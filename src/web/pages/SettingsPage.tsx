@@ -414,7 +414,7 @@ function SuppressionsPanel() {
 }
 
 const OUTCOME_TONE = { succeeded: "ok", partial: "warn", failed: "fail" } as const
-const JOB_TONE = { sent: "ok", sending: "info", failed: "fail", unknown: "warn" } as const
+const JOB_TONE = { sent: "ok", sending: "info", failed: "fail", unknown: "warn", skipped: "warn" } as const
 
 function StatusPanel() {
   const { t } = useI18n()
@@ -465,21 +465,41 @@ function StatusPanel() {
           />
         </div>
       ) : telegram.data?.configured ? (
-        <div className="ui-kv">
-          <span>{t("settings.lastMorning")}</span>
-          <span>
-            {telegram.data.lastMorning ? (
-              <>
-                <Time value={telegram.data.lastMorning.at ?? telegram.data.lastMorning.date} mode="day" />{" "}
-                <Tag tone={JOB_TONE[telegram.data.lastMorning.state]}>
-                  {t(`settings.job.${telegram.data.lastMorning.state}`)}
-                </Tag>
-              </>
-            ) : (
-              t("settings.noMorningYet")
-            )}
-          </span>
-        </div>
+        <>
+          <div className="ui-kv">
+            <span>{t("settings.bot")}</span>
+            <span>
+              <Tag tone={telegram.data.polling ? "ok" : "warn"}>
+                {telegram.data.polling ? t("settings.botPolling") : t("settings.botNotPolling")}
+              </Tag>
+            </span>
+          </div>
+          <div className="ui-kv">
+            <span>{t("settings.lastUpdate")}</span>
+            <span>
+              {telegram.data.lastUpdateAt ? (
+                <Time value={telegram.data.lastUpdateAt} mode="full" />
+              ) : (
+                t("settings.noUpdateYet")
+              )}
+            </span>
+          </div>
+          <div className="ui-kv">
+            <span>{t("settings.lastMorning")}</span>
+            <span>
+              {telegram.data.lastMorning ? (
+                <>
+                  <Time value={telegram.data.lastMorning.at ?? telegram.data.lastMorning.localDate} mode="day" />{" "}
+                  <Tag tone={JOB_TONE[telegram.data.lastMorning.state]}>
+                    {t(`settings.job.${telegram.data.lastMorning.state}`)}
+                  </Tag>
+                </>
+              ) : (
+                t("settings.noMorningYet")
+              )}
+            </span>
+          </div>
+        </>
       ) : telegram.data ? (
         <div className="ui-panel-body">
           <Locked title={t("settings.telegramLocked")}>{t("settings.telegramLockedBody")}</Locked>

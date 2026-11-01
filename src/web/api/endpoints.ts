@@ -83,7 +83,8 @@ export const api = {
     try {
       return await data<TelegramStatus>("GET", "/telegram/status")
     } catch (error) {
-      if (error instanceof ApiError && error.code === "not_found") return { configured: false, lastMorning: null }
+      if (error instanceof ApiError && error.code === "not_found")
+        return { configured: false, polling: false, lastUpdateAt: null, lastMorning: null }
       throw error
     }
   },

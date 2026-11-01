@@ -471,7 +471,13 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     record("settings.update", "settings", state.settings.id, before, { ...state.settings })
     return ok(state.settings)
   }
-  if (head === "telegram") return fail(404, "not_found", "Nothing is here.")
+  if (head === "telegram")
+    return ok({
+      configured: true,
+      polling: true,
+      lastUpdateAt: ago(16),
+      lastMorning: { localDate: ago(8).slice(0, 10), state: "sent", at: ago(8) },
+    })
   if (head === "devices" && !id) return ok(state.devices)
   if (head === "devices" && id === "end-all") {
     for (const device of state.devices) device.revokedAt ??= new Date().toISOString()

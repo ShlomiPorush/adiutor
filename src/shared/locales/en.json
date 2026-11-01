@@ -580,11 +580,17 @@
       "sending": "Sending",
       "sent": "Sent",
       "failed": "Failed",
-      "unknown": "Unknown"
+      "unknown": "Unknown",
+      "skipped": "Skipped"
     },
     "telegramLocked": "The Telegram bot is not configured",
     "telegramLockedBody": "Without it there is no morning message and no quick add from Telegram. The bot token and the owner chat are set in the server's environment.",
-    "telegramFailed": "Could not read the Telegram status"
+    "telegramFailed": "Could not read the Telegram status",
+    "bot": "Telegram bot",
+    "botPolling": "Connected",
+    "botNotPolling": "Not reaching Telegram",
+    "lastUpdate": "Last message to the bot",
+    "noUpdateYet": "None yet"
   },
   "devices": {
     "title": "Paired devices",

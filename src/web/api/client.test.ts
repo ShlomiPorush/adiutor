@@ -94,7 +94,12 @@ describe("request and endpoints", () => {
 
   it("reads a missing Telegram status route (404) as a bot that is not configured", async () => {
     setTransport(answer(404, { error: { code: "not_found", message: "Nothing is here." } }))
-    expect(await api.telegramStatus()).toEqual({ configured: false, lastMorning: null })
+    expect(await api.telegramStatus()).toEqual({
+      configured: false,
+      polling: false,
+      lastUpdateAt: null,
+      lastMorning: null,
+    })
     setTransport(answer(500, { error: { code: "internal_error", message: "Boom." } }))
     await expect(api.telegramStatus()).rejects.toMatchObject({ code: "internal_error" })
   })

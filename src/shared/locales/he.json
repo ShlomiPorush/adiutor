@@ -580,11 +580,17 @@
       "sending": "נשלחת",
       "sent": "נשלחה",
       "failed": "נכשלה",
-      "unknown": "לא ידוע"
+      "unknown": "לא ידוע",
+      "skipped": "דולגה"
     },
     "telegramLocked": "בוט הטלגרם לא מוגדר",
     "telegramLockedBody": "בלעדיו אין הודעת בוקר ואין הוספה מהירה מטלגרם. הטוקן של הבוט והצ׳אט שלך מוגדרים בסביבת השרת.",
-    "telegramFailed": "לא הצלחתי לקרוא את מצב הטלגרם"
+    "telegramFailed": "לא הצלחתי לקרוא את מצב הטלגרם",
+    "bot": "בוט הטלגרם",
+    "botPolling": "מחובר",
+    "botNotPolling": "לא מגיע לטלגרם",
+    "lastUpdate": "הודעה אחרונה לבוט",
+    "noUpdateYet": "עוד אין"
   },
   "devices": {
     "title": "מכשירים מצומדים",

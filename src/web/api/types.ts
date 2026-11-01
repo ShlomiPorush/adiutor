@@ -294,10 +294,13 @@ export type SyncRun = {
   errors: { record: string; code: string }[]
 }
 
-/** GET /telegram/status; the route is built separately, and a 404 means the bot is not configured. */
+/** GET /telegram/status (docs/api.md, Telegram). A server without the route (404) counts as not configured. */
 export type TelegramStatus = {
   configured: boolean
-  lastMorning: { date: string; state: JobState; at: string | null } | null
+  /** The latest getUpdates call of the bot succeeded. */
+  polling: boolean
+  lastUpdateAt: string | null
+  lastMorning: { localDate: string; state: JobState; at: string | null } | null
 }
 
 export type Suppression = {
