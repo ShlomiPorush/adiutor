@@ -14,6 +14,10 @@ on:
         type: choice
         options: [patch, minor, major]
         required: true
+      dry_run:
+        description: Check everything, publish nothing (for example before the first release)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,6 +56,7 @@ jobs:
         # Inputs reach the script through the environment, never through ${{ }} in the script.
         env:
           BUMP: ${{ inputs.bump }}
+          DRY_RUN: ${{ inputs.dry_run }}
           VERIFIED_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -59,4 +64,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
-          scripts/release.sh --target ghcr --bump "$BUMP" --skip-verify --expect-sha "$VERIFIED_SHA"
+          args=(--target ghcr --bump "$BUMP" --skip-verify --expect-sha "$VERIFIED_SHA")
+          [ "$DRY_RUN" != true ] || args+=(--dry-run)
+          scripts/release.sh "${args[@]}"
