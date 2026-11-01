@@ -25,6 +25,8 @@ Status: implemented in `src/server/http/` and `src/server/mcp/`; request bodies 
 | `suppressed` | 409 | The owner deleted the item of this thread | |
 | `conflict` | 409 | Another state conflict: a thread linked to another item, a project that still has items, a proposal decided already, a duplicate T3 project id | `itemId` or `projectId` when useful |
 | `rate_limited` | 429 | 10 failed token attempts from this client within a minute | |
+| `telegram_failed` | 502 | `POST /telegram/test-message`: Telegram did not take the message (it refused it, or the server could not reach Telegram at all) | |
+| `telegram_uncertain` | 502 | `POST /telegram/test-message`: Telegram gave no clear answer (a timeout, a lost connection, a 5xx): the message may have been sent. Check the chat before sending again | |
 | `internal_error` | 500 | Unexpected server error | |
 
 ## Authentication
@@ -64,7 +66,7 @@ Fields are always present; `null` when unset.
 - **SyncResult**: `runId, outcome, counts, errors`.
 - **Device**: `id, label, createdAt, lastSeenAt, revokedAt`. Never its hash.
 - **Suppression**: `id, kind (thread, project), externalId, label (what was deleted), createdAt`.
-- **Settings**: `id, closedItemDays (1 to 365, default 7), dateFormat, timeFormat, language (he, en), updatedAt`.
+- **Settings**: `id, closedItemDays (1 to 365, default 7), dateFormat, timeFormat, language (he, en), updatedAt`. The formats the UI offers are in `src/shared/datetime-formats.ts`: `dateFormat` is `dd/MM/yyyy` (default), `MM/dd/yyyy`, `dd.MM.yyyy`, `yyyy-MM-dd` or `browser`; `timeFormat` is `HH:mm` (default), `h:mm a` or `browser`. The morning message writes `browser`, and any value not offered, as the default numeric date and the 24-hour clock.
 - **AuditEntry**: `id (number), at, actorKind, actorLabel, action, entityType, entityId, before, after, source`. Actions: `item.create|update|delete`, `comment.create`, `thread.link|update|move|unlink`, `project.create|update|delete`, `goal.create|close`, `proposal.create|update|accept|reject`, `security.update`, `suppression.create|delete`, `settings.update`, `device.pair|revoke|revoke_all`. Comment, thread, goal and proposal entries carry the entity of their item (`item`) or project (`project`), so an item's history includes them.
 
 ## Routes
@@ -77,8 +79,8 @@ Fields are always present; `null` when unset.
 |---|---|---|---|
 | `GET /session` | any | | `{actor: {kind, label}, via: "token"\|"cookie", deviceId}` |
 | `DELETE /session` | browser | | `204`; revokes this device and clears the cookie. `forbidden` with a token |
-| `GET /morning` | any | | Morning (below). `since` is this device's previous visit |
-| `POST /visits` | browser | | `201 {at, previous}`. Call after the morning view was shown. `forbidden` with a token |
+| `GET /morning` | any | `since?` (time) | Morning (below). `since` is this device's previous visit unless the query gives one |
+| `POST /visits` | browser | `{at?}` (time) | `201 {at, previous}`. Call after the morning view was shown, with that read's `now`; recorded one minute before `at`, or before now when `at` is missing or later than the server's clock (see below). `forbidden` with a token |
 
 **Morning**:
 
@@ -97,17 +99,19 @@ Fields are always present; `null` when unset.
   projects: [ {id, name, slug, stage, goal: GoalProgress | null, whereWeAre, openItems,
                openIssues, openIssuesAsOf, repo} ],
   inboxCount,
-  sync: {lastSuccessAt, stale, securityLastSuccessAt}
+  sync: {lastSuccessAt, stale, lastPartialAt, securityLastSuccessAt}
 }
 ```
 
-- `since`: the device's latest recorded visit; 24 hours before now on a device's first visit, and always for token callers. Each device keeps its own.
+- `now`: the server's time when this read started. A visit recorded with it marks nothing newer than what this read showed as seen. The visit is stored one minute before `now`: a write whose transaction was still open during the read has a time before `now` but at most 30 seconds before it (PostgreSQL ends any transaction of the server after 30 seconds), so it still counts as new on the next visit. Items written in that minute may show as new twice; none is hidden.
+- `since`: the `since` query when given; else the device's latest recorded visit; 24 hours before now on a device's first visit, and always for token callers. Each device keeps its own. The UI keeps the `since` of the page's first read and passes it on every refresh, so "new since your last visit" stays stable while the page is open.
 - Items shown anywhere in the view: open items, and closed ones closed within `closedItemDays`. Older closed items are only in the archive.
 - `new`: created after `since` (`change: "created"`, except items imported by the first sync run) or changed after `since` and after their creation (`"updated"`). Newest first.
 - `security`: one line per project with something to say. `critical` counts in every project, `high` only at stage `production` (0 elsewhere). Counts come from enabled `dependabot`, `code_scanning` and `secret_scanning` sources plus open `security` items of the project. `asOf` is the oldest as-of time of the project's enabled sources (null when it has none); `stale` is true when that time is unknown or older than 26 hours.
 - `agentUpdates`: comments and status changes by agents and the sync after `since`, grouped by project (`projectId: null` for the inbox), groups and updates newest first, at most 300 of each kind.
 - `projects`: projects with at least one open item, by name.
-- `sync.stale`: no successful T3 sync, or the last one finished more than 26 hours ago.
+- `sync.lastSuccessAt`: when the last complete T3 run (`succeeded`) finished; a `partial` run may have missed whole projects, so it never counts as fresh. `sync.lastPartialAt`: when the latest `partial` T3 run finished, only when it is later than `lastSuccessAt` (else null). `sync.securityLastSuccessAt`: the latest security run that was `succeeded` or `partial`.
+- `sync.stale`: no complete T3 sync, or the last one finished more than 26 hours ago.
 
 ### Projects
 
@@ -152,7 +156,7 @@ Item rules: entering `done` or `not_relevant` sets `closedAt`; any other status 
 
 **Start of thread**, in one transaction: refuses `not_top_level` when `parentThreadId` is set; returns the item already linked to `threadId` (also on a retry or a race); otherwise links `itemId`, or creates a `task` in `projectId`, or in the project whose `t3ProjectId` matches, or in the inbox. The item is set `in_progress` (a closed item reopens). `suppressed` when the owner deleted this thread's item; `conflict` when `itemId` differs from the item the thread is linked to.
 
-**Sync routes** accept a bearer token only (a browser cookie is `forbidden`). Changes are recorded with actor kind `sync`. Per-record failures are collected in `errors` (`record` is `project:<t3ProjectId>`, `thread:<threadId>`, `item:<id>` or `repo:<owner/name>`; `code` is an error code) and never stop the run; `outcome` is `partial` when some failed, `failed` when all did.
+**Sync routes** accept a bearer token only (a browser cookie is `forbidden`). Changes are recorded with actor kind `sync`. Per-record failures are collected in `errors` (`record` is `project:<t3ProjectId>`, `thread:<threadId>`, `item:<id>`, `repo:<owner/name>` or `threads:<t3ProjectId>`; `code` is an error code) and never stop the run; `outcome` is `partial` when some failed or the snapshot lists `failedProjects`, `failed` when all failed.
 
 T3 snapshot, a full read of every top-level and child thread of every T3 project, never a delta:
 
@@ -161,15 +165,18 @@ T3 snapshot, a full read of every top-level and child thread of every T3 project
   collectedAt,
   projects: [ {t3ProjectId, title, repo?: "owner/name" | null} ],
   threads:  [ {threadId, t3ProjectId | null, title, status, settled, settledAt?: time | null,
-               parentThreadId?: id | null, updatedAt} ]
+               parentThreadId?: id | null, updatedAt} ],
+  failedProjects?: [ t3ProjectId ]
 }
 ```
+
+- `failedProjects`: T3 projects whose threads the sync tool could not read in this run, or read only in part (invalid thread records). Each is recorded in `errors` as `{record: "threads:<t3ProjectId>", code: "threads_not_read"}`, the run is `partial`, and no item of those projects (by its project or by a link's `t3ProjectId`) is decided in this run (`counts.itemsNotDecided`).
 
 - Projects: created by `t3ProjectId` with the redacted title as name, `stage: null` and the repository; an existing project keeps its name and only gets a repository when it has none; a suppressed project id is skipped.
 - A thread with a `parentThreadId` never gets an item. When it is linked, the link moves to its top-level thread (the parent's parent, as far as the snapshot knows): deleted when that thread has its own link, re-pointed otherwise.
 - A top-level thread without an item and without a suppression (of the thread or its project) gets a `task` titled from the redacted thread title, in the mapped project or the inbox: when unsettled, whatever its age (`waiting` → `waiting_on_you`, otherwise `in_progress`); when settled, only if it settled (`settledAt`, else `updatedAt`) at most 7 days before `collectedAt` (status `done`). Items created by the first successful run are `imported`.
-- Every link is refreshed (title, status, settled, `updatedAt` as last activity), then every item with a link is decided over all its links: any `running`, `starting`, `queued` or `preparing` → `in_progress`; otherwise any `waiting` → `waiting_on_you`; otherwise all settled → `done`; otherwise no change. The sync never moves an item out of `done` or `not_relevant`, never sets `done` on `future` or `todo`, and leaves a status the owner set at or after the threads' latest activity. Each change is a compare-and-set on the version read in that run; a changed or deleted item is skipped (`counts.itemsSkipped`) and decided again next run.
-- Counts: `projectsCreated`, `projectsUpdated`, `projectsSuppressed`, `childLinksFolded`, `threadsUpdated`, `threadsSuppressed`, `threadsTooOld`, `itemsCreated`, `itemsUpdated`, `itemsSkipped` (only the non-zero ones are present).
+- Every link is refreshed (title, status, settled, `updatedAt` as last activity) when the record's `updatedAt` is newer than the stored last activity (an older or equal record is ignored, so snapshots applied out of order never roll back), then every item with a link is decided over all its links: any `running`, `starting`, `queued` or `preparing` → `in_progress`; otherwise any `waiting` → `waiting_on_you`; otherwise all settled → `done`; otherwise no change. The sync never moves an item out of `done` or `not_relevant`, never sets `done` on `future` or `todo`, and leaves a status the owner set at or after the threads' latest activity. Each change is a compare-and-set on the version read in that run; a changed or deleted item is skipped (`counts.itemsSkipped`) and decided again next run.
+- Counts: `projectsCreated`, `projectsUpdated`, `projectsSuppressed`, `childLinksFolded`, `threadsUpdated`, `threadsSuppressed`, `threadsTooOld`, `itemsCreated`, `itemsUpdated`, `itemsSkipped`, `itemsNotDecided` (only the non-zero ones are present).
 
 Security snapshot, from the `overview` collector:
 
@@ -181,7 +188,7 @@ Security snapshot, from the `overview` collector:
 }
 ```
 
-Each repository is matched to every project whose `githubRepo` equals it, ignoring case (`counts.reposUnmatched` otherwise). The project's open Issues count and its time are replaced; each listed family is upserted; families not listed keep their last values. `asOf` is the source's last success, not the sync time. An unchanged project writes nothing.
+Each repository is matched to every project whose `githubRepo` equals it, ignoring case (`counts.reposUnmatched` otherwise). The project's open Issues count and its time are replaced; each listed family is upserted; families not listed keep their last values. A family, or the open Issues count, whose as-of time is older than the stored one is ignored. `asOf` is the source's last success, not the sync time. An unchanged project writes nothing.
 
 ### Owner settings
 
@@ -195,6 +202,7 @@ Each repository is matched to every project whose `githubRepo` equals it, ignori
 | `DELETE /devices/:id` | owner | | `204`; the device's cookie stops working |
 | `POST /devices/end-all` | owner | | `{ended}`: every device is revoked, the caller's too (its cookie is cleared) |
 | `GET /telegram/status` | owner | | `TelegramStatus` (below) |
+| `POST /telegram/test-message` | owner | | `{sent: true, warning?}`. Sends today's morning message (below) to the owner's chat now. `warning: "outcome_not_recorded"` when it was sent but the outcome's audit row could not be written. `conflict` when Telegram is not configured, `telegram_failed` when Telegram did not take it, `telegram_uncertain` when it may have been sent |
 
 ### Telegram
 
@@ -211,9 +219,10 @@ The bot and the morning message run inside the server, never through this API. T
 }
 ```
 
-- `lastMorning.state`: `sending` (in progress), `sent`, `failed` (Telegram refused it; retried every 30 seconds until 11:00), `unknown` (it may have gone out: a timeout, a dropped connection, or a restart during the send; never resent) or `skipped` (11:00 passed without a send). `at` is the time of the latest state change.
+- `lastMorning.state`: `sending` (in progress), `sent`, `failed` (Telegram refused it with a 4xx answer, or there was no connection; retried every 30 seconds until 11:00), `unknown` (it may have gone out: a timeout, a dropped connection, a 5xx or an answer that is not Telegram's, or a restart during the send; never resent) or `skipped` (11:00 passed without a send). `at` is the time of the latest state change.
 - **Quick add**: plain text from the owner's chat becomes an inbox item exactly like `POST /capture` (type `idea`, status `future`), created by actor kind `bot` with audit source `telegram`. The bot answers with a link to `<MIKUD_PUBLIC_URL>/items/<id>`. Text that looks like a secret is refused as agent text is, and the bot answers that nothing was saved without repeating the text. `/start`, `/help` and other commands answer with a help text; photos and other non-text messages with a short note. Other chats get no answer.
 - **Morning message**: 08:00 Asia/Jerusalem, Sunday to Friday, in the language of the settings, built from the morning view (above) with `since` set to the owner's last visit on any device or the last morning message, whichever is later. Deep links: `<MIKUD_PUBLIC_URL>/` and `<MIKUD_PUBLIC_URL>/items/<id>`.
+- **Test message**: `POST /telegram/test-message` (Settings, "Send a test morning message") builds the same message the job would send now and sends it to the owner's chat at once. It never reads or writes `job_runs`, so the 08:00 message still goes out, and it records two audit rows (action `telegram.test_message`): `after: {state: "sending"}`, committed before the send, then `after: {state, code?}` with `sent`, `failed` or `uncertain` and the failure code. Not retried.
 
 ## MCP
 

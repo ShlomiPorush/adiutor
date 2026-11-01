@@ -38,7 +38,7 @@ const SEPARATOR = " · "
 export function buildMorningMessage(summary: MorningSummary, options: MessageOptions): TelegramHtml {
   const t = telegramTexts(options.language).morning
   const url = (path: string) => uiUrl(options.publicUrl, path)
-  const time = (at: Date) => formatLocal(at, options.dateFormat, options.timeFormat)
+  const time = (at: Date) => formatLocal(at, options.dateFormat, options.timeFormat, options.language)
   const board = link(url(UI_ROUTES.home), t.openBoard)
 
   if (summary.waiting.length === 0 && summary.newCount === 0 && summary.security.length === 0 && !summary.sync.stale)

@@ -1,10 +1,10 @@
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
-import { items, itemThreads, projects, securitySources, suppressions, syncRuns } from "../db/schema.ts"
+import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
-import { log } from "../log.ts"
-import { type By, type Ctx, inTx, writeAudit } from "./context.ts"
-import { createItemTx, type ItemRow, type ThreadLinkRow, updateItemTx } from "./items.ts"
+import { errorFacts, log } from "../log.ts"
+import { type By, type Ctx, inLinkTx, inTx, writeAudit } from "./context.ts"
+import { createItemTx, type ItemRow, isSuppressed, type ThreadLinkRow, updateItemTx } from "./items.ts"
 import { createProjectTx } from "./projects.ts"
 import { newItemStatus, rootThreadId, syncDecision, wantsItem } from "./sync-rules.ts"
 
@@ -26,6 +26,7 @@ class Run {
   readonly errors: { record: string; code: string }[] = []
   private attempted = 0
   private failed = 0
+  private incomplete = false
 
   constructor(readonly kind: string) {}
 
@@ -41,18 +42,19 @@ class Run {
       this.failed++
       const code = error instanceof AppError ? error.code : "internal_error"
       this.errors.push({ record: name, code })
-      // The record's name is an id; its text (titles) is never logged.
-      log.warn("sync record failed", {
-        kind: this.kind,
-        record: name,
-        code,
-        error: error instanceof AppError ? undefined : String(error),
-      })
+      // The record's name is an id; its text (titles) and a failed query's parameters are never logged.
+      log.warn("sync record failed", { kind: this.kind, record: name, ...errorFacts(error), code })
     }
   }
 
+  /** The input itself was incomplete (projects the sync tool could not read): at best partial. */
+  missing(name: string, code: string) {
+    this.incomplete = true
+    this.errors.push({ record: name, code })
+  }
+
   get outcome(): SyncResult["outcome"] {
-    if (this.failed === 0) return "succeeded"
+    if (this.failed === 0) return this.incomplete ? "partial" : "succeeded"
     return this.failed === this.attempted ? "failed" : "partial"
   }
 }
@@ -93,6 +95,8 @@ async function guarded(ctx: Ctx, id: string, run: Run, work: () => Promise<void>
 }
 
 export type ApplyHooks = {
+  /** Test seam: runs after the run read its starting state, before any record is processed. */
+  afterLoad?: () => Promise<void>
   /** Test seam: runs after the item states were read and before any change is applied. */
   beforeApply?: () => Promise<void>
 }
@@ -112,14 +116,16 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       .limit(1)
     const firstRun = !previous
 
-    const suppressed = await loadSuppressions(ctx)
     const projectIds = new Map<string, string>()
+    const unread = new Set(snapshot.failedProjects ?? [])
+    for (const id of unread) run.missing(`threads:${id}`, "threads_not_read")
+    await hooks.afterLoad?.()
 
     // 1. Projects: upsert by T3 project id, except those the owner deleted.
     for (const p of snapshot.projects) {
       await run.record(`project:${p.t3ProjectId}`, async () => {
-        if (suppressed.project.has(p.t3ProjectId)) return run.add("projectsSuppressed")
-        await inTx(ctx, async (tx) => {
+        // Under the link structure lock: an owner delete that commits during the run wins.
+        await inLinkTx(ctx, async (tx) => {
           const [existing] = await tx
             .select()
             .from(projects)
@@ -145,6 +151,7 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             }
             return
           }
+          if (await isSuppressed(tx, "project", p.t3ProjectId)) return run.add("projectsSuppressed")
           const name = ctx.secrets.redact(p.title).trim() || p.t3ProjectId
           const created = await createProjectTx(ctx, tx, SYNC, {
             name,
@@ -178,7 +185,9 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       if (thread.parentThreadId) continue
       await run.record(`thread:${thread.threadId}`, async () => {
         const title = ctx.secrets.redact(thread.title).trim()
-        await inTx(ctx, async (tx) => {
+        // Under the link structure lock, as an owner delete and an agent's link: the suppression and link
+        // checks below stay true until this transaction commits.
+        await inLinkTx(ctx, async (tx) => {
           const [link] = await tx
             .select()
             .from(itemThreads)
@@ -192,6 +201,8 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             lastActivityAt: thread.updatedAt,
           }
           if (link) {
+            // An older snapshot applied after a newer one: the stored state is newer (equal: nothing new).
+            if (link.lastActivityAt && thread.updatedAt.getTime() <= link.lastActivityAt.getTime()) return
             if (!linkChanged(link, fields)) return
             const [after] = await tx.update(itemThreads).set(fields).where(eq(itemThreads.id, link.id)).returning()
             await writeAudit(ctx, tx, SYNC, {
@@ -203,8 +214,9 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             })
             return run.add("threadsUpdated")
           }
-          if (suppressed.thread.has(thread.threadId)) return run.add("threadsSuppressed")
-          if (thread.t3ProjectId && suppressed.project.has(thread.t3ProjectId)) return run.add("threadsSuppressed")
+          if (await isSuppressed(tx, "thread", thread.threadId)) return run.add("threadsSuppressed")
+          if (thread.t3ProjectId && (await isSuppressed(tx, "project", thread.t3ProjectId)))
+            return run.add("threadsSuppressed")
           if (!wantsItem(thread, snapshot.collectedAt)) return run.add("threadsTooOld")
 
           const item = await createItemTx(
@@ -248,7 +260,16 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       entry.links.push(link)
       grouped.set(item.id, entry)
     }
+    // An item of a project whose threads were not read is not decided in this run.
+    const unreadProjectIds = new Set([...unread].map((id) => projectIds.get(id)).filter((id) => id !== undefined))
     const decisions = [...grouped.values()]
+      .filter(({ item, links }) => {
+        const notRead =
+          (item.projectId !== null && unreadProjectIds.has(item.projectId)) ||
+          links.some((l) => l.t3ProjectId !== null && unread.has(l.t3ProjectId))
+        if (notRead) run.add("itemsNotDecided")
+        return !notRead
+      })
       .map(({ item, links }) => ({ item, target: syncDecision(item, links) }))
       .filter((d) => d.target !== null)
 
@@ -293,7 +314,9 @@ async function foldChildLink(
   rootId: string,
   root: T3Snapshot["threads"][number] | undefined,
 ) {
-  await inTx(ctx, async (tx) => {
+  // Under the link structure lock: an owner delete or an agent's link of the root thread runs entirely
+  // before or after this fold, so a delete suppresses either the child's link or the moved one.
+  await inLinkTx(ctx, async (tx) => {
     const [child] = await tx.select().from(itemThreads).where(eq(itemThreads.threadId, childId)).for("update")
     if (!child) return
     const [rootLink] = await tx.select().from(itemThreads).where(eq(itemThreads.threadId, rootId))
@@ -333,14 +356,6 @@ async function foldChildLink(
   })
 }
 
-async function loadSuppressions(ctx: Ctx) {
-  const rows = await ctx.db.select().from(suppressions)
-  return {
-    thread: new Set(rows.filter((r) => r.kind === "thread").map((r) => r.externalId)),
-    project: new Set(rows.filter((r) => r.kind === "project").map((r) => r.externalId)),
-  }
-}
-
 /**
  * Applies the security and Issues counts the overview collector gathered, per GitHub repository, to every
  * project linked to that repository. Families missing from the snapshot keep their last values.
@@ -363,18 +378,24 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
             const sourcesBefore = await tx.select().from(securitySources).where(eq(securitySources.projectId, id))
             const now = ctx.clock()
             let changed = false
+            // What is stored after this record: the audit row records that, not the snapshot.
+            let issues = { openIssuesCount: project.openIssuesCount, openIssuesAsOf: project.openIssuesAsOf }
             if (
-              project.openIssuesCount !== repo.openIssues ||
-              project.openIssuesAsOf?.getTime() !== repo.issuesAsOf?.getTime()
+              !staleAgainst(repo.issuesAsOf, project.openIssuesAsOf) &&
+              (project.openIssuesCount !== repo.openIssues ||
+                project.openIssuesAsOf?.getTime() !== repo.issuesAsOf?.getTime())
             ) {
               await tx
                 .update(projects)
                 .set({ openIssuesCount: repo.openIssues, openIssuesAsOf: repo.issuesAsOf, updatedAt: now })
                 .where(eq(projects.id, id))
+              issues = { openIssuesCount: repo.openIssues, openIssuesAsOf: repo.issuesAsOf }
               changed = true
             }
             for (const f of repo.families) {
               const old = sourcesBefore.find((s) => s.family === f.family)
+              // An older snapshot applied after a newer one, or a failed read, never rolls the counts back.
+              if (old && staleAgainst(f.asOf, old.asOf)) continue
               const values = { coverage: f.coverage, ...f.counts, asOf: f.asOf }
               if (
                 old &&
@@ -406,7 +427,7 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
                 openIssuesAsOf: project.openIssuesAsOf,
                 sources: sourcesBefore,
               },
-              after: { openIssuesCount: repo.openIssues, openIssuesAsOf: repo.issuesAsOf, sources: sourcesAfter },
+              after: { ...issues, sources: sourcesAfter },
             })
             run.add("projectsUpdated")
           })
@@ -414,6 +435,14 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
       })
     }
   })
+}
+
+/**
+ * True when an incoming record must not replace the stored one: the stored record has a time and the
+ * incoming one is older, or has no time at all (a failed or unknown read never overwrites a known one).
+ */
+function staleAgainst(next: Date | null, stored: Date | null): boolean {
+  return stored !== null && (next === null || next.getTime() < stored.getTime())
 }
 
 /** The latest runs, newest first. */

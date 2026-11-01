@@ -6,7 +6,13 @@
 services:
   mikud:
     image: mikud:${MIKUD_IMAGE_TAG:-dev}
-    env_file: docker/dev.env
+    # docker/dev.env holds fake values. An optional .env.dev at the repository root (ignored by git) is read
+    # after it, so real tokens and the Telegram settings for a dry run stay out of git. scripts/verify.sh
+    # sets MIKUD_LOCAL_ENV_FILE=/dev/null, so it never reads .env.dev; try-pr does not use this file.
+    env_file:
+      - path: docker/dev.env
+      - path: ${MIKUD_LOCAL_ENV_FILE:-.env.dev}
+        required: false
     depends_on:
       postgres:
         condition: service_healthy

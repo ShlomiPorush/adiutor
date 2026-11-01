@@ -8,7 +8,17 @@ import {
 } from "../../shared/enums.ts"
 import { comments, goals, items, itemThreads, projects, suppressions } from "../db/schema.ts"
 import { AppError, invalid, notFound } from "../errors.ts"
-import { type By, type Ctx, checkAgentText, type DbOrTx, inTx, requireOwner, type Tx, writeAudit } from "./context.ts"
+import {
+  type By,
+  type Ctx,
+  checkAgentText,
+  type DbOrTx,
+  inLinkTx,
+  inTx,
+  requireOwner,
+  type Tx,
+  writeAudit,
+} from "./context.ts"
 
 export type ItemRow = typeof items.$inferSelect
 export type ThreadLinkRow = typeof itemThreads.$inferSelect
@@ -217,7 +227,9 @@ export async function updateItem(ctx: Ctx, by: By, id: string, version: number, 
  */
 export async function deleteItem(ctx: Ctx, by: By, id: string, version?: number): Promise<void> {
   requireOwner(by, "delete items")
-  return inTx(ctx, async (tx) => {
+  // Under the link structure lock no link is added, moved or removed until commit, so the suppressions
+  // cover exactly the thread ids this delete removes.
+  return inLinkTx(ctx, async (tx) => {
     const before = await lockItem(tx, id)
     if (version !== undefined && before.version !== version)
       throw new AppError("version_conflict", "The item changed since you read it. Read it again and retry.", {
@@ -292,8 +304,9 @@ export function refuseChildThread(parentThreadId: string | null | undefined): vo
 }
 
 /**
- * Links a T3 thread to an item inside the caller's transaction. Returns the link, or the existing link
- * when the thread is linked to this item already. A thread linked to another item is a `conflict`.
+ * Links a T3 thread to an item inside the caller's transaction, which holds the link structure lock
+ * (`inLinkTx`). Returns the link, or the existing link when the thread is linked to this item already. A
+ * thread linked to another item is a `conflict`.
  */
 export async function linkThreadTx(
   ctx: Ctx,
@@ -329,7 +342,7 @@ export async function linkThreadTx(
   return { link: existing, created: false }
 }
 
-/** Inserts a link unless the thread is linked already (then null). Audited. */
+/** Inserts a link unless the thread is linked already (then null). Audited. Under the link structure lock. */
 export async function insertLinkTx(
   ctx: Ctx,
   tx: Tx,
@@ -354,7 +367,7 @@ export async function insertLinkTx(
 }
 
 export async function linkThread(ctx: Ctx, by: By, itemId: string, input: LinkThreadInput) {
-  return inTx(ctx, async (tx) => {
+  return inLinkTx(ctx, async (tx) => {
     await getItemRow(tx, itemId)
     return linkThreadTx(ctx, tx, by, itemId, input)
   })

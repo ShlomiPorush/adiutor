@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from "node:crypto"
 import { and, desc, eq, isNull, lt } from "drizzle-orm"
 import type { Language } from "../../shared/enums.ts"
+import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { devices, settings, suppressions, visits } from "../db/schema.ts"
 import { invalid, notFound } from "../errors.ts"
-import { type By, type Ctx, type DbOrTx, inTx, requireOwner, writeAudit } from "./context.ts"
+import { type By, type Ctx, type DbOrTx, inLinkTx, inTx, requireOwner, writeAudit } from "./context.ts"
 
 export type SettingsRow = typeof settings.$inferSelect
 export type DeviceRow = typeof devices.$inferSelect
@@ -53,7 +54,7 @@ export async function listSuppressions(ctx: Ctx, by: By): Promise<SuppressionRow
 /** Owner only. The sync may then recreate the item or project on its next run. */
 export async function removeSuppression(ctx: Ctx, by: By, id: string): Promise<void> {
   requireOwner(by, "remove suppressions")
-  return inTx(ctx, async (tx) => {
+  return inLinkTx(ctx, async (tx) => {
     const [before] = await tx.delete(suppressions).where(eq(suppressions.id, id)).returning()
     if (!before) throw notFound("The suppression")
     await writeAudit(ctx, tx, by, { action: "suppression.delete", entityType: "suppression", entityId: id, before })
@@ -180,9 +181,15 @@ export async function lastVisitAnyDevice(ctx: Ctx): Promise<Date | null> {
   return row?.at ?? null
 }
 
-/** Records that the device's owner saw the board now. Bookkeeping, not a change: no audit row. */
-export async function recordVisit(ctx: Ctx, deviceId: string): Promise<Date> {
-  const at = ctx.clock()
+/**
+ * Records that the device's owner saw the board: VISIT_SAFETY_MARGIN_MS before the start of the read that
+ * was shown (never later than now; now when it is not given), so a write that committed after that read
+ * still counts as new (see the invariant in db/client.ts). Bookkeeping, not a change: no audit row.
+ */
+export async function recordVisit(ctx: Ctx, deviceId: string, shownAt?: Date): Promise<Date> {
+  const now = ctx.clock()
+  const readAt = shownAt && shownAt.getTime() < now.getTime() ? shownAt : now
+  const at = new Date(readAt.getTime() - VISIT_SAFETY_MARGIN_MS)
   await ctx.db.insert(visits).values({ deviceId, at })
   return at
 }

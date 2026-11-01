@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm"
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
-import { audit, items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
+import { audit, items, itemThreads, projects, securitySources, suppressions, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
+import { lockLinkStructure } from "./context.ts"
 import { createItem, deleteItem, getItemRow, linkThread, updateItem } from "./items.ts"
 import { createProject, deleteProject } from "./projects.ts"
 import { REDACTED } from "./secrets.ts"
@@ -132,6 +133,100 @@ describe("applyT3Snapshot", () => {
     const result = await applyT3Snapshot(t.ctx, snapshot([thread("a")]))
     expect(result.counts).toMatchObject({ threadsSuppressed: 1 })
     expect(await t.ctx.db.select().from(items)).toHaveLength(0)
+  })
+
+  it("never recreates an item or a project the owner deletes while a run is under way", async () => {
+    await applyT3Snapshot(t.ctx, snapshot([thread("a")]))
+    const item = await itemOf("a")
+    // The delete commits after the run read its starting state and before it reaches the thread.
+    const result = await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: ago(HOUR / 2) })]), {
+      afterLoad: () => deleteItem(t.ctx, owner, item?.id ?? ""),
+    })
+    expect(result.counts).toMatchObject({ threadsSuppressed: 1 })
+    expect(await t.ctx.db.select().from(items)).toHaveLength(0)
+
+    const [p] = await t.ctx.db.select().from(projects)
+    const again = await applyT3Snapshot(t.ctx, snapshot([]), {
+      afterLoad: () => deleteProject(t.ctx, owner, p?.id ?? ""),
+    })
+    expect(again.counts).toMatchObject({ projectsSuppressed: 1 })
+    expect(await t.ctx.db.select().from(projects)).toHaveLength(0)
+  })
+
+  describe("an owner delete while the sync folds the item's child link", () => {
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+    // No projects: the sync's first transaction is the fold, so it queues for the lock before the delete.
+    const folding = () =>
+      snapshot([thread("root-1"), thread("child-1", { parentThreadId: "root-1" })], { projects: [] })
+    const moves = () => t.ctx.db.select().from(audit).where(eq(audit.action, "thread.move"))
+    const suppressed = async () => (await t.ctx.db.select().from(suppressions)).map((s) => s.externalId).sort()
+
+    /** Holds the link structure lock until `release`, as a concurrent transaction would. */
+    function holdLinkLock() {
+      let release = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const done = t.ctx.db.transaction(async (tx) => {
+        await lockLinkStructure(tx)
+        await held
+      })
+      return { release, done }
+    }
+
+    it("waits for a delete that read the child's link: the link is not moved under it", async () => {
+      const item = await linkedItem("in_progress", ["child-1"])
+      const lock = holdLinkLock()
+      await pause(50)
+      // The delete waits for the lock first; the sync's fold waits behind it.
+      const deleting = deleteItem(t.ctx, owner, item.id)
+      await pause(100)
+      const syncing = applyT3Snapshot(t.ctx, folding())
+      await pause(300)
+      lock.release()
+      await lock.done
+      await deleting
+      await syncing
+      // Before the fix the fold moved the link to root-1 meanwhile, and the delete removed root-1's link
+      // while it suppressed only child-1.
+      expect(await moves()).toHaveLength(0)
+      expect(await suppressed()).toEqual(["child-1"])
+    })
+
+    it("suppresses the top-level thread when the fold moved the link first", async () => {
+      const item = await linkedItem("in_progress", ["child-1"])
+      const lock = holdLinkLock()
+      await pause(50)
+      const syncing = applyT3Snapshot(t.ctx, folding())
+      await pause(200)
+      const deleting = deleteItem(t.ctx, owner, item.id)
+      await pause(100)
+      lock.release()
+      await lock.done
+      await syncing
+      await deleting
+      expect(await moves()).toHaveLength(1)
+      expect(await suppressed()).toEqual(["root-1"])
+      const again = await applyT3Snapshot(t.ctx, folding())
+      expect(again.counts).toMatchObject({ threadsSuppressed: 1 })
+      expect(await t.ctx.db.select().from(items)).toHaveLength(0)
+    })
+  })
+
+  it("ignores a thread record that is not newer than the stored one (snapshots out of order)", async () => {
+    const newer = ago(HOUR)
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { status: "running", updatedAt: newer })]))
+    const older = snapshot([
+      thread("a", { status: "completed", settled: true, settledAt: ago(2 * HOUR), updatedAt: ago(2 * HOUR) }),
+    ])
+    const result = await applyT3Snapshot(t.ctx, older)
+    expect(result.counts).toEqual({})
+    expect(await itemOf("a")).toMatchObject({ status: "in_progress" })
+    const [link] = await t.ctx.db.select().from(itemThreads)
+    expect(link).toMatchObject({ lastStatus: "running", settled: false, lastActivityAt: newer })
+    // The same time with other data is a no-op too.
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { status: "waiting", updatedAt: newer })]))
+    expect((await t.ctx.db.select().from(itemThreads))[0]).toMatchObject({ lastStatus: "running" })
   })
 
   it("imports a settled thread without an item only when it settled in the last 7 days", async () => {
@@ -277,6 +372,40 @@ describe("applyT3Snapshot", () => {
     expect(run?.finishedAt).toBeInstanceOf(Date)
   })
 
+  it("logs a failing record without the query's text or parameters", async () => {
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((line: unknown) => void lines.push(String(line)))
+    let result: Awaited<ReturnType<typeof applyT3Snapshot>>
+    try {
+      // PostgreSQL refuses a NUL character in text: the record fails with the title as a parameter.
+      result = await applyT3Snapshot(
+        t.ctx,
+        snapshot([thread("a", { title: `private-title-0815${String.fromCharCode(0)}` })]),
+      )
+    } finally {
+      spy.mockRestore()
+    }
+    expect(result.errors).toEqual([{ record: "thread:a", code: "internal_error" }])
+    const logged = lines.join(" ")
+    expect(logged).toContain('"sqlstate":"22021"')
+    expect(logged).not.toContain("private-title-0815")
+    expect(logged).not.toMatch(/insert into|params/i)
+  })
+
+  it("records a run with unread projects as partial and never decides their items", async () => {
+    await applyT3Snapshot(t.ctx, snapshot([thread("n1", { t3ProjectId: "t3-notes", status: "waiting" })]))
+    const item = await itemOf("n1")
+    await updateItem(t.ctx, agent, item?.id ?? "", item?.version ?? 0, { status: "in_progress" })
+    // The threads of t3-notes could not be read: its item keeps the agent's status in this run.
+    const result = await applyT3Snapshot(t.ctx, snapshot([thread("a")], { failedProjects: ["t3-notes"] }))
+    expect(result.outcome).toBe("partial")
+    expect(result.errors).toEqual([{ record: "threads:t3-notes", code: "threads_not_read" }])
+    expect(result.counts).toMatchObject({ itemsCreated: 1, itemsNotDecided: 1 })
+    expect(await itemOf("n1")).toMatchObject({ status: "in_progress" })
+    const runs = await t.ctx.db.select().from(syncRuns)
+    expect(runs.map((r) => r.outcome)).toEqual(["succeeded", "partial"])
+  })
+
   it("leaves items an agent linked through startThread to the agent's status until the threads say otherwise", async () => {
     const started = await startThread(t.ctx, agent, { threadId: "s-1", parentThreadId: null, title: "Started" })
     await applyT3Snapshot(t.ctx, snapshot([thread("s-1", { status: "running" })]))
@@ -332,5 +461,70 @@ describe("applySecuritySnapshot", () => {
     const again = await applySecuritySnapshot(t.ctx, snap)
     expect(again.counts).toEqual({ reposUnmatched: 1 })
     expect(await t.ctx.db.select().from(audit).where(eq(audit.action, "security.update"))).toHaveLength(auditCount)
+  })
+
+  it("never rolls back counts with an older snapshot applied after a newer one", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    await applySecuritySnapshot(t.ctx, security())
+    const older = security({
+      openIssues: 9,
+      issuesAsOf: ago(3 * HOUR),
+      families: [
+        {
+          family: "dependabot",
+          coverage: "enabled",
+          counts: { critical: 7, high: 7, medium: 7, low: 7 },
+          asOf: ago(3 * HOUR),
+        },
+      ],
+    })
+    const result = await applySecuritySnapshot(t.ctx, older)
+    expect(result.counts).toEqual({ reposUnmatched: 1 })
+    const [p] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    expect(p?.openIssuesCount).toBe(4)
+    const sources = await t.ctx.db.select().from(securitySources).where(eq(securitySources.projectId, project.id))
+    expect(sources.find((s) => s.family === "dependabot")).toMatchObject({ critical: 1, high: 2, low: 3 })
+  })
+
+  it("never overwrites known counts with a record that has no time (a failed or unknown read)", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    await applySecuritySnapshot(t.ctx, security())
+    const failed = security({
+      openIssues: null,
+      issuesAsOf: null,
+      families: [
+        { family: "dependabot", coverage: "error", counts: { critical: 0, high: 0, medium: 0, low: 0 }, asOf: null },
+      ],
+    })
+    const [stored] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    const result = await applySecuritySnapshot(t.ctx, failed)
+    expect(result.counts).toEqual({ reposUnmatched: 1 })
+    const [p] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    expect(p).toMatchObject({ openIssuesCount: 4, openIssuesAsOf: stored?.openIssuesAsOf })
+    const sources = await t.ctx.db.select().from(securitySources).where(eq(securitySources.projectId, project.id))
+    expect(sources.find((s) => s.family === "dependabot")).toMatchObject({ coverage: "enabled", critical: 1 })
+  })
+
+  it("records in the audit row the Issues count that was stored, not a refused older one", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    await applySecuritySnapshot(t.ctx, security())
+    const [stored] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    // Older Issues (refused) with a newer dependabot record (applied).
+    const mixed = security({
+      openIssues: 9,
+      issuesAsOf: ago(3 * HOUR),
+      families: [
+        {
+          family: "dependabot",
+          coverage: "enabled",
+          counts: { critical: 0, high: 0, medium: 0, low: 0 },
+          asOf: ago(HOUR / 2),
+        },
+      ],
+    })
+    expect((await applySecuritySnapshot(t.ctx, mixed)).counts).toMatchObject({ projectsUpdated: 1 })
+    const rows = await t.ctx.db.select().from(audit).where(eq(audit.action, "security.update"))
+    const last = rows.find((r) => r.id === Math.max(...rows.map((x) => x.id)))
+    expect(last?.after).toMatchObject({ openIssuesCount: 4, openIssuesAsOf: stored?.openIssuesAsOf?.toISOString() })
   })
 })

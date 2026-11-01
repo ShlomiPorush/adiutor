@@ -2,7 +2,7 @@
 // {"data": ...}, paged lists as {"data": [...], "nextCursor"}; this file unwraps them.
 
 import type { Stage } from "../../shared/enums.ts"
-import { ApiError, query, request } from "./client.ts"
+import { query, request } from "./client.ts"
 import type {
   AuditEntry,
   Comment,
@@ -45,8 +45,10 @@ export const api = {
   pair: (token: string, label: string) => data<{ device: Device }>("POST", "/pair", { token, label }),
 
   morning: () => data<Morning>("GET", "/morning"),
-  /** Records that the morning view was shown; the next "new since" counts from now. */
-  visit: () => data<{ at: string; previous: string | null }>("POST", "/visits", {}),
+  /** The morning view with a fixed "new since" boundary: the morning page keeps its first read's. */
+  morningSince: (since: string) => data<Morning>("GET", `/morning?since=${encodeURIComponent(since)}`),
+  /** Records that the morning view was shown, at the time of the read shown (its `now`). */
+  visit: (at: string) => data<{ at: string; previous: string | null }>("POST", "/visits", { at }),
 
   projects: () => data<ProjectListEntry[]>("GET", "/projects"),
   project: (projectId: string) => data<ProjectDetail>("GET", `/projects/${id(projectId)}`),
@@ -78,16 +80,10 @@ export const api = {
 
   settings: () => data<Settings>("GET", "/settings"),
   updateSettings: (patch: SettingsPatch) => data<Settings>("PATCH", "/settings", patch),
-  /** Not built yet on every server: a 404 means the bot is not configured. */
-  telegramStatus: async (): Promise<TelegramStatus> => {
-    try {
-      return await data<TelegramStatus>("GET", "/telegram/status")
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "not_found")
-        return { configured: false, polling: false, lastUpdateAt: null, lastMorning: null }
-      throw error
-    }
-  },
+  telegramStatus: () => data<TelegramStatus>("GET", "/telegram/status"),
+  /** Sends today's morning message to the owner's chat now, without touching the 08:00 run. */
+  telegramTestMessage: () =>
+    data<{ sent: true; warning?: "outcome_not_recorded" }>("POST", "/telegram/test-message", {}),
 
   devices: () => data<Device[]>("GET", "/devices"),
   revokeDevice: (deviceId: string) => request<null>("DELETE", `/devices/${id(deviceId)}`),
@@ -101,6 +97,7 @@ export const api = {
 export const qk = {
   session: ["session"] as const,
   morning: ["morning"] as const,
+  morningSince: (since: string) => ["morning", since] as const,
   projects: ["projects"] as const,
   project: (projectId: string) => ["project", projectId] as const,
   item: (itemId: string) => ["item", itemId] as const,

@@ -92,14 +92,9 @@ describe("request and endpoints", () => {
     await expect(api.inbox()).rejects.toMatchObject({ status: 0, code: "network" })
   })
 
-  it("reads a missing Telegram status route (404) as a bot that is not configured", async () => {
+  it("shows a failed Telegram status read as a failed read, never as a bot that is not configured", async () => {
     setTransport(answer(404, { error: { code: "not_found", message: "Nothing is here." } }))
-    expect(await api.telegramStatus()).toEqual({
-      configured: false,
-      polling: false,
-      lastUpdateAt: null,
-      lastMorning: null,
-    })
+    await expect(api.telegramStatus()).rejects.toMatchObject({ code: "not_found" })
     setTransport(answer(500, { error: { code: "internal_error", message: "Boom." } }))
     await expect(api.telegramStatus()).rejects.toMatchObject({ code: "internal_error" })
   })

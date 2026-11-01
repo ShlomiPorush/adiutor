@@ -59,8 +59,16 @@ function isReportableIpv4(address: string): boolean {
 const ASSIGNMENT_KEYS =
   "password|passwd|pwd|passphrase|secret|client[_-]?secret|token|access[_-]?token|auth[_-]?token|refresh[_-]?token|bearer|api[_-]?key|apikey|access[_-]?key|secret[_-]?key|private[_-]?key"
 
+/** The endings of environment-style secret names; `api` + `key` covers APIKEY. */
+const ENV_SUFFIXES = "token|secret|password|passwd|key"
+
 const BASE_RULES: Rule[] = [
-  { name: "private_key", pattern: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g },
+  {
+    name: "private_key",
+    // The whole block, BEGIN through END; a block cut off before its END runs to the end of the text.
+    pattern:
+      /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----|$)/g,
+  },
   {
     name: "url_credentials",
     pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:([^\s/@]+)@/gi,
@@ -82,6 +90,22 @@ const BASE_RULES: Rule[] = [
     pattern: new RegExp(`\\b(?:${ASSIGNMENT_KEYS})["']?\\s*[:=]\\s*["'\`]?([^\\s"'\`,;)}\\]]+)`, "gi"),
     group: 1,
     accept: (m) => looksLikeCredential(m[1] ?? ""),
+  },
+  {
+    name: "secret_assignment",
+    // Environment-style names (MIKUD_OWNER_TOKEN, DB_PASSWORD, signing-key, OPENAI_APIKEY): the word
+    // boundary of the rule above does not see a key after "_", so these get their own rule. The name says
+    // the value is a secret, so any value of 8 or more characters is one, lower-case words and hex
+    // included; only placeholders (***, <...>, [redacted], ${VAR}, changeme, example) pass.
+    pattern: new RegExp(
+      `(?<![A-Za-z0-9_-])(?:[A-Za-z0-9]+[_-])*(?:[A-Za-z0-9]+[_-]|[A-Za-z0-9]*api)(?:${ENV_SUFFIXES})["']?\\s*[:=]\\s*["'\`]?([^\\s"'\`,;)}\\]]+)`,
+      "gi",
+    ),
+    group: 1,
+    accept: (m) => {
+      const value = (m[1] ?? "").replace(/[.!?:]+$/, "")
+      return value.length >= 8 && !isPlaceholder(value)
+    },
   },
   { name: "ipv4_address", pattern: IPV4, accept: (m) => isReportableIpv4(m[0]) },
 ]

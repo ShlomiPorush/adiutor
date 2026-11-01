@@ -417,7 +417,24 @@ const OUTCOME_TONE = { succeeded: "ok", partial: "warn", failed: "fail" } as con
 const JOB_TONE = { sent: "ok", sending: "info", failed: "fail", unknown: "warn", skipped: "warn" } as const
 
 function StatusPanel() {
-  const { t } = useI18n()
+  const { t, language } = useI18n()
+  const [sendingTest, setSendingTest] = useState(false)
+  const sendTest = async () => {
+    setSendingTest(true)
+    try {
+      const result = await api.telegramTestMessage()
+      if (result.warning) showToast(t("settings.telegramTestSentUnrecorded"), "warning")
+      else showToast(t("settings.telegramTestSent"), "success")
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "telegram_uncertain")
+        showToast(t("settings.telegramTestUncertain"), "warning")
+      else if (error instanceof ApiError && error.code === "telegram_failed")
+        showToast(t("settings.telegramTestRefused"), "error")
+      else showToast(t("settings.telegramTestFailed", { reason: errorReason(language, error) }), "error")
+    } finally {
+      setSendingTest(false)
+    }
+  }
   const morning = useQuery({ queryKey: qk.morning, queryFn: api.morning, staleTime: EVERY.live })
   const runs = usePageQuery({ queryKey: qk.syncRuns, queryFn: api.syncRuns, every: EVERY.slow })
   const telegram = usePageQuery({ queryKey: qk.telegram, queryFn: api.telegramStatus, every: EVERY.slow })
@@ -498,6 +515,12 @@ function StatusPanel() {
                 t("settings.noMorningYet")
               )}
             </span>
+          </div>
+          <div className="ui-panel-body">
+            <p className="ui-hint">{t("settings.telegramTestHint")}</p>
+            <button type="button" className="ui-btn" disabled={sendingTest} onClick={() => void sendTest()}>
+              {sendingTest ? t("settings.telegramTestSending") : t("settings.telegramTest")}
+            </button>
           </div>
         </>
       ) : telegram.data ? (

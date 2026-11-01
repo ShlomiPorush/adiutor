@@ -113,6 +113,8 @@
       "suppressed": "You deleted this before",
       "conflict": "It conflicts with the current state",
       "rate_limited": "Too many attempts. Wait a minute",
+      "telegram_failed": "Telegram did not take the message",
+      "telegram_uncertain": "Telegram gave no clear answer; the message may have been sent",
       "internal_error": "The server failed"
     }
   },
@@ -150,13 +152,15 @@
     "discard": "Discard"
   },
   "sync": {
-    "title": "Last successful sync of T3 threads",
+    "title": "Last complete sync of T3 threads",
     "last": "Synced",
     "never": "Never synced",
     "staleTitle": "The T3 sync is out of date",
     "staleBody": "Items and statuses may have changed since the last successful sync, at",
     "neverTitle": "T3 has not been synced yet",
-    "neverBody": "Items appear once the sync tool on your PC runs for the first time."
+    "neverBody": "Items appear once the sync tool on your PC runs for the first time.",
+    "partial": "Partial sync",
+    "partialBody": "A later sync could not read every project, at"
   },
   "bell": {
     "title": "Needs you",
@@ -408,7 +412,9 @@
     "saveChanges": "Save changes",
     "saved": "{title} saved",
     "saveFailed": "Could not save: {reason}",
-    "conflictKept": "This item changed meanwhile. It was reloaded; your text is kept, so save again.",
+    "conflictTitle": "This item changed meanwhile",
+    "conflictBody": "Your text is kept. Save again to replace the change with it, or reload to see the item as it is now.",
+    "conflictReload": "Reload",
     "delete": "Delete item",
     "deleteTitle": "Delete {title}?",
     "deleteMessage": "Its comments and thread links go with it, and the sync will not create it again for those threads. This cannot be undone.",
@@ -499,7 +505,8 @@
       "settings_update": "changed settings",
       "device_pair": "paired a device",
       "device_revoke": "revoked a device",
-      "device_revoke_all": "ended all devices"
+      "device_revoke_all": "ended all devices",
+      "telegram_test_message": "sent a test morning message"
     },
     "field": {
       "status": "Status",
@@ -576,6 +583,14 @@
     },
     "lastMorning": "Last morning message",
     "noMorningYet": "Not sent yet",
+    "telegramTest": "Send a test morning message",
+    "telegramTestHint": "Sends today's morning message to your Telegram chat now. The 08:00 message still goes out.",
+    "telegramTestSending": "Sending...",
+    "telegramTestSent": "The test morning message was sent",
+    "telegramTestSentUnrecorded": "The test morning message was sent, but it could not be recorded in the activity log",
+    "telegramTestRefused": "Telegram did not take the test message. Check the bot token and the chat ID, then try again.",
+    "telegramTestUncertain": "Telegram gave no clear answer, so the test message may have been sent. Check the chat before you send it again.",
+    "telegramTestFailed": "Could not send the test message: {reason}",
     "job": {
       "sending": "Sending",
       "sent": "Sent",

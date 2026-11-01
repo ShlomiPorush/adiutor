@@ -3,21 +3,23 @@
 // Format picked in Settings: numbers only, never month names. A page never formats a date itself;
 // format.guard.test.ts fails on toLocaleDateString, Intl.DateTimeFormat and the like outside this file.
 
-import type { DateFormat, TimeFormat } from "../api/types.ts"
+import {
+  DATE_FORMATS,
+  type DateFormat,
+  DEFAULT_DATE_FORMAT,
+  DEFAULT_TIME_FORMAT,
+  isDateFormat,
+  isTimeFormat,
+  TIME_FORMATS,
+  type TimeFormat,
+  write24h,
+  writeNumericDate,
+} from "../../shared/datetime-formats.ts"
+
+// The formats and their numeric dates are shared with the server (the morning message).
+export { DATE_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, isDateFormat, isTimeFormat, TIME_FORMATS }
 
 export const APP_TIME_ZONE = "Asia/Jerusalem"
-/** The formats the UI offers, as the server stores them; the server default is dd/MM/yyyy and HH:mm. */
-export const DATE_FORMATS: readonly DateFormat[] = ["dd/MM/yyyy", "MM/dd/yyyy", "dd.MM.yyyy", "yyyy-MM-dd", "browser"]
-export const TIME_FORMATS: readonly TimeFormat[] = ["HH:mm", "h:mm a", "browser"]
-export const DEFAULT_DATE_FORMAT: DateFormat = "dd/MM/yyyy"
-export const DEFAULT_TIME_FORMAT: TimeFormat = "HH:mm"
-
-export function isDateFormat(value: string): value is DateFormat {
-  return (DATE_FORMATS as readonly string[]).includes(value)
-}
-export function isTimeFormat(value: string): value is TimeFormat {
-  return (TIME_FORMATS as readonly string[]).includes(value)
-}
 
 type Prefs = {
   dateFormat: DateFormat
@@ -112,34 +114,21 @@ const pad = (value: number, length = 2) => String(value).padStart(length, "0")
 
 /** An instant's date as Date Format writes it, with or without the year. */
 export function writeDate(date: Date, { year = true }: { year?: boolean } = {}): string {
-  const p = zonedParts(date)
-  const dd = pad(p.day)
-  const mm = pad(p.month)
-  const yyyy = pad(p.year, 4)
-  switch (prefs.dateFormat) {
-    case "dd/MM/yyyy":
-      return year ? `${dd}/${mm}/${yyyy}` : `${dd}/${mm}`
-    case "MM/dd/yyyy":
-      return year ? `${mm}/${dd}/${yyyy}` : `${mm}/${dd}`
-    case "dd.MM.yyyy":
-      return year ? `${dd}.${mm}.${yyyy}` : `${dd}.${mm}`
-    case "yyyy-MM-dd":
-      return year ? `${yyyy}-${mm}-${dd}` : `${mm}-${dd}`
-    default:
-      return formatter(prefs.browserLocale, {
-        timeZone: prefs.timeZone,
-        day: "2-digit",
-        month: "2-digit",
-        ...(year ? { year: "numeric" } : {}),
-      }).format(date)
-  }
+  const numeric = writeNumericDate(zonedParts(date), prefs.dateFormat, { year })
+  if (numeric !== null) return numeric
+  return formatter(prefs.browserLocale, {
+    timeZone: prefs.timeZone,
+    day: "2-digit",
+    month: "2-digit",
+    ...(year ? { year: "numeric" } : {}),
+  }).format(date)
 }
 
 /** An instant's time of day as Time Format writes it. */
 export function writeClock(date: Date, { seconds = false }: { seconds?: boolean } = {}): string {
   if (prefs.timeFormat === "HH:mm") {
     const p = zonedParts(date)
-    return seconds ? `${pad(p.hour)}:${pad(p.minute)}:${pad(p.second)}` : `${pad(p.hour)}:${pad(p.minute)}`
+    return seconds ? `${write24h(p.hour, p.minute)}:${pad(p.second)}` : write24h(p.hour, p.minute)
   }
   const twelve = prefs.timeFormat === "h:mm a"
   return formatter(twelve ? prefs.uiLocale : prefs.browserLocale, {

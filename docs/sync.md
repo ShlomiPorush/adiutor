@@ -1,6 +1,6 @@
 # Sync tool
 
-Status: built and tested against fixtures and a stub server; the server routes it calls (`/api/v1/sync/t3`, `/api/v1/sync/security`) are being built separately. Not yet run against a Mikud server.
+Status: built and tested against fixtures and a stub server. The server routes it calls (`/api/v1/sync/t3`, `/api/v1/sync/security`) are on `main`; see [api.md](api.md). Not yet run against a Mikud server; that happens in the dry run.
 
 `dist/sync/mikud-sync.js` runs on the owner's PC, started by the T3 scheduled task in [prompts/reconcile.md](../prompts/reconcile.md). It is the only way T3 and GitHub data reach Mikud: the server never calls T3 or GitHub.
 
@@ -8,7 +8,7 @@ Status: built and tested against fixtures and a stub server; the server routes i
 
 1. Runs the `overview` collector (`node src/cli.mjs collect` in the overview checkout, 20 minute limit), then reads the newest snapshot: the run in `data/latest-run.txt`, or else the newest readable `data/runs/<runId>/snapshot.json`. When the collector fails (for example, another overview run holds its lock), the newest existing snapshot is used and the output says so.
 2. Reads the projects file that the scheduled agent wrote from `t3_project_list`. Deleted projects and projects whose id holds characters other than letters, digits, `.`, `_`, `:` and `-` are skipped and counted.
-3. Runs `t3 thread list --project <id> --json` for every project, four at a time, 2 minute limit each. Top-level and child threads are both sent with their `parentThreadId`; the server folds child threads into their parent's item.
+3. Runs `t3 thread list --project <id> --json` for every project, four at a time, 2 minute limit each. Top-level and child threads are both sent with their `parentThreadId`; the server folds child threads into their parent's item. Projects whose threads could not be read, or whose thread list had invalid records, are sent as `failedProjects`, so the server records the run as `partial` and does not decide their items in that run. When no project could be read, the T3 payload is not sent.
 4. Finds each project's GitHub repository: from T3's repository identity when its provider is GitHub, otherwise by matching the project's folder (`workspaceRoot` or the identity's `rootPath`) against the snapshot's local repositories and their worktrees, ignoring case and separators.
 5. Sends `POST /api/v1/sync/t3`, then `POST /api/v1/sync/security` for the project repositories found in the snapshot, and prints each answer.
 

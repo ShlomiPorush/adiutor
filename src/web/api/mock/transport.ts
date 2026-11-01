@@ -197,7 +197,7 @@ function morning(): Morning {
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),
     inboxCount: open.filter((item) => item.projectId === null).length,
-    sync: { lastSuccessAt: ago(27), stale: true, securityLastSuccessAt: ago(9) },
+    sync: { lastSuccessAt: ago(27), stale: true, lastPartialAt: ago(3), securityLastSuccessAt: ago(9) },
   }
 }
 
@@ -471,6 +471,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     record("settings.update", "settings", state.settings.id, before, { ...state.settings })
     return ok(state.settings)
   }
+  if (head === "telegram" && id === "test-message" && method === "POST") return ok({ sent: true })
   if (head === "telegram")
     return ok({
       configured: true,

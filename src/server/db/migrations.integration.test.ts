@@ -4,7 +4,7 @@ import { getTableName, is } from "drizzle-orm"
 import { PgTable } from "drizzle-orm/pg-core"
 import postgres from "postgres"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { createDatabase, type Database } from "./client.ts"
+import { createDatabase, type Database, TRANSACTION_TIMEOUT_MS } from "./client.ts"
 import * as schema from "./schema.ts"
 
 // The migrations in drizzle/ against a real PostgreSQL. MIKUD_TEST_DATABASE_URL is a role that may create
@@ -43,6 +43,13 @@ describe("migrations", () => {
     await database.migrate(folder)
     await database.migrate(folder)
     expect(await database.ping()).toBe(true)
+  })
+
+  it("bound every transaction of the app pool (the visit boundary relies on it)", async () => {
+    const [row] = await database.db.execute<{ tx: string; idle: string }>(
+      "select current_setting('transaction_timeout') as tx, current_setting('idle_in_transaction_session_timeout') as idle",
+    )
+    expect(row).toEqual({ tx: `${TRANSACTION_TIMEOUT_MS / 1000}s`, idle: "15s" })
   })
 
   it("create every table of the schema", async () => {

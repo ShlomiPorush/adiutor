@@ -47,6 +47,16 @@ describe("secret scanner", () => {
     ["secret_assignment", 'config {"api_key": "a8f5f167f44f4964e6c998dee827110c"}'],
     ["secret_assignment", "TOKEN: Zq81-kd92-xx01"],
     ["secret_assignment", "client_secret = 9f8e7d6c5b4a"],
+    ["secret_assignment", `MIKUD_OWNER_TOKEN=${rep("0123456789abcdef", 64)}`],
+    ["secret_assignment", `export MIKUD_AGENT_TOKEN="${rep("f00dCafe12", 40)}"`],
+    ["secret_assignment", "DB_PASSWORD=Spring2026x"],
+    ["secret_assignment", "smtp_passwd: x9k2m4q7z"],
+    ["secret_assignment", `STRIPE_SECRET=${rep("q1w2e3r4", 24)}`],
+    ["secret_assignment", `OPENAI_APIKEY=${rep("Zz9Yy8Xx7", 24)}`],
+    ["secret_assignment", `signing-key: ${rep("a1b2c3d4", 16)}`],
+    // Lower-case values (hex, a passphrase of words) after an env-style secret name.
+    ["secret_assignment", `MIKUD_OWNER_TOKEN=${rep("deadbeef", 64)}`],
+    ["secret_assignment", `DB_PASSWORD=${["correct", "horse", "battery"].join("")}`],
     ["ipv4_address", `server at ${ip(10, 1, 20, 30)}`],
     ["ipv4_address", `ssh to ${ip(192, 168, 1, 50)}:22`],
     ["ipv4_address", `public ${ip(8, 8, 4, 4)}`],
@@ -73,6 +83,10 @@ describe("secret scanner", () => {
     ["a redacted value", "api_key=[redacted]"],
     ["an environment variable reference", `token=${"$"}{GITHUB_TOKEN} and secret: MIKUD_AGENT_TOKEN`],
     ["prose about tokens", "The token: expired after a week. Rotate the secret: done."],
+    ["an env-style placeholder", "MIKUD_OWNER_TOKEN=<64 hex characters> and DB_PASSWORD=*** and API_KEY=changeme"],
+    ["an env-style reference", `MIKUD_AGENT_TOKEN=${"$"}{MIKUD_AGENT_TOKEN} and CACHE_KEY=${"$"}CACHE`],
+    ["a short env-style value", "SORT_KEY=name1"],
+    ["an env-style name in prose", "Set MIKUD_OWNER_TOKEN: rotated last week"],
     ["a placeholder in a URL", "postgres://mikud:<password>@db.example.com/mikud"],
     ["a URL with a port", "open https://example.com:8443/path@v2"],
     ["the public domain of a private one", "corp.example.org is someone else's"],
@@ -92,6 +106,15 @@ describe("secret scanner", () => {
     const out = scanner.redact(text)
     expect(out).toBe(`Thread: fix ${REDACTED} leak on ${REDACTED}, password=${REDACTED} at ${REDACTED}, commit 9fceb02`)
     expect(scanner.find(out)).toBeNull()
+  })
+
+  it("redacts a whole private key block, and a truncated one to the end of the text", () => {
+    const body = rep("b3BlbnNzaC1rZXk", 60)
+    const begin = `-----BEGIN ${"OPENSSH"} PRIVATE KEY-----`
+    const full = [`key: ${begin}`, body, "-----END OPENSSH PRIVATE KEY-----", "after"].join(" ")
+    expect(scanner.redact(full)).toBe(`key: ${REDACTED} after`)
+    const truncated = [`pasted ${begin}`, body, body].join(" ")
+    expect(scanner.redact(truncated)).toBe(`pasted ${REDACTED}`)
   })
 
   it("redacts only the password of URL credentials", () => {

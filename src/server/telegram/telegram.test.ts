@@ -114,8 +114,18 @@ describe("BotApi", () => {
       answer({ ok: false, error_code: 429, parameters: { retry_after: 3 } }, 429).sendMessage("1", html`x`),
     )
     expect(limited).toMatchObject({ failure: "answer", code: "telegram_429", retryAfter: 3 })
+    // A gateway's page or Telegram's own 5xx may hide a message that went out: never definite.
     const gateway = new BotApi(TOKEN, "https://x.example", async () => new Response("<html>", { status: 502 }))
-    expect(await failure(gateway.sendMessage("1", html`x`))).toMatchObject({ failure: "answer", code: "telegram_502" })
+    expect(await failure(gateway.sendMessage("1", html`x`))).toMatchObject({
+      failure: "uncertain",
+      code: "telegram_502",
+    })
+    const serverError = await failure(
+      answer({ ok: false, error_code: 500, description: "Internal" }, 500).sendMessage("1", html`x`),
+    )
+    expect(serverError).toMatchObject({ failure: "uncertain", code: "telegram_500" })
+    const foreignJson = await failure(answer({ message: "Bad request" }, 400).sendMessage("1", html`x`))
+    expect(foreignJson).toMatchObject({ failure: "uncertain", code: "telegram_400" })
     const garbled = new BotApi(TOKEN, "https://x.example", async () => new Response("not json", { status: 200 }))
     expect(await failure(garbled.sendMessage("1", html`x`))).toMatchObject({ failure: "uncertain" })
 

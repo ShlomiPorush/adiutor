@@ -6,6 +6,7 @@
 
 import {
   type InfiniteData,
+  keepPreviousData,
   type QueryKey,
   type UseInfiniteQueryResult,
   type UseQueryResult,
@@ -27,11 +28,14 @@ export function usePageQuery<T>(options: {
   queryFn: () => Promise<T>
   every: number
   enabled?: boolean
+  /** Keeps showing the previous key's data while a new key loads (a page that changes its key). */
+  keepPrevious?: boolean
 }): UseQueryResult<T> {
   return useQuery({
     queryKey: options.queryKey,
     queryFn: options.queryFn,
     enabled: options.enabled,
+    placeholderData: options.keepPrevious ? keepPreviousData : undefined,
     refetchInterval: options.every,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,

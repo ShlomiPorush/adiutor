@@ -2,7 +2,17 @@ import { and, eq, isNull, like, or } from "drizzle-orm"
 import type { Stage } from "../../shared/enums.ts"
 import { goals, items, projects, stageProposals, suppressions } from "../db/schema.ts"
 import { AppError, forbidden, invalid, notFound } from "../errors.ts"
-import { type By, type Ctx, checkAgentText, type DbOrTx, inTx, requireOwner, type Tx, writeAudit } from "./context.ts"
+import {
+  type By,
+  type Ctx,
+  checkAgentText,
+  type DbOrTx,
+  inLinkTx,
+  inTx,
+  requireOwner,
+  type Tx,
+  writeAudit,
+} from "./context.ts"
 
 export type ProjectRow = typeof projects.$inferSelect
 export type GoalRow = typeof goals.$inferSelect
@@ -289,7 +299,7 @@ export async function decideProposal(
  */
 export async function deleteProject(ctx: Ctx, by: By, id: string): Promise<void> {
   requireOwner(by, "delete projects")
-  return inTx(ctx, async (tx) => {
+  return inLinkTx(ctx, async (tx) => {
     const [before] = await tx.select().from(projects).where(eq(projects.id, id)).for("update")
     if (!before) throw notFound("The project")
     const [item] = await tx.select({ id: items.id }).from(items).where(eq(items.projectId, id)).limit(1)

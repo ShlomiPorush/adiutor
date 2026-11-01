@@ -1,7 +1,8 @@
 // Opening an item and the one-click item actions. An item opens as a dialog over the current page
 // with its own address (?item=<id>), so Back closes it and the link can be shared. A status, type or
-// project change acts at once and offers Undo for ten seconds (v3 FB-16): Undo sends the previous
-// value with the version the change returned, so it cannot undo someone else's later change.
+// project change acts at once and offers Undo for ten seconds (v3 FB-16): Undo sends every field the
+// change altered back to its previous value (undo.ts), with the version the change returned, so it
+// cannot undo someone else's later change.
 
 import { useQueryClient } from "@tanstack/react-query"
 import { useCallback } from "react"
@@ -13,6 +14,7 @@ import type { Item, ItemDetail, ItemPatch } from "../api/types.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { errorReason } from "../ui/states.tsx"
 import { showToast } from "../ui/Toast.tsx"
+import { type UndoState, undoPatch } from "./undo.ts"
 
 export const ITEM_PARAM = "item"
 
@@ -65,7 +67,7 @@ export function useRefreshItems(): () => Promise<void> {
   }, [queryClient])
 }
 
-type ItemRef = { id: string; version: number; title: string }
+type ItemRef = { id: string; version: number; title: string } & UndoState
 
 export function useItemActions() {
   const { t, language } = useI18n()
@@ -83,7 +85,7 @@ export function useItemActions() {
     async (
       item: ItemRef,
       patch: ItemPatch,
-      undo: ItemPatch | null,
+      undoable: boolean,
       message: string,
       undoLabel: string,
     ): Promise<Item | null> => {
@@ -91,6 +93,7 @@ export function useItemActions() {
         const next = await api.updateItem(item.id, item.version, patch)
         keep(next)
         await refresh()
+        const undo = undoable ? undoPatch(item, next) : null
         showToast(
           message,
           "success",
@@ -132,32 +135,32 @@ export function useItemActions() {
   )
 
   return {
-    setStatus: (item: ItemRef & { status: ItemStatus }, status: ItemStatus) =>
+    setStatus: (item: ItemRef, status: ItemStatus) =>
       change(
         item,
         { status },
-        { status: item.status },
+        true,
         t("toast.statusSet", { title: item.title, status: t(`itemStatus.${status}`) }),
         t("toast.undoStatus", { title: item.title }),
       ),
-    setType: (item: ItemRef & { type: ItemType }, type: ItemType) =>
+    setType: (item: ItemRef, type: ItemType) =>
       change(
         item,
         { type },
-        { type: item.type },
+        true,
         t("toast.typeSet", { title: item.title, type: t(`itemType.${type}`) }),
         t("toast.undoType", { title: item.title }),
       ),
-    moveTo: (item: ItemRef & { projectId: string | null }, projectId: string | null, projectName: string | null) =>
+    moveTo: (item: ItemRef, projectId: string | null, projectName: string | null) =>
       change(
         item,
         { projectId },
-        { projectId: item.projectId },
+        true,
         projectId
           ? t("toast.moved", { title: item.title, project: projectName ?? "" })
           : t("toast.movedToInbox", { title: item.title }),
         t("toast.undoMove", { title: item.title }),
       ),
-    update: (item: ItemRef, patch: ItemPatch, message: string) => change(item, patch, null, message, ""),
+    update: (item: ItemRef, patch: ItemPatch, message: string) => change(item, patch, false, message, ""),
   }
 }

@@ -1,6 +1,7 @@
 import { lastRun } from "../jobs/morning.ts"
 import type { Ctx } from "../services/context.ts"
 import { lastUpdateAt } from "./bot.ts"
+import type { TelegramHtml } from "./html.ts"
 
 /** What the running server knows about its bot; the rest comes from the database. */
 export type TelegramRuntime = {
@@ -8,6 +9,8 @@ export type TelegramRuntime = {
   configured: boolean
   /** The latest getUpdates call succeeded. */
   polling(): boolean
+  /** Sends a message to the owner's chat now (the test morning message). Throws TelegramError. */
+  send?(text: TelegramHtml): Promise<void>
 }
 
 export const TELEGRAM_OFF: TelegramRuntime = { configured: false, polling: () => false }

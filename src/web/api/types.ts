@@ -3,6 +3,7 @@
 // src/shared/enums.ts; labels come from the locale files. Times are ISO 8601 strings in UTC. When
 // the contract changes, this file and endpoints.ts are the only places to follow it.
 
+import type { DateFormat, TimeFormat } from "../../shared/datetime-formats.ts"
 import type {
   ActorKind,
   AuditSource,
@@ -31,6 +32,8 @@ export const API_ERROR_CODES = [
   "suppressed",
   "conflict",
   "rate_limited",
+  "telegram_failed",
+  "telegram_uncertain",
   "internal_error",
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
@@ -259,14 +262,18 @@ export type Morning = {
   agentUpdates: AgentUpdateGroup[]
   projects: MorningProject[]
   inboxCount: number
-  sync: { lastSuccessAt: string | null; stale: boolean; securityLastSuccessAt: string | null }
+  sync: {
+    lastSuccessAt: string | null
+    stale: boolean
+    lastPartialAt: string | null
+    securityLastSuccessAt: string | null
+  }
 }
 
 export type Page<T> = { entries: T[]; nextCursor: string | null }
 
 /** Date and time formats as the server stores them (free text up to 40; these are the ones the UI offers). */
-export type DateFormat = "browser" | "dd/MM/yyyy" | "MM/dd/yyyy" | "dd.MM.yyyy" | "yyyy-MM-dd"
-export type TimeFormat = "HH:mm" | "h:mm a" | "browser"
+export type { DateFormat, TimeFormat }
 
 export type Settings = {
   id: string
@@ -294,7 +301,7 @@ export type SyncRun = {
   errors: { record: string; code: string }[]
 }
 
-/** GET /telegram/status (docs/api.md, Telegram). A server without the route (404) counts as not configured. */
+/** GET /telegram/status (docs/api.md, Telegram). */
 export type TelegramStatus = {
   configured: boolean
   /** The latest getUpdates call of the bot succeeded. */

@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
+import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { RateLimiter } from "./auth.ts"
 
@@ -60,6 +61,29 @@ async function pair(label = "Desktop") {
 }
 
 describe("authentication", () => {
+  it("logs a failing query without its text or parameters", async () => {
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((line: unknown) => void lines.push(String(line)))
+    try {
+      // PostgreSQL refuses a NUL character in text, so the insert fails with the owner's text as a parameter.
+      const marker = "owner-private-note-4711"
+      const res = await call("/items", {
+        method: "POST",
+        token: OWNER,
+        body: { type: "task", title: "Logged", body: `${marker}${String.fromCharCode(0)}` },
+      })
+      expect(res.status).toBe(500)
+      expect(res.json.error.code).toBe("internal_error")
+    } finally {
+      spy.mockRestore()
+    }
+    const logged = lines.join(" ")
+    expect(logged).toContain('"msg":"request failed"')
+    expect(logged).toContain('"sqlstate":"22021"')
+    expect(logged).not.toContain("owner-private-note-4711")
+    expect(logged).not.toMatch(/insert into|params/i)
+  })
+
   it("refuses a request without a token or cookie", async () => {
     const res = await call("/projects")
     expect(res.status).toBe(401)
@@ -205,6 +229,35 @@ describe("browser pairing", () => {
     const view = await call("/morning", { cookie })
     expect(view.json.data.since).toBe(visit.json.data.at)
     expect((await call("/visits", { method: "POST", token: OWNER })).status).toBe(403)
+  })
+
+  it("keeps a page's boundary on refresh and records a visit no later than the read that was shown", async () => {
+    const { cookie } = await pair()
+    const first = await call("/morning", { cookie })
+    const { since, now: asOf } = first.json.data
+    expect(new Date(asOf).getTime()).toBeLessThanOrEqual(t.ctx.clock().getTime())
+    // Arrives after the read was shown: never marked seen by the visit that follows it.
+    t.clock.travel(60_000)
+    await call("/items", { method: "POST", token: AGENT, body: { type: "task", title: "Arrived later" } })
+    const visit = await call("/visits", { method: "POST", cookie, headers: browser, body: { at: asOf } })
+    expect(visit.status).toBe(201)
+    // Recorded a safety margin before the read (see db/client.ts).
+    expect(visit.json.data.at).toBe(new Date(new Date(asOf).getTime() - VISIT_SAFETY_MARGIN_MS).toISOString())
+
+    const titles = (view: { json: { data: { new: { item: { title: string } }[] } } }) =>
+      view.json.data.new.map((n) => n.item.title)
+    const refresh = await call(`/morning?since=${encodeURIComponent(since)}`, { cookie })
+    expect(refresh.json.data.since).toBe(since)
+    expect(titles(refresh)).toContain("Arrived later")
+    const next = await call("/morning", { cookie })
+    expect(next.json.data.since).toBe(visit.json.data.at)
+    expect(titles(next)).toContain("Arrived later")
+
+    // A time after the server's clock is recorded as now; a bad one is refused.
+    const future = new Date(t.ctx.clock().getTime() + 86_400_000).toISOString()
+    const late = await call("/visits", { method: "POST", cookie, headers: browser, body: { at: future } })
+    expect(new Date(late.json.data.at).getTime()).toBeLessThanOrEqual(t.ctx.clock().getTime())
+    expect((await call("/morning?since=yesterday", { cookie })).status).toBe(400)
   })
 })
 

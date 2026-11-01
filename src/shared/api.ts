@@ -102,6 +102,12 @@ export const settingsBody = z.object({
   language: languageSchema.optional(),
 })
 
+/** A page keeps the boundary of its first read: later refreshes pass it back. */
+export const morningQuery = z.object({ since: isoDate.optional() })
+
+/** The visit is recorded at the time of the read that was shown (its `now`), never later than the server's now. */
+export const visitBody = z.object({ at: isoDate.optional() })
+
 export const pairBody = z.object({
   token: z.string().min(1).max(500),
   label: text(100).optional(),
@@ -135,6 +141,8 @@ export const t3SnapshotBody = z.object({
       }),
     )
     .max(20_000),
+  /** T3 projects whose threads could not be read in this run: their items are not decided. */
+  failedProjects: z.array(externalId).max(2_000).optional(),
 })
 
 const count = z.number().int().min(0)

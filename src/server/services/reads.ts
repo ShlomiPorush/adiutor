@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lt, or, type SQL, sql } from "drizzle-orm"
-import { CLOSED_STATUSES, type ItemStatus, type ItemType } from "../../shared/enums.ts"
+import { CLOSED_STATUSES, type ItemStatus, type ItemType, type SyncOutcome } from "../../shared/enums.ts"
 import {
   audit,
   comments,
@@ -88,22 +88,31 @@ async function currentGoals(ctx: Ctx, projectIds?: string[]): Promise<Map<string
   )
 }
 
-async function lastSuccess(ctx: Ctx, kind: string): Promise<Date | null> {
+async function lastFinished(ctx: Ctx, kind: string, outcomes: SyncOutcome[]): Promise<Date | null> {
   const [row] = await ctx.db
     .select({ at: syncRuns.finishedAt })
     .from(syncRuns)
-    .where(and(eq(syncRuns.kind, kind), inArray(syncRuns.outcome, ["succeeded", "partial"])))
+    .where(and(eq(syncRuns.kind, kind), inArray(syncRuns.outcome, outcomes)))
     .orderBy(desc(syncRuns.finishedAt))
     .limit(1)
   return row?.at ?? null
 }
 
+/**
+ * T3 freshness comes from the last complete run (`succeeded`): a partial run may have missed whole
+ * projects. A partial run after it is reported as such (`lastPartialAt`).
+ */
 export async function syncStatus(ctx: Ctx) {
   const now = ctx.clock().getTime()
-  const [t3, security] = await Promise.all([lastSuccess(ctx, "t3"), lastSuccess(ctx, "security")])
+  const [t3, partial, security] = await Promise.all([
+    lastFinished(ctx, "t3", ["succeeded"]),
+    lastFinished(ctx, "t3", ["partial"]),
+    lastFinished(ctx, "security", ["succeeded", "partial"]),
+  ])
   return {
     lastSuccessAt: t3,
     stale: !t3 || now - t3.getTime() > STALE_AFTER_MS,
+    lastPartialAt: partial && (!t3 || partial.getTime() > t3.getTime()) ? partial : null,
     securityLastSuccessAt: security,
   }
 }
@@ -270,6 +279,8 @@ async function visibleItems(ctx: Ctx, closedItemDays: number): Promise<ItemRow[]
  * caller gives one (the morning message).
  */
 export async function morning(ctx: Ctx, options: { deviceId?: string | null; since?: Date } = {}) {
+  // The time of this read, taken before anything is read: a visit recorded with it marks nothing newer seen.
+  const now = ctx.clock()
   const settingsRow = await getSettings(ctx.db)
   const since = options.since ?? (await previousVisit(ctx, options.deviceId))
   const allProjects = await ctx.db.select().from(projects).orderBy(asc(projects.name))
@@ -331,7 +342,7 @@ export async function morning(ctx: Ctx, options: { deviceId?: string | null; sin
     }))
 
   return {
-    now: ctx.clock(),
+    now,
     since,
     waiting,
     new: fresh,
