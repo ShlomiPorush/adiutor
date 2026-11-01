@@ -17,7 +17,7 @@ UI follows the `v3-ui-style` skill.
 
 One pnpm package (no workspace apps).
 
-- `src/server/`: Hono server. `index.ts` starts it (and the bot and the morning job when Telegram is configured), `config.ts` reads and checks the environment, `app.ts` mounts `/healthz`, `/api/v1` and `/mcp` and maps errors, `healthcheck.ts` is the container health check, `errors.ts` holds the stable error codes, `db/` the Drizzle schema and client.
+- `src/server/`: Hono server. `index.ts` starts it (and the bot and the morning job when Telegram is configured), `config.ts` reads and checks the environment, `app.ts` mounts `/healthz`, `/api/v1`, `/mcp` and the built UI (`web.ts`: `dist/web` with a page fallback and the Content-Security-Policy) and maps errors, `healthcheck.ts` is the container health check, `errors.ts` holds the stable error codes, `db/` the Drizzle schema and client.
   - `services/`: every write and read model. `context.ts` (actor, audit row, agent secret check), `items.ts`, `projects.ts`, `threads.ts` (start of thread), `sync.ts` and `sync-rules.ts` (T3 and security snapshots), `reads.ts` (morning, project, item, archive, inbox, audit), `admin.ts` (settings, suppressions, devices, visits), `secrets.ts`.
   - `http/`: `auth.ts` (bearer token, device cookie, CSRF check, rate limit) and `api.ts` (the `/api/v1` routes). `mcp/server.ts`: the MCP tools.
   - `telegram/`: `api.ts` (Bot API client; a failure is `answer`, `not_sent`, `uncertain` or `aborted`), `html.ts` (Telegram HTML that escapes every value), `bot.ts` (long polling, one transaction per update), `texts.ts` (locale texts), `status.ts` (the status route's read).
@@ -25,24 +25,31 @@ One pnpm package (no workspace apps).
   - `testing/db.ts`: a migrated database per integration test file, and a movable clock. `testing/bot-api.ts`: a stand-in Telegram Bot API on `127.0.0.1` for tests (getUpdates with Telegram's offset rules, sendMessage recorded, failures on demand).
 - `src/shared/`: enum codes as `const` arrays with zod schemas (`enums.ts`), the API request schemas (`api.ts`), the UI paths that messages link to (`routes.ts`) and the locale files `locales/en.json` and `locales/he.json`.
 - `drizzle/`: generated SQL migrations and their snapshots. Never edit by hand.
-- `config/`: TypeScript base config, Vitest configs, Drizzle Kit config.
+- `config/`: TypeScript base config, Vitest configs, Drizzle Kit config, `vite.config.ts` (the UI build) and `playwright.config.ts` (end-to-end tests).
 - `docker/`: toolchain and application Dockerfiles, the development Compose template and `dev.env` (fake development values).
 - `scripts/`: `local.sh`, `verify.sh`, `try-pr.sh`, `release.sh` and its tests `test-release.sh`; `lib/common.sh` (shared helpers), `lib/guards.sh` (repository guards) and `lib/try-pr-seed.mjs` (invented fixtures for `try-pr.sh`).
 - `src/sync/`: the sync tool that runs on the owner's PC, bundled to `dist/sync/mikud-sync.js` (Node stdlib only at runtime; no imports from `src/server/`). `main.ts` is the entry, `run.ts` one run, `fixtures/` invented T3 and `overview` data for its tests. See `docs/sync.md`.
 - `prompts/`: `reconcile.md`, the instructions of the T3 scheduled task that runs the sync tool.
 - `docs/api.md`: the HTTP API and MCP contract. Change it together with the routes.
 - `docs/deployment.md`: the owner's deployment notes. `.github/workflows/`: `ci.yml` and `release.yml`.
-- `src/web/`, `e2e/`: planned, not created yet.
+- `src/web/`: the web UI (React 19, Vite, React Router, TanStack Query), built to `dist/web`. Its own `tsconfig.json` (DOM, JSX).
+  - `api/`: `types.ts` (every shape of `docs/api.md`), `endpoints.ts` (every route and the query keys), `client.ts` (the one fetch client: CSRF header, `{error}` to `ApiError`, 401 to pairing). `mock/`: invented data behind the same routes, loaded only with `VITE_MIKUD_MOCK=1`.
+  - `ui/`: the shared builders and parts: `Dialog.tsx` (every dialog; a sheet on phones), `Toast.tsx`, `confirm.tsx`, `layers.ts` (Escape, Back, focus, inert), `unsaved.tsx` (save bar guard), `refresh.ts` (`usePageQuery`, the paces), states, tags, time, copy.
+  - `shell/`: the frame (sidebar, rail, phone bars, More sheet), the bell, quick add, item actions with Undo, theme, the session gate. `pages/`: one file per page and the item dialog. `format/`: the only date, time and number helpers. `i18n/`: locale lookup with plurals. `styles/ui.css`: the one stylesheet of `--ui-*` tokens and `ui-` components.
+  - `guards.test.ts`: the v3 guards (popups only from the builders, every page refreshes, dates through the helpers, locale keys used exist).
+- `e2e/`: Playwright specs against a running Mikud (pairing, morning, an item status change with Undo, quick add), desktop and phone.
 
 ## Commands
 
 Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfmt run in the toolchain container; the host needs Docker only.
 
-- `scripts/verify.sh`: guards, Biome, types, unit tests, build, schema-versus-migration check, database tests against a disposable PostgreSQL (`mikud-verify`), then the image with health, UID and hardening checks. `--guards-only` for the guards alone; `--changed [BASE]` runs guards only when every change is documentation; `--skip-e2e` is accepted (no end-to-end tests yet).
+- `scripts/verify.sh`: guards, Biome, types, unit tests, build, schema-versus-migration check, database tests against a disposable PostgreSQL (`mikud-verify`), then the image with health, UID and hardening checks, then the end-to-end tests in the Playwright image against that container. After the build it checks `dist/web` for external assets and the mock (`scripts/lib/web-dist-check.sh`). `--guards-only` for the guards alone; `--changed [BASE]` runs guards only when every change is documentation; `--skip-e2e` skips the end-to-end tests.
 - `scripts/local.sh build|up|start|down|status|logs|nuke`: the development stack (`mikud-dev`) from the ignored `docker-compose-dev.yml`. Create it once with `cp docker/docker-compose-dev.example.yml docker-compose-dev.yml`. Serves `http://127.0.0.1:8090`; `MIKUD_PORT` changes the port.
 - `scripts/try-pr.sh <number>|status|restore`: runs a pull request's head as the separate Compose project `mikud-pr` (own PostgreSQL, generated tokens in a 0600 file under `~/.cache/mikud/try-pr`, Telegram off, invented fixtures) on `http://127.0.0.1:8091`; `MIKUD_PR_PORT` changes the port. Never touches `mikud-dev`. `restore` removes the stack, its data, image and worktree.
 - `scripts/release.sh --target ghcr --bump <patch|minor|major> [--dry-run]`: run by the manual Release workflow on `main`; never by agents except `--dry-run`. `scripts/test-release.sh` tests it offline and runs with the guards.
 - A single tool in the toolchain: `source scripts/lib/common.sh && build_toolchain && in_toolchain "pnpm test"`.
+- UI development: `in_toolchain "VITE_MIKUD_MOCK=1 pnpm dev:web"` serves the UI on the mock API (port 5173 in the container); without the flag `pnpm dev:web` proxies `/api` to the development stack.
+- End-to-end tests against the development stack: `docker run --rm --ipc=host --network host --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo" -w /repo mcr.microsoft.com/playwright:v1.64.1-noble npx playwright test --config config/playwright.config.ts` (from a WSL clone; the tests create invented records and set the language to Hebrew).
 - New migration after a schema change: `in_toolchain "pnpm db:generate --name <change>"`. `verify.sh` fails when the schema and the migrations disagree.
 
 ## Traps
@@ -60,6 +67,11 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 - The morning message goes out at most once a day: its `job_runs` row is taken as `sending` before the send. Only a definite failure (`answer`, `not_sent`) becomes `failed` and is retried; anything else becomes `unknown` and is never resent. Do not add a resend path for `unknown`.
 - Bot text goes through the same secret check as agent text: `checkAgentText` covers actor kinds `agent` and `bot`.
 - Write bidirectional control characters in source as escapes (backslash, `u`, four hex digits), never as literal characters. Some editing tools turn the escapes into the characters; check new files before committing.
+- UI text keys may not contain dots inside one segment: the lookup splits keys on `.`, so audit actions are keyed `item_update`, not `item.update`. Hebrew is allowed only in `he.json`: a language's name written in that language comes from `Intl.DisplayNames`, not from `en.json`.
+- The production UI build defines `__MIKUD_MOCK__` as `false`, which drops `src/web/api/mock`; `web-dist-check.sh` fails when the mock's storage key `mikud.mock.` is in `dist/web`. Never import the mock any other way.
+- `@playwright/test` in `package.json` and `PLAYWRIGHT_IMAGE` in `scripts/lib/common.sh` must name the same version; `verify.sh` refuses a mismatch.
+- The verification stack's `MIKUD_PUBLIC_URL` is `http://127.0.0.1:8090`; the server refuses a browser change whose `Origin` differs. `e2e/global-setup.ts` forwards that address to the container (`E2E_TARGET`), so do not point the tests at `http://mikud:8080` directly.
+- The UI formats dates only through `src/web/format/datetime.ts` (app time zone Asia/Jerusalem, the Date and Time Format settings); `guards.test.ts` fails on `toLocaleDateString`, `Intl.DateTimeFormat` and the like anywhere else. Every layer comes from `ui/Dialog.tsx` or a builder listed there with its reason.
 - The guards scan tracked files and new files that are not ignored. The deny list `docs/private/deny-list.txt` exists only on the owner's machine; in CI the guard is skipped, and its output never repeats a matched line.
 
 ## Docker

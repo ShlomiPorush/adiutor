@@ -9,17 +9,19 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 PROJECT="mikud-verify"
 CHANGED_BASE=""
 CHECKS=1
+E2E=1
 
 usage() {
   cat <<'EOF'
 Usage: scripts/verify.sh [options]
 
   (no options)      Full sweep: guards, lint, types, unit tests, build, integration tests against a
-                    disposable PostgreSQL, then the image with health, user and hardening checks.
+                    disposable PostgreSQL, then the image with health, user and hardening checks, then the
+                    end-to-end tests of the web UI against that container.
   --changed [BASE]  Guards only when every change since BASE (default origin/main) is documentation;
                     otherwise the full sweep.
   --guards-only     Only the repository guards.
-  --skip-e2e        Skip the end-to-end tests. Accepted now; there are no end-to-end tests yet.
+  --skip-e2e        Skip the end-to-end tests (Playwright against the container).
 EOF
 }
 
@@ -33,7 +35,7 @@ while [ $# -gt 0 ]; do
       fi
       ;;
     --guards-only) CHECKS=0 ;;
-    --skip-e2e) ;;
+    --skip-e2e) E2E=0 ;;
     -h | --help)
       usage
       exit 0
@@ -67,6 +69,8 @@ run_checks() {
   in_toolchain "pnpm lint"
   info "Types, unit tests and build"
   in_toolchain "pnpm typecheck && pnpm test && pnpm build"
+  info "Web UI build: local assets only, no mock API"
+  in_toolchain "bash scripts/lib/web-dist-check.sh" || die "the web UI build loads an external asset or holds the mock API"
   info "Database schema matches its migrations"
   # A schema change without its migration would otherwise only show when the next migration is generated.
   # shellcheck disable=SC2016 # expands inside the container
@@ -91,6 +95,19 @@ fail_stack() {
   stack ps -a || true
   stack logs --tail 50 || true
   die "$1"
+}
+
+# Runs e2e/ in the Playwright image on the stack's network. e2e/global-setup.ts forwards 127.0.0.1:8090,
+# the stack's MIKUD_PUBLIC_URL, to the container, so the server's Origin check sees its own address.
+run_e2e() {
+  local pinned
+  pinned="$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/package.json")"
+  [ "v$pinned-noble" = "${PLAYWRIGHT_IMAGE##*:}" ] ||
+    die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
+  docker run --rm --ipc=host --network "${PROJECT}_default" \
+    --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=mikud:8080 \
+    -v "$REPO_ROOT:/repo" -w /repo "$PLAYWRIGHT_IMAGE" \
+    npx --no-install playwright test --config config/playwright.config.ts
 }
 
 run_integration() {
@@ -118,6 +135,11 @@ run_integration() {
   TOOLCHAIN_EXTRA_ARGS=()
   check_non_root "$PROJECT" mikud postgres
   check_hardening "$PROJECT"
+
+  if [ $E2E -eq 1 ]; then
+    info "End-to-end: the web UI against the container (Playwright)"
+    run_e2e || fail_stack "end-to-end tests failed"
+  fi
 
   info "Stopping $PROJECT"
   stack down --remove-orphans || die "the verification stack did not stop"

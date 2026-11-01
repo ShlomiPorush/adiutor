@@ -1,5 +1,6 @@
-import { writeSync } from "node:fs"
+import { existsSync, writeSync } from "node:fs"
 import type { Server } from "node:http"
+import { join } from "node:path"
 import { serve } from "@hono/node-server"
 import { createApp } from "./app.ts"
 import { ConfigError, loadConfig } from "./config.ts"
@@ -56,7 +57,10 @@ if (config.telegram) {
   log.info("telegram is not configured: the bot and the morning message are off")
 }
 
-const app = createApp({ checkDatabase: database.ping, core: { ctx, config, telegram } })
+// The image holds the built UI in dist/web next to the server bundle; a checkout without a UI build serves the API only.
+const webRoot = process.env.MIKUD_WEB_DIR ?? "dist/web"
+const web = existsSync(join(webRoot, "index.html")) ? { root: webRoot } : undefined
+const app = createApp({ checkDatabase: database.ping, core: { ctx, config, telegram }, web })
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   log.info(`Mikud ${config.version} listening`, { port })
 }) as Server
