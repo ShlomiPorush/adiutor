@@ -52,6 +52,6 @@ services:
       retries: 3
 
 networks:
-  # Adapt to the private network setup; see docs/deployment.md once it exists.
+  # Adapt to your reverse proxy and private network: docs/deployment.md, step 3.
   traefik:
     external: true

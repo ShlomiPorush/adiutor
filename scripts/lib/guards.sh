@@ -127,4 +127,7 @@ while read -r mode _ _ path; do
   }
 done < <(git ls-files -s 'scripts/*.sh')
 
+echo "--- Release script: refusals and resume paths against a local remote"
+bash scripts/test-release.sh || fail=1
+
 exit "$fail"
