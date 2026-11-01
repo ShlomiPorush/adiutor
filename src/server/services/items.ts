@@ -8,7 +8,17 @@ import {
 } from "../../shared/enums.ts"
 import { comments, goals, items, itemThreads, projects, suppressions } from "../db/schema.ts"
 import { AppError, invalid, notFound } from "../errors.ts"
-import { type By, type Ctx, checkAgentText, type DbOrTx, inTx, requireOwner, type Tx, writeAudit } from "./context.ts"
+import {
+  type By,
+  type Ctx,
+  checkAgentText,
+  type DbOrTx,
+  inTx,
+  lockExternalId,
+  requireOwner,
+  type Tx,
+  writeAudit,
+} from "./context.ts"
 
 export type ItemRow = typeof items.$inferSelect
 export type ThreadLinkRow = typeof itemThreads.$inferSelect
@@ -225,6 +235,7 @@ export async function deleteItem(ctx: Ctx, by: By, id: string, version?: number)
       })
     const links = await tx.select().from(itemThreads).where(eq(itemThreads.itemId, id))
     for (const link of links) {
+      await lockExternalId(tx, "thread", link.threadId)
       const [s] = await tx
         .insert(suppressions)
         .values({ kind: "thread", externalId: link.threadId, label: before.title, createdAt: ctx.clock() })

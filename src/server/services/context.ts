@@ -1,4 +1,5 @@
-import type { ActorKind, AuditSource } from "../../shared/enums.ts"
+import { sql } from "drizzle-orm"
+import type { ActorKind, AuditSource, SuppressionKind } from "../../shared/enums.ts"
 import type { Db } from "../db/client.ts"
 import { audit } from "../db/schema.ts"
 import { AppError, forbidden } from "../errors.ts"
@@ -69,6 +70,14 @@ export async function writeAudit(ctx: Ctx, tx: DbOrTx, by: By, entry: AuditEntry
     after: plain(entry.after),
     source: by.source,
   })
+}
+
+/**
+ * Serializes an owner delete (which writes the suppression) with a sync creation (which checks it) of the
+ * same thread or T3 project: a transaction-level advisory lock, released at commit or rollback.
+ */
+export async function lockExternalId(tx: Tx, kind: SuppressionKind, externalId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`mikud:${kind}:${externalId}`}, 0))`)
 }
 
 /** Runs a write in one transaction. */

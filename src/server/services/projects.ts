@@ -2,7 +2,17 @@ import { and, eq, isNull, like, or } from "drizzle-orm"
 import type { Stage } from "../../shared/enums.ts"
 import { goals, items, projects, stageProposals, suppressions } from "../db/schema.ts"
 import { AppError, forbidden, invalid, notFound } from "../errors.ts"
-import { type By, type Ctx, checkAgentText, type DbOrTx, inTx, requireOwner, type Tx, writeAudit } from "./context.ts"
+import {
+  type By,
+  type Ctx,
+  checkAgentText,
+  type DbOrTx,
+  inTx,
+  lockExternalId,
+  requireOwner,
+  type Tx,
+  writeAudit,
+} from "./context.ts"
 
 export type ProjectRow = typeof projects.$inferSelect
 export type GoalRow = typeof goals.$inferSelect
@@ -295,6 +305,7 @@ export async function deleteProject(ctx: Ctx, by: By, id: string): Promise<void>
     const [item] = await tx.select({ id: items.id }).from(items).where(eq(items.projectId, id)).limit(1)
     if (item) throw new AppError("conflict", "The project still has items. Delete or move them first.")
     if (before.t3ProjectId) {
+      await lockExternalId(tx, "project", before.t3ProjectId)
       const [s] = await tx
         .insert(suppressions)
         .values({ kind: "project", externalId: before.t3ProjectId, label: before.name, createdAt: ctx.clock() })

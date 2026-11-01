@@ -134,6 +134,24 @@ describe("applyT3Snapshot", () => {
     expect(await t.ctx.db.select().from(items)).toHaveLength(0)
   })
 
+  it("never recreates an item or a project the owner deletes while a run is under way", async () => {
+    await applyT3Snapshot(t.ctx, snapshot([thread("a")]))
+    const item = await itemOf("a")
+    // The delete commits after the run read its starting state and before it reaches the thread.
+    const result = await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: ago(HOUR / 2) })]), {
+      afterLoad: () => deleteItem(t.ctx, owner, item?.id ?? ""),
+    })
+    expect(result.counts).toMatchObject({ threadsSuppressed: 1 })
+    expect(await t.ctx.db.select().from(items)).toHaveLength(0)
+
+    const [p] = await t.ctx.db.select().from(projects)
+    const again = await applyT3Snapshot(t.ctx, snapshot([]), {
+      afterLoad: () => deleteProject(t.ctx, owner, p?.id ?? ""),
+    })
+    expect(again.counts).toMatchObject({ projectsSuppressed: 1 })
+    expect(await t.ctx.db.select().from(projects)).toHaveLength(0)
+  })
+
   it("imports a settled thread without an item only when it settled in the last 7 days", async () => {
     const result = await applyT3Snapshot(
       t.ctx,

@@ -1,10 +1,10 @@
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
-import { items, itemThreads, projects, securitySources, suppressions, syncRuns } from "../db/schema.ts"
+import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
 import { log } from "../log.ts"
-import { type By, type Ctx, inTx, writeAudit } from "./context.ts"
-import { createItemTx, type ItemRow, type ThreadLinkRow, updateItemTx } from "./items.ts"
+import { type By, type Ctx, inTx, lockExternalId, writeAudit } from "./context.ts"
+import { createItemTx, type ItemRow, isSuppressed, type ThreadLinkRow, updateItemTx } from "./items.ts"
 import { createProjectTx } from "./projects.ts"
 import { newItemStatus, rootThreadId, syncDecision, wantsItem } from "./sync-rules.ts"
 
@@ -93,6 +93,8 @@ async function guarded(ctx: Ctx, id: string, run: Run, work: () => Promise<void>
 }
 
 export type ApplyHooks = {
+  /** Test seam: runs after the run read its starting state, before any record is processed. */
+  afterLoad?: () => Promise<void>
   /** Test seam: runs after the item states were read and before any change is applied. */
   beforeApply?: () => Promise<void>
 }
@@ -112,14 +114,15 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       .limit(1)
     const firstRun = !previous
 
-    const suppressed = await loadSuppressions(ctx)
     const projectIds = new Map<string, string>()
+    await hooks.afterLoad?.()
 
     // 1. Projects: upsert by T3 project id, except those the owner deleted.
     for (const p of snapshot.projects) {
       await run.record(`project:${p.t3ProjectId}`, async () => {
-        if (suppressed.project.has(p.t3ProjectId)) return run.add("projectsSuppressed")
         await inTx(ctx, async (tx) => {
+          // Checked under the same lock an owner delete takes: a delete that commits during the run wins.
+          await lockExternalId(tx, "project", p.t3ProjectId)
           const [existing] = await tx
             .select()
             .from(projects)
@@ -145,6 +148,7 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             }
             return
           }
+          if (await isSuppressed(tx, "project", p.t3ProjectId)) return run.add("projectsSuppressed")
           const name = ctx.secrets.redact(p.title).trim() || p.t3ProjectId
           const created = await createProjectTx(ctx, tx, SYNC, {
             name,
@@ -179,6 +183,9 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       await run.record(`thread:${thread.threadId}`, async () => {
         const title = ctx.secrets.redact(thread.title).trim()
         await inTx(ctx, async (tx) => {
+          // The same locks an owner delete takes, in a fixed order (thread, then project).
+          await lockExternalId(tx, "thread", thread.threadId)
+          if (thread.t3ProjectId) await lockExternalId(tx, "project", thread.t3ProjectId)
           const [link] = await tx
             .select()
             .from(itemThreads)
@@ -203,8 +210,9 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             })
             return run.add("threadsUpdated")
           }
-          if (suppressed.thread.has(thread.threadId)) return run.add("threadsSuppressed")
-          if (thread.t3ProjectId && suppressed.project.has(thread.t3ProjectId)) return run.add("threadsSuppressed")
+          if (await isSuppressed(tx, "thread", thread.threadId)) return run.add("threadsSuppressed")
+          if (thread.t3ProjectId && (await isSuppressed(tx, "project", thread.t3ProjectId)))
+            return run.add("threadsSuppressed")
           if (!wantsItem(thread, snapshot.collectedAt)) return run.add("threadsTooOld")
 
           const item = await createItemTx(
@@ -331,14 +339,6 @@ async function foldChildLink(
     }
     run.add("childLinksFolded")
   })
-}
-
-async function loadSuppressions(ctx: Ctx) {
-  const rows = await ctx.db.select().from(suppressions)
-  return {
-    thread: new Set(rows.filter((r) => r.kind === "thread").map((r) => r.externalId)),
-    project: new Set(rows.filter((r) => r.kind === "project").map((r) => r.externalId)),
-  }
 }
 
 /**

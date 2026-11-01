@@ -106,7 +106,7 @@ Status: the schema exists in `src/server/db/schema.ts` (migration `drizzle/0000_
 - `goals`: project, text, created and closed time. Progress is the count of `done` items linked to the current goal out of all items linked to it.
 - `items`: project (null for the inbox), type, status, title, body, severity (security only), goal, `version` (optimistic concurrency), status set by (actor kind) and when, created by, created, updated and closed time.
 - `item_threads`: item, T3 thread id (unique), T3 project id, title, last T3 status and settled flag, last T3 activity time, linked time.
-- `suppressions`: T3 thread ids and T3 project ids whose item or project the owner deleted; the sync never recreates them. The owner can remove a suppression in the UI.
+- `suppressions`: T3 thread ids and T3 project ids whose item or project the owner deleted; the sync never recreates them. The sync checks a suppression inside the transaction that would create the item or project, under the same transaction-level advisory lock on the thread id or T3 project id that the owner's delete takes, so a delete that commits during a run still wins. The owner can remove a suppression in the UI.
 - `comments`: item, author, text, thread id, time.
 - `stage_proposals`: project, proposed stage, reason, author, state (`open`, `accepted`, `rejected`).
 - `security_sources`: project, family (`dependabot`, `code_scanning`, `secret_scanning`, `overview`), coverage (`enabled`, `not_enabled`, `no_access`, `error`, `unknown`), counts by severity, data as-of time (the source's last success, not the sync time).
