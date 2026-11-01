@@ -509,4 +509,46 @@ describe("applySecuritySnapshot", () => {
     const sources = await t.ctx.db.select().from(securitySources).where(eq(securitySources.projectId, project.id))
     expect(sources.find((s) => s.family === "dependabot")).toMatchObject({ critical: 1, high: 2, low: 3 })
   })
+
+  it("never overwrites known counts with a record that has no time (a failed or unknown read)", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    await applySecuritySnapshot(t.ctx, security())
+    const failed = security({
+      openIssues: null,
+      issuesAsOf: null,
+      families: [
+        { family: "dependabot", coverage: "error", counts: { critical: 0, high: 0, medium: 0, low: 0 }, asOf: null },
+      ],
+    })
+    const [stored] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    const result = await applySecuritySnapshot(t.ctx, failed)
+    expect(result.counts).toEqual({ reposUnmatched: 1 })
+    const [p] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    expect(p).toMatchObject({ openIssuesCount: 4, openIssuesAsOf: stored?.openIssuesAsOf })
+    const sources = await t.ctx.db.select().from(securitySources).where(eq(securitySources.projectId, project.id))
+    expect(sources.find((s) => s.family === "dependabot")).toMatchObject({ coverage: "enabled", critical: 1 })
+  })
+
+  it("records in the audit row the Issues count that was stored, not a refused older one", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    await applySecuritySnapshot(t.ctx, security())
+    const [stored] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    // Older Issues (refused) with a newer dependabot record (applied).
+    const mixed = security({
+      openIssues: 9,
+      issuesAsOf: ago(3 * HOUR),
+      families: [
+        {
+          family: "dependabot",
+          coverage: "enabled",
+          counts: { critical: 0, high: 0, medium: 0, low: 0 },
+          asOf: ago(HOUR / 2),
+        },
+      ],
+    })
+    expect((await applySecuritySnapshot(t.ctx, mixed)).counts).toMatchObject({ projectsUpdated: 1 })
+    const rows = await t.ctx.db.select().from(audit).where(eq(audit.action, "security.update"))
+    const last = rows.find((r) => r.id === Math.max(...rows.map((x) => x.id)))
+    expect(last?.after).toMatchObject({ openIssuesCount: 4, openIssuesAsOf: stored?.openIssuesAsOf?.toISOString() })
+  })
 })

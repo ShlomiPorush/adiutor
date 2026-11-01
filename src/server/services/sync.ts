@@ -388,8 +388,10 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
             const sourcesBefore = await tx.select().from(securitySources).where(eq(securitySources.projectId, id))
             const now = ctx.clock()
             let changed = false
+            // What is stored after this record: the audit row records that, not the snapshot.
+            let issues = { openIssuesCount: project.openIssuesCount, openIssuesAsOf: project.openIssuesAsOf }
             if (
-              !olderThan(repo.issuesAsOf, project.openIssuesAsOf) &&
+              !staleAgainst(repo.issuesAsOf, project.openIssuesAsOf) &&
               (project.openIssuesCount !== repo.openIssues ||
                 project.openIssuesAsOf?.getTime() !== repo.issuesAsOf?.getTime())
             ) {
@@ -397,12 +399,13 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
                 .update(projects)
                 .set({ openIssuesCount: repo.openIssues, openIssuesAsOf: repo.issuesAsOf, updatedAt: now })
                 .where(eq(projects.id, id))
+              issues = { openIssuesCount: repo.openIssues, openIssuesAsOf: repo.issuesAsOf }
               changed = true
             }
             for (const f of repo.families) {
               const old = sourcesBefore.find((s) => s.family === f.family)
-              // An older snapshot applied after a newer one never rolls the counts back.
-              if (old && olderThan(f.asOf, old.asOf)) continue
+              // An older snapshot applied after a newer one, or a failed read, never rolls the counts back.
+              if (old && staleAgainst(f.asOf, old.asOf)) continue
               const values = { coverage: f.coverage, ...f.counts, asOf: f.asOf }
               if (
                 old &&
@@ -434,7 +437,7 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
                 openIssuesAsOf: project.openIssuesAsOf,
                 sources: sourcesBefore,
               },
-              after: { openIssuesCount: repo.openIssues, openIssuesAsOf: repo.issuesAsOf, sources: sourcesAfter },
+              after: { ...issues, sources: sourcesAfter },
             })
             run.add("projectsUpdated")
           })
@@ -444,9 +447,12 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
   })
 }
 
-/** True when both times are known and `next` is before `stored`. */
-function olderThan(next: Date | null, stored: Date | null): boolean {
-  return next !== null && stored !== null && next.getTime() < stored.getTime()
+/**
+ * True when an incoming record must not replace the stored one: the stored record has a time and the
+ * incoming one is older, or has no time at all (a failed or unknown read never overwrites a known one).
+ */
+function staleAgainst(next: Date | null, stored: Date | null): boolean {
+  return stored !== null && (next === null || next.getTime() < stored.getTime())
 }
 
 /** The latest runs, newest first. */
