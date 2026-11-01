@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
+import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { RateLimiter } from "./auth.ts"
 
@@ -240,7 +241,8 @@ describe("browser pairing", () => {
     await call("/items", { method: "POST", token: AGENT, body: { type: "task", title: "Arrived later" } })
     const visit = await call("/visits", { method: "POST", cookie, headers: browser, body: { at: asOf } })
     expect(visit.status).toBe(201)
-    expect(visit.json.data.at).toBe(asOf)
+    // Recorded a safety margin before the read (see db/client.ts).
+    expect(visit.json.data.at).toBe(new Date(new Date(asOf).getTime() - VISIT_SAFETY_MARGIN_MS).toISOString())
 
     const titles = (view: { json: { data: { new: { item: { title: string } }[] } } }) =>
       view.json.data.new.map((n) => n.item.title)
@@ -248,7 +250,7 @@ describe("browser pairing", () => {
     expect(refresh.json.data.since).toBe(since)
     expect(titles(refresh)).toContain("Arrived later")
     const next = await call("/morning", { cookie })
-    expect(next.json.data.since).toBe(asOf)
+    expect(next.json.data.since).toBe(visit.json.data.at)
     expect(titles(next)).toContain("Arrived later")
 
     // A time after the server's clock is recorded as now; a bad one is refused.

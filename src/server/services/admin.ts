@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import { and, desc, eq, isNull, lt } from "drizzle-orm"
 import type { Language } from "../../shared/enums.ts"
+import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { devices, settings, suppressions, visits } from "../db/schema.ts"
 import { invalid, notFound } from "../errors.ts"
 import { type By, type Ctx, type DbOrTx, inTx, requireOwner, writeAudit } from "./context.ts"
@@ -181,12 +182,14 @@ export async function lastVisitAnyDevice(ctx: Ctx): Promise<Date | null> {
 }
 
 /**
- * Records that the device's owner saw the board, at the time of the read that was shown (never later than
- * now; now when it is not given). Bookkeeping, not a change: no audit row.
+ * Records that the device's owner saw the board: VISIT_SAFETY_MARGIN_MS before the start of the read that
+ * was shown (never later than now; now when it is not given), so a write that committed after that read
+ * still counts as new (see the invariant in db/client.ts). Bookkeeping, not a change: no audit row.
  */
 export async function recordVisit(ctx: Ctx, deviceId: string, shownAt?: Date): Promise<Date> {
   const now = ctx.clock()
-  const at = shownAt && shownAt.getTime() < now.getTime() ? shownAt : now
+  const readAt = shownAt && shownAt.getTime() < now.getTime() ? shownAt : now
+  const at = new Date(readAt.getTime() - VISIT_SAFETY_MARGIN_MS)
   await ctx.db.insert(visits).values({ deviceId, at })
   return at
 }

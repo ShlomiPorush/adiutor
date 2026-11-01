@@ -19,7 +19,7 @@ These notes are for the owner, who deploys production himself. Agents never depl
    openssl rand -hex 24
    ```
 
-2. On your PostgreSQL server, as a superuser, create a role and a database that only Mikud uses:
+2. Mikud needs PostgreSQL 17 or newer: every connection sets `transaction_timeout`, which older servers refuse, and the "new since your last visit" boundary relies on it. On your PostgreSQL server, as a superuser, create a role and a database that only Mikud uses:
 
    ```sql
    CREATE ROLE mikud LOGIN PASSWORD '<database password>';

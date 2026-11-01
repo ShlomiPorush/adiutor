@@ -79,7 +79,7 @@ Fields are always present; `null` when unset.
 | `GET /session` | any | | `{actor: {kind, label}, via: "token"\|"cookie", deviceId}` |
 | `DELETE /session` | browser | | `204`; revokes this device and clears the cookie. `forbidden` with a token |
 | `GET /morning` | any | `since?` (time) | Morning (below). `since` is this device's previous visit unless the query gives one |
-| `POST /visits` | browser | `{at?}` (time) | `201 {at, previous}`. Call after the morning view was shown, with that read's `now`; recorded at `at`, or now when `at` is missing or later than the server's clock. `forbidden` with a token |
+| `POST /visits` | browser | `{at?}` (time) | `201 {at, previous}`. Call after the morning view was shown, with that read's `now`; recorded one minute before `at`, or before now when `at` is missing or later than the server's clock (see below). `forbidden` with a token |
 
 **Morning**:
 
@@ -102,7 +102,7 @@ Fields are always present; `null` when unset.
 }
 ```
 
-- `now`: the server's time when this read started. A visit recorded with it marks nothing newer than what this read showed as seen.
+- `now`: the server's time when this read started. A visit recorded with it marks nothing newer than what this read showed as seen. The visit is stored one minute before `now`: a write whose transaction was still open during the read has a time before `now` but at most 30 seconds before it (PostgreSQL ends any transaction of the server after 30 seconds), so it still counts as new on the next visit. Items written in that minute may show as new twice; none is hidden.
 - `since`: the `since` query when given; else the device's latest recorded visit; 24 hours before now on a device's first visit, and always for token callers. Each device keeps its own. The UI keeps the `since` of the page's first read and passes it on every refresh, so "new since your last visit" stays stable while the page is open.
 - Items shown anywhere in the view: open items, and closed ones closed within `closedItemDays`. Older closed items are only in the archive.
 - `new`: created after `since` (`change: "created"`, except items imported by the first sync run) or changed after `since` and after their creation (`"updated"`). Newest first.

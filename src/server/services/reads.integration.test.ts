@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { items, securitySources, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { pairDevice, recordVisit, updateSettings } from "./admin.ts"
-import { addComment, captureItem, createItem, linkThread, updateItem } from "./items.ts"
+import { addComment, captureItem, createItem, createItemTx, linkThread, updateItem } from "./items.ts"
 import { createProject, proposeStage, updateProject } from "./projects.ts"
 import { archive, auditLog, findItems, inbox, itemDetail, morning, projectDetail } from "./reads.ts"
 import { applyT3Snapshot } from "./sync.ts"
@@ -44,6 +44,34 @@ describe("morning", () => {
     // Another device keeps its own boundary: a visit on one does not hide updates on the other.
     const { device: desktop } = await pairDevice(t.ctx, owner, "Desktop")
     expect((await morning(t.ctx, { deviceId: desktop.id })).since.getTime()).toBeLessThan(visit.getTime())
+  })
+
+  it("shows a write as new on the next visit when its transaction was open across the read and the visit", async () => {
+    const { device } = await pairDevice(t.ctx, owner, "Phone")
+    const titles = (view: Awaited<ReturnType<typeof morning>>) => view.new.map((n) => n.item.title)
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let written = () => {}
+    const inside = new Promise<void>((resolve) => {
+      written = resolve
+    })
+    // The item's time is taken inside its transaction, which commits only after the visit.
+    const writing = t.ctx.db.transaction(async (tx) => {
+      await createItemTx(t.ctx, tx, agent, { type: "task", title: "Slow write" })
+      written()
+      await held
+    })
+    await inside
+    t.clock.travel(5_000)
+    const shown = await morning(t.ctx, { deviceId: device.id })
+    expect(titles(shown)).not.toContain("Slow write")
+    await recordVisit(t.ctx, device.id, shown.now)
+    release()
+    await writing
+    t.clock.travel(5_000)
+    expect(titles(await morning(t.ctx, { deviceId: device.id }))).toContain("Slow write")
   })
 
   it("lists waiting items and open stage proposals under waiting", async () => {
