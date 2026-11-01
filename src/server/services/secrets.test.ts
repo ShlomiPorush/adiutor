@@ -54,6 +54,9 @@ describe("secret scanner", () => {
     ["secret_assignment", `STRIPE_SECRET=${rep("q1w2e3r4", 24)}`],
     ["secret_assignment", `OPENAI_APIKEY=${rep("Zz9Yy8Xx7", 24)}`],
     ["secret_assignment", `signing-key: ${rep("a1b2c3d4", 16)}`],
+    // Lower-case values (hex, a passphrase of words) after an env-style secret name.
+    ["secret_assignment", `MIKUD_OWNER_TOKEN=${rep("deadbeef", 64)}`],
+    ["secret_assignment", `DB_PASSWORD=${["correct", "horse", "battery"].join("")}`],
     ["ipv4_address", `server at ${ip(10, 1, 20, 30)}`],
     ["ipv4_address", `ssh to ${ip(192, 168, 1, 50)}:22`],
     ["ipv4_address", `public ${ip(8, 8, 4, 4)}`],
