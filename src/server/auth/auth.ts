@@ -16,7 +16,13 @@ export const CLIENT_IP_HEADER = "x-mikud-client-ip"
  * the clocks and the audit row from the final response. The API middleware requires a session that proved TOTP
  * (two_factor_at). Better Auth's own rate limiter is off: Mikud's counts by socket address.
  */
-export function createAuth(options: { db: Db; secret: string; publicUrl: URL }) {
+export function createAuth(options: {
+  db: Db
+  secret: string
+  publicUrl: URL
+  /** Tests only: runs inside Better Auth before it updates the user (TOTP enrolment sets twoFactorEnabled). */
+  beforeUserUpdate?: () => Promise<void>
+}) {
   const { publicUrl } = options
   return betterAuth({
     appName: "Mikud",
@@ -50,6 +56,19 @@ export function createAuth(options: { db: Db; secret: string; publicUrl: URL }) 
       useSecureCookies: publicUrl.protocol === "https:",
       ipAddress: { ipAddressHeaders: [CLIENT_IP_HEADER] },
     },
+    ...(options.beforeUserUpdate
+      ? {
+          databaseHooks: {
+            user: {
+              update: {
+                before: async () => {
+                  await options.beforeUserUpdate?.()
+                },
+              },
+            },
+          },
+        }
+      : {}),
     plugins: [username(), twoFactor({ issuer: "Mikud" })],
   })
 }

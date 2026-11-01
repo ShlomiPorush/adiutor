@@ -521,7 +521,8 @@
       "session_end": "was signed out by the session clock",
       "session_end_others": "signed out the other browsers",
       "session_end_all": "signed out everywhere",
-      "session_sweep": "removed ended sessions"
+      "session_sweep": "removed ended sessions",
+      "auth_repair": "repaired the two-factor setting"
     },
     "field": {
       "status": "Status",

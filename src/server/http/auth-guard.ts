@@ -26,11 +26,19 @@ import { type RateLimiter, REQUEST_HEADER } from "./auth.ts"
  * transaction fails the sign-in fails closed: the new session and the challenge rows the request created are
  * deleted and the answer is 500 with the session cookie cleared. A sign-out whose audit fails still succeeds.
  *
- * Success is acted on only while the lock is still held: the lock's connection can die during the request (a
- * network drop, a terminated backend), and then a reset may already have run. So the recording transaction checks
- * first that the backend that took the lock still holds it (lockHeld); when it does not, the request fails closed
- * like a failed audit, with 503 busy: its new session and challenge rows are deleted, its cookies cleared, and
- * nothing is marked. TOTP enable undoes its unverified secret the same way; sign-out has nothing to undo and logs.
+ * A reset wins by data, not by timing. The lock's connection can die during a request (a network drop, a
+ * terminated backend); PostgreSQL then releases the lock and a reset may run while the request goes on over other
+ * connections. So the wrapper reads the owner's auth_epoch under the lock before the handler runs, and the
+ * recording transaction writes that epoch on the session it marks. A session is valid only while its epoch equals
+ * the owner's (services/session-policy.ts), and every reset increments the owner's epoch, so a session issued or
+ * marked by a request that started before a reset is dead for good, whatever the timing. The recording
+ * transaction also locks the owner's row (FOR SHARE, which a reset's update waits for) and fails closed with 503
+ * busy when the epoch moved or the session is gone; lockHeld only shortens the window in which that can happen.
+ * TOTP enable undoes its unverified secret when the lock was lost; sign-out has nothing to undo and logs.
+ *
+ * Before a password sign-in the wrapper also repairs an owner flagged twoFactorEnabled without a verified factor
+ * (an enrolment cut across by a reset can leave that): the flag goes back to false with an audit row
+ * (auth.repair), so the sign-in leads to enrolment instead of a challenge no code can answer.
  *
  * That transaction runs on a pool connection while this request's own connection holds the lock, so it must
  * never take AUTH_LOCK_KEY itself (inAuthTx would wait for the lock this request holds, until lock_timeout):
@@ -45,8 +53,15 @@ export type AuthGuardDeps = {
   attempts: RateLimiter
   clientIp: (c: Context) => string
   lockAuth: () => Promise<AuthLock>
-  /** Tests only: runs after Better Auth answered with success, before the request is recorded. */
+  /** Tests only: pause points around recording a request. */
+  testHooks?: AuthTestHooks
+}
+
+export type AuthTestHooks = {
+  /** After Better Auth answered with success, before the request is recorded. */
   beforeRecord?: (route: string) => Promise<void>
+  /** Inside the recording transaction, after lockHeld and before it reads or writes anything else. */
+  insideRecord?: (route: string) => Promise<void>
 }
 
 type Route = "sign-in" | "sign-out" | "get-session" | "enable" | "verify"
@@ -150,6 +165,13 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
     throw error
   }
   try {
+    // The owner's state under the lock, before Better Auth acts (one owner; none before setup).
+    const [owner] = await deps.ctx.db
+      .select({ id: authUser.id, epoch: authUser.authEpoch, twoFactorEnabled: authUser.twoFactorEnabled })
+      .from(authUser)
+      .limit(1)
+    if (route === "sign-in" && owner?.twoFactorEnabled) await repairTwoFactorFlag(deps.ctx, owner.id)
+    const epoch = owner?.epoch ?? 0
     const found = await deps.auth.api.getSession({ headers: request.headers })
     let prior: Prior | null = null
     if (found && route !== "sign-in" && route !== "sign-out") {
@@ -173,7 +195,7 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
 
     const response = await handle(deps.auth, request)
     if (response.status < 200 || response.status >= 300) return response
-    await deps.beforeRecord?.(route)
+    await deps.testHooks?.beforeRecord?.(route)
 
     if (route === "enable") {
       if (!(await lockHeld(deps.ctx.db, lock))) {
@@ -200,26 +222,43 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
       // Not inAuthTx: this request already holds the auth lock (see the comment at the top).
       await deps.ctx.db.transaction(async (tx) => {
         if (!(await lockHeld(tx, lock))) throw new AuthLockLost()
+        await deps.testHooks?.insideRecord?.(route)
         const [created] = newToken
           ? await tx
               .select({ id: authSession.id, userId: authSession.userId, userAgent: authSession.userAgent })
               .from(authSession)
               .where(eq(authSession.token, newToken))
           : []
+        // A session Better Auth issued that is gone already was deleted by a reset: nothing may be recorded.
+        if (newToken && !created) throw new AuthLockLost()
         const targetId = created?.id ?? (route === "verify" ? prior?.id : undefined)
+        // A verified code always has a session to mark: the new one, or the current one at enrolment.
+        if (route === "verify" && !targetId) throw new AuthLockLost()
         // A password sign-in of an enrolled owner only opens the code challenge: nothing to record yet.
         if (!targetId) return
         const userId = created?.userId ?? prior?.userId ?? ""
+        // FOR SHARE: a reset's update of the owner waits until this commits, or this sees the reset's new epoch.
         const [user] = await tx
-          .select({ username: authUser.username, name: authUser.name })
+          .select({ username: authUser.username, name: authUser.name, epoch: authUser.authEpoch })
           .from(authUser)
           .where(eq(authUser.id, userId))
+          .for("share")
+        if (!user || user.epoch !== epoch) throw new AuthLockLost()
+        // The session to mark must still be there (a reset deletes every session).
+        const mark = async (values: Partial<typeof authSession.$inferInsert>) => {
+          const marked = await tx
+            .update(authSession)
+            .set({ ...values, authEpoch: epoch })
+            .where(eq(authSession.id, targetId))
+            .returning({ id: authSession.id })
+          if (marked.length !== 1) throw new AuthLockLost()
+        }
         const by: By = { actor: { kind: "owner", label: user?.username ?? user?.name ?? "owner" }, source: "ui" }
         const now = deps.ctx.clock()
         const facts = { userAgent: created?.userAgent ?? null }
         if (route === "sign-in") {
           // An account without TOTP (new, or after a reset): this session may only enrol.
-          await tx.update(authSession).set({ authenticatedAt: now, activeAt: now }).where(eq(authSession.id, targetId))
+          await mark({ authenticatedAt: now, activeAt: now })
           await writeAudit(deps.ctx, tx, by, {
             action: "session.sign_in",
             entityType: "session",
@@ -230,10 +269,7 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
         }
         // verify-totp: a replacement session keeps the clocks of the one it replaces; a sign-in starts them now.
         const clocks = prior?.clocks ?? { authenticatedAt: now, activeAt: now }
-        await tx
-          .update(authSession)
-          .set({ twoFactorAt: now, authenticatedAt: clocks.authenticatedAt, activeAt: clocks.activeAt })
-          .where(eq(authSession.id, targetId))
+        await mark({ twoFactorAt: now, authenticatedAt: clocks.authenticatedAt, activeAt: clocks.activeAt })
         if (prior) {
           const ended = await tx
             .delete(authSession)
@@ -256,7 +292,7 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
       })
     } catch (error) {
       if (error instanceof AuthLockLost) {
-        log.error("the auth lock was lost during a sign-in", { route })
+        log.error("a sign-in lost to the auth lock or a reset", { route })
         return failClosed(deps, names.clearing, newToken, [answered, opened], answer(503, "busy", LOCK_LOST_MESSAGE))
       }
       log.error("a sign-in could not be recorded", { route, ...errorFacts(error) })
@@ -264,9 +300,9 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
     }
     return response
   } finally {
-    // A lock lost after the check above needs nothing more: everything this request committed, it committed while
-    // the lock was held, so it is older than any reset that could take the lock afterwards, and that reset deletes
-    // it (sessions, challenges, the factor). The release then only reports the loss.
+    // A lock lost after the recording needs nothing more: the session it marked carries the epoch read under the
+    // lock, and any reset after that increments the owner's epoch, so the session is no longer valid (see the
+    // comment at the top). The release then only reports the loss.
     await lock.release().catch((error: unknown) => log.error("the auth lock was not released", errorFacts(error)))
   }
 }
@@ -309,6 +345,38 @@ async function lockHeld(db: DbOrTx, lock: AuthLock): Promise<boolean> {
       and classid = 0 and objid = ${sql.raw(String(AUTH_LOCK_KEY))} and objsubid = 1
       and database = (select oid from pg_database where datname = current_database())`)
   return [...rows].length > 0
+}
+
+/**
+ * An owner flagged twoFactorEnabled without a verified factor cannot answer a code challenge (an enrolment cut
+ * across by a reset can leave that). Puts the flag back to false, with its audit row, in one transaction.
+ */
+async function repairTwoFactorFlag(ctx: Ctx, userId: string): Promise<void> {
+  await ctx.db.transaction(async (tx) => {
+    const [factor] = await tx
+      .select({ id: authTwoFactor.id })
+      .from(authTwoFactor)
+      .where(and(eq(authTwoFactor.userId, userId), eq(authTwoFactor.verified, true)))
+      .limit(1)
+    if (factor) return
+    const [user] = await tx
+      .update(authUser)
+      .set({ twoFactorEnabled: false, updatedAt: ctx.clock() })
+      .where(and(eq(authUser.id, userId), eq(authUser.twoFactorEnabled, true)))
+      .returning({ username: authUser.username, name: authUser.name })
+    if (!user) return
+    await writeAudit(
+      ctx,
+      tx,
+      { actor: { kind: "system", label: "system" }, source: "ui" },
+      {
+        action: "auth.repair",
+        entityType: "account",
+        entityId: null,
+        after: { user: user.username ?? user.name, twoFactorEnabled: false, reason: "no_verified_factor" },
+      },
+    )
+  })
 }
 
 async function auditSignOut(deps: AuthGuardDeps, userId: string): Promise<void> {

@@ -2,17 +2,18 @@ import { inspect } from "node:util"
 import { count, eq, sql } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
-import { passwordHasher } from "../auth/auth.ts"
+import { createAuth, passwordHasher } from "../auth/auth.ts"
 import { createDatabase, type Database } from "../db/client.ts"
 import { audit, authAccount, authSession, authTwoFactor, authUser, authVerification, settings } from "../db/schema.ts"
 import { changePassword, resetPassword } from "../services/account.ts"
 import { AUTH_LOCK_KEY } from "../services/context.ts"
 import { sweepSessions } from "../services/session-policy.ts"
-import { testCore } from "../testing/app.ts"
+import { TEST_AUTH_SECRET, testCore } from "../testing/app.ts"
 import { TEST_ORIGIN, TEST_PASSWORD, TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { totp, wrongTotp } from "../testing/totp.ts"
 import { RateLimiter } from "./auth.ts"
+import type { AuthTestHooks } from "./auth-guard.ts"
 
 const OWNER = "owner-token-for-tests-only-000000000000"
 const AGENT = "agent-token-for-tests-only-000000000000"
@@ -22,7 +23,7 @@ let t: TestDatabase
 let app: ReturnType<typeof createApp>
 let core: ReturnType<typeof testCore>
 
-function build(lockAuth?: Database["lockAuth"], beforeAuthRecord?: (route: string) => Promise<void>) {
+function build(lockAuth?: Database["lockAuth"], authTestHooks?: AuthTestHooks, beforeUserUpdate?: () => Promise<void>) {
   core = testCore(t, {
     config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: new URL(TEST_ORIGIN), version: "test" },
     limiter: new RateLimiter(10, 60_000),
@@ -30,7 +31,14 @@ function build(lockAuth?: Database["lockAuth"], beforeAuthRecord?: (route: strin
     clientIp: (c) => c.req.header("x-test-ip") ?? "client",
   })
   if (lockAuth) core.lockAuth = lockAuth
-  core.beforeAuthRecord = beforeAuthRecord
+  core.authTestHooks = authTestHooks
+  if (beforeUserUpdate)
+    core.auth = createAuth({
+      db: t.ctx.db,
+      secret: TEST_AUTH_SECRET,
+      publicUrl: new URL(TEST_ORIGIN),
+      beforeUserUpdate,
+    })
   app = createApp({ checkDatabase: async () => true, core })
 }
 
@@ -756,8 +764,10 @@ describe("result review fixes", () => {
     const own = createDatabase(t.url)
     let pause: (() => Promise<void>) | undefined
     try {
-      build(own.lockAuth, async (route) => {
-        if (route === "verify" && pause) await pause()
+      build(own.lockAuth, {
+        beforeRecord: async (route) => {
+          if (route === "verify" && pause) await pause()
+        },
       })
       const secret = await browser().owner()
       const hasher = await passwordHasher(core.auth)
@@ -791,5 +801,120 @@ describe("result review fixes", () => {
     } finally {
       await own.close()
     }
+  })
+})
+
+describe("the auth epoch", () => {
+  /** Ends the backend that holds the auth lock, as a network drop or an administrator would. */
+  async function killLockBackend() {
+    const holders = await t.ctx.db.execute<{ pid: number }>(sql`
+      select pid from pg_locks
+      where locktype = 'advisory' and granted and classid = 0 and objsubid = 1
+        and objid = ${sql.raw(String(AUTH_LOCK_KEY))}
+        and database = (select oid from pg_database where datname = current_database())`)
+    const [holder] = [...holders]
+    expect(holder?.pid).toBeGreaterThan(0)
+    await t.ctx.db.execute(sql`select pg_terminate_backend(${holder?.pid ?? 0})`)
+  }
+  const liveSessionCookies = (cookies: string[]) =>
+    cookies.filter((c) => c.includes("session_token=") && !/max-age=0/i.test(c))
+
+  it("an enrolment cut across by a reset leaves no usable session, and the next sign-in enrols again", async () => {
+    const own = createDatabase(t.url)
+    let pause: (() => Promise<void>) | undefined
+    try {
+      build(own.lockAuth, undefined, async () => {
+        const run = pause
+        pause = undefined
+        await run?.()
+      })
+      const b = browser()
+      await b.setup()
+      const secret = await b.enable()
+      const hasher = await passwordHasher(core.auth)
+      let newPassword: string | undefined
+      // Inside Better Auth's verify: it has read the factor and is about to set twoFactorEnabled.
+      pause = async () => {
+        await killLockBackend()
+        newPassword = (await resetPassword(t.ctx, hasher))?.password
+      }
+      const res = await b.verify(totp(secret))
+      expect(newPassword).toBeDefined()
+      expect([res.status, res.json.code]).toEqual([503, "busy"])
+      expect(liveSessionCookies(res.setCookies)).toEqual([])
+      expect((await api(b)).status).toBe(401)
+      // The cut-across request set the flag after the reset removed the factor.
+      const [flagged] = await t.ctx.db.select().from(authUser)
+      expect(flagged?.twoFactorEnabled).toBe(true)
+      expect(await t.ctx.db.select().from(authTwoFactor).where(eq(authTwoFactor.verified, true))).toHaveLength(0)
+
+      // The next sign-in repairs the flag and enrols, instead of a challenge no code can answer.
+      const after = browser("after")
+      const signed = await after.passwordSignIn("owner.name", newPassword)
+      expect(signed.status).toBe(200)
+      expect(signed.json.twoFactorRedirect).toBeUndefined()
+      expect((await api(after)).json.error.code).toBe("totp_required")
+      expect(await actions()).toContain("auth.repair")
+      const fresh = await after.enable(newPassword)
+      expect((await after.verify(totp(fresh))).status).toBe(200)
+      expect((await api(after)).status).toBe(200)
+    } finally {
+      await own.close()
+    }
+  })
+
+  it("a reset that finishes between the lock check and the commit leaves no usable session", async () => {
+    const own = createDatabase(t.url)
+    let pause: (() => Promise<void>) | undefined
+    try {
+      build(own.lockAuth, {
+        insideRecord: async (route) => {
+          if (route !== "verify") return
+          const run = pause
+          pause = undefined
+          await run?.()
+        },
+      })
+      const secret = await browser().owner()
+      const hasher = await passwordHasher(core.auth)
+      const b = browser("b")
+      expect((await b.passwordSignIn()).json.twoFactorRedirect).toBe(true)
+      let newPassword: string | undefined
+      pause = async () => {
+        await killLockBackend()
+        newPassword = (await resetPassword(t.ctx, hasher))?.password
+      }
+      const res = await b.verify(totp(secret))
+      expect(newPassword).toBeDefined()
+      expect([res.status, res.json.code]).toEqual([503, "busy"])
+      expect(liveSessionCookies(res.setCookies)).toEqual([])
+      expect((await api(b)).status).toBe(401)
+      // No success was recorded: the only sign-in in the log is the setup's.
+      expect((await actions()).filter((a) => a === "session.sign_in")).toHaveLength(1)
+      expect((await browser("old").passwordSignIn()).status).toBe(401)
+      const after = browser("after")
+      expect((await after.passwordSignIn("owner.name", newPassword)).status).toBe(200)
+      expect((await api(after)).json.error.code).toBe("totp_required")
+    } finally {
+      await own.close()
+    }
+  })
+
+  it("refuses a session whose epoch is stale, everywhere a session is accepted", async () => {
+    const secret = await browser().owner()
+    const b = browser("b")
+    await b.signIn(secret)
+    expect((await api(b)).status).toBe(200)
+    await t.ctx.db.update(authUser).set({ authEpoch: sql`${authUser.authEpoch} + 1` })
+    expect((await api(b)).json.error.code).toBe("unauthorized")
+    expect((await b.call("GET", "/api/auth/get-session")).json).toBeNull()
+    expect((await api(b, "/api/setup/status")).json.data).toEqual({ hasUser: true, session: "none" })
+    expect((await b.call("POST", "/api/v1/account/sessions/end-others")).status).toBe(401)
+    // A browser that signs in now gets the current epoch, and lists only itself.
+    const fresh = browser("fresh")
+    await fresh.signIn(secret)
+    const list = await fresh.call("GET", "/api/v1/account/sessions")
+    expect(list.json.data.sessions).toHaveLength(1)
+    expect(list.json.data.sessions[0].current).toBe(true)
   })
 })

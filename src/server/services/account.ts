@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { and, count, desc, eq, gt, inArray, isNotNull, isNull, like, ne, notLike } from "drizzle-orm"
+import { and, count, desc, eq, gt, inArray, isNotNull, isNull, like, ne, notLike, sql } from "drizzle-orm"
 import { normalizeUsername, ownerEmail } from "../../shared/auth.ts"
 import { challengeRows } from "../auth/cookies.ts"
 import { authAccount, authSession, authTwoFactor, authUser, authVerification, devices } from "../db/schema.ts"
@@ -179,9 +179,12 @@ export async function listSessions(ctx: Ctx, sessionId: string): Promise<Session
       userAgent: authSession.userAgent,
     })
     .from(authSession)
+    .innerJoin(authUser, eq(authUser.id, authSession.userId))
     .where(
       and(
         eq(authSession.userId, own.userId),
+        // Only sessions of the current auth epoch are valid (a reset ends the others for good).
+        eq(authSession.authEpoch, authUser.authEpoch),
         isNotNull(authSession.twoFactorAt),
         isNull(authSession.endedReason),
         gt(authSession.expiresAt, now),
@@ -237,7 +240,8 @@ export const randomPassword = () => randomBytes(18).toString("base64url")
 
 /**
  * The recovery command (cli.ts): under the auth lock, one transaction sets a new random password, removes TOTP
- * (it must be set up again after signing in), ends every session, deletes pending two-factor challenges and
+ * (it must be set up again after signing in), increments the auth epoch (so no session from before the reset can
+ * ever be valid, whatever a request in flight does), ends every session, deletes pending two-factor challenges and
  * writes the audit row with actor `system`, label `cli`. The auth lock also serializes it with every
  * state-changing Better Auth request (http/auth-guard.ts holds it for the whole request), so no sign-in or
  * verification runs across a reset. Returns the username and the new password, shown once.
@@ -259,7 +263,11 @@ export async function resetPassword(
       .set({ password: hash, updatedAt: now })
       .where(and(eq(authAccount.userId, user.id), eq(authAccount.providerId, CREDENTIAL)))
     await tx.delete(authTwoFactor).where(eq(authTwoFactor.userId, user.id))
-    await tx.update(authUser).set({ twoFactorEnabled: false, updatedAt: now }).where(eq(authUser.id, user.id))
+    // A new auth epoch: every session from before the reset, also one a request in flight records later, is dead.
+    await tx
+      .update(authUser)
+      .set({ twoFactorEnabled: false, authEpoch: sql`${authUser.authEpoch} + 1`, updatedAt: now })
+      .where(eq(authUser.id, user.id))
     const sessions = await tx
       .delete(authSession)
       .where(eq(authSession.userId, user.id))

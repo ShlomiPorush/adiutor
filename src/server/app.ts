@@ -7,7 +7,7 @@ import type { AuthLock } from "./db/client.ts"
 import { AppError, errorBody } from "./errors.ts"
 import { apiRoutes } from "./http/api.ts"
 import { RateLimiter } from "./http/auth.ts"
-import { authGuard } from "./http/auth-guard.ts"
+import { type AuthTestHooks, authGuard } from "./http/auth-guard.ts"
 import { setupRoutes } from "./http/setup.ts"
 import { errorFacts, log } from "./log.ts"
 import { mcpRoutes } from "./mcp/server.ts"
@@ -26,8 +26,8 @@ export type AppDeps = {
     auth: Auth
     /** Takes the auth lock for one state-changing /api/auth request (Database.lockAuth). */
     lockAuth: () => Promise<AuthLock>
-    /** Tests only: runs after Better Auth answered a state-changing request with success, before it is recorded. */
-    beforeAuthRecord?: (route: string) => Promise<void>
+    /** Tests only: pause points around recording a state-changing /api/auth request. */
+    authTestHooks?: AuthTestHooks
     /** Failed token attempts: 10 a minute per address. */
     limiter?: RateLimiter
     /** Sign-in, TOTP, setup and password attempts: 5 per 5 minutes per route and address. */
@@ -82,7 +82,7 @@ export function createApp(deps: AppDeps) {
       attempts,
       clientIp,
       lockAuth: deps.core.lockAuth,
-      beforeRecord: deps.core.beforeAuthRecord,
+      testHooks: deps.core.authTestHooks,
     }
     app.on(["GET", "POST"], "/api/auth/*", authGuard(guard))
     app.all("/api/auth/*", (c) => c.json({ code: "not_found", message: "Nothing is here." }, 404))

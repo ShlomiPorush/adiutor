@@ -521,7 +521,8 @@
       "session_end": "נותק לפי שעון החיבור",
       "session_end_others": "ניתק את שאר הדפדפנים",
       "session_end_all": "ניתק בכל מקום",
-      "session_sweep": "הסיר חיבורים שהסתיימו"
+      "session_sweep": "הסיר חיבורים שהסתיימו",
+      "auth_repair": "תיקן את הגדרת האימות הדו-שלבי"
     },
     "field": {
       "status": "סטטוס",

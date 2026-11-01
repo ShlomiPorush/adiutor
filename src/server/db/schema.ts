@@ -374,6 +374,11 @@ export const authUser = pgTable("auth_user", {
   username: text("username").unique(),
   displayUsername: text("display_username"),
   twoFactorEnabled: boolean("two_factor_enabled").default(false),
+  /**
+   * Incremented by every credentials reset (the recovery CLI). A session is valid only while its auth_epoch equals
+   * this, so a session issued by a request that started before a reset is dead whatever the timing.
+   */
+  authEpoch: integer("auth_epoch").notNull().default(0),
   createdAt: createdAt(),
   updatedAt: at("updated_at").notNull().defaultNow(),
 })
@@ -396,6 +401,8 @@ export const authSession = pgTable(
     authenticatedAt: at("authenticated_at").notNull().defaultNow(),
     /** The last real input the page reported: the idle limit counts from here. Polling never moves it. */
     activeAt: at("active_at").notNull().defaultNow(),
+    /** The owner's auth_epoch when Mikud recorded this session. Null until then: such a session is not valid. */
+    authEpoch: integer("auth_epoch"),
     /** When this session proved the TOTP code. Null until then: the API refuses it with totp_required. */
     twoFactorAt: at("two_factor_at"),
     /** Why the clocks ended it (max, idle); every request after that is answered session_ended. */

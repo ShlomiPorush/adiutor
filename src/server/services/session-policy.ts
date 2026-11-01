@@ -88,6 +88,8 @@ export async function checkSessionIn(ctx: Ctx, tx: Tx, sessionId: string, mode: 
       activeAt: authSession.activeAt,
       twoFactorAt: authSession.twoFactorAt,
       endedReason: authSession.endedReason,
+      sessionEpoch: authSession.authEpoch,
+      userEpoch: authUser.authEpoch,
       username: authUser.username,
       name: authUser.name,
     })
@@ -96,6 +98,8 @@ export async function checkSessionIn(ctx: Ctx, tx: Tx, sessionId: string, mode: 
     .where(eq(authSession.id, sessionId))
     .for("update", { of: authSession })
   if (!row) return { ok: false, reason: "revoked" }
+  // A session Mikud never recorded, or one from before a credentials reset, is not valid (see auth_epoch).
+  if (row.sessionEpoch === null || row.sessionEpoch !== row.userEpoch) return { ok: false, reason: "revoked" }
   if (row.endedReason) return { ok: false, reason: row.endedReason === "idle" ? "idle" : "max" }
   const policy = policyOf(await getSettings(tx))
   const now = ctx.clock()
