@@ -5,8 +5,9 @@ import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
 
 const OWNER_TOKEN = "dev-only-owner-token-not-a-secret-000000"
+// Like the UI: every filled value is wrapped in a first-strong isolate (U+2068 ... U+2069).
 const fill = (text: string, vars: Record<string, string>) =>
-  text.replace(/\{(\w+)\}/g, (_, name: string) => vars[name] ?? "")
+  text.replace(/\{(\w+)\}/g, (_, name: string) => `⁨${vars[name] ?? ""}⁩`)
 
 test.describe.configure({ mode: "serial" })
 
