@@ -199,6 +199,8 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             lastActivityAt: thread.updatedAt,
           }
           if (link) {
+            // An older snapshot applied after a newer one: the stored state is newer (equal: nothing new).
+            if (link.lastActivityAt && thread.updatedAt.getTime() <= link.lastActivityAt.getTime()) return
             if (!linkChanged(link, fields)) return
             const [after] = await tx.update(itemThreads).set(fields).where(eq(itemThreads.id, link.id)).returning()
             await writeAudit(ctx, tx, SYNC, {
@@ -364,8 +366,9 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
             const now = ctx.clock()
             let changed = false
             if (
-              project.openIssuesCount !== repo.openIssues ||
-              project.openIssuesAsOf?.getTime() !== repo.issuesAsOf?.getTime()
+              !olderThan(repo.issuesAsOf, project.openIssuesAsOf) &&
+              (project.openIssuesCount !== repo.openIssues ||
+                project.openIssuesAsOf?.getTime() !== repo.issuesAsOf?.getTime())
             ) {
               await tx
                 .update(projects)
@@ -375,6 +378,8 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
             }
             for (const f of repo.families) {
               const old = sourcesBefore.find((s) => s.family === f.family)
+              // An older snapshot applied after a newer one never rolls the counts back.
+              if (old && olderThan(f.asOf, old.asOf)) continue
               const values = { coverage: f.coverage, ...f.counts, asOf: f.asOf }
               if (
                 old &&
@@ -414,6 +419,11 @@ export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot
       })
     }
   })
+}
+
+/** True when both times are known and `next` is before `stored`. */
+function olderThan(next: Date | null, stored: Date | null): boolean {
+  return next !== null && stored !== null && next.getTime() < stored.getTime()
 }
 
 /** The latest runs, newest first. */

@@ -152,6 +152,22 @@ describe("applyT3Snapshot", () => {
     expect(await t.ctx.db.select().from(projects)).toHaveLength(0)
   })
 
+  it("ignores a thread record that is not newer than the stored one (snapshots out of order)", async () => {
+    const newer = ago(HOUR)
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { status: "running", updatedAt: newer })]))
+    const older = snapshot([
+      thread("a", { status: "completed", settled: true, settledAt: ago(2 * HOUR), updatedAt: ago(2 * HOUR) }),
+    ])
+    const result = await applyT3Snapshot(t.ctx, older)
+    expect(result.counts).toEqual({})
+    expect(await itemOf("a")).toMatchObject({ status: "in_progress" })
+    const [link] = await t.ctx.db.select().from(itemThreads)
+    expect(link).toMatchObject({ lastStatus: "running", settled: false, lastActivityAt: newer })
+    // The same time with other data is a no-op too.
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { status: "waiting", updatedAt: newer })]))
+    expect((await t.ctx.db.select().from(itemThreads))[0]).toMatchObject({ lastStatus: "running" })
+  })
+
   it("imports a settled thread without an item only when it settled in the last 7 days", async () => {
     const result = await applyT3Snapshot(
       t.ctx,
@@ -350,5 +366,28 @@ describe("applySecuritySnapshot", () => {
     const again = await applySecuritySnapshot(t.ctx, snap)
     expect(again.counts).toEqual({ reposUnmatched: 1 })
     expect(await t.ctx.db.select().from(audit).where(eq(audit.action, "security.update"))).toHaveLength(auditCount)
+  })
+
+  it("never rolls back counts with an older snapshot applied after a newer one", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    await applySecuritySnapshot(t.ctx, security())
+    const older = security({
+      openIssues: 9,
+      issuesAsOf: ago(3 * HOUR),
+      families: [
+        {
+          family: "dependabot",
+          coverage: "enabled",
+          counts: { critical: 7, high: 7, medium: 7, low: 7 },
+          asOf: ago(3 * HOUR),
+        },
+      ],
+    })
+    const result = await applySecuritySnapshot(t.ctx, older)
+    expect(result.counts).toEqual({ reposUnmatched: 1 })
+    const [p] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    expect(p?.openIssuesCount).toBe(4)
+    const sources = await t.ctx.db.select().from(securitySources).where(eq(securitySources.projectId, project.id))
+    expect(sources.find((s) => s.family === "dependabot")).toMatchObject({ critical: 1, high: 2, low: 3 })
   })
 })
