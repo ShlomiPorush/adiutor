@@ -3,7 +3,7 @@ import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
-import { type By, type Ctx, inTx, lockExternalId, writeAudit } from "./context.ts"
+import { type By, type Ctx, inTx, lockExternalId, lockThreadIds, writeAudit } from "./context.ts"
 import { createItemTx, type ItemRow, isSuppressed, type ThreadLinkRow, updateItemTx } from "./items.ts"
 import { createProjectTx } from "./projects.ts"
 import { newItemStatus, rootThreadId, syncDecision, wantsItem } from "./sync-rules.ts"
@@ -317,6 +317,16 @@ async function foldChildLink(
   root: T3Snapshot["threads"][number] | undefined,
 ) {
   await inTx(ctx, async (tx) => {
+    // The locks an owner delete and a creation take, in the same order: both thread ids, then the item
+    // row, then the link row. An owner delete then sees either the child's link or the moved one.
+    await lockThreadIds(tx, [childId, rootId])
+    const [peek] = await tx
+      .select({ itemId: itemThreads.itemId })
+      .from(itemThreads)
+      .where(eq(itemThreads.threadId, childId))
+    if (!peek) return
+    const [item] = await tx.select({ id: items.id }).from(items).where(eq(items.id, peek.itemId)).for("update")
+    if (!item) return
     const [child] = await tx.select().from(itemThreads).where(eq(itemThreads.threadId, childId)).for("update")
     if (!child) return
     const [rootLink] = await tx.select().from(itemThreads).where(eq(itemThreads.threadId, rootId))

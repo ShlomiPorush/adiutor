@@ -14,7 +14,7 @@ import {
   checkAgentText,
   type DbOrTx,
   inTx,
-  lockExternalId,
+  lockThreadIds,
   requireOwner,
   type Tx,
   writeAudit,
@@ -228,14 +228,30 @@ export async function updateItem(ctx: Ctx, by: By, id: string, version: number, 
 export async function deleteItem(ctx: Ctx, by: By, id: string, version?: number): Promise<void> {
   requireOwner(by, "delete items")
   return inTx(ctx, async (tx) => {
+    // Thread locks before the item row, in the order the sync's creation and folding take them.
+    const linksOf = () => tx.select().from(itemThreads).where(eq(itemThreads.itemId, id))
+    const locked = new Set<string>()
+    const lockThreads = async (threadIds: string[]) => {
+      await lockThreadIds(tx, threadIds)
+      for (const threadId of threadIds) locked.add(threadId)
+    }
+    await lockThreads((await linksOf()).map((l) => l.threadId))
     const before = await lockItem(tx, id)
     if (version !== undefined && before.version !== version)
       throw new AppError("version_conflict", "The item changed since you read it. Read it again and retry.", {
         currentVersion: before.version,
       })
-    const links = await tx.select().from(itemThreads).where(eq(itemThreads.itemId, id))
+    // With the item row locked no link is added; a link folded onto its top-level thread before the thread
+    // locks has a thread id not locked yet. Read again until every link's thread is locked, so the
+    // suppressions cover the thread ids this delete actually removes.
+    let links = await linksOf()
+    for (;;) {
+      const missing = links.map((l) => l.threadId).filter((threadId) => !locked.has(threadId))
+      if (missing.length === 0) break
+      await lockThreads(missing)
+      links = await linksOf()
+    }
     for (const link of links) {
-      await lockExternalId(tx, "thread", link.threadId)
       const [s] = await tx
         .insert(suppressions)
         .values({ kind: "thread", externalId: link.threadId, label: before.title, createdAt: ctx.clock() })

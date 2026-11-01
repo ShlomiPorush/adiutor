@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
-import { audit, items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
+import { audit, items, itemThreads, projects, securitySources, suppressions, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { lockExternalId } from "./context.ts"
 import { createItem, deleteItem, getItemRow, linkThread, updateItem } from "./items.ts"
@@ -177,6 +177,64 @@ describe("applyT3Snapshot", () => {
     await syncLike
     await deleting
     expect(await t.ctx.db.select().from(projects)).toHaveLength(0)
+  })
+
+  describe("an owner delete while the sync folds the item's child link", () => {
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+    const folding = () => snapshot([thread("root-1"), thread("child-1", { parentThreadId: "root-1" })])
+    const moves = () => t.ctx.db.select().from(audit).where(eq(audit.action, "thread.move"))
+    const suppressed = async () => (await t.ctx.db.select().from(suppressions)).map((s) => s.externalId).sort()
+
+    /** Holds the child thread's lock until `release`, as a concurrent transaction would. */
+    function holdChildLock() {
+      let release = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const done = t.ctx.db.transaction(async (tx) => {
+        await lockExternalId(tx, "thread", "child-1")
+        await held
+      })
+      return { release, done }
+    }
+
+    it("waits for a delete that read the child's link: the link is not moved under it", async () => {
+      const item = await linkedItem("in_progress", ["child-1"])
+      const lock = holdChildLock()
+      await pause(50)
+      // The delete reads the item's links (the child) and waits for the child's thread lock.
+      const deleting = deleteItem(t.ctx, owner, item.id)
+      await pause(100)
+      const syncing = applyT3Snapshot(t.ctx, folding())
+      await pause(300)
+      lock.release()
+      await lock.done
+      await deleting
+      await syncing
+      // Before the fix the fold moved the link to root-1 meanwhile, and the delete removed root-1's link
+      // while it suppressed only child-1.
+      expect(await moves()).toHaveLength(0)
+      expect(await suppressed()).toEqual(["child-1"])
+    })
+
+    it("suppresses the top-level thread when the fold moved the link first", async () => {
+      const item = await linkedItem("in_progress", ["child-1"])
+      const lock = holdChildLock()
+      await pause(50)
+      const syncing = applyT3Snapshot(t.ctx, folding())
+      await pause(200)
+      const deleting = deleteItem(t.ctx, owner, item.id)
+      await pause(100)
+      lock.release()
+      await lock.done
+      await syncing
+      await deleting
+      expect(await moves()).toHaveLength(1)
+      expect(await suppressed()).toEqual(["root-1"])
+      const again = await applyT3Snapshot(t.ctx, folding())
+      expect(again.counts).toMatchObject({ threadsSuppressed: 1 })
+      expect(await t.ctx.db.select().from(items)).toHaveLength(0)
+    })
   })
 
   it("ignores a thread record that is not newer than the stored one (snapshots out of order)", async () => {

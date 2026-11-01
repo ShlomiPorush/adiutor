@@ -80,6 +80,15 @@ export async function lockExternalId(tx: Tx, kind: SuppressionKind, externalId: 
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`mikud:${kind}:${externalId}`}, 0))`)
 }
 
+/**
+ * Takes the locks of several thread ids in one global order (sorted, each once), so transactions that
+ * lock overlapping sets never deadlock. Thread locks come before project locks and before item and link
+ * row locks.
+ */
+export async function lockThreadIds(tx: Tx, threadIds: Iterable<string>): Promise<void> {
+  for (const id of [...new Set(threadIds)].sort()) await lockExternalId(tx, "thread", id)
+}
+
 /** Runs a write in one transaction. */
 export function inTx<T>(ctx: Ctx, run: (tx: Tx) => Promise<T>): Promise<T> {
   return ctx.db.transaction(run)
