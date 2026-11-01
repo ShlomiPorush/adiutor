@@ -23,7 +23,9 @@ One pnpm package (no workspace apps).
 - `config/`: TypeScript base config, Vitest configs, Drizzle Kit config.
 - `docker/`: toolchain and application Dockerfiles, the development Compose template and `dev.env` (fake development values).
 - `scripts/`: `local.sh`, `verify.sh`; `lib/common.sh` (shared helpers) and `lib/guards.sh` (repository guards).
-- `src/web/`, `src/sync/`, `e2e/`, `prompts/`: planned, not created yet.
+- `src/sync/`: the sync tool that runs on the owner's PC, bundled to `dist/sync/mikud-sync.js` (Node stdlib only at runtime; no imports from `src/server/`). `main.ts` is the entry, `run.ts` one run, `fixtures/` invented T3 and `overview` data for its tests. See `docs/sync.md`.
+- `prompts/`: `reconcile.md`, the instructions of the T3 scheduled task that runs the sync tool.
+- `src/web/`, `e2e/`: planned, not created yet.
 
 ## Commands
 
@@ -39,6 +41,7 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 - pnpm 12 reads its settings only from `pnpm-workspace.yaml` (not from `package.json`), and refuses to install when a dependency's build script is not allowed there. The file holds settings only; it lists no packages.
 - `grep -P` with `\x{...}` code points needs a UTF-8 locale; `scripts/lib/guards.sh` sets `LC_ALL=C.UTF-8` and stops on any grep error, so a broken pattern cannot pass silently.
 - Tests named `*.integration.test.ts` run only from `verify.sh`, which passes `MIKUD_TEST_DATABASE_URL`. `pnpm test` skips them.
+- Node refuses to start a `.cmd` file (the T3 CLI on Windows) without a shell. `src/sync/exec.ts` runs it through `cmd.exe /d /v:off /s /c` with every part quoted and refuses `"`, `%` and line breaks; never build a shell string anywhere else.
 - `ON DELETE RESTRICT` (items of a project) fails with SQLSTATE `23001`, not `23503`.
 - Codes are text columns with database checks generated from `src/shared/enums.ts`: adding a code needs a new migration.
 - The guards scan tracked files and new files that are not ignored. The deny list `docs/private/deny-list.txt` exists only on the owner's machine; in CI the guard is skipped, and its output never repeats a matched line.

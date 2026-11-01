@@ -1,0 +1,40 @@
+[
+  {
+    "threadId": "thread-w1",
+    "projectId": "p-widget",
+    "title": "Add an export button",
+    "link": "http://127.0.0.1:3773/env/thread-w1",
+    "createdBy": "agent",
+    "status": "running",
+    "settled": false,
+    "settledAt": null,
+    "snoozed": false,
+    "parentThreadId": null,
+    "relationshipToParent": null,
+    "createdAt": "2026-10-31T10:00:00.000Z",
+    "updatedAt": "2026-11-01T05:00:00.000Z"
+  },
+  {
+    "threadId": "thread-w2",
+    "projectId": "p-widget",
+    "title": "Review: export button",
+    "status": "completed",
+    "settled": true,
+    "settledAt": "2026-10-31T12:00:00.000Z",
+    "parentThreadId": "thread-w1",
+    "relationshipToParent": "delegate",
+    "createdAt": "2026-10-31T11:00:00.000Z",
+    "updatedAt": "2026-10-31T12:00:00.000Z"
+  },
+  {
+    "threadId": "thread-w3",
+    "projectId": "p-widget",
+    "title": "Fix the date format; $(echo not a command)",
+    "status": "completed",
+    "settled": false,
+    "settledAt": null,
+    "parentThreadId": null,
+    "createdAt": "2026-10-30T09:00:00.000Z",
+    "updatedAt": "2026-10-30T09:30:00.000Z"
+  }
+]

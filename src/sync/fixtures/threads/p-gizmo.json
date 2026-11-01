@@ -1,0 +1,13 @@
+[
+  { "projectId": "p-gizmo", "title": "A record without a thread id", "status": "running" },
+  {
+    "threadId": "thread-z1",
+    "projectId": "p-gizmo",
+    "title": "Release 1.2",
+    "status": "completed",
+    "settled": true,
+    "settledAt": "2026-10-28T08:00:00.000Z",
+    "parentThreadId": null,
+    "updatedAt": "2026-10-28T08:00:00.000Z"
+  }
+]
