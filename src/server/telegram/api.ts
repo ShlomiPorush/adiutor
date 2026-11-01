@@ -2,9 +2,10 @@ import type { TelegramHtml } from "./html.ts"
 
 /**
  * Why a Bot API call failed, as a code that is safe to log and store:
- * - `answer`: Telegram (or the stand-in) answered with an error. Definite: nothing was done.
+ * - `answer`: Telegram's own JSON answer with `ok: false` and a 4xx code. Definite: nothing was done.
  * - `not_sent`: the request never reached the server (DNS, connection refused, unreachable). Definite.
- * - `uncertain`: the request may have reached Telegram (timeout, connection reset, unreadable answer).
+ * - `uncertain`: the request may have reached Telegram: a timeout, a reset, a 5xx (Telegram's or a
+ *   gateway's), or an answer that is not Telegram's JSON (a gateway's HTML page, for example).
  * - `aborted`: the caller stopped it (shutdown).
  */
 export type TelegramFailure = "answer" | "not_sent" | "uncertain" | "aborted"
@@ -83,13 +84,22 @@ export class BotApi {
       json = (await response.json()) as typeof json
     } catch {
       if (signal?.aborted) throw new TelegramError("aborted", "aborted", method)
-      // An answer we cannot read: from Telegram an error status is still an answer, 2xx is not clear.
-      if (response.status >= 400) throw new TelegramError("answer", `telegram_${response.status}`, method)
-      throw new TelegramError("uncertain", "bad_answer", method)
+      // Not Telegram's answer (a gateway's page, a cut-off body): Telegram may still have done the work.
+      const code = response.status >= 400 ? `telegram_${response.status}` : "bad_answer"
+      throw new TelegramError("uncertain", code, method)
     }
-    if (json.ok !== true) {
-      const status = Number.isInteger(json.error_code) ? json.error_code : response.status
-      throw new TelegramError("answer", `telegram_${status}`, method, json.parameters?.retry_after)
+    if (json?.ok !== true) {
+      const errorCode = json?.error_code
+      const fromTelegram = json?.ok === false && typeof errorCode === "number" && Number.isInteger(errorCode)
+      const status = fromTelegram ? errorCode : response.status
+      // Only Telegram's own refusal (4xx) proves nothing was done; a 5xx or a foreign answer may hide a send.
+      const definite = fromTelegram && status >= 400 && status < 500
+      throw new TelegramError(
+        definite ? "answer" : "uncertain",
+        `telegram_${status}`,
+        method,
+        json?.parameters?.retry_after,
+      )
     }
     return json.result as T
   }

@@ -114,11 +114,11 @@ describe("morning job", () => {
     expect(await runs()).toMatchObject([{ state: "unknown", detail: "interrupted" }])
   })
 
-  it("retries after a Telegram error until it is sent, and skips the day after the cutoff", async () => {
-    standIn.sendFailures.push(500)
+  it("retries after a Telegram refusal until it is sent, and skips the day after the cutoff", async () => {
+    standIn.sendFailures.push(400)
     const morning = job()
     expect(await morning.tick()).toEqual({ action: "failed", localDate: "2026-11-01" })
-    expect(await runs()).toMatchObject([{ state: "failed", detail: "telegram_500" }])
+    expect(await runs()).toMatchObject([{ state: "failed", detail: "telegram_400" }])
     now = new Date(now.getTime() + 30_000)
     expect(await morning.tick()).toEqual({ action: "sent", localDate: "2026-11-01" })
     expect(standIn.sent).toHaveLength(1)
@@ -132,6 +132,16 @@ describe("morning job", () => {
     const monday = (await runs()).find((r) => r.localDate === "2026-11-02")
     expect(monday).toMatchObject({ state: "skipped", detail: "telegram_429" })
     expect(standIn.sent).toHaveLength(1)
+  })
+
+  it("never resends after a server error, which may hide a message that went out", async () => {
+    standIn.sendFailures.push(500)
+    const morning = job()
+    expect(await morning.tick()).toEqual({ action: "unknown", localDate: "2026-11-01" })
+    now = new Date(now.getTime() + 30_000)
+    expect(await morning.tick()).toEqual({ action: "none", reason: "done" })
+    expect(standIn.sent).toEqual([])
+    expect(await runs()).toMatchObject([{ state: "unknown", detail: "telegram_500" }])
   })
 
   it("never resends when it cannot tell whether the message arrived", async () => {
