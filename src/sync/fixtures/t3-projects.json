@@ -1,0 +1,43 @@
+{
+  "collectedAt": "2026-11-01T05:30:00.000Z",
+  "projects": [
+    {
+      "id": "p-widget",
+      "title": "Widget",
+      "workspaceRoot": "C:\\Work\\Widget",
+      "repositoryIdentity": { "provider": "github", "owner": "acme", "name": "widget", "rootPath": "C:/Work/Widget" }
+    },
+    {
+      "id": "mcp:p-gadget",
+      "title": "Gadget",
+      "workspaceRoot": "c:/work/gadget/",
+      "repositoryIdentity": null
+    },
+    {
+      "id": "p-gizmo",
+      "title": "Gizmo",
+      "workspaceRoot": "C:\\Users\\Old Name\\Work\\gizmo",
+      "repositoryIdentity": {
+        "provider": "unknown",
+        "owner": "dev",
+        "name": "gizmo",
+        "rootPath": "C:/Users/Dev/.t3/worktrees/gizmo/t3-0001"
+      }
+    },
+    { "id": "p-notes", "title": "Notes", "workspaceRoot": "/home/dev/notes" },
+    {
+      "id": "p-missing",
+      "title": "Missing",
+      "workspaceRoot": "C:\\Work\\Missing",
+      "repositoryIdentity": { "provider": "github", "owner": "acme", "name": "missing" }
+    },
+    {
+      "id": "p-deleted",
+      "title": "Deleted",
+      "workspaceRoot": "C:\\Work\\Deleted",
+      "deletedAt": "2026-10-01T00:00:00.000Z"
+    },
+    { "id": "bad id; rm -rf /", "title": "Bad id", "workspaceRoot": "C:\\Work\\Bad" },
+    { "title": "No id" }
+  ]
+}

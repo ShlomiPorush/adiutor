@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "runId": "20261101T060000Z",
+  "startedAt": "2026-11-01T06:00:00.000Z",
+  "finishedAt": "2026-11-01T06:05:00.000Z",
+  "sources": {
+    "github": {
+      "attemptedAt": "2026-11-01T06:01:00.000Z",
+      "succeededAt": "2026-11-01T06:04:00.000Z",
+      "completeness": "partial",
+      "reason": null
+    }
+  },
+  "local": [
+    {
+      "key": "c:/work/gadget",
+      "name": "gadget",
+      "mainPath": "C:\\Work\\Gadget",
+      "github": "acme/gadget",
+      "worktrees": [{ "path": "C:/Work/Gadget", "branch": "main" }]
+    },
+    {
+      "key": "c:/work/gizmo-main",
+      "name": "gizmo-main",
+      "mainPath": "C:\\Work\\gizmo-main",
+      "github": "acme/gizmo",
+      "worktrees": [
+        { "path": "C:\\Work\\gizmo-main", "branch": "main" },
+        { "path": "C:\\Users\\Dev\\.t3\\worktrees\\gizmo\\t3-0001", "branch": "feature/x" }
+      ]
+    },
+    {
+      "key": "/home/dev/notes",
+      "name": "notes",
+      "mainPath": "/home/dev/notes",
+      "github": null,
+      "worktrees": [{ "path": "/home/dev/notes", "branch": "main" }]
+    }
+  ],
+  "github": [
+    {
+      "fullName": "acme/widget",
+      "access": "member",
+      "archived": false,
+      "source": {
+        "attemptedAt": "2026-11-01T06:01:30.000Z",
+        "succeededAt": "2026-11-01T06:02:00.000Z",
+        "completeness": "complete",
+        "reason": null,
+        "lastSuccessAt": "2026-11-01T06:02:00.000Z"
+      },
+      "openIssues": 4,
+      "security": {
+        "dependabot": {
+          "status": "enabled",
+          "alerts": [
+            { "number": 1, "severity": "critical", "package": "left-pad" },
+            { "number": 2, "severity": "high", "package": "left-pad" },
+            { "number": 3, "severity": "high", "package": "right-pad" },
+            { "number": 4, "severity": "medium", "package": "right-pad" },
+            { "number": 5, "severity": "low", "package": "center-pad" }
+          ],
+          "attemptedAt": "2026-11-01T06:02:01.000Z",
+          "succeededAt": "2026-11-01T06:02:01.000Z",
+          "reason": null
+        },
+        "codeScanning": {
+          "status": "enabled",
+          "alerts": [
+            { "number": 7, "severity": "error", "rule": "example rule" },
+            { "number": 8, "severity": "warning", "rule": "example rule" },
+            { "number": 9, "severity": "note", "rule": "example rule" },
+            { "number": 10, "rule": "rule without a severity" }
+          ],
+          "attemptedAt": "2026-11-01T06:02:02.000Z",
+          "succeededAt": "2026-11-01T06:02:02.000Z",
+          "reason": null
+        },
+        "secretScanning": {
+          "status": "not-enabled",
+          "alerts": [],
+          "attemptedAt": "2026-11-01T06:02:03.000Z",
+          "succeededAt": "2026-11-01T06:02:03.000Z",
+          "reason": "Secret scanning is disabled on this repository."
+        }
+      }
+    },
+    {
+      "fullName": "acme/gadget",
+      "access": "member",
+      "archived": false,
+      "source": {
+        "attemptedAt": "2026-11-01T06:03:00.000Z",
+        "succeededAt": null,
+        "completeness": "failed",
+        "reason": "timeout",
+        "lastSuccessAt": "2026-10-30T06:02:00.000Z"
+      },
+      "stale": { "since": "2026-10-30T06:02:00.000Z" },
+      "openIssues": 2,
+      "security": {
+        "dependabot": {
+          "status": "enabled",
+          "alerts": [{ "number": 3, "severity": "high", "package": "example-lib" }],
+          "attemptedAt": "2026-10-30T06:01:00.000Z",
+          "succeededAt": "2026-10-30T06:01:00.000Z",
+          "reason": null
+        },
+        "codeScanning": {
+          "status": "error",
+          "alerts": [],
+          "attemptedAt": "2026-10-30T06:01:01.000Z",
+          "reason": "HTTP 500"
+        },
+        "secretScanning": {
+          "status": "no-access",
+          "alerts": [],
+          "attemptedAt": "2026-10-30T06:01:02.000Z",
+          "reason": "Resource not accessible"
+        }
+      }
+    },
+    {
+      "fullName": "Acme/Gizmo",
+      "access": "member",
+      "archived": false,
+      "source": {
+        "attemptedAt": "2026-11-01T06:03:30.000Z",
+        "succeededAt": "2026-11-01T06:03:40.000Z",
+        "completeness": "complete",
+        "reason": null,
+        "lastSuccessAt": "2026-11-01T06:03:40.000Z"
+      },
+      "openIssues": 0,
+      "security": {
+        "dependabot": {
+          "status": "enabled",
+          "alerts": [{ "number": 1, "severity": "critical", "package": "example-lib" }],
+          "attemptedAt": "2026-11-01T06:03:31.000Z",
+          "succeededAt": "2026-10-29T06:00:00.000Z",
+          "reason": "HTTP 502",
+          "stale": { "since": "2026-10-29T06:00:00.000Z" }
+        },
+        "codeScanning": {
+          "status": "paused",
+          "alerts": [],
+          "attemptedAt": "2026-11-01T06:03:32.000Z",
+          "succeededAt": "2026-11-01T06:03:32.000Z",
+          "reason": null
+        }
+      }
+    },
+    {
+      "fullName": "acme/archived",
+      "access": "member",
+      "archived": true,
+      "source": {
+        "attemptedAt": "2026-11-01T06:04:00.000Z",
+        "succeededAt": "2026-11-01T06:04:00.000Z",
+        "completeness": "complete",
+        "reason": null,
+        "lastSuccessAt": "2026-11-01T06:04:00.000Z"
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "threadId": "thread-g1",
+    "projectId": "mcp:p-gadget",
+    "title": "Decide on the storage format",
+    "status": "waiting",
+    "settled": false,
+    "settledAt": null,
+    "parentThreadId": null,
+    "updatedAt": "2026-10-31T18:00:00.000Z"
+  }
+]
