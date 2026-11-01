@@ -5,7 +5,7 @@ import type { ServerConfig } from "./config.ts"
 import { AppError, errorBody } from "./errors.ts"
 import { apiRoutes } from "./http/api.ts"
 import { RateLimiter } from "./http/auth.ts"
-import { log } from "./log.ts"
+import { errorFacts, log } from "./log.ts"
 import { mcpRoutes } from "./mcp/server.ts"
 import type { Ctx } from "./services/context.ts"
 import type { TelegramRuntime } from "./telegram/status.ts"
@@ -66,8 +66,8 @@ export function createApp(deps: AppDeps) {
     if (error instanceof AppError) return c.json(errorBody(error), error.status)
     if (error instanceof HTTPException && error.status < 500)
       return c.json({ error: { code: "validation_failed", message: "The request is not valid." } }, error.status)
-    // Never log request bodies or headers: they may hold tokens or text.
-    log.error("request failed", { method: c.req.method, path: c.req.path, error: String(error) })
+    // Never log request bodies, headers or the error's message: they may hold tokens, text or a query.
+    log.error("request failed", { method: c.req.method, path: c.req.path, ...errorFacts(error) })
     return c.json({ error: { code: "internal_error", message: "Something went wrong on the server." } }, 500)
   })
 

@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
-import { log } from "../log.ts"
+import { errorFacts, log } from "../log.ts"
 import { type By, type Ctx, inTx, lockExternalId, writeAudit } from "./context.ts"
 import { createItemTx, type ItemRow, isSuppressed, type ThreadLinkRow, updateItemTx } from "./items.ts"
 import { createProjectTx } from "./projects.ts"
@@ -41,13 +41,8 @@ class Run {
       this.failed++
       const code = error instanceof AppError ? error.code : "internal_error"
       this.errors.push({ record: name, code })
-      // The record's name is an id; its text (titles) is never logged.
-      log.warn("sync record failed", {
-        kind: this.kind,
-        record: name,
-        code,
-        error: error instanceof AppError ? undefined : String(error),
-      })
+      // The record's name is an id; its text (titles) and a failed query's parameters are never logged.
+      log.warn("sync record failed", { kind: this.kind, record: name, ...errorFacts(error), code })
     }
   }
 

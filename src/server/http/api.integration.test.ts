@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { RateLimiter } from "./auth.ts"
@@ -60,6 +60,29 @@ async function pair(label = "Desktop") {
 }
 
 describe("authentication", () => {
+  it("logs a failing query without its text or parameters", async () => {
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((line: unknown) => void lines.push(String(line)))
+    try {
+      // PostgreSQL refuses a NUL character in text, so the insert fails with the owner's text as a parameter.
+      const marker = "owner-private-note-4711"
+      const res = await call("/items", {
+        method: "POST",
+        token: OWNER,
+        body: { type: "task", title: "Logged", body: `${marker}${String.fromCharCode(0)}` },
+      })
+      expect(res.status).toBe(500)
+      expect(res.json.error.code).toBe("internal_error")
+    } finally {
+      spy.mockRestore()
+    }
+    const logged = lines.join(" ")
+    expect(logged).toContain('"msg":"request failed"')
+    expect(logged).toContain('"sqlstate":"22021"')
+    expect(logged).not.toContain("owner-private-note-4711")
+    expect(logged).not.toMatch(/insert into|params/i)
+  })
+
   it("refuses a request without a token or cookie", async () => {
     const res = await call("/projects")
     expect(res.status).toBe(401)

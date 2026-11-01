@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm"
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { audit, items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
@@ -309,6 +309,26 @@ describe("applyT3Snapshot", () => {
     const [run] = await t.ctx.db.select().from(syncRuns)
     expect(run).toMatchObject({ kind: "t3", outcome: "partial", errors: result.errors })
     expect(run?.finishedAt).toBeInstanceOf(Date)
+  })
+
+  it("logs a failing record without the query's text or parameters", async () => {
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((line: unknown) => void lines.push(String(line)))
+    let result: Awaited<ReturnType<typeof applyT3Snapshot>>
+    try {
+      // PostgreSQL refuses a NUL character in text: the record fails with the title as a parameter.
+      result = await applyT3Snapshot(
+        t.ctx,
+        snapshot([thread("a", { title: `private-title-0815${String.fromCharCode(0)}` })]),
+      )
+    } finally {
+      spy.mockRestore()
+    }
+    expect(result.errors).toEqual([{ record: "thread:a", code: "internal_error" }])
+    const logged = lines.join(" ")
+    expect(logged).toContain('"sqlstate":"22021"')
+    expect(logged).not.toContain("private-title-0815")
+    expect(logged).not.toMatch(/insert into|params/i)
   })
 
   it("leaves items an agent linked through startThread to the agent's status until the threads say otherwise", async () => {
