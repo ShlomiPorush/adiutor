@@ -12,12 +12,13 @@ export const ERROR_CODES = [
   "suppressed",
   "conflict",
   "rate_limited",
+  "telegram_failed",
   "internal_error",
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]
 
-export const ERROR_STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500> = {
+export const ERROR_STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502> = {
   unauthorized: 401,
   forbidden: 403,
   not_found: 404,
@@ -28,6 +29,7 @@ export const ERROR_STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 422 |
   suppressed: 409,
   conflict: 409,
   rate_limited: 429,
+  telegram_failed: 502,
   internal_error: 500,
 }
 

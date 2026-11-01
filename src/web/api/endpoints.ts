@@ -81,6 +81,8 @@ export const api = {
   settings: () => data<Settings>("GET", "/settings"),
   updateSettings: (patch: SettingsPatch) => data<Settings>("PATCH", "/settings", patch),
   telegramStatus: () => data<TelegramStatus>("GET", "/telegram/status"),
+  /** Sends today's morning message to the owner's chat now, without touching the 08:00 run. */
+  telegramTestMessage: () => data<{ sent: true }>("POST", "/telegram/test-message", {}),
 
   devices: () => data<Device[]>("GET", "/devices"),
   revokeDevice: (deviceId: string) => request<null>("DELETE", `/devices/${id(deviceId)}`),

@@ -22,6 +22,7 @@ import {
 } from "../../shared/api.ts"
 import { itemStatusSchema, itemTypeSchema } from "../../shared/enums.ts"
 import { AppError, forbidden, invalid, notFound } from "../errors.ts"
+import { sendTestMorningMessage } from "../jobs/morning.ts"
 import {
   getSettings,
   listDevices,
@@ -269,6 +270,10 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   api.get("/telegram/status", requireOwnerAuth, async (c) =>
     c.json({ data: await telegramStatus(ctx, deps.telegram ?? TELEGRAM_OFF) }),
   )
+  api.post("/telegram/test-message", requireOwnerAuth, async (c) => {
+    const send = deps.telegram?.configured ? deps.telegram.send?.bind(deps.telegram) : undefined
+    return c.json({ data: await sendTestMorningMessage(ctx, byOf(c), deps.config.publicUrl, send) })
+  })
   api.get("/devices", async (c) => c.json({ data: await listDevices(ctx, byOf(c)) }))
   api.delete("/devices/:id", async (c) => {
     await revokeDevice(ctx, byOf(c), idParam(c))

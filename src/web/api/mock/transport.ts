@@ -471,6 +471,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     record("settings.update", "settings", state.settings.id, before, { ...state.settings })
     return ok(state.settings)
   }
+  if (head === "telegram" && id === "test-message" && method === "POST") return ok({ sent: true })
   if (head === "telegram")
     return ok({
       configured: true,

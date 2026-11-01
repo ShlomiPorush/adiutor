@@ -113,6 +113,7 @@
       "suppressed": "מחקת את זה בעבר",
       "conflict": "זה מתנגש במצב הנוכחי",
       "rate_limited": "יותר מדי ניסיונות. צריך לחכות דקה",
+      "telegram_failed": "Telegram לא קיבל את ההודעה",
       "internal_error": "השרת נכשל"
     }
   },
@@ -503,7 +504,8 @@
       "settings_update": "שינה הגדרות",
       "device_pair": "צימד מכשיר",
       "device_revoke": "ביטל מכשיר",
-      "device_revoke_all": "ניתק את כל המכשירים"
+      "device_revoke_all": "ניתק את כל המכשירים",
+      "telegram_test_message": "שלח הודעת בוקר לבדיקה"
     },
     "field": {
       "status": "סטטוס",
@@ -580,6 +582,11 @@
     },
     "lastMorning": "הודעת בוקר אחרונה",
     "noMorningYet": "עוד לא נשלחה",
+    "telegramTest": "שליחת הודעת בוקר לבדיקה",
+    "telegramTestHint": "שולח עכשיו את הודעת הבוקר של היום לצ'אט שלך ב-Telegram. ההודעה של 08:00 עדיין תישלח.",
+    "telegramTestSending": "שולח...",
+    "telegramTestSent": "הודעת הבוקר לבדיקה נשלחה",
+    "telegramTestFailed": "לא הצלחתי לשלוח את הודעת הבדיקה: {reason}",
     "job": {
       "sending": "נשלחת",
       "sent": "נשלחה",

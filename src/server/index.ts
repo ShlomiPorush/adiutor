@@ -52,7 +52,13 @@ if (config.telegram) {
       await api.sendMessage(chatId, text, signal)
     },
   })
-  telegram = { configured: true, polling: () => telegramBot.polling }
+  telegram = {
+    configured: true,
+    polling: () => telegramBot.polling,
+    send: async (text) => {
+      await api.sendMessage(chatId, text)
+    },
+  }
 } else {
   log.info("telegram is not configured: the bot and the morning message are off")
 }

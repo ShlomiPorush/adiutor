@@ -1,9 +1,10 @@
 import { and, desc, eq } from "drizzle-orm"
 import type { JobState } from "../../shared/enums.ts"
 import { jobRuns } from "../db/schema.ts"
+import { AppError } from "../errors.ts"
 import { log } from "../log.ts"
 import { getSettings, lastVisitAnyDevice } from "../services/admin.ts"
-import type { Ctx } from "../services/context.ts"
+import { type By, type Ctx, requireOwner, writeAudit } from "../services/context.ts"
 import { morning } from "../services/reads.ts"
 import { TelegramError } from "../telegram/api.ts"
 import type { TelegramHtml } from "../telegram/html.ts"
@@ -148,6 +149,42 @@ export async function buildTodaysMessage(ctx: Ctx, publicUrl: URL): Promise<Tele
     dateFormat: settings.dateFormat,
     timeFormat: settings.timeFormat,
   })
+}
+
+/**
+ * The owner's test of the morning message: today's message, built exactly as the job builds it, sent to
+ * the owner's chat now. It never touches job_runs, so the 08:00 message still goes out. Audited.
+ */
+export async function sendTestMorningMessage(
+  ctx: Ctx,
+  by: By,
+  publicUrl: URL,
+  send: ((text: TelegramHtml) => Promise<void>) | undefined,
+): Promise<{ sent: true }> {
+  requireOwner(by, "send a test morning message")
+  if (!send)
+    throw new AppError(
+      "conflict",
+      "Telegram is not configured: set MIKUD_TELEGRAM_BOT_TOKEN and MIKUD_TELEGRAM_CHAT_ID on the server.",
+    )
+  const text = await buildTodaysMessage(ctx, publicUrl)
+  let outcome = "sent"
+  try {
+    await send(text)
+  } catch (error) {
+    outcome = error instanceof TelegramError ? error.code : "unexpected"
+  }
+  await writeAudit(ctx, ctx.db, by, {
+    action: "telegram.test_message",
+    entityType: "settings",
+    entityId: null,
+    after: { outcome },
+  })
+  if (outcome !== "sent") {
+    log.warn("test morning message failed", { code: outcome })
+    throw new AppError("telegram_failed", `Telegram did not take the message (${outcome}). Check the bot settings.`)
+  }
+  return { sent: true }
 }
 
 export type MorningJobDeps = {

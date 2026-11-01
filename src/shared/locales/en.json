@@ -113,6 +113,7 @@
       "suppressed": "You deleted this before",
       "conflict": "It conflicts with the current state",
       "rate_limited": "Too many attempts. Wait a minute",
+      "telegram_failed": "Telegram did not take the message",
       "internal_error": "The server failed"
     }
   },
@@ -503,7 +504,8 @@
       "settings_update": "changed settings",
       "device_pair": "paired a device",
       "device_revoke": "revoked a device",
-      "device_revoke_all": "ended all devices"
+      "device_revoke_all": "ended all devices",
+      "telegram_test_message": "sent a test morning message"
     },
     "field": {
       "status": "Status",
@@ -580,6 +582,11 @@
     },
     "lastMorning": "Last morning message",
     "noMorningYet": "Not sent yet",
+    "telegramTest": "Send a test morning message",
+    "telegramTestHint": "Sends today's morning message to your Telegram chat now. The 08:00 message still goes out.",
+    "telegramTestSending": "Sending...",
+    "telegramTestSent": "The test morning message was sent",
+    "telegramTestFailed": "Could not send the test message: {reason}",
     "job": {
       "sending": "Sending",
       "sent": "Sent",
