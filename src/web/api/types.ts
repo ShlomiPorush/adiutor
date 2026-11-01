@@ -299,7 +299,7 @@ export type SyncRun = {
   errors: { record: string; code: string }[]
 }
 
-/** GET /telegram/status (docs/api.md, Telegram). A server without the route (404) counts as not configured. */
+/** GET /telegram/status (docs/api.md, Telegram). */
 export type TelegramStatus = {
   configured: boolean
   /** The latest getUpdates call of the bot succeeded. */
