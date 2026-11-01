@@ -2,14 +2,7 @@ import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { audit, comments, goals, items, itemThreads, projects, suppressions } from "../db/schema.ts"
 import { agent, bot, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
-import {
-  getSettings,
-  listSuppressions,
-  pairDevice,
-  removeSuppression,
-  revokeAllDevices,
-  updateSettings,
-} from "./admin.ts"
+import { getSettings, listSuppressions, removeSuppression, updateSettings } from "./admin.ts"
 import type { By } from "./context.ts"
 import { addComment, captureItem, createItem, deleteItem, linkThread, updateItem } from "./items.ts"
 import { createProject, decideProposal, deleteProject, proposeStage, updateProject } from "./projects.ts"
@@ -223,17 +216,10 @@ describe("projects", () => {
   })
 })
 
-describe("settings and devices", () => {
+describe("settings", () => {
   it("lets only the owner change settings", async () => {
     expect((await getSettings(t.ctx.db)).closedItemDays).toBe(7)
     await refused("forbidden", () => updateSettings(t.ctx, agent, { closedItemDays: 3 }))
     expect((await updateSettings(t.ctx, owner, { closedItemDays: 3 })).closedItemDays).toBe(3)
-  })
-
-  it("lets only the owner pair and end devices", async () => {
-    await refused("forbidden", () => pairDevice(t.ctx, agent, "Phone"))
-    await pairDevice(t.ctx, owner, "Phone")
-    await refused("forbidden", () => revokeAllDevices(t.ctx, agent))
-    expect(await revokeAllDevices(t.ctx, owner)).toBe(1)
   })
 })

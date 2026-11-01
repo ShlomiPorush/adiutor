@@ -1762,39 +1762,150 @@ html.ui-layer-on .ui-page {
   font-size: var(--ui-fs-sm);
 }
 
-/* ---------- Pairing page (FS-23: a column on the page, no card) ---------- */
+/* ---------- Sign-in and setup pages (FS-23: a column on the page, no card) ---------- */
 
-.ui-pair {
+.ui-auth {
   display: grid;
   place-items: center;
   height: 100dvh;
   overflow: auto;
   padding: 24px 16px;
 }
-.ui-pair-col {
+.ui-auth-col {
   display: grid;
   gap: 18px;
   width: 100%;
   max-width: 400px;
 }
-.ui-pair-col .ui-brand {
+/* Nothing inside may widen the column past a phone screen. */
+.ui-auth-col > * {
+  min-width: 0;
+}
+.ui-auth-col .ui-brand {
   padding: 0;
 }
-.ui-pair-col .ui-input,
-.ui-pair-col .ui-btn {
+.ui-auth-col .ui-input,
+.ui-auth-col .ui-btn {
   height: 40px;
 }
-.ui-pair-col .ui-btn-primary {
+.ui-auth-col .ui-btn-primary {
   width: 100%;
 }
-.ui-pair-col p {
+.ui-auth-col p {
   margin: 0;
   color: var(--ui-muted);
+}
+.ui-auth-col .ui-auth-lead {
+  color: var(--ui-ink);
+  font-weight: 600;
+}
+.ui-auth-note {
+  display: grid;
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ui-line);
+  font-size: var(--ui-fs-sm);
+}
+.ui-auth-note .ui-copy,
+.ui-secret .ui-copy {
+  justify-self: start;
+  max-width: 100%;
+  text-align: start;
+}
+/* A long key or command wraps instead of being cut: it is read and typed, not only copied. */
+/* biome-ignore lint/style/noDescendingSpecificity: the wrapping variant of the copy text, only on these pages */
+.ui-auth-note .ui-copy bdi,
+.ui-secret .ui-copy bdi {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 .ui-caps {
   margin: 0;
   color: var(--ui-warn);
   font-size: var(--ui-fs-sm);
+}
+.ui-code-input {
+  font-family: var(--ui-mono);
+  font-size: 1.35rem;
+  letter-spacing: 0.4em;
+  text-align: center;
+}
+.ui-qr {
+  display: grid;
+  place-items: center;
+}
+/* The code stays dark on white in both themes: authenticator apps read it that way. */
+.ui-qr img,
+.ui-qr-wait {
+  width: 220px;
+  height: 220px;
+  padding: 8px;
+  border-radius: var(--ui-radius-sm);
+  background: #fff;
+}
+.ui-secret {
+  display: block;
+}
+.ui-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  font-weight: 600;
+}
+.ui-steps li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ui-steps li[aria-current="step"] {
+  color: var(--ui-ink);
+}
+.ui-step-n {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--ui-line);
+  font-size: var(--ui-fs-meta);
+}
+.ui-steps li[aria-current="step"] .ui-step-n {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: var(--ui-on-accent);
+}
+.ui-steps li[data-done] .ui-step-n {
+  border-color: var(--ui-ok);
+  color: var(--ui-ok);
+}
+
+/* ---------- Account (Settings) ---------- */
+
+.ui-h3 {
+  margin: 0 0 2px;
+  font-size: var(--ui-fs-item);
+  font-weight: 650;
+}
+
+.ui-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ui-account-form {
+  display: grid;
+  gap: 12px;
+  max-width: 420px;
+}
+.ui-account-form .ui-btn {
+  justify-self: start;
 }
 
 /* ---------- Rail: 761 to 1100px (icon rail, dot counters) ---------- */

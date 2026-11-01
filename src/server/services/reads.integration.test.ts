@@ -1,14 +1,21 @@
 import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { items, securitySources, syncRuns } from "../db/schema.ts"
+import { devices, items, securitySources, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
-import { pairDevice, recordVisit, updateSettings } from "./admin.ts"
+import { recordVisit, updateSettings } from "./admin.ts"
 import { addComment, captureItem, createItem, createItemTx, linkThread, updateItem } from "./items.ts"
 import { createProject, proposeStage, updateProject } from "./projects.ts"
 import { archive, auditLog, findItems, inbox, itemDetail, morning, projectDetail } from "./reads.ts"
 import { applyT3Snapshot } from "./sync.ts"
 
 let t: TestDatabase
+
+/** A browser identity (the mikud_browser cookie names one). */
+async function browser(label: string) {
+  const [device] = await t.ctx.db.insert(devices).values({ label }).returning()
+  if (!device) throw new Error("no browser row")
+  return { device }
+}
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
 
@@ -34,20 +41,20 @@ async function source(projectId: string, critical: number, high: number, asOf: D
 }
 
 describe("morning", () => {
-  it("uses the device's previous visit as since, or 24 hours ago on its first visit", async () => {
-    const { device } = await pairDevice(t.ctx, owner, "Phone")
+  it("uses the browser's previous visit as since, or 24 hours ago on its first visit", async () => {
+    const { device } = await browser("Phone")
     const first = await morning(t.ctx, { deviceId: device.id })
     expect(t.ctx.clock().getTime() - first.since.getTime()).toBeGreaterThanOrEqual(DAY - 1000)
     const visit = await recordVisit(t.ctx, device.id)
     t.clock.travel(1000)
     expect((await morning(t.ctx, { deviceId: device.id })).since.getTime()).toBe(visit.getTime())
-    // Another device keeps its own boundary: a visit on one does not hide updates on the other.
-    const { device: desktop } = await pairDevice(t.ctx, owner, "Desktop")
+    // Another browser keeps its own boundary: a visit on one does not hide updates on the other.
+    const { device: desktop } = await browser("Desktop")
     expect((await morning(t.ctx, { deviceId: desktop.id })).since.getTime()).toBeLessThan(visit.getTime())
   })
 
   it("shows a write as new on the next visit when its transaction was open across the read and the visit", async () => {
-    const { device } = await pairDevice(t.ctx, owner, "Phone")
+    const { device } = await browser("Phone")
     const titles = (view: Awaited<ReturnType<typeof morning>>) => view.new.map((n) => n.item.title)
     let release = () => {}
     const held = new Promise<void>((resolve) => {

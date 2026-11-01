@@ -1,9 +1,21 @@
-// Settings: language, date and time format, closed-item days (saved with the save bar), the theme of
-// this browser (applies at once), paired devices, suppressions, and the sync and Telegram status.
+// Settings: language, date and time format, closed-item days and the session clocks (saved with the save
+// bar), the account (signed-in browsers, password, sign out), the theme of this browser (applies at once),
+// suppressions, and the sync and Telegram status.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { type ReactNode, useId, useState } from "react"
+import { type FormEvent, type ReactNode, useId, useState } from "react"
+import { useNavigate } from "react-router"
+import {
+  PASSWORD_MAX,
+  PASSWORD_MIN,
+  passwordSchema,
+  SESSION_IDLE_MINUTES_MAX,
+  SESSION_IDLE_MINUTES_MIN,
+  SESSION_MAX_DAYS_MAX,
+  SESSION_MAX_DAYS_MIN,
+} from "../../shared/auth.ts"
 import { LANGUAGES } from "../../shared/enums.ts"
+import { authClient } from "../api/auth.ts"
 import { ApiError } from "../api/client.ts"
 import { api, qk } from "../api/endpoints.ts"
 import type { DateFormat, Settings, SettingsPatch, TimeFormat } from "../api/types.ts"
@@ -28,13 +40,24 @@ import { Empty, ErrorState, errorReason, Loading, Locked } from "../ui/states.ts
 import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
-import { useUnsaved } from "../ui/unsaved.tsx"
+import { useClearUnsaved, useUnsaved } from "../ui/unsaved.tsx"
+import { describeAgent } from "./agent.ts"
+import { RECOVERY_COMMAND } from "./auth/LoginPage.tsx"
+import { FormError, PasswordField } from "./auth/parts.tsx"
 import { Panel } from "./parts.tsx"
 
 export const CLOSED_DAYS_MIN = 1
 export const CLOSED_DAYS_MAX = 365
 
-type Draft = { language?: Language; dateFormat?: DateFormat; timeFormat?: TimeFormat; closedItemDays?: string }
+type Draft = {
+  language?: Language
+  dateFormat?: DateFormat
+  timeFormat?: TimeFormat
+  closedItemDays?: string
+  sessionMaxDays?: string
+  sessionIdle?: boolean
+  sessionIdleMinutes?: string
+}
 
 export function changedFields(saved: Settings, draft: Draft): SettingsPatch {
   const patch: SettingsPatch = {}
@@ -44,6 +67,11 @@ export function changedFields(saved: Settings, draft: Draft): SettingsPatch {
   if (draft.closedItemDays !== undefined && draft.closedItemDays.trim() !== String(saved.closedItemDays)) {
     patch.closedItemDays = Number(draft.closedItemDays.trim())
   }
+  if (draft.sessionMaxDays !== undefined && draft.sessionMaxDays.trim() !== String(saved.sessionMaxDays))
+    patch.sessionMaxDays = Number(draft.sessionMaxDays.trim())
+  if (draft.sessionIdle !== undefined && draft.sessionIdle !== saved.sessionIdle) patch.sessionIdle = draft.sessionIdle
+  if (draft.sessionIdleMinutes !== undefined && draft.sessionIdleMinutes.trim() !== String(saved.sessionIdleMinutes))
+    patch.sessionIdleMinutes = Number(draft.sessionIdleMinutes.trim())
   return patch
 }
 
@@ -65,8 +93,8 @@ export function SettingsPage() {
           <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
         ) : null}
         {query.data ? <GeneralSettings saved={query.data} /> : null}
+        <AccountPanel />
         <AppearancePanel />
-        <DevicesPanel />
         <SuppressionsPanel />
         <StatusPanel />
       </div>
@@ -108,9 +136,13 @@ function GeneralSettings({ saved }: { saved: Settings }) {
   const daysId = useId()
   const dateId = useId()
   const errorId = useId()
+  const maxDaysId = useId()
+  const idleMinutesId = useId()
+  const sessionErrorId = useId()
   const [draft, setDraft] = useState<Draft>({})
   const [busy, setBusy] = useState(false)
   const [daysError, setDaysError] = useState<string | null>(null)
+  const [sessionError, setSessionError] = useState<{ field: "max" | "idle"; text: string } | null>(null)
   const patch = changedFields(saved, draft)
   const count = Object.keys(patch).length
   useUnsaved("settings", { count, kind: "leave" })
@@ -120,6 +152,9 @@ function GeneralSettings({ saved }: { saved: Settings }) {
     dateFormat: draft.dateFormat ?? saved.dateFormat,
     timeFormat: draft.timeFormat ?? saved.timeFormat,
     closedItemDays: draft.closedItemDays ?? String(saved.closedItemDays),
+    sessionMaxDays: draft.sessionMaxDays ?? String(saved.sessionMaxDays),
+    sessionIdle: draft.sessionIdle ?? saved.sessionIdle,
+    sessionIdleMinutes: draft.sessionIdleMinutes ?? String(saved.sessionIdleMinutes),
   }
   const example = withFormatPrefs({ dateFormat: current.dateFormat, timeFormat: current.timeFormat }, () =>
     formatTime(new Date(), { seconds: false }),
@@ -137,6 +172,33 @@ function GeneralSettings({ saved }: { saved: Settings }) {
       }
     }
     setDaysError(null)
+    const outside = (value: number | undefined, min: number, max: number) =>
+      value !== undefined && (!Number.isInteger(value) || value < min || value > max)
+    const invalidSession = outside(patch.sessionMaxDays, SESSION_MAX_DAYS_MIN, SESSION_MAX_DAYS_MAX)
+      ? ({
+          field: "max",
+          min: SESSION_MAX_DAYS_MIN,
+          max: SESSION_MAX_DAYS_MAX,
+          id: maxDaysId,
+          label: "maxDays",
+        } as const)
+      : outside(patch.sessionIdleMinutes, SESSION_IDLE_MINUTES_MIN, SESSION_IDLE_MINUTES_MAX)
+        ? ({
+            field: "idle",
+            min: SESSION_IDLE_MINUTES_MIN,
+            max: SESSION_IDLE_MINUTES_MAX,
+            id: idleMinutesId,
+            label: "idleMinutes",
+          } as const)
+        : null
+    if (invalidSession) {
+      const message = t("settings.session.daysInvalid", { min: invalidSession.min, max: invalidSession.max })
+      setSessionError({ field: invalidSession.field, text: message })
+      showToast(`${t(`settings.session.${invalidSession.label}`)}: ${message}`, "error")
+      document.getElementById(invalidSession.id)?.focus()
+      return
+    }
+    setSessionError(null)
     setBusy(true)
     try {
       const next = await api.updateSettings(patch)
@@ -228,6 +290,64 @@ function GeneralSettings({ saved }: { saved: Settings }) {
           </p>
         ) : null}
       </Row>
+      <Row label={t("settings.session.maxDays")} hint={t("settings.session.maxDaysHint")} htmlFor={maxDaysId}>
+        <input
+          id={maxDaysId}
+          className="ui-input ui-input-num"
+          type="number"
+          inputMode="numeric"
+          min={SESSION_MAX_DAYS_MIN}
+          max={SESSION_MAX_DAYS_MAX}
+          value={current.sessionMaxDays}
+          aria-invalid={sessionError?.field === "max" ? true : undefined}
+          aria-describedby={sessionError?.field === "max" ? sessionErrorId : undefined}
+          onChange={(event) => setDraft((d) => ({ ...d, sessionMaxDays: event.target.value }))}
+        />
+        {sessionError?.field === "max" ? (
+          <p id={sessionErrorId} className="ui-field-error">
+            {sessionError.text}
+          </p>
+        ) : null}
+      </Row>
+      <Row label={t("settings.session.idle")} hint={t("settings.session.idleHint")}>
+        <fieldset className="ui-seg ui-plain-fieldset">
+          <legend className="ui-sr-only">{t("settings.session.idle")}</legend>
+          {([false, true] as const).map((on) => (
+            <button
+              key={String(on)}
+              type="button"
+              aria-pressed={current.sessionIdle === on}
+              onClick={() => setDraft((d) => ({ ...d, sessionIdle: on }))}
+            >
+              {on ? t("settings.session.idleOn") : t("settings.session.idleOff")}
+            </button>
+          ))}
+        </fieldset>
+        {current.sessionIdle ? (
+          <span className="ui-field">
+            <label className="ui-label" htmlFor={idleMinutesId}>
+              {t("settings.session.idleMinutes")}
+            </label>
+            <input
+              id={idleMinutesId}
+              className="ui-input ui-input-num"
+              type="number"
+              inputMode="numeric"
+              min={SESSION_IDLE_MINUTES_MIN}
+              max={SESSION_IDLE_MINUTES_MAX}
+              value={current.sessionIdleMinutes}
+              aria-invalid={sessionError?.field === "idle" ? true : undefined}
+              aria-describedby={sessionError?.field === "idle" ? sessionErrorId : undefined}
+              onChange={(event) => setDraft((d) => ({ ...d, sessionIdleMinutes: event.target.value }))}
+            />
+            {sessionError?.field === "idle" ? (
+              <span id={sessionErrorId} className="ui-field-error">
+                {sessionError.text}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+      </Row>
       <SaveBar
         count={count}
         busy={busy}
@@ -235,6 +355,7 @@ function GeneralSettings({ saved }: { saved: Settings }) {
         onDiscard={() => {
           setDraft({})
           setDaysError(null)
+          setSessionError(null)
         }}
       />
     </Panel>
@@ -260,91 +381,210 @@ function AppearancePanel() {
   )
 }
 
-function DevicesPanel() {
+/** Leaves for sign-in after this browser's session ended on purpose; nothing asks about unsaved changes. */
+function useSignedOut() {
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const clearUnsaved = useClearUnsaved()
+  return () => {
+    clearUnsaved()
+    queryClient.clear()
+    navigate("/login", { replace: true })
+  }
+}
+
+function AccountPanel() {
   const { t, language } = useI18n()
   const queryClient = useQueryClient()
-  const query = usePageQuery({ queryKey: qk.devices, queryFn: api.devices, every: EVERY.slow })
-  const session = useQuery({ queryKey: qk.session, queryFn: api.session, staleTime: Number.POSITIVE_INFINITY })
-  const devices = (query.data ?? []).filter((device) => !device.revokedAt)
-  const afterChange = async (endedThis: boolean) => {
-    if (endedThis) await queryClient.invalidateQueries({ queryKey: qk.session })
-    else await queryClient.invalidateQueries({ queryKey: qk.devices })
+  const signedOut = useSignedOut()
+  const query = usePageQuery({ queryKey: qk.account, queryFn: api.account, every: EVERY.slow })
+  const [signingOut, setSigningOut] = useState(false)
+  const sessions = query.data?.sessions ?? []
+
+  const signOut = async () => {
+    setSigningOut(true)
+    try {
+      const { error } = await authClient.signOut()
+      if (error?.status) throw new ApiError(error.status, "unknown", error.message ?? null)
+      signedOut()
+    } catch (error) {
+      setSigningOut(false)
+      showToast(t("account.signOutFailed", { reason: errorReason(language, error) }), "error")
+    }
   }
-  const revoke = async (id: string, label: string, current: boolean) => {
+  const endOthers = async () => {
     const ok = await confirmDialog({
-      title: t("devices.revokeTitle", { label }),
-      message: current ? t("devices.revokeThis") : t("devices.revokeOther"),
-      confirmText: t("devices.revoke"),
+      title: t("account.endOthersTitle"),
+      message: t("account.endOthersMessage"),
+      confirmText: t("account.endOthers"),
       danger: true,
     })
     if (!ok) return
     try {
-      await api.revokeDevice(id)
-      showToast(t("devices.revoked", { label }), "success")
-      await afterChange(current)
+      await api.endOtherSessions()
+      showToast(t("account.endOthersDone"), "success")
+      await queryClient.invalidateQueries({ queryKey: qk.account })
     } catch (error) {
-      showToast(t("devices.revokeFailed", { label, reason: errorReason(language, error) }), "error")
+      showToast(t("account.endFailed", { reason: errorReason(language, error) }), "error")
     }
   }
   const endAll = async () => {
     const ok = await confirmDialog({
-      title: t("devices.endAllTitle"),
-      message: t("devices.endAllMessage", { count: devices.length }),
-      confirmText: t("devices.endAll"),
+      title: t("account.endAllTitle"),
+      message: t("account.endAllMessage"),
+      confirmText: t("account.endAll"),
       danger: true,
     })
     if (!ok) return
     try {
-      await api.endAllDevices()
-      await afterChange(true)
+      await api.endAllSessions()
+      signedOut()
     } catch (error) {
-      showToast(t("devices.endAllFailed", { reason: errorReason(language, error) }), "error")
+      showToast(t("account.endFailed", { reason: errorReason(language, error) }), "error")
     }
   }
+
   return (
     <Panel
-      id="devices"
-      title={t("devices.title")}
-      count={query.data ? devices.length : undefined}
+      id="account"
+      title={t("account.title")}
       extra={
-        devices.length ? (
-          <button type="button" className="ui-more ui-text-fail" onClick={() => void endAll()}>
-            {t("devices.endAll")}
-          </button>
-        ) : null
+        <button type="button" className="ui-more" disabled={signingOut} onClick={() => void signOut()}>
+          {t("account.signOut")}
+        </button>
       }
     >
-      {query.isPending ? <Loading label={t("devices.loading")} /> : null}
+      {query.isPending ? <Loading label={t("account.loading")} /> : null}
       {query.isError && !query.data ? (
-        <ErrorState title={t("devices.failed")} error={query.error} onRetry={() => void query.refetch()} />
+        <ErrorState title={t("account.failed")} error={query.error} onRetry={() => void query.refetch()} />
       ) : null}
-      {query.data && devices.length === 0 ? <Empty title={t("devices.empty")} /> : null}
-      {devices.map((device) => {
-        const current = device.id === session.data?.deviceId
-        return (
-          <div key={device.id} className="ui-item">
-            <div className="ui-item-main">
-              <span className="ui-item-title">
-                <bdi dir="auto">{device.label}</bdi> {current ? <Tag tone="info">{t("devices.thisDevice")}</Tag> : null}
-              </span>
-              <span className="ui-item-meta">
-                {t("devices.paired")} <Time value={device.createdAt} mode="full" /> · {t("devices.lastSeen")}{" "}
-                <Time value={device.lastSeenAt} mode="ago" />
-              </span>
-            </div>
-            <div className="ui-item-end">
-              <button
-                type="button"
-                className="ui-btn ui-btn-sm ui-btn-danger"
-                onClick={() => void revoke(device.id, device.label, current)}
-              >
-                {t("devices.revoke")}
-              </button>
-            </div>
+      {query.data ? (
+        <>
+          <div className="ui-kv">
+            <span>{t("account.signedInAs")}</span>
+            <bdi className="ui-mono" dir="ltr">
+              {query.data.username}
+            </bdi>
           </div>
-        )
-      })}
+          <div className="ui-panel-body">
+            <h3 className="ui-h3">{t("account.sessions")}</h3>
+            <p className="ui-hint">{t("account.sessionsHint")}</p>
+          </div>
+          {sessions.map((session) => {
+            const agent = describeAgent(session.userAgent)
+            return (
+              <div key={session.id} className="ui-item">
+                <div className="ui-item-main">
+                  <span className="ui-item-title">
+                    <bdi dir="auto">{agent ? t("account.browserOn", agent) : t("account.unknownBrowser")}</bdi>{" "}
+                    {session.current ? <Tag tone="info">{t("account.thisBrowser")}</Tag> : null}
+                  </span>
+                  <span className="ui-item-meta">
+                    {t("account.signedIn")} <Time value={session.signedInAt} mode="full" /> · {t("account.lastActive")}{" "}
+                    <Time value={session.activeAt} mode="ago" />
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+          <div className="ui-panel-body ui-account-actions">
+            {sessions.length > 1 ? (
+              <button type="button" className="ui-btn ui-btn-danger" onClick={() => void endOthers()}>
+                {t("account.endOthers")}
+              </button>
+            ) : null}
+            <button type="button" className="ui-btn ui-btn-danger" onClick={() => void endAll()}>
+              {t("account.endAll")}
+            </button>
+          </div>
+          <PasswordForm />
+          <div className="ui-panel-body ui-auth-note">
+            <h3 className="ui-h3">{t("account.recovery")}</h3>
+            <p className="ui-hint">{t("account.recoveryHint")}</p>
+            <Copyable value={RECOVERY_COMMAND} />
+          </div>
+        </>
+      ) : null}
     </Panel>
+  )
+}
+
+/** Change password: the current one, the new one twice. Other browsers are signed out; this one stays. */
+function PasswordForm() {
+  const { t, language } = useI18n()
+  const queryClient = useQueryClient()
+  const [current, setCurrent] = useState("")
+  const [next, setNext] = useState("")
+  const [repeat, setRepeat] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<{ field: "current" | "next" | "repeat" | null; text: string } | null>(null)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!current) return setError({ field: "current", text: t("account.wrongCurrent") })
+    if (!passwordSchema.safeParse(next).success)
+      return setError({
+        field: "next",
+        text:
+          next.length > PASSWORD_MAX
+            ? t("auth.error.passwordLong", { max: PASSWORD_MAX })
+            : t("auth.error.passwordShort", { min: PASSWORD_MIN }),
+      })
+    if (next !== repeat) return setError({ field: "repeat", text: t("auth.error.mismatch") })
+    setBusy(true)
+    setError(null)
+    try {
+      await api.changePassword(current, next)
+      setCurrent("")
+      setNext("")
+      setRepeat("")
+      showToast(t("account.changed"), "success")
+      await queryClient.invalidateQueries({ queryKey: qk.account })
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.code === "wrong_password") {
+        setCurrent("")
+        setError({ field: "current", text: t("account.wrongCurrent") })
+      } else if (failure instanceof ApiError && failure.code === "rate_limited")
+        setError({ field: null, text: t("auth.error.rateLimited") })
+      else setError({ field: null, text: t("account.changeFailed", { reason: errorReason(language, failure) }) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form className="ui-panel-body ui-account-form" onSubmit={submit} noValidate>
+      <div>
+        <h3 className="ui-h3">{t("account.password")}</h3>
+        <p className="ui-hint">{t("account.passwordHint")}</p>
+      </div>
+      <PasswordField
+        label={t("account.currentPassword")}
+        value={current}
+        onChange={setCurrent}
+        autoComplete="current-password"
+        invalid={error?.field === "current"}
+      />
+      <PasswordField
+        label={t("account.newPassword")}
+        hint={t("auth.passwordHint", { min: PASSWORD_MIN })}
+        value={next}
+        onChange={setNext}
+        autoComplete="new-password"
+        invalid={error?.field === "next"}
+      />
+      <PasswordField
+        label={t("account.repeatNewPassword")}
+        value={repeat}
+        onChange={setRepeat}
+        autoComplete="new-password"
+        invalid={error?.field === "repeat"}
+      />
+      {error ? <FormError>{error.text}</FormError> : null}
+      <button type="submit" className="ui-btn" disabled={busy}>
+        {busy ? t("account.changing") : t("account.change")}
+      </button>
+    </form>
   )
 }
 

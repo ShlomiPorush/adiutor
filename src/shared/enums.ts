@@ -17,8 +17,8 @@ export const CLOSED_STATUSES = ["done", "not_relevant"] as const satisfies reado
 
 /** Who made a change. Services enforce the rights of each. */
 export const ACTOR_KINDS = ["owner", "agent", "bot", "sync", "system"] as const
-/** Where a change came in. */
-export const AUDIT_SOURCES = ["ui", "api", "mcp", "telegram", "sync"] as const
+/** Where a change came in. `cli` is the recovery command run on the server (dist/server/cli.js). */
+export const AUDIT_SOURCES = ["ui", "api", "mcp", "telegram", "sync", "cli"] as const
 export const PROPOSAL_STATES = ["open", "accepted", "rejected"] as const
 export const SECURITY_FAMILIES = ["dependabot", "code_scanning", "secret_scanning", "overview"] as const
 export const SECURITY_COVERAGES = ["enabled", "not_enabled", "no_access", "error", "unknown"] as const

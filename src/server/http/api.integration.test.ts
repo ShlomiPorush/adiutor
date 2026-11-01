@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
 import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
+import { testCore } from "../testing/app.ts"
+import { TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { RateLimiter } from "./auth.ts"
 
@@ -14,12 +16,11 @@ let app: ReturnType<typeof createApp>
 function build(publicUrl = ORIGIN) {
   return createApp({
     checkDatabase: async () => true,
-    core: {
-      ctx: t.ctx,
+    core: testCore(t, {
       config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: new URL(publicUrl), version: "test" },
       limiter: new RateLimiter(10, 60_000),
       clientIp: (c) => c.req.header("x-test-ip") ?? "client",
-    },
+    }),
   })
 }
 
@@ -52,12 +53,11 @@ async function call(path: string, init: Init = {}) {
 
 const browser = { "x-mikud-request": "1", origin: ORIGIN }
 
-/** Pairs a browser and returns its cookie header. */
-async function pair(label = "Desktop") {
-  const res = await call("/pair", { method: "POST", body: { token: OWNER, label }, headers: browser })
-  expect(res.status).toBe(201)
-  const cookie = res.headers.get("set-cookie") ?? ""
-  return { cookie: cookie.split(";")[0] ?? "", raw: cookie, deviceId: res.json.data.device.id as string }
+/** The owner, set up and signed in with TOTP; returns the browser and its cookie header. */
+async function signedIn() {
+  const owner = new TestBrowser((request) => app.fetch(request))
+  await owner.owner()
+  return { cookie: owner.cookieHeader, owner }
 }
 
 describe("authentication", () => {
@@ -113,8 +113,10 @@ describe("authentication", () => {
       ["POST", "/projects", { name: "By agent" }],
       ["GET", "/settings", undefined],
       ["PATCH", "/settings", { closedItemDays: 3 }],
-      ["GET", "/devices", undefined],
-      ["POST", "/devices/end-all", undefined],
+      ["GET", "/account/sessions", undefined],
+      ["POST", "/account/sessions/end-all", undefined],
+      ["POST", "/account/password", { currentPassword: "x", newPassword: "y".repeat(12) }],
+      ["POST", "/session/activity", undefined],
       ["GET", "/suppressions", undefined],
     ] as const) {
       const res = await call(path, { method, token: AGENT, body })
@@ -129,59 +131,23 @@ describe("authentication", () => {
     const blocked = await call("/projects", { token: OWNER, headers: { "x-test-ip": "attacker" } })
     expect(blocked.status).toBe(429)
     expect(blocked.json.error.code).toBe("rate_limited")
-    const pairing = await call("/pair", {
-      method: "POST",
-      body: { token: OWNER },
-      headers: { ...browser, "x-test-ip": "attacker" },
+    // A forged forwarding header is not the address: the count stays.
+    const forged = await call("/projects", {
+      token: OWNER,
+      headers: { "x-test-ip": "attacker", "x-forwarded-for": "198.51.100.7" },
     })
-    expect(pairing.status).toBe(429)
+    expect(forged.status).toBe(429)
     expect((await call("/projects", { token: OWNER, headers: { "x-test-ip": "someone-else" } })).status).toBe(200)
   })
 })
 
-describe("browser pairing", () => {
-  it("sets a host-only HttpOnly Lax cookie for 400 days, without Secure on a loopback http URL", async () => {
-    const { raw, deviceId } = await pair()
-    expect(raw).toMatch(/^mikud_device=[A-Za-z0-9_-]{43};/)
-    expect(raw).toContain("Max-Age=34560000")
-    expect(raw).toContain("HttpOnly")
-    expect(raw).toContain("SameSite=Lax")
-    expect(raw).toContain("Path=/")
-    expect(raw).not.toMatch(/Domain=/i)
-    expect(raw).not.toContain("Secure")
-    expect(deviceId).toMatch(/^[0-9a-f-]{36}$/)
-  })
-
-  it("sets Secure for any other public URL", async () => {
-    app = build("https://mikud.example.com")
-    const res = await call("/pair", {
-      method: "POST",
-      body: { token: OWNER },
-      headers: { "x-mikud-request": "1", origin: "https://mikud.example.com" },
-    })
-    expect(res.status).toBe(201)
-    expect(res.headers.get("set-cookie")).toContain("Secure")
-  })
-
-  it("pairs only with the owner token, from the Mikud page", async () => {
-    expect((await call("/pair", { method: "POST", body: { token: AGENT }, headers: browser })).status).toBe(403)
-    expect((await call("/pair", { method: "POST", body: { token: "nope" }, headers: browser })).status).toBe(401)
-    expect((await call("/pair", { method: "POST", body: { token: OWNER } })).status).toBe(403)
-    expect(
-      (
-        await call("/pair", {
-          method: "POST",
-          body: { token: OWNER },
-          headers: { ...browser, origin: "https://evil.example" },
-        })
-      ).status,
-    ).toBe(403)
-  })
-
-  it("lets a paired browser act as the owner, with the CSRF header and Origin on changes", async () => {
-    const { cookie, deviceId } = await pair()
+describe("browser sessions", () => {
+  it("lets a signed-in browser act as the owner, with the CSRF header and Origin on changes", async () => {
+    const { cookie } = await signedIn()
     const session = await call("/session", { cookie })
-    expect(session.json.data).toEqual({ actor: { kind: "owner", label: "device:Desktop" }, via: "cookie", deviceId })
+    expect(session.json.data).toMatchObject({ actor: { kind: "owner", label: "owner.name" }, via: "session" })
+    expect(session.json.data.clocks.max.remainingSec).toBeGreaterThan(29 * 86_400)
+    expect(session.json.data.clocks.idle).toBeNull()
 
     const body = { type: "task", title: "From the browser" }
     const noHeader = await call("/items", { method: "POST", cookie, body, headers: { origin: ORIGIN } })
@@ -195,69 +161,80 @@ describe("browser pairing", () => {
     expect(badOrigin.status).toBe(403)
     const noOrigin = await call("/items", { method: "POST", cookie, body, headers: { "x-mikud-request": "1" } })
     expect(noOrigin.status).toBe(403)
+    // Reads are plain same-origin reads.
+    expect((await call("/account/sessions", { cookie })).status).toBe(200)
     const ok = await call("/items", { method: "POST", cookie, body, headers: browser })
     expect(ok.status).toBe(201)
     expect(ok.json.data.createdBy).toBe("owner")
     const history = await call(`/audit?entityId=${ok.json.data.id}`, { cookie })
-    expect(history.json.data[0]).toMatchObject({ actorKind: "owner", actorLabel: "device:Desktop", source: "ui" })
+    expect(history.json.data[0]).toMatchObject({ actorKind: "owner", actorLabel: "owner.name", source: "ui" })
   })
 
-  it("refuses a revoked device, and lists devices without their hash", async () => {
-    const { cookie, deviceId } = await pair()
-    const devices = await call("/devices", { token: OWNER })
-    expect(devices.json.data).toHaveLength(1)
-    expect(devices.json.data[0]).not.toHaveProperty("secretHash")
-    expect((await call(`/devices/${deviceId}`, { method: "DELETE", token: OWNER })).status).toBe(204)
-    const res = await call("/session", { cookie })
-    expect([res.status, res.json.error.code]).toEqual([401, "unauthorized"])
+  it("never lets a session stand in for a token: sync pushes and MCP refuse it", async () => {
+    const { cookie } = await signedIn()
+    const snapshot = { collectedAt: new Date().toISOString(), projects: [], threads: [] }
+    expect((await call("/sync/t3", { method: "POST", cookie, body: snapshot, headers: browser })).status).toBe(403)
+    const mcp = await app.request("/mcp", {
+      method: "POST",
+      headers: {
+        cookie,
+        ...browser,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    })
+    expect(mcp.status).toBe(401)
   })
 
-  it("ends every device, and a browser can end its own session", async () => {
-    const one = await pair("One")
-    const two = await pair("Two")
-    expect((await call("/session", { method: "DELETE", cookie: one.cookie, headers: browser })).status).toBe(204)
-    expect((await call("/session", { cookie: one.cookie })).status).toBe(401)
-    const ended = await call("/devices/end-all", { method: "POST", cookie: two.cookie, headers: browser })
-    expect(ended.json.data).toEqual({ ended: 1 })
-    expect((await call("/session", { cookie: two.cookie })).status).toBe(401)
-  })
+  it("gives the browser an identity cookie that never authenticates, and records visits for it", async () => {
+    const { owner } = await signedIn()
+    const first = await owner.call("GET", "/api/v1/session")
+    const browserCookie = first.setCookies.find((c) => c.startsWith("mikud_browser="))
+    expect(browserCookie).toMatch(/HttpOnly/)
+    expect(browserCookie).toMatch(/SameSite=Lax/)
+    expect(browserCookie).not.toMatch(/Secure/)
+    const browserId = first.json.data.browserId
+    // Alone, the identity cookie is nobody.
+    const alone = await call("/session", { cookie: `mikud_browser=${browserId}` })
+    expect([alone.status, alone.json.error.code]).toEqual([401, "unauthorized"])
+    // The same browser keeps its identity.
+    expect((await owner.call("GET", "/api/v1/session")).json.data.browserId).toBe(browserId)
 
-  it("records visits for the browser's device only", async () => {
-    const { cookie } = await pair()
-    const visit = await call("/visits", { method: "POST", cookie, headers: browser })
+    const visit = await owner.call("POST", "/api/v1/visits")
     expect(visit.status).toBe(201)
-    const view = await call("/morning", { cookie })
+    const view = await owner.call("GET", "/api/v1/morning")
     expect(view.json.data.since).toBe(visit.json.data.at)
     expect((await call("/visits", { method: "POST", token: OWNER })).status).toBe(403)
   })
 
   it("keeps a page's boundary on refresh and records a visit no later than the read that was shown", async () => {
-    const { cookie } = await pair()
-    const first = await call("/morning", { cookie })
-    const { since, now: asOf } = first.json.data
+    const { owner } = await signedIn()
+    const get = async (path: string) => (await owner.call("GET", `/api/v1${path}`)).json
+    const first = await get("/morning")
+    const { since, now: asOf } = first.data
     expect(new Date(asOf).getTime()).toBeLessThanOrEqual(t.ctx.clock().getTime())
     // Arrives after the read was shown: never marked seen by the visit that follows it.
     t.clock.travel(60_000)
     await call("/items", { method: "POST", token: AGENT, body: { type: "task", title: "Arrived later" } })
-    const visit = await call("/visits", { method: "POST", cookie, headers: browser, body: { at: asOf } })
+    const visit = await owner.call("POST", "/api/v1/visits", { body: { at: asOf } })
     expect(visit.status).toBe(201)
     // Recorded a safety margin before the read (see db/client.ts).
     expect(visit.json.data.at).toBe(new Date(new Date(asOf).getTime() - VISIT_SAFETY_MARGIN_MS).toISOString())
 
-    const titles = (view: { json: { data: { new: { item: { title: string } }[] } } }) =>
-      view.json.data.new.map((n) => n.item.title)
-    const refresh = await call(`/morning?since=${encodeURIComponent(since)}`, { cookie })
-    expect(refresh.json.data.since).toBe(since)
+    const titles = (view: { data: { new: { item: { title: string } }[] } }) => view.data.new.map((n) => n.item.title)
+    const refresh = await get(`/morning?since=${encodeURIComponent(since)}`)
+    expect(refresh.data.since).toBe(since)
     expect(titles(refresh)).toContain("Arrived later")
-    const next = await call("/morning", { cookie })
-    expect(next.json.data.since).toBe(visit.json.data.at)
+    const next = await get("/morning")
+    expect(next.data.since).toBe(visit.json.data.at)
     expect(titles(next)).toContain("Arrived later")
 
     // A time after the server's clock is recorded as now; a bad one is refused.
     const future = new Date(t.ctx.clock().getTime() + 86_400_000).toISOString()
-    const late = await call("/visits", { method: "POST", cookie, headers: browser, body: { at: future } })
+    const late = await owner.call("POST", "/api/v1/visits", { body: { at: future } })
     expect(new Date(late.json.data.at).getTime()).toBeLessThanOrEqual(t.ctx.clock().getTime())
-    expect((await call("/morning?since=yesterday", { cookie })).status).toBe(400)
+    expect((await owner.call("GET", "/api/v1/morning?since=yesterday")).status).toBe(400)
   })
 })
 
@@ -335,8 +312,6 @@ describe("routes and error codes", () => {
       body: { collectedAt: new Date().toISOString(), repos: [] },
     })
     expect(security.status).toBe(200)
-    const { cookie } = await pair()
-    expect((await call("/sync/t3", { method: "POST", cookie, body: snapshot, headers: browser })).status).toBe(403)
     expect((await call("/sync/runs", { token: AGENT })).json.data).toHaveLength(2)
   })
 

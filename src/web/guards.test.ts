@@ -134,14 +134,15 @@ function floatingCssViolations(css: string): string[] {
 /** Pages without a refresh of their own, each with its reason. */
 const NO_REFRESH: Record<string, string> = {
   NotFoundPage: "says the address names no page; it reads nothing",
-  PairPage: "sends the owner token once; there is nothing to read before pairing",
+  LoginPage: "signs in; it reads only whether an owner exists, once",
+  SetupPage: "creates the owner and sets up TOTP; it reads the setup state once and after each step",
 }
 /** Route elements that are not pages (Component is the element of each PAGES entry, checked by name above). */
 const NOT_PAGES = new Set(["Root", "Shell", "ItemLink", "Component"])
 
 function routedPages(routes: string): Record<string, string> {
   const imports = new Map<string, string>()
-  for (const match of routes.matchAll(/import \{ (\w+) \} from "\.\/(pages\/\w+)\.tsx"/g))
+  for (const match of routes.matchAll(/import \{ (\w+) \} from "\.\/(pages\/[\w/]+)\.tsx"/g))
     imports.set(match[1] ?? "", `${match[2]}.tsx`)
   const names = new Set<string>()
   for (const match of routes.matchAll(/Component: ([A-Z]\w*Page)\b/g)) names.add(match[1] ?? "")

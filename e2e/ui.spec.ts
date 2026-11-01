@@ -1,13 +1,10 @@
-// The web UI against the real server: pairing, the morning view, an item status change with Undo,
-// and quick add. Texts come from the Hebrew locale file (the default language), and the data is
-// invented and created here through the API, so the tests run on an empty database.
+// The web UI against the real server: the morning view, an item status change with Undo, quick add, and
+// signing out. It runs after auth.spec.ts and reuses the browser that signed in there (sign-in is rate
+// limited). Texts come from the Hebrew locale file (the default language), and the data is invented and
+// created here through the API, so the tests run on an empty database.
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
-
-const OWNER_TOKEN = "dev-only-owner-token-not-a-secret-000000"
-// Like the UI: every filled value is wrapped in a first-strong isolate (U+2068 ... U+2069).
-const fill = (text: string, vars: Record<string, string>) =>
-  text.replace(/\{(\w+)\}/g, (_, name: string) => `⁨${vars[name] ?? ""}⁩`)
+import { fill, storageFile } from "./helpers.ts"
 
 test.describe.configure({ mode: "serial" })
 
@@ -16,7 +13,7 @@ let run = ""
 let itemTitle = ""
 let captureText = ""
 
-/** A request from the page itself: the browser sends the device cookie and the Origin. */
+/** A request from the page itself: the browser sends the session cookie and the Origin. */
 async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
   return page.evaluate(
     async ({ method, path, body }) => {
@@ -39,29 +36,15 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
   run = `${testInfo.project.name}-${Date.now().toString(36)}`
   itemTitle = `Approve the release notes ${run}`
   captureText = `Check the phone layout of quick add ${run}`
-  page = await (await browser.newContext({ ...testInfo.project.use })).newPage()
+  page = await (
+    await browser.newContext({ ...testInfo.project.use, storageState: storageFile(testInfo.project.name) })
+  ).newPage()
 })
 
-test("a new browser is sent to pairing, refuses a wrong token and comes back paired", async () => {
+test("the stored session opens the board without signing in again", async () => {
   await page.goto("/settings")
-  await expect(page).toHaveURL(/\/pair\?next=%2Fsettings$/)
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(he.pair.title)
-  // The token field is a secret field: never in the address, shown only on request.
-  const token = page.getByLabel(he.pair.token, { exact: true })
-  await expect(token).toHaveAttribute("type", "password")
-
-  await token.fill("wrong-token-wrong-token-wrong-token-0000")
-  await page.getByRole("button", { name: he.pair.submit }).click()
-  await expect(page.getByRole("alert")).toHaveText(he.pair.rejected)
-
-  await token.fill(OWNER_TOKEN)
-  await page.getByRole("button", { name: he.pair.submit }).click()
   await expect(page).toHaveURL(/\/settings$/)
-  // The texts in these tests are the Hebrew ones: the board is in Hebrew whatever ran before.
-  await api("PATCH", "/settings", { language: "he" })
-  await page.reload()
-  await expect(page.locator("#devices")).toContainText(he.devices.thisDevice)
-  expect(page.url()).not.toContain(OWNER_TOKEN)
+  await expect(page.locator("#account")).toContainText(he.account.thisBrowser)
 })
 
 test("the morning view shows what waits on the owner, and the bell counts it", async () => {
@@ -170,4 +153,20 @@ test("quick add files a note in the inbox", async () => {
 
   await page.goto("/inbox")
   await expect(page.locator("#inbox")).toContainText(captureText)
+})
+
+test("signing out ends this browser's session; a copy of its cookies is refused", async ({ browser }, testInfo) => {
+  const other = await browser.newContext({ ...testInfo.project.use, storageState: await page.context().storageState() })
+  try {
+    await page.goto("/settings")
+    // Only this browser: the other project keeps its stored session.
+    await page.locator("#account").getByRole("button", { name: he.account.signOut }).click()
+    await expect(page).toHaveURL(/\/login$/)
+    // A copy of the old cookies is refused as well, and the board sends it to sign-in.
+    const tab = await other.newPage()
+    await tab.goto("/inbox")
+    await expect(tab).toHaveURL(/\/login\?next=%2Finbox$/)
+  } finally {
+    await other.close()
+  }
 })

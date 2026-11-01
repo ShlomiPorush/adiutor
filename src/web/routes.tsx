@@ -5,10 +5,11 @@ import type { ComponentType } from "react"
 import { createBrowserRouter, Navigate, useParams } from "react-router"
 import { ActivityPage } from "./pages/ActivityPage.tsx"
 import { ArchivePage } from "./pages/ArchivePage.tsx"
+import { LoginPage } from "./pages/auth/LoginPage.tsx"
+import { SetupPage } from "./pages/auth/SetupPage.tsx"
 import { InboxPage } from "./pages/InboxPage.tsx"
 import { MorningPage } from "./pages/MorningPage.tsx"
 import { NotFoundPage } from "./pages/NotFoundPage.tsx"
-import { PairPage } from "./pages/PairPage.tsx"
 import { ProjectPage } from "./pages/ProjectPage.tsx"
 import { ProjectsPage } from "./pages/ProjectsPage.tsx"
 import { SettingsPage } from "./pages/SettingsPage.tsx"
@@ -39,7 +40,8 @@ export function createRouter() {
     {
       element: <Root />,
       children: [
-        { path: "/pair", element: <PairPage /> },
+        { path: "/login", element: <LoginPage /> },
+        { path: "/setup", element: <SetupPage /> },
         {
           element: <Shell />,
           children: [

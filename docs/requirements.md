@@ -16,7 +16,8 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 - Users: the owner and his AI agents. No other people, no roles beyond owner and agent.
 - Devices: the owner's desktop and his phone.
 - Network: reachable only over the owner's private overlay network (NetBird). Never published to the internet.
-- Every API and MCP call carries a token, in addition to the network restriction. There is no login screen.
+- Every API and MCP call from an agent, the sync or a script carries a token, in addition to the network restriction.
+- The owner's browsers sign in (owner's decision, 2026-11-01, replacing "There is no login screen" and the paste-a-token pairing of browsers): one account with a username and a password, and a TOTP code from an authenticator app, which is required. The first run creates the account and sets up TOTP. A signed-in browser stays signed in for 30 days by default; the owner sets that length and an optional sign-out after a time without activity (off by default) in Settings, and can see the signed-in browsers, sign out the others or sign out everywhere. Recovery is a command run on the server, never a route over the network.
 
 ## 3. Domain model
 

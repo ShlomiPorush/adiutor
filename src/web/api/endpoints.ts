@@ -4,9 +4,9 @@
 import type { Stage } from "../../shared/enums.ts"
 import { query, request } from "./client.ts"
 import type {
+  Account,
   AuditEntry,
   Comment,
-  Device,
   Item,
   ItemDetail,
   ItemPatch,
@@ -18,8 +18,10 @@ import type {
   ProjectListEntry,
   ProjectPatch,
   Session,
+  SessionClocks,
   Settings,
   SettingsPatch,
+  SetupStatus,
   StageProposal,
   Suppression,
   SyncRun,
@@ -42,7 +44,16 @@ const id = (value: string) => encodeURIComponent(value)
 
 export const api = {
   session: () => data<Session>("GET", "/session"),
-  pair: (token: string, label: string) => data<{ device: Device }>("POST", "/pair", { token, label }),
+  /** Real input on the page: restarts the idle clock. */
+  activity: () => data<{ clocks: SessionClocks }>("POST", "/session/activity", {}),
+  setupStatus: () => data<SetupStatus>("GET", "/api/setup/status"),
+  setupAccount: (username: string, password: string) =>
+    data<{ username: string; signedIn: boolean }>("POST", "/api/setup/account", { username, password }),
+  account: () => data<Account>("GET", "/account/sessions"),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    data<{ endedSessions: number }>("POST", "/account/password", { currentPassword, newPassword }),
+  endOtherSessions: () => data<{ ended: number }>("POST", "/account/sessions/end-others", {}),
+  endAllSessions: () => data<{ ended: number }>("POST", "/account/sessions/end-all", {}),
 
   morning: () => data<Morning>("GET", "/morning"),
   /** The morning view with a fixed "new since" boundary: the morning page keeps its first read's. */
@@ -85,10 +96,6 @@ export const api = {
   telegramTestMessage: () =>
     data<{ sent: true; warning?: "outcome_not_recorded" }>("POST", "/telegram/test-message", {}),
 
-  devices: () => data<Device[]>("GET", "/devices"),
-  revokeDevice: (deviceId: string) => request<null>("DELETE", `/devices/${id(deviceId)}`),
-  endAllDevices: () => data<{ ended: number }>("POST", "/devices/end-all", {}),
-
   suppressions: () => data<Suppression[]>("GET", "/suppressions"),
   deleteSuppression: (suppressionId: string) => request<null>("DELETE", `/suppressions/${id(suppressionId)}`),
 }
@@ -107,6 +114,7 @@ export const qk = {
   settings: ["settings"] as const,
   syncRuns: ["sync-runs"] as const,
   telegram: ["telegram"] as const,
-  devices: ["devices"] as const,
+  setupStatus: ["setup-status"] as const,
+  account: ["account"] as const,
   suppressions: ["suppressions"] as const,
 }

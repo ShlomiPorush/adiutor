@@ -1,33 +1,40 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 import type { Context } from "hono"
-import { getCookie } from "hono/cookie"
+import { getCookie, setCookie } from "hono/cookie"
 import { createMiddleware } from "hono/factory"
+import type { Auth as BetterAuth } from "../auth/auth.ts"
 import type { ServerConfig } from "../config.ts"
 import { AppError, forbidden } from "../errors.ts"
-import { deviceForSecret } from "../services/admin.ts"
+import { ensureBrowser } from "../services/account.ts"
 import type { Actor, By, Ctx } from "../services/context.ts"
+import { checkSession, type SessionStatus } from "../services/session-policy.ts"
 
-export const DEVICE_COOKIE = "mikud_device"
+/** Names the browser for "new since your last visit". Not a credential: it never authenticates. */
+export const BROWSER_COOKIE = "mikud_browser"
 /** Browsers cap cookie lifetimes at 400 days. */
-export const DEVICE_COOKIE_MAX_AGE = 400 * 24 * 60 * 60
+export const BROWSER_COOKIE_MAX_AGE = 400 * 24 * 60 * 60
 export const REQUEST_HEADER = "x-mikud-request"
 export const AGENT_LABEL_HEADER = "x-mikud-agent"
 
-export type Auth = { actor: Actor; via: "token" | "cookie"; deviceId?: string }
+export type Auth =
+  | { actor: Actor; via: "token" }
+  | { actor: Actor; via: "session"; sessionId: string; browserId: string; status: SessionStatus }
 export type Env = { Variables: { auth: Auth } }
 
 export type AuthDeps = {
   ctx: Ctx
   config: Pick<ServerConfig, "ownerToken" | "agentToken" | "publicUrl">
+  /** Better Auth: the owner's browser sessions. */
+  auth: BetterAuth
   limiter: RateLimiter
-  /** The client's address, for the rate limit of failed token attempts. */
+  /** The client's address, for the rate limits. */
   clientIp: (c: Context) => string
 }
 
 /** Who a change is made by, from the request's authentication. */
 export function byOf(c: Context<Env>, source?: By["source"]): By {
   const auth = c.get("auth")
-  return { actor: auth.actor, source: source ?? (auth.via === "cookie" ? "ui" : "api") }
+  return { actor: auth.actor, source: source ?? (auth.via === "session" ? "ui" : "api") }
 }
 
 const digest = (text: string) => createHash("sha256").update(text).digest()
@@ -72,8 +79,7 @@ export class RateLimiter {
 }
 
 const rateLimited = () => new AppError("rate_limited", "Too many failed attempts. Wait a minute and try again.")
-const unauthorized = (message = "A valid token or a paired browser is required.") =>
-  new AppError("unauthorized", message)
+const unauthorized = (message = "Sign in, or send a valid token.") => new AppError("unauthorized", message)
 
 /**
  * Browser state-changing requests must name themselves with X-Mikud-Request: 1 and come from the
@@ -93,10 +99,11 @@ function agentLabel(c: Context): string {
 }
 
 /**
- * Authenticates a request: `Authorization: Bearer <owner or agent token>`, or (when allowed) the device
- * cookie of a paired browser, which acts as the owner. Failed attempts count toward the rate limit.
+ * Authenticates a request: `Authorization: Bearer <owner or agent token>`, or (when allowed) the owner's
+ * browser session (Better Auth), which must be live under the clocks and have proved TOTP. A session never
+ * stands in for a token where a token is required. Failed token attempts count toward the rate limit.
  */
-export function authenticate(deps: AuthDeps, options: { allowCookie: boolean }) {
+export function authenticate(deps: AuthDeps, options: { allowSession: boolean }) {
   return createMiddleware<Env>(async (c, next) => {
     const ip = deps.clientIp(c)
     if (deps.limiter.blocked(ip)) throw rateLimited()
@@ -114,28 +121,39 @@ export function authenticate(deps: AuthDeps, options: { allowCookie: boolean }) 
       })
       return next()
     }
-    const secret = options.allowCookie ? getCookie(c, DEVICE_COOKIE) : undefined
-    if (secret) {
-      const device = await deviceForSecret(deps.ctx, secret)
-      if (!device) {
-        deps.limiter.fail(ip)
-        throw unauthorized("This browser is not paired, or it was ended. Pair it again.")
-      }
-      if (!SAFE_METHODS.has(c.req.method)) checkBrowserRequest(c, deps.config.publicUrl)
-      c.set("auth", { actor: { kind: "owner", label: `device:${device.label}` }, via: "cookie", deviceId: device.id })
-      return next()
+    if (!options.allowSession) throw unauthorized("A valid token is required.")
+    const found = await deps.auth.api.getSession({ headers: c.req.raw.headers })
+    if (!found) throw unauthorized()
+    const check = await checkSession(deps.ctx, found.session.id, "check")
+    if (!check.ok) {
+      if (check.reason === "revoked") throw unauthorized()
+      throw new AppError("session_ended", "Your session ended. Sign in again.", { reason: check.reason })
     }
-    throw unauthorized()
+    if (!check.session.twoFactorAt)
+      throw new AppError("totp_required", "Enter the code from your authenticator app to finish signing in.")
+    if (!SAFE_METHODS.has(c.req.method)) checkBrowserRequest(c, deps.config.publicUrl)
+    const browser = await ensureBrowser(deps.ctx, getCookie(c, BROWSER_COOKIE))
+    if (browser.created)
+      setCookie(c, BROWSER_COOKIE, browser.id, {
+        httpOnly: true,
+        sameSite: "Lax",
+        secure: deps.config.publicUrl.protocol === "https:",
+        path: "/",
+        maxAge: BROWSER_COOKIE_MAX_AGE,
+      })
+    c.set("auth", {
+      actor: { kind: "owner", label: check.session.username },
+      via: "session",
+      sessionId: check.session.id,
+      browserId: browser.id,
+      status: check.session.status,
+    })
+    return next()
   })
 }
 
-/** Refuses anything but the owner (the owner token or a paired browser). */
+/** Refuses anything but the owner (the owner token or the owner's session). */
 export const requireOwnerAuth = createMiddleware<Env>(async (c, next) => {
   if (c.get("auth").actor.kind !== "owner") throw forbidden("Only the owner can do this.")
   return next()
 })
-
-/** True when cookies may go without Secure: a development URL on the loopback host over HTTP. */
-export function insecureCookieAllowed(publicUrl: URL): boolean {
-  return publicUrl.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(publicUrl.hostname)
-}

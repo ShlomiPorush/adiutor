@@ -1,6 +1,7 @@
 // The mock API: the routes of docs/api.md over the invented data in fixtures.ts, held in memory.
 // Loaded only when VITE_MIKUD_MOCK=1 (development and screenshots); the production build drops it.
-// Pairing accepts any token of 32 characters or more; sessionStorage keeps the pairing across reloads.
+// The mock is always signed in with TOTP; the sign-in pages need the real server. Ending the other sessions
+// is kept in sessionStorage across reloads.
 
 import type { ItemStatus, Stage } from "../../../shared/enums.ts"
 import type { TransportRequest, TransportResponse } from "../client.ts"
@@ -8,15 +9,15 @@ import type { AuditEntry, Item, ItemSummary, Morning, ProjectListEntry, Security
 import { ago, createState, type MockState, uuid } from "./fixtures.ts"
 
 const state: MockState = createState()
-const PAIRED_KEY = "mikud.mock.paired"
+const ENDED_OTHERS_KEY = "mikud.mock.endedOthers"
 const DELAY_MS = 120
 const STALE_MS = 26 * 3_600_000
 
-function paired(): boolean {
+function endedOthers(): boolean {
   try {
-    return state.paired || sessionStorage.getItem(PAIRED_KEY) === "1"
+    return state.endedOthers || sessionStorage.getItem(ENDED_OTHERS_KEY) === "1"
   } catch {
-    return state.paired
+    return state.endedOthers
   }
 }
 
@@ -234,23 +235,33 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
   const parts = url.pathname.split("/").filter(Boolean)
   const [head, id, sub] = parts
 
-  if (method === "POST" && head === "pair") {
-    const token = String(body.token ?? "")
-    if (token.length < 32) return fail(401, "unauthorized", "The token is not valid.")
-    state.paired = true
-    try {
-      sessionStorage.setItem(PAIRED_KEY, "1")
-    } catch {
-      // Storage blocked: paired for this page only.
-    }
-    const current = state.devices[0]
-    if (current) current.label = String(body.label ?? "Browser")
-    return ok({ device: current }, 201)
-  }
-  if (!paired()) return fail(401, "unauthorized", "Pair this browser first.")
-
+  if (url.pathname === "/api/setup/status") return ok({ hasUser: true, session: "active" })
   if (head === "session" && method === "GET")
-    return ok({ actor: { kind: "owner", label: "owner" }, via: "cookie", deviceId: state.devices[0]?.id ?? null })
+    return ok({
+      actor: { kind: "owner", label: "owner" },
+      via: "session",
+      browserId: state.browserId,
+      clocks: { max: { remainingSec: state.settings.sessionMaxDays * 86_400 - 3_600 }, idle: null },
+    })
+  if (head === "session" && id === "activity")
+    return ok({ clocks: { max: { remainingSec: state.settings.sessionMaxDays * 86_400 - 3_600 }, idle: null } })
+  if (head === "account" && id === "sessions" && !sub)
+    return ok({ username: "owner", sessions: endedOthers() ? state.sessions.filter((s) => s.current) : state.sessions })
+  if (head === "account" && id === "sessions" && sub === "end-others") {
+    state.endedOthers = true
+    try {
+      sessionStorage.setItem(ENDED_OTHERS_KEY, "1")
+    } catch {
+      // Storage blocked: for this page only.
+    }
+    return ok({ ended: state.sessions.length - 1 })
+  }
+  if (head === "account" && id === "sessions" && sub === "end-all") return ok({ ended: state.sessions.length })
+  if (head === "account" && id === "password") {
+    if (body.currentPassword !== "correct horse battery staple")
+      return fail(400, "wrong_password", "The current password is not right.")
+    return ok({ endedSessions: state.sessions.length - 1 })
+  }
   if (head === "morning") return ok(morning())
   if (head === "visits") return ok({ at: new Date().toISOString(), previous: state.previousVisit }, 201)
 
@@ -479,22 +490,6 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
       lastUpdateAt: ago(16),
       lastMorning: { localDate: ago(8).slice(0, 10), state: "sent", at: ago(8) },
     })
-  if (head === "devices" && !id) return ok(state.devices)
-  if (head === "devices" && id === "end-all") {
-    for (const device of state.devices) device.revokedAt ??= new Date().toISOString()
-    state.paired = false
-    try {
-      sessionStorage.removeItem(PAIRED_KEY)
-    } catch {
-      // Nothing to clear.
-    }
-    return ok({ ended: state.devices.length })
-  }
-  if (head === "devices" && method === "DELETE") {
-    const device = state.devices.find((entry) => entry.id === id)
-    if (device) device.revokedAt = new Date().toISOString()
-    return { status: 204, body: null }
-  }
   if (head === "suppressions" && !id) return ok(state.suppressions)
   if (head === "suppressions" && method === "DELETE") {
     state.suppressions = state.suppressions.filter((entry) => entry.id !== id)

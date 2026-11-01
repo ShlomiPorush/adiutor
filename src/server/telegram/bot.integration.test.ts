@@ -5,6 +5,7 @@ import { createApp } from "../app.ts"
 import { audit, items, jobRuns, telegramUpdates } from "../db/schema.ts"
 import { updateSettings } from "../services/admin.ts"
 import type { Ctx } from "../services/context.ts"
+import { testCore } from "../testing/app.ts"
 import { StandInBotApi, waitFor } from "../testing/bot-api.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { BotApi, type TelegramUpdate } from "./api.ts"
@@ -218,11 +219,10 @@ describe("Telegram bot", () => {
     const app = (telegram?: { configured: boolean; polling: () => boolean }) =>
       createApp({
         checkDatabase: async () => true,
-        core: {
-          ctx: t.ctx,
+        core: testCore(t, {
           config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: PUBLIC_URL, version: "test" },
           telegram,
-        },
+        }),
       })
     const get = (a: ReturnType<typeof app>, token: string) =>
       a.request("/api/v1/telegram/status", { headers: { authorization: `Bearer ${token}` } })

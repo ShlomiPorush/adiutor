@@ -84,6 +84,16 @@ export async function writeAudit(ctx: Ctx, tx: DbOrTx, by: By, entry: AuditEntry
  */
 export const LINK_STRUCTURE_LOCK_KEY = 0x6d696b64
 
+/**
+ * The key of the advisory lock that serializes every change to the owner's credentials and sessions. Mikud's
+ * auth services (setup, the password change, ending sessions, the clock sweep) and the recovery CLI take it as
+ * the first statement of their transaction (`inAuthTx`, `pg_advisory_xact_lock`). Every state-changing Better
+ * Auth request (sign-in, sign-out, TOTP enable and verify) holds it as a session-level lock on a connection of
+ * its own for the whole request (`Database.lockAuth`, http/auth-guard.ts). The two conflict, so all auth state
+ * changes run one at a time: fine for one owner. "mkau" in ASCII.
+ */
+export const AUTH_LOCK_KEY = 0x6d6b6175
+
 /** Takes the link structure lock (see LINK_STRUCTURE_LOCK_KEY); released at commit or rollback. */
 export async function lockLinkStructure(tx: Tx): Promise<void> {
   await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(LINK_STRUCTURE_LOCK_KEY))})`)
@@ -101,6 +111,14 @@ export function inTx<T>(ctx: Ctx, run: (tx: Tx) => Promise<T>): Promise<T> {
 export function inLinkTx<T>(ctx: Ctx, run: (tx: Tx) => Promise<T>): Promise<T> {
   return ctx.db.transaction(async (tx) => {
     await lockLinkStructure(tx)
+    return run(tx)
+  })
+}
+
+/** Runs an auth write in one transaction whose first statement takes the auth lock (see AUTH_LOCK_KEY). */
+export function inAuthTx<T>(ctx: Ctx, run: (tx: Tx) => Promise<T>): Promise<T> {
+  return ctx.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(AUTH_LOCK_KEY))})`)
     return run(tx)
   })
 }

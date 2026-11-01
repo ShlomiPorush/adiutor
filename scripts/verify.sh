@@ -136,10 +136,17 @@ run_integration() {
   TOOLCHAIN_EXTRA_ARGS=()
   check_non_root "$PROJECT" mikud postgres
   check_hardening "$PROJECT"
+  stack exec -T mikud test -f dist/server/cli.js || fail_stack "the image has no recovery command (dist/server/cli.js)"
+  echo "    recovery command present: dist/server/cli.js"
 
   if [ $E2E -eq 1 ]; then
     info "End-to-end: the web UI against the container (Playwright)"
     run_e2e || fail_stack "end-to-end tests failed"
+    # The owner exists now: the bundled recovery command must reset it. Its output (a password) is not shown.
+    info "Recovery command in the container"
+    stack exec -T mikud node dist/server/cli.js reset-password | grep -q '^New password: .\{20,\}$' ||
+      fail_stack "node dist/server/cli.js reset-password did not reset the owner"
+    echo "    reset-password set a new password"
   fi
 
   info "Stopping $PROJECT"

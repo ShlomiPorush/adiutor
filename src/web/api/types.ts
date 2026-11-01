@@ -23,7 +23,9 @@ import type {
 /** Error codes the server sends as {error: {code, message, ...details}}. */
 export const API_ERROR_CODES = [
   "unauthorized",
+  "session_ended",
   "forbidden",
+  "totp_required",
   "not_found",
   "validation_failed",
   "version_conflict",
@@ -31,22 +33,41 @@ export const API_ERROR_CODES = [
   "not_top_level",
   "suppressed",
   "conflict",
+  "already_set_up",
+  "wrong_password",
   "rate_limited",
+  "busy",
   "telegram_failed",
   "telegram_uncertain",
   "internal_error",
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
 
-export type Session = { actor: { kind: ActorKind; label: string }; via: "token" | "cookie"; deviceId: string | null }
-
-export type Device = {
-  id: string
-  label: string
-  createdAt: string
-  lastSeenAt: string | null
-  revokedAt: string | null
+/** Seconds left on the session's clocks (Settings): its maximum length, and the idle limit when it is on. */
+export type SessionClocks = {
+  max: { remainingSec: number }
+  idle: { timeoutSec: number; remainingSec: number } | null
 }
+
+export type Session = {
+  actor: { kind: ActorKind; label: string }
+  via: "token" | "session"
+  browserId: string | null
+  clocks: SessionClocks | null
+}
+
+/** GET /api/setup/status: whether the owner exists, and what this browser's session may do. */
+export type SetupStatus = { hasUser: boolean; session: "none" | "enrol" | "active" }
+
+export type AccountSession = {
+  id: string
+  current: boolean
+  signedInAt: string
+  activeAt: string
+  userAgent: string | null
+}
+
+export type Account = { username: string; sessions: AccountSession[] }
 
 export type GoalProgress = { id: string; text: string; createdAt: string; done: number; total: number }
 export type Goal = { id: string; projectId: string; text: string; createdAt: string; closedAt: string | null }
@@ -281,6 +302,9 @@ export type Settings = {
   dateFormat: string
   timeFormat: string
   language: Language
+  sessionMaxDays: number
+  sessionIdle: boolean
+  sessionIdleMinutes: number
   updatedAt: string
 }
 
@@ -289,6 +313,9 @@ export type SettingsPatch = Partial<{
   dateFormat: DateFormat
   timeFormat: TimeFormat
   language: Language
+  sessionMaxDays: number
+  sessionIdle: boolean
+  sessionIdleMinutes: number
 }>
 
 export type SyncRun = {

@@ -10,6 +10,9 @@ PR_PROJECT="mikud-pr"
 STATE_DIR="$CACHE_DIR/try-pr"
 STATE_FILE="$STATE_DIR/state.env"
 ENV_FILE="$STATE_DIR/pr.env"
+# The invented owner's username, password and TOTP secret, written by the seed (0600). Never in pr.env, which
+# the container reads.
+OWNER_FILE="$STATE_DIR/owner.env"
 COMPOSE_FILE="$STATE_DIR/compose.yml"
 DATA_DIR="$STATE_DIR/postgres"
 WORKTREE="$STATE_DIR/worktree"
@@ -23,9 +26,10 @@ Usage: scripts/try-pr.sh <command>
 
   <number>  Build the pull request's head in a disposable worktree as mikud:pr-<number> and run it as
             the Compose project $PR_PROJECT with its own disposable PostgreSQL, generated tokens and
-            invented fixtures, on http://127.0.0.1:\${MIKUD_PR_PORT:-$DEFAULT_PORT}. Telegram is off.
-  status    Show the pull request that runs, its health and where its tokens are.
-  restore   Remove the pull request stack, its database, image, tokens and worktree.
+            invented fixtures and an owner with a generated password and TOTP secret, on
+            http://127.0.0.1:\${MIKUD_PR_PORT:-$DEFAULT_PORT}. Telegram is off.
+  status    Show the pull request that runs, its health and where its tokens and sign-in are.
+  restore   Remove the pull request stack, its database, image, tokens, sign-in and worktree.
 
 One pull request at a time. The development stack (mikud-dev), its data and docker-compose-dev.yml
 are never touched; nothing is pushed or merged, and your working tree is never changed.
@@ -80,8 +84,21 @@ POSTGRES_DB=mikud
 DATABASE_URL=postgres://mikud:$password@postgres:5432/mikud
 MIKUD_OWNER_TOKEN=$(random_hex)
 MIKUD_AGENT_TOKEN=$(random_hex)
+MIKUD_AUTH_SECRET=$(random_hex)
 MIKUD_PUBLIC_URL=http://127.0.0.1:$PORT
 EOF
+  )
+  chmod 600 "$ENV_FILE"
+}
+
+# A pr.env written before sign-in existed has no MIKUD_AUTH_SECRET, and the server refuses to start without it.
+ensure_auth_secret() {
+  [ -f "$ENV_FILE" ] || return 0
+  grep -q '^MIKUD_AUTH_SECRET=' "$ENV_FILE" && return 0
+  info "Adding MIKUD_AUTH_SECRET to $ENV_FILE"
+  (
+    umask 077
+    echo "MIKUD_AUTH_SECRET=$(random_hex)" >>"$ENV_FILE"
   )
   chmod 600 "$ENV_FILE"
 }
@@ -126,13 +143,18 @@ gh_head() {
 }
 
 seed() {
-  info "Seeding invented fixtures with the agent token"
+  info "Seeding the owner (setup and TOTP) and invented fixtures with the agent token"
   build_toolchain
-  # The token reaches the container through the environment, never through the command line.
-  TOOLCHAIN_EXTRA_ARGS=(--network "${PR_PROJECT}_default" -e MIKUD_URL=http://mikud:8080 -e MIKUD_AGENT_TOKEN)
+  # The token reaches the container through the environment, never through the command line. The seed writes
+  # the owner's sign-in to /state/owner.env (0600), outside the container's environment.
+  TOOLCHAIN_EXTRA_ARGS=(--network "${PR_PROJECT}_default" -v "$STATE_DIR:/state"
+    -e MIKUD_URL=http://mikud:8080 -e "MIKUD_ORIGIN=http://127.0.0.1:$PORT" -e MIKUD_OWNER_FILE=/state/owner.env
+    -e MIKUD_AGENT_TOKEN)
   MIKUD_AGENT_TOKEN="$(sed -n 's/^MIKUD_AGENT_TOKEN=//p' "$ENV_FILE")" \
     in_toolchain "node scripts/lib/try-pr-seed.mjs"
   TOOLCHAIN_EXTRA_ARGS=()
+  [ -f "$OWNER_FILE" ] || die "the seed did not write $OWNER_FILE"
+  chmod 600 "$OWNER_FILE"
 }
 
 try_pr() {
@@ -177,6 +199,7 @@ try_pr() {
 
   mkdir -p "$DATA_DIR"
   write_env
+  ensure_auth_secret
   write_compose
   info "Starting $PR_PROJECT on http://127.0.0.1:$PORT"
   pr_compose up -d --wait --wait-timeout 120 || {
@@ -189,7 +212,8 @@ try_pr() {
   seed || die "seeding failed; the stack still runs. Inspect it, then: scripts/try-pr.sh restore"
 
   info "Pull request #$pr (${COMMIT:0:12}) runs on http://127.0.0.1:$PORT"
-  echo "    tokens for pairing and API calls: $ENV_FILE (MIKUD_OWNER_TOKEN, MIKUD_AGENT_TOKEN)"
+  echo "    sign in with: $OWNER_FILE (username, password, TOTP secret for an authenticator app)"
+  echo "    tokens for API calls: $ENV_FILE (MIKUD_OWNER_TOKEN, MIKUD_AGENT_TOKEN)"
   echo "    when done: scripts/try-pr.sh restore"
 }
 
@@ -202,6 +226,8 @@ status() {
   info "Pull request #$PR (${COMMIT:0:12}) as $PR_PROJECT on http://127.0.0.1:$PORT"
   echo "    worktree: $WORKTREE"
   echo "    tokens:   $ENV_FILE"
+  echo "    sign-in:  $OWNER_FILE"
+  ensure_auth_secret
   [ -f "$COMPOSE_FILE" ] || {
     echo "    the stack was not started"
     return 0
@@ -245,10 +271,10 @@ restore() {
   if [ -n "$REF" ] && git -C "$REPO_ROOT" rev-parse -q --verify "$REF" >/dev/null; then
     git -C "$REPO_ROOT" update-ref -d "$REF"
   fi
-  rm -f "$ENV_FILE" "$COMPOSE_FILE" "$STATE_FILE"
+  rm -f "$ENV_FILE" "$OWNER_FILE" "$COMPOSE_FILE" "$STATE_FILE"
   rmdir "$STATE_DIR" 2>/dev/null || true
   if [ -n "$PR" ]; then
-    info "Removed pull request #$PR: stack, database, image, tokens and worktree"
+    info "Removed pull request #$PR: stack, database, image, tokens, sign-in and worktree"
   else
     info "Nothing of a pull request stack is left"
   fi
