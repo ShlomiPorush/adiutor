@@ -13,8 +13,8 @@ import {
   type Ctx,
   checkAgentText,
   type DbOrTx,
+  inLinkTx,
   inTx,
-  lockThreadIds,
   requireOwner,
   type Tx,
   writeAudit,
@@ -227,30 +227,15 @@ export async function updateItem(ctx: Ctx, by: By, id: string, version: number, 
  */
 export async function deleteItem(ctx: Ctx, by: By, id: string, version?: number): Promise<void> {
   requireOwner(by, "delete items")
-  return inTx(ctx, async (tx) => {
-    // Thread locks before the item row, in the order the sync's creation and folding take them.
-    const linksOf = () => tx.select().from(itemThreads).where(eq(itemThreads.itemId, id))
-    const locked = new Set<string>()
-    const lockThreads = async (threadIds: string[]) => {
-      await lockThreadIds(tx, threadIds)
-      for (const threadId of threadIds) locked.add(threadId)
-    }
-    await lockThreads((await linksOf()).map((l) => l.threadId))
+  // Under the link structure lock no link is added, moved or removed until commit, so the suppressions
+  // cover exactly the thread ids this delete removes.
+  return inLinkTx(ctx, async (tx) => {
     const before = await lockItem(tx, id)
     if (version !== undefined && before.version !== version)
       throw new AppError("version_conflict", "The item changed since you read it. Read it again and retry.", {
         currentVersion: before.version,
       })
-    // With the item row locked no link is added; a link folded onto its top-level thread before the thread
-    // locks has a thread id not locked yet. Read again until every link's thread is locked, so the
-    // suppressions cover the thread ids this delete actually removes.
-    let links = await linksOf()
-    for (;;) {
-      const missing = links.map((l) => l.threadId).filter((threadId) => !locked.has(threadId))
-      if (missing.length === 0) break
-      await lockThreads(missing)
-      links = await linksOf()
-    }
+    const links = await tx.select().from(itemThreads).where(eq(itemThreads.itemId, id))
     for (const link of links) {
       const [s] = await tx
         .insert(suppressions)
@@ -319,8 +304,9 @@ export function refuseChildThread(parentThreadId: string | null | undefined): vo
 }
 
 /**
- * Links a T3 thread to an item inside the caller's transaction. Returns the link, or the existing link
- * when the thread is linked to this item already. A thread linked to another item is a `conflict`.
+ * Links a T3 thread to an item inside the caller's transaction, which holds the link structure lock
+ * (`inLinkTx`). Returns the link, or the existing link when the thread is linked to this item already. A
+ * thread linked to another item is a `conflict`.
  */
 export async function linkThreadTx(
   ctx: Ctx,
@@ -356,7 +342,7 @@ export async function linkThreadTx(
   return { link: existing, created: false }
 }
 
-/** Inserts a link unless the thread is linked already (then null). Audited. */
+/** Inserts a link unless the thread is linked already (then null). Audited. Under the link structure lock. */
 export async function insertLinkTx(
   ctx: Ctx,
   tx: Tx,
@@ -381,7 +367,7 @@ export async function insertLinkTx(
 }
 
 export async function linkThread(ctx: Ctx, by: By, itemId: string, input: LinkThreadInput) {
-  return inTx(ctx, async (tx) => {
+  return inLinkTx(ctx, async (tx) => {
     await getItemRow(tx, itemId)
     return linkThreadTx(ctx, tx, by, itemId, input)
   })

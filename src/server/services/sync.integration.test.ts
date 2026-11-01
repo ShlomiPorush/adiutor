@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { audit, items, itemThreads, projects, securitySources, suppressions, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
-import { lockExternalId } from "./context.ts"
+import { lockLinkStructure } from "./context.ts"
 import { createItem, deleteItem, getItemRow, linkThread, updateItem } from "./items.ts"
 import { createProject, deleteProject } from "./projects.ts"
 import { REDACTED } from "./secrets.ts"
@@ -153,46 +153,22 @@ describe("applyT3Snapshot", () => {
     expect(await t.ctx.db.select().from(projects)).toHaveLength(0)
   })
 
-  it("takes the delete's locks in the sync's order, so a project delete and a sync never deadlock", async () => {
-    await applyT3Snapshot(t.ctx, snapshot([]))
-    const [p] = await t.ctx.db.select().from(projects)
-    let release = () => {}
-    const held = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    // Like the sync's project step: the advisory lock first, then the project row.
-    const syncLike = t.ctx.db.transaction(async (tx) => {
-      await lockExternalId(tx, "project", "t3-garden")
-      await held
-      await tx
-        .select()
-        .from(projects)
-        .where(eq(projects.id, p?.id ?? ""))
-        .for("update")
-    })
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    const deleting = deleteProject(t.ctx, owner, p?.id ?? "")
-    await new Promise((resolve) => setTimeout(resolve, 150))
-    release()
-    await syncLike
-    await deleting
-    expect(await t.ctx.db.select().from(projects)).toHaveLength(0)
-  })
-
   describe("an owner delete while the sync folds the item's child link", () => {
     const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-    const folding = () => snapshot([thread("root-1"), thread("child-1", { parentThreadId: "root-1" })])
+    // No projects: the sync's first transaction is the fold, so it queues for the lock before the delete.
+    const folding = () =>
+      snapshot([thread("root-1"), thread("child-1", { parentThreadId: "root-1" })], { projects: [] })
     const moves = () => t.ctx.db.select().from(audit).where(eq(audit.action, "thread.move"))
     const suppressed = async () => (await t.ctx.db.select().from(suppressions)).map((s) => s.externalId).sort()
 
-    /** Holds the child thread's lock until `release`, as a concurrent transaction would. */
-    function holdChildLock() {
+    /** Holds the link structure lock until `release`, as a concurrent transaction would. */
+    function holdLinkLock() {
       let release = () => {}
       const held = new Promise<void>((resolve) => {
         release = resolve
       })
       const done = t.ctx.db.transaction(async (tx) => {
-        await lockExternalId(tx, "thread", "child-1")
+        await lockLinkStructure(tx)
         await held
       })
       return { release, done }
@@ -200,9 +176,9 @@ describe("applyT3Snapshot", () => {
 
     it("waits for a delete that read the child's link: the link is not moved under it", async () => {
       const item = await linkedItem("in_progress", ["child-1"])
-      const lock = holdChildLock()
+      const lock = holdLinkLock()
       await pause(50)
-      // The delete reads the item's links (the child) and waits for the child's thread lock.
+      // The delete waits for the lock first; the sync's fold waits behind it.
       const deleting = deleteItem(t.ctx, owner, item.id)
       await pause(100)
       const syncing = applyT3Snapshot(t.ctx, folding())
@@ -219,7 +195,7 @@ describe("applyT3Snapshot", () => {
 
     it("suppresses the top-level thread when the fold moved the link first", async () => {
       const item = await linkedItem("in_progress", ["child-1"])
-      const lock = holdChildLock()
+      const lock = holdLinkLock()
       await pause(50)
       const syncing = applyT3Snapshot(t.ctx, folding())
       await pause(200)

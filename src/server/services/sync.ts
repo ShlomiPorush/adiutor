@@ -3,7 +3,7 @@ import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
-import { type By, type Ctx, inTx, lockExternalId, lockThreadIds, writeAudit } from "./context.ts"
+import { type By, type Ctx, inLinkTx, inTx, writeAudit } from "./context.ts"
 import { createItemTx, type ItemRow, isSuppressed, type ThreadLinkRow, updateItemTx } from "./items.ts"
 import { createProjectTx } from "./projects.ts"
 import { newItemStatus, rootThreadId, syncDecision, wantsItem } from "./sync-rules.ts"
@@ -124,9 +124,8 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
     // 1. Projects: upsert by T3 project id, except those the owner deleted.
     for (const p of snapshot.projects) {
       await run.record(`project:${p.t3ProjectId}`, async () => {
-        await inTx(ctx, async (tx) => {
-          // Checked under the same lock an owner delete takes: a delete that commits during the run wins.
-          await lockExternalId(tx, "project", p.t3ProjectId)
+        // Under the link structure lock: an owner delete that commits during the run wins.
+        await inLinkTx(ctx, async (tx) => {
           const [existing] = await tx
             .select()
             .from(projects)
@@ -186,10 +185,9 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       if (thread.parentThreadId) continue
       await run.record(`thread:${thread.threadId}`, async () => {
         const title = ctx.secrets.redact(thread.title).trim()
-        await inTx(ctx, async (tx) => {
-          // The same locks an owner delete takes, in a fixed order (thread, then project).
-          await lockExternalId(tx, "thread", thread.threadId)
-          if (thread.t3ProjectId) await lockExternalId(tx, "project", thread.t3ProjectId)
+        // Under the link structure lock, as an owner delete and an agent's link: the suppression and link
+        // checks below stay true until this transaction commits.
+        await inLinkTx(ctx, async (tx) => {
           const [link] = await tx
             .select()
             .from(itemThreads)
@@ -316,17 +314,9 @@ async function foldChildLink(
   rootId: string,
   root: T3Snapshot["threads"][number] | undefined,
 ) {
-  await inTx(ctx, async (tx) => {
-    // The locks an owner delete and a creation take, in the same order: both thread ids, then the item
-    // row, then the link row. An owner delete then sees either the child's link or the moved one.
-    await lockThreadIds(tx, [childId, rootId])
-    const [peek] = await tx
-      .select({ itemId: itemThreads.itemId })
-      .from(itemThreads)
-      .where(eq(itemThreads.threadId, childId))
-    if (!peek) return
-    const [item] = await tx.select({ id: items.id }).from(items).where(eq(items.id, peek.itemId)).for("update")
-    if (!item) return
+  // Under the link structure lock: an owner delete or an agent's link of the root thread runs entirely
+  // before or after this fold, so a delete suppresses either the child's link or the moved one.
+  await inLinkTx(ctx, async (tx) => {
     const [child] = await tx.select().from(itemThreads).where(eq(itemThreads.threadId, childId)).for("update")
     if (!child) return
     const [rootLink] = await tx.select().from(itemThreads).where(eq(itemThreads.threadId, rootId))

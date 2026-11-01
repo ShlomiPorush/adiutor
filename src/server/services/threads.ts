@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
 import { itemThreads, projects } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
-import { type By, type Ctx, checkAgentText, inTx, type Tx } from "./context.ts"
+import { type By, type Ctx, checkAgentText, inLinkTx, type Tx } from "./context.ts"
 import {
   cleanTitle,
   createItemTx,
@@ -39,7 +39,7 @@ export async function startThread(ctx: Ctx, by: By, input: StartThreadInput): Pr
   const title = cleanTitle(input.title)
   for (let attempt = 0; ; attempt++) {
     try {
-      return await inTx(ctx, (tx) => startOnce(ctx, tx, by, input, title))
+      return await inLinkTx(ctx, (tx) => startOnce(ctx, tx, by, input, title))
     } catch (error) {
       if (error instanceof LostRace && attempt < 2) continue
       if (error instanceof LostRace) throw new AppError("conflict", "The thread was linked at the same time. Retry.")

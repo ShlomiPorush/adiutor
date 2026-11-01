@@ -7,8 +7,8 @@ import {
   type Ctx,
   checkAgentText,
   type DbOrTx,
+  inLinkTx,
   inTx,
-  lockExternalId,
   requireOwner,
   type Tx,
   writeAudit,
@@ -299,11 +299,7 @@ export async function decideProposal(
  */
 export async function deleteProject(ctx: Ctx, by: By, id: string): Promise<void> {
   requireOwner(by, "delete projects")
-  return inTx(ctx, async (tx) => {
-    // The advisory lock comes before the row lock, in the sync's order, so the two never deadlock. The
-    // T3 project id is set only when the project is created, so reading it first is safe.
-    const [peek] = await tx.select({ t3ProjectId: projects.t3ProjectId }).from(projects).where(eq(projects.id, id))
-    if (peek?.t3ProjectId) await lockExternalId(tx, "project", peek.t3ProjectId)
+  return inLinkTx(ctx, async (tx) => {
     const [before] = await tx.select().from(projects).where(eq(projects.id, id)).for("update")
     if (!before) throw notFound("The project")
     const [item] = await tx.select({ id: items.id }).from(items).where(eq(items.projectId, id)).limit(1)
