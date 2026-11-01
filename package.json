@@ -10,29 +10,45 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "pnpm build:server && pnpm build:sync",
+    "build": "pnpm build:server && pnpm build:sync && pnpm build:web",
     "build:server": "esbuild src/server/index.ts src/server/healthcheck.ts --bundle --platform=node --target=node24 --format=esm --outdir=dist/server",
     "build:sync": "esbuild src/sync/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/sync/mikud-sync.js",
-    "typecheck": "tsc -p tsconfig.json",
+    "build:web": "vite build --config config/vite.config.ts",
+    "dev:web": "vite --config config/vite.config.ts",
+    "typecheck": "tsc -p tsconfig.json && tsc -p src/web/tsconfig.json && tsc -p e2e/tsconfig.json",
     "test": "vitest run --config config/vitest.config.ts",
     "test:integration": "vitest run --config config/vitest.integration.config.ts",
     "lint": "biome ci .",
-    "db:generate": "drizzle-kit generate --config config/drizzle.config.ts"
+    "db:generate": "drizzle-kit generate --config config/drizzle.config.ts",
+    "test:e2e": "playwright test --config config/playwright.config.ts"
   },
   "dependencies": {
+    "@fontsource-variable/noto-sans-hebrew": "5.3.0",
+    "@fontsource-variable/onest": "5.3.1",
+    "@fontsource/ibm-plex-mono": "5.3.0",
     "@hono/node-server": "2.1.5",
     "@modelcontextprotocol/sdk": "1.32.2",
+    "@tanstack/react-query": "5.105.0",
     "drizzle-orm": "0.45.4",
     "hono": "4.13.13",
+    "lucide-react": "1.66.0",
     "postgres": "3.4.9",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router": "8.5.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
+    "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
     "drizzle-kit": "0.31.11",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
+    "vite": "8.3.5",
     "vitest": "5.0.5"
   }
 }

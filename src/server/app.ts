@@ -9,6 +9,7 @@ import { log } from "./log.ts"
 import { mcpRoutes } from "./mcp/server.ts"
 import type { Ctx } from "./services/context.ts"
 import type { TelegramRuntime } from "./telegram/status.ts"
+import { webRoutes } from "./web.ts"
 
 export type AppDeps = {
   /** True when the database answers a trivial query. */
@@ -22,6 +23,8 @@ export type AppDeps = {
     /** The bot, for the status route; off when absent. */
     telegram?: TelegramRuntime
   }
+  /** The built web UI (dist/web); without it only the API, MCP and /healthz are served. */
+  web?: { root: string }
 }
 
 /** The socket's address. Behind a proxy every client shares the proxy's address, which is acceptable here. */
@@ -55,6 +58,8 @@ export function createApp(deps: AppDeps) {
     app.route("/api/v1", apiRoutes(auth))
     app.route("/mcp", mcpRoutes(auth))
   }
+
+  if (deps.web) webRoutes(app, deps.web.root)
 
   app.notFound((c) => c.json({ error: { code: "not_found", message: "Nothing is here." } }, 404))
   app.onError((error, c) => {

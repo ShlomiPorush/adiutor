@@ -5,6 +5,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export REPO_ROOT
 
 TOOLCHAIN_IMAGE="mikud-toolchain:local"
+# Browsers for the end-to-end tests; the tag must match @playwright/test in package.json.
+PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v1.64.1-noble"
+export PLAYWRIGHT_IMAGE
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mikud"
 
 die() {
