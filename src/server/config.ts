@@ -7,6 +7,8 @@ export type ServerConfig = {
   publicUrl: URL
   migrationsDir: string
   version: string
+  /** Domains whose host names agents must not write (MIKUD_PRIVATE_DOMAINS, comma-separated, optional). */
+  privateDomains: string[]
 }
 
 export const MIN_TOKEN_LENGTH = 32
@@ -51,6 +53,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 
   if (databaseUrl && !/^postgres(ql)?:\/\//.test(databaseUrl)) problems.push("DATABASE_URL must be a postgres:// URL")
 
+  const privateDomains = (env.MIKUD_PRIVATE_DOMAINS ?? "")
+    .split(",")
+    .map((d) =>
+      d
+        .trim()
+        .toLowerCase()
+        .replace(/^\.+|\.+$/g, ""),
+    )
+    .filter(Boolean)
+  if (privateDomains.some((d) => !/^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(d)))
+    problems.push("MIKUD_PRIVATE_DOMAINS must be a comma-separated list of domain names")
+
   const port = Number(env.PORT ?? 8080)
   if (!Number.isInteger(port) || port <= 0 || port > 65535) problems.push("PORT must be a port number")
 
@@ -64,5 +78,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicUrl,
     migrationsDir: env.MIGRATIONS_DIR || "drizzle",
     version: env.MIKUD_VERSION || "dev",
+    privateDomains,
   }
 }

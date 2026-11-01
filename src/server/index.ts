@@ -5,6 +5,7 @@ import { createApp } from "./app.ts"
 import { ConfigError, loadConfig } from "./config.ts"
 import { createDatabase } from "./db/client.ts"
 import { log } from "./log.ts"
+import { createSecretScanner } from "./services/secrets.ts"
 
 /** Writes synchronously: console output to a pipe may still be pending when the process exits. */
 function fail(msg: string): never {
@@ -28,7 +29,8 @@ try {
   fail(`Database migration failed: ${error instanceof Error ? error.message : String(error)}`)
 }
 
-const app = createApp({ checkDatabase: database.ping })
+const ctx = { db: database.db, secrets: createSecretScanner(config.privateDomains), clock: () => new Date() }
+const app = createApp({ checkDatabase: database.ping, core: { ctx, config } })
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   log.info(`Mikud ${config.version} listening`, { port })
 }) as Server

@@ -60,6 +60,16 @@ describe("loadConfig", () => {
     expect(message).not.toContain("secret")
   })
 
+  it("reads the private domains, normalized, and refuses one that is not a domain", () => {
+    expect(loadConfig(valid).privateDomains).toEqual([])
+    expect(loadConfig({ ...valid, MIKUD_PRIVATE_DOMAINS: " Corp.Example , .internal.test.,," }).privateDomains).toEqual(
+      ["corp.example", "internal.test"],
+    )
+    expect(refusal({ ...valid, MIKUD_PRIVATE_DOMAINS: "corp.example, not a domain" })).toContain(
+      "MIKUD_PRIVATE_DOMAINS",
+    )
+  })
+
   it("refuses a bad port", () => {
     expect(refusal({ ...valid, PORT: "http" })).toContain("PORT")
   })

@@ -17,14 +17,18 @@ UI follows the `v3-ui-style` skill.
 
 One pnpm package (no workspace apps).
 
-- `src/server/`: Hono server. `index.ts` starts it, `config.ts` reads and checks the environment, `app.ts` holds the routes (only `/healthz` so far), `healthcheck.ts` is the container health check, `db/` holds the Drizzle schema and client.
-- `src/shared/`: enum codes as `const` arrays with zod schemas (`enums.ts`) and the locale files `locales/en.json` and `locales/he.json`.
+- `src/server/`: Hono server. `index.ts` starts it, `config.ts` reads and checks the environment, `app.ts` mounts `/healthz`, `/api/v1` and `/mcp` and maps errors, `healthcheck.ts` is the container health check, `errors.ts` holds the stable error codes, `db/` the Drizzle schema and client.
+  - `services/`: every write and read model. `context.ts` (actor, audit row, agent secret check), `items.ts`, `projects.ts`, `threads.ts` (start of thread), `sync.ts` and `sync-rules.ts` (T3 and security snapshots), `reads.ts` (morning, project, item, archive, inbox, audit), `admin.ts` (settings, suppressions, devices, visits), `secrets.ts`.
+  - `http/`: `auth.ts` (bearer token, device cookie, CSRF check, rate limit) and `api.ts` (the `/api/v1` routes). `mcp/server.ts`: the MCP tools.
+  - `testing/db.ts`: a migrated database per integration test file, and a movable clock.
+- `src/shared/`: enum codes as `const` arrays with zod schemas (`enums.ts`), the API request schemas (`api.ts`) and the locale files `locales/en.json` and `locales/he.json`.
 - `drizzle/`: generated SQL migrations and their snapshots. Never edit by hand.
 - `config/`: TypeScript base config, Vitest configs, Drizzle Kit config.
 - `docker/`: toolchain and application Dockerfiles, the development Compose template and `dev.env` (fake development values).
 - `scripts/`: `local.sh`, `verify.sh`; `lib/common.sh` (shared helpers) and `lib/guards.sh` (repository guards).
 - `src/sync/`: the sync tool that runs on the owner's PC, bundled to `dist/sync/mikud-sync.js` (Node stdlib only at runtime; no imports from `src/server/`). `main.ts` is the entry, `run.ts` one run, `fixtures/` invented T3 and `overview` data for its tests. See `docs/sync.md`.
 - `prompts/`: `reconcile.md`, the instructions of the T3 scheduled task that runs the sync tool.
+- `docs/api.md`: the HTTP API and MCP contract. Change it together with the routes.
 - `src/web/`, `e2e/`: planned, not created yet.
 
 ## Commands
@@ -44,6 +48,9 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 - Node refuses to start a `.cmd` file (the T3 CLI on Windows) without a shell. `src/sync/exec.ts` runs it through `cmd.exe /d /v:off /s /c` with every part quoted and refuses `"`, `%` and line breaks; never build a shell string anywhere else.
 - `ON DELETE RESTRICT` (items of a project) fails with SQLSTATE `23001`, not `23503`.
 - Codes are text columns with database checks generated from `src/shared/enums.ts`: adding a code needs a new migration.
+- Services take their time from `ctx.clock()`, never `now()` in SQL or `new Date()`, so tests can move time; integration tests use `createTestDatabase` from `src/server/testing/db.ts`.
+- Exported service functions are `async`: a refusal must be a rejected promise, not a synchronous throw.
+- Fake secrets in tests are assembled at run time (`${"gh"}p_...`) and private IPv4 addresses with `[10, 1, 2, 3].join(".")`: the guards and GitHub push protection scan the literal text.
 - The guards scan tracked files and new files that are not ignored. The deny list `docs/private/deny-list.txt` exists only on the owner's machine; in CI the guard is skipped, and its output never repeats a matched line.
 
 ## Docker
