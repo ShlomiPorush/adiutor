@@ -169,7 +169,7 @@ T3 snapshot, a full read of every top-level and child thread of every T3 project
 }
 ```
 
-- `failedProjects`: T3 projects whose threads the sync tool could not read in this run. Each is recorded in `errors` as `{record: "threads:<t3ProjectId>", code: "threads_not_read"}`, the run is `partial`, and no item of those projects (by its project or by a link's `t3ProjectId`) is decided in this run (`counts.itemsNotDecided`).
+- `failedProjects`: T3 projects whose threads the sync tool could not read in this run, or read only in part (invalid thread records). Each is recorded in `errors` as `{record: "threads:<t3ProjectId>", code: "threads_not_read"}`, the run is `partial`, and no item of those projects (by its project or by a link's `t3ProjectId`) is decided in this run (`counts.itemsNotDecided`).
 
 - Projects: created by `t3ProjectId` with the redacted title as name, `stage: null` and the repository; an existing project keeps its name and only gets a repository when it has none; a suppressed project id is skipped.
 - A thread with a `parentThreadId` never gets an item. When it is linked, the link moves to its top-level thread (the parent's parent, as far as the snapshot knows): deleted when that thread has its own link, re-pointed otherwise.

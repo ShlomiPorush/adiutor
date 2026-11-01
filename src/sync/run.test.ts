@@ -130,8 +130,9 @@ describe("runSync", () => {
       { t3ProjectId: "p-missing", title: "Missing", repo: "acme/missing" },
     ])
     expect(t3.threads.map((t) => t.threadId)).toEqual(["thread-w1", "thread-w2", "thread-w3", "thread-g1", "thread-z1"])
-    // The server must not take the missing threads of an unread project as a complete picture.
-    expect(t3.failedProjects).toEqual(["p-notes"])
+    // The server must not take the missing threads of an unread project, or of one with invalid thread
+    // records (p-gizmo), as a complete picture.
+    expect(t3.failedProjects).toEqual(["p-gizmo", "p-notes"])
 
     const security = received[1]?.body as { collectedAt: string; repos: Array<{ repo: string }> }
     expect(security.collectedAt).toBe("2026-11-01T05:31:00.000Z")
@@ -146,6 +147,7 @@ describe("runSync", () => {
     expect(text).toContain(
       "t3: threads of project p-notes not read: exit code 1: No T3 Code project matches 'p-notes'.",
     )
+    expect(text).toContain("t3: project p-gizmo has 1 invalid thread records; sent as not fully read")
     expect(text).toContain("t3: 5 threads (1 child threads), 1 records skipped, 1 of 5 projects not read")
     expect(text).toContain("security: 3 repositories, 1 project repositories not in the snapshot")
     expect(text).toContain('t3 sync: sent (HTTP 200) {"ok":true}')

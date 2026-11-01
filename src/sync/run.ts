@@ -130,6 +130,8 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
   const collectedAt = deps.now().toISOString()
   const threads = new Map<string, ThreadRecord>()
   const failed: string[] = []
+  // Projects with invalid thread records: their threads are sent, but the picture is not complete.
+  const incomplete: string[] = []
   let invalid = 0
   if (!config.cliPath) {
     say("t3: T3CODE_CLI_PATH is not set; threads are not read")
@@ -149,6 +151,10 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
         continue
       }
       invalid += result.invalid
+      if (result.invalid > 0) {
+        incomplete.push(result.project.id)
+        say(`t3: project ${result.project.id} has ${result.invalid} invalid thread records; sent as not fully read`)
+      }
       for (const thread of result.threads) if (!threads.has(thread.threadId)) threads.set(thread.threadId, thread)
     }
   }
@@ -165,8 +171,13 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
       (invalid ? `, ${invalid} records skipped` : "") +
       (failed.length ? `, ${failed.length} of ${projects.length} projects not read` : ""),
   )
-  // The server must not read the missing threads of an unread project as "no threads".
-  const t3Payload = { collectedAt, projects: projectRecords, threads: threadRecords, failedProjects: failed }
+  // The server must not read the missing threads of an unread or partly read project as "no threads".
+  const t3Payload = {
+    collectedAt,
+    projects: projectRecords,
+    threads: threadRecords,
+    failedProjects: [...incomplete, ...failed],
+  }
   const canSendT3 = config.cliPath !== undefined && failed.length < projects.length
 
   // 4. Security for the GitHub repositories of the projects.
