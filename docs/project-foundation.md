@@ -1,13 +1,24 @@
 # Mikud project foundation
 
-Status: Preparation. Nothing below is implemented unless its status says so.
+Status: Foundation in progress. Nothing below is implemented unless its status says so.
 
 This document separates the repository's current state from the approved desired state. Product behavior is in [requirements.md](requirements.md). A planned file, command or feature does not exist until its status and verification evidence say otherwise.
 
 ## Current truth
 
-- The repository holds documentation only: `README.md`, `AGENTS.md`, `LICENSE`, `.gitignore`, `.gitattributes`, `docs/requirements.md` and this document.
-- No code, scripts, container files, CI workflows or lockfiles exist yet.
+- The foundation slice exists: implementation rows 1 to 3, the database schema of row 4, and the skeleton of rows 10 to 12.
+  - One pnpm package with `pnpm-lock.yaml`, Biome 2, TypeScript 7, Vitest 5, esbuild, Drizzle ORM with postgres.js, Hono and zod. Versions match n8n-ops where they overlap.
+  - `src/server/`: configuration that refuses to start without `DATABASE_URL`, `MIKUD_PUBLIC_URL` and two different tokens of at least 32 characters; migrations applied on start from `MIGRATIONS_DIR`; `GET /healthz` runs `select 1`. No API, MCP, jobs or Telegram yet.
+  - `src/server/db/schema.ts` and the generated migration `drizzle/0000_initial.sql`: every table of the data model below, with codes checked by the database.
+  - `src/shared/`: enum codes with zod schemas; `locales/en.json` and `locales/he.json` label every stage, item status, item type and severity, and the inbox.
+  - `docker/`: toolchain image, application image, development Compose template and `dev.env`. Root `docker-compose.yml` and `.env.example` for production.
+  - `scripts/local.sh`, `scripts/verify.sh`, `scripts/lib/common.sh`, `scripts/lib/guards.sh`.
+  - `.github/workflows/ci.yml`, `.github/dependabot.yml`, `.github/pull_request_template.md`, `CHANGELOG.md`.
+- Verified on the owner's PC (WSL, Docker 29.8.2) on 2026-11-01. Not yet run in GitHub Actions.
+  - `scripts/verify.sh` (full) passed: guards; Biome; types; 17 unit tests; build; the schema matches its migrations; 5 database tests against a disposable PostgreSQL 18 (migrations apply twice, every table exists, the unique keys and code checks refuse bad rows); the image healthy with `/healthz` reporting the database, `mikud` as UID 1000 and `postgres` as UID 999, no capabilities, read-only root, no new privileges; the stack removed afterwards.
+  - Each guard failed on a planted violation and passed again once it was removed (see row 3 of the implementation plan).
+  - `scripts/local.sh`: `build`, `start` (healthy on `127.0.0.1:8090`), `status`, `down` (database kept), `start` again (a row written before `down` was still there), and `nuke` refusing without confirmation, with a wrong answer, and for the home directory, a name not starting with `mikud-dev`, or a path under `/mnt`.
+- GitHub repository settings read back on 2026-11-01: public, default branch `main`, MIT detected, secret scanning with push protection, Dependabot security updates, Actions default token read-only. Merge commits and rebase merges are still allowed, and merged branches are not deleted automatically.
 - `docs/private/` is ignored by Git and may exist only on the owner's machine. It holds environment facts that must not be public.
 - Facts checked on 2026-11-01 for this plan:
   - The owner's machine has Node.js 24.20.0, Docker 29.8.2 and WSL (Ubuntu) with Docker.
@@ -64,14 +75,14 @@ This document separates the repository's current state from the approved desired
 
 | Component | Responsibility | Expected path | Status | Dependencies or blockers |
 |---|---|---|---|---|
-| Schema and migrations | Tables below; Drizzle migrations run on start | `src/server/db/` | Planned | None |
+| Schema and migrations | Tables below; Drizzle migrations run on start | `src/server/db/`, `drizzle/` | Exists: schema and first migration, tested against PostgreSQL | None |
 | Services | Every write: validation, permission by actor, optimistic concurrency, audit row in the same transaction, secret check for agent text | `src/server/services/` | Planned | Schema |
-| HTTP API | `/api/v1` for the UI and the sync tool; `/healthz`; static UI | `src/server/http/` | Planned | Services |
+| HTTP API | `/api/v1` for the UI and the sync tool; `/healthz`; static UI | `src/server/http/` | Partial: `/healthz` only, in `src/server/app.ts` | Services |
 | MCP server | Tools for agents over Streamable HTTP at `/mcp` | `src/server/mcp/` | Planned | Services |
 | Jobs | Morning message at 08:00 Asia/Jerusalem, Sunday to Friday, with durable run state | `src/server/jobs/` | Planned | Services, Telegram |
 | Telegram | Long-polling bot: owner-only quick add, morning message | `src/server/telegram/` | Planned | Bot token from the owner |
 | Web UI | Morning view, projects, project, item, inbox, archive, audit log, settings; Hebrew and English; light and dark; phone | `src/web/` | Planned | API |
-| Shared | Enum codes, request and response schemas (zod), locale files | `src/shared/` | Planned | None |
+| Shared | Enum codes, request and response schemas (zod), locale files | `src/shared/` | Partial: enum codes, their zod schemas and their labels; no request or response schemas yet | None |
 | Sync tool | Runs on the PC: runs the `overview` collector, reads T3 threads, calls the API | `src/sync/` | Planned | API, agent token |
 | Reconciler prompt | Instructions for the T3 scheduled task | `prompts/reconcile.md` | Planned | Sync tool |
 | Agent instruction | Proposed text for the owner's shared agent configuration | `docs/agent-instruction.md` | Planned | MCP tools |
@@ -83,7 +94,9 @@ Load-bearing relationships:
 - The server never reaches T3 or GitHub. T3 data and security counts arrive only through the sync tool on the PC, which pushes them to the API with the agent token.
 - Statuses, stages, types and severities are stored and sent as English codes. Labels come from the locale files only.
 
-### Data model (planned)
+### Data model
+
+Status: the schema exists in `src/server/db/schema.ts` (migration `drizzle/0000_initial.sql`); the services that write it do not. Choices made in the schema: codes are text columns with database checks; a project's current goal is its one goal that is not closed (a partial unique index), not a column on `projects`; the items of a project block its deletion (`ON DELETE RESTRICT`) until the services move them; thread links, comments, goals, proposals and security sources go with their parent; `closed_at` is set exactly when the status is `done` or `not_relevant`; `severity` is only on `security` items; `settings` is a single row; `visits` carry the device.
 
 - `projects`: name, slug, T3 project id (unique, optional), GitHub repository `owner/name` (optional), stage (nullable until the owner sets one), current goal, where-we-are line, open Issues count with its as-of time.
 - `goals`: project, text, created and closed time. Progress is the count of `done` items linked to the current goal out of all items linked to it.
@@ -135,19 +148,22 @@ Load-bearing relationships:
 | `LICENSE` | Tracked | GitHub license detection | Exists |
 | `.gitignore` | Tracked | Git reads it from the root | Exists |
 | `.gitattributes` | Tracked | Git reads it from the root; forces LF for scripts | Exists |
-| `CHANGELOG.md` | Tracked | Release workflow and readers expect it at the root | Planned |
-| `package.json` | Tracked | pnpm and Node resolve it from the root | Planned |
-| `pnpm-lock.yaml` | Tracked | pnpm requires it next to `package.json` | Planned |
-| `biome.json` | Tracked | Biome 2 must find its configuration at the root (nested configs fail) | Planned |
-| `tsconfig.json` | Tracked | Editors and `tsc` find it at the root; extends `config/` | Planned |
-| `docker-compose.yml` | Tracked | Production deployment file, run from the deploy directory | Planned |
-| `docker-compose-dev.yml` | Ignored, never committed | Machine-local development stack used only by `scripts/local.sh` | Planned |
-| `.env.example` | Tracked | Compose `env_file` contract next to `docker-compose.yml` | Planned |
-| `.env` | Ignored | Real values on the server only | Planned |
+| `CHANGELOG.md` | Tracked | Release workflow and readers expect it at the root | Exists |
+| `package.json` | Tracked | pnpm and Node resolve it from the root | Exists |
+| `pnpm-lock.yaml` | Tracked | pnpm requires it next to `package.json` | Exists |
+| `pnpm-workspace.yaml` | Tracked | pnpm 12 reads its settings only from this file (it ignores the `pnpm` field of `package.json`) and refuses to install while esbuild's build script is not allowed there. Holds settings only, no packages | Exists |
+| `biome.json` | Tracked | Biome 2 must find its configuration at the root (nested configs fail) | Exists |
+| `tsconfig.json` | Tracked | Editors and `tsc` find it at the root; extends `config/` | Exists |
+| `docker-compose.yml` | Tracked | Production deployment file, run from the deploy directory | Exists |
+| `docker-compose-dev.yml` | Ignored, never committed | Machine-local development stack used only by `scripts/local.sh` | Template exists: `docker/docker-compose-dev.example.yml` |
+| `.env.example` | Tracked | Compose `env_file` contract next to `docker-compose.yml` | Exists |
+| `.env` | Ignored | Real values on the server only | Ignored; never created in the repository |
 
-Directories: `src/` (code), `scripts/` (workflow scripts), `docker/` (Dockerfiles, development Compose template, development env), `config/` (movable tool configuration), `docs/` (documentation), `prompts/` (T3 task prompts), `.github/` (CI, Dependabot, templates), `e2e/` (Playwright specs).
+Directories: `drizzle/` (generated migrations; the Drizzle migrator and drizzle-kit read and write them there), `src/` (code), `scripts/` (workflow scripts), `docker/` (Dockerfiles, development Compose template, development env), `config/` (movable tool configuration), `docs/` (documentation), `prompts/` (T3 task prompts), `.github/` (CI, Dependabot, templates), `e2e/` (Playwright specs).
 
-## Docker decisions (planned)
+## Docker decisions
+
+Status: implemented and verified locally as described here. The production file has not been run; the owner deploys.
 
 | Container | Runtime user | Health check | Persistent state | Host directory | Named volume | Backup lifecycle |
 |---|---|---|---|---|---|---|
@@ -162,18 +178,18 @@ Directories: `src/` (code), `scripts/` (workflow scripts), `docker/` (Dockerfile
 
 | Order | Deliverable | Status | Acceptance criteria | Required verification |
 |---|---|---|---|---|
-| 1 | Repository baseline | Planned | Git repository, public GitHub repository, docs, license, ignore rules, `.gitattributes` | `git status` clean; GitHub settings read back |
-| 2 | Toolchain and package | Planned | `package.json`, lockfile, Biome, TypeScript, Vitest; toolchain image with Node, pnpm, shellcheck, shfmt | Guards and a type check pass in the container |
-| 3 | Guards | Planned | Hebrew outside the locale file, IPv4 literals, `build:` in Compose, local deny list, locale key parity, no external assets | Each guard fails on a planted violation |
-| 4 | Schema, services, audit | Planned | Every rule in requirements section 3 enforced by actor; audit row per change; concurrency by `version` | Tests per rule, including refused agent delete and stage change and a stale `version` |
+| 1 | Repository baseline | Done: settings read back on 2026-11-01 (see Current truth) | Git repository, public GitHub repository, docs, license, ignore rules, `.gitattributes` | `git status` clean; GitHub settings read back |
+| 2 | Toolchain and package | Done locally; CI not run yet | `package.json`, lockfile, Biome, TypeScript, Vitest; toolchain image with Node, pnpm, shellcheck, shfmt | Guards and a type check pass in the container |
+| 3 | Guards | Done locally, except "no external assets", which comes with the UI (row 7). Planted violations, each failing and then passing once removed: Hebrew in a new source file and in `he.json.bak`; a private IPv4 address (allowed forms and version strings such as `1.2.3.4.5` pass); `build:` in `docker-compose.yml` and in the ignored copy; a deny-list term, also in upper case (inside a longer word it passes; CI output shows only file and line); a key only in `en.json`; a shellcheck finding; an shfmt difference; a script without the executable bit | Hebrew outside the locale file, IPv4 literals, `build:` in Compose, local deny list, locale key parity, no external assets | Each guard fails on a planted violation |
+| 4 | Schema, services, audit | Partial: schema and migration only | Every rule in requirements section 3 enforced by actor; audit row per change; concurrency by `version` | Tests per rule, including refused agent delete and stage change and a stale `version` |
 | 5 | HTTP API and pairing | Planned | Token and cookie auth, CSRF checks, stable error codes | HTTP tests: missing and wrong token, agent on owner route, bad Origin, revoked device |
 | 6 | MCP server | Planned | Tools listed in `docs/agent-instruction.md`, same rules as the API | MCP client test over HTTP; one real connection each from Claude Code and Codex in the dry run |
 | 7 | Web UI | Planned | All screens, Hebrew and English, RTL and LTR, light and dark, phone; `v3-ui-style` checklist and guard tests | Playwright against the container; screenshots at 1440, 1000 and 390 px in both themes |
 | 8 | Telegram and morning job | Planned | Morning message once per day, quick add, owner-only, `update_id` dedup | Tests against a stand-in Bot API, including a crash between send and record and a repeated update; one real message in the dry run |
 | 9 | Sync tool and reconciler prompt | Planned | Rules in "Agent and sync rules" | Tests with recorded `t3` and snapshot fixtures: owner edit between read and apply, two linked threads, deleted item, stale security source, failed record; one real run in the dry run |
-| 10 | Container and Compose | Planned | Non-root runtime, health check, production and development Compose files | Health and UID checks in `verify.sh` |
-| 11 | Workflow scripts | Planned | `local.sh`, `verify.sh`, `try-pr.sh`, `release.sh` per the contracts below | Each command exercised; refusals tested |
-| 12 | CI and Dependabot | Planned | Path-filtered CI, summary job, weekly grouped updates | Green run on a pull request and on `main` |
+| 10 | Container and Compose | Done locally (health, UID and hardening checks in `verify.sh`); the production file has not been run | Non-root runtime, health check, production and development Compose files | Health and UID checks in `verify.sh` |
+| 11 | Workflow scripts | Partial: `local.sh` and `verify.sh` exist and were exercised; `try-pr.sh` and `release.sh` are planned | `local.sh`, `verify.sh`, `try-pr.sh`, `release.sh` per the contracts below | Each command exercised; refusals tested |
+| 12 | CI and Dependabot | Partial: files exist, no run on GitHub yet; the Release workflow is planned | Path-filtered CI, summary job, weekly grouped updates | Green run on a pull request and on `main` |
 | 13 | Agent instruction and deployment notes | Planned | `docs/agent-instruction.md`; `docs/deployment.md` including the one-time move from the dry run to production: stop the local stack (the only bot consumer) first, move the approved data with `pg_dump` and `pg_restore` (which carries `job_runs` and `telegram_updates`), start production, point the reconciler at it | Cross-provider review |
 | 14 | Dry run | Planned | On the development stack: seeded drafts (stage as proposals), one real morning message, morning view at desktop and phone sizes, the launch evidence below | Owner's review |
 
