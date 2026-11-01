@@ -29,9 +29,9 @@
     "@hono/node-server": "2.1.5",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@tanstack/react-query": "5.105.0",
-    "better-auth": "1.7.10",
+    "better-auth": "1.7.14",
     "drizzle-orm": "0.45.4",
-    "hono": "4.13.13",
+    "hono": "4.13.14",
     "lucide-react": "1.66.0",
     "postgres": "3.4.9",
     "qrcode": "1.5.4",
@@ -41,7 +41,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
+    "@biomejs/biome": "2.6.4",
     "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
     "@types/qrcode": "1.5.6",
