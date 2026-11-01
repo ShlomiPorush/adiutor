@@ -2272,3 +2272,10 @@ html.ui-layer-on .ui-page {
 [dir="ltr"] [dir="auto"] {
   text-align: left;
 }
+/* A title that is a button keeps to its column, so a long title ends in an ellipsis instead of overflowing */
+.ui-row-title {
+  max-width: 100%;
+}
+button.ui-item-title {
+  width: 100%;
+}

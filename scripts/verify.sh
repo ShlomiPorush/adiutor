@@ -101,7 +101,7 @@ fail_stack() {
 # the stack's MIKUD_PUBLIC_URL, to the container, so the server's Origin check sees its own address.
 run_e2e() {
   local pinned
-  pinned="$(grep -oE '"@playwright/test": "[^"]+"' "$REPO_ROOT/package.json" | grep -oE '[0-9][^"]*$')"
+  pinned="$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/package.json")"
   [ "v$pinned-noble" = "${PLAYWRIGHT_IMAGE##*:}" ] ||
     die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
   docker run --rm --ipc=host --network "${PROJECT}_default" \
