@@ -106,12 +106,12 @@ Status: the schema exists in `src/server/db/schema.ts` (migration `drizzle/0000_
 - `goals`: project, text, created and closed time. Progress is the count of `done` items linked to the current goal out of all items linked to it.
 - `items`: project (null for the inbox), type, status, title, body, severity (security only), goal, `version` (optimistic concurrency), status set by (actor kind) and when, created by, created, updated and closed time.
 - `item_threads`: item, T3 thread id (unique), T3 project id, title, last T3 status and settled flag, last T3 activity time, linked time.
-- `suppressions`: T3 thread ids and T3 project ids whose item or project the owner deleted; the sync never recreates them. The sync checks a suppression inside the transaction that would create the item or project, under the same transaction-level advisory lock on the thread id or T3 project id that the owner's delete takes, so a delete that commits during a run still wins. The owner can remove a suppression in the UI.
+- `suppressions`: T3 thread ids and T3 project ids whose item or project the owner deleted; the sync never recreates them. Every transaction that creates, moves, links or deletes thread links, creates items or projects from the sync, deletes items or projects, or writes or removes suppressions takes one global transaction-level advisory lock as its first statement, so these run one at a time and never deadlock. The sync checks a suppression inside such a transaction, so a delete that commits during a run still wins. The owner can remove a suppression in the UI.
 - `comments`: item, author, text, thread id, time.
 - `stage_proposals`: project, proposed stage, reason, author, state (`open`, `accepted`, `rejected`).
 - `security_sources`: project, family (`dependabot`, `code_scanning`, `secret_scanning`, `overview`), coverage (`enabled`, `not_enabled`, `no_access`, `error`, `unknown`), counts by severity, data as-of time (the source's last success, not the sync time).
 - `sync_runs`: kind, start and end, outcome, counts, per-record errors.
-- `job_runs`: job, local date, state (`sending`, `sent`, `failed`, `unknown`, `skipped`), time, detail (an error code). Unique on job and local date.
+- `job_runs`: job, local date, state (`sending`, `sent`, `failed`, `unknown`, `skipped`), time, detail (an error code), and for a sent morning message the time its "new since" ran to (`covers_until`: the start of its read minus the one-minute safety margin), where the next message starts counting. Unique on job and local date.
 - `telegram_updates`: `update_id` (primary key), outcome (`item_created`, `ignored`, `refused`), time.
 - `visits`: one row per owner visit, for "new since your last visit".
 - `settings`: closed-item days in the morning view (default 7), date and time format, language. The morning time and days are fixed (plan review P19): they must stay after the reconciler's fixed T3 schedule.
