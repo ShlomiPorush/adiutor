@@ -1,0 +1,106 @@
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { ApiError, fetchTransport, onUnauthorized, query, setTransport, type TransportRequest } from "./client.ts"
+import { api } from "./endpoints.ts"
+
+function answer(status: number, body: unknown) {
+  return vi.fn(async (_request: TransportRequest) => ({ status, body }))
+}
+
+afterEach(() => {
+  onUnauthorized(null)
+  vi.unstubAllGlobals()
+})
+
+describe("fetch transport", () => {
+  it("sends the CSRF header and the cookie on a change, and no CSRF header on a read", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: { ok: true } }), { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    await fetchTransport({ method: "POST", path: "/capture", body: { text: "x" } })
+    await fetchTransport({ method: "GET", path: "/morning" })
+    const [postUrl, post] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    const [, get] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
+    expect(postUrl).toBe("/api/v1/capture")
+    expect(post.credentials).toBe("same-origin")
+    expect((post.headers as Record<string, string>)["X-Mikud-Request"]).toBe("1")
+    expect((post.headers as Record<string, string>)["Content-Type"]).toBe("application/json")
+    expect(post.body).toBe(JSON.stringify({ text: "x" }))
+    expect((get.headers as Record<string, string>)["X-Mikud-Request"]).toBeUndefined()
+  })
+
+  it("reads an empty 204 answer as no body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 204 })),
+    )
+    expect(await fetchTransport({ method: "DELETE", path: "/items/x" })).toEqual({ status: 204, body: null })
+  })
+})
+
+describe("request and endpoints", () => {
+  it("unwraps {data} and paged {data, nextCursor}", async () => {
+    setTransport(answer(200, { data: { actor: { kind: "owner", label: "owner" }, via: "cookie", deviceId: "d1" } }))
+    expect((await api.session()).deviceId).toBe("d1")
+    const paged = answer(200, { data: [{ id: 1 }], nextCursor: "abc" })
+    setTransport(paged)
+    expect(await api.audit("first")).toEqual({ entries: [{ id: 1 }], nextCursor: "abc" })
+    expect(paged.mock.calls[0]?.[0]).toMatchObject({ method: "GET", path: "/audit?cursor=first&limit=50" })
+  })
+
+  it("sends the item version with a change and the decision of a proposal", async () => {
+    const transport = answer(200, { data: {} })
+    setTransport(transport)
+    await api.updateItem("i1", 4, { status: "done" })
+    await api.decideProposal("p1", "accept")
+    expect(transport.mock.calls[0]?.[0]).toEqual({
+      method: "PATCH",
+      path: "/items/i1",
+      body: { version: 4, status: "done" },
+    })
+    expect(transport.mock.calls[1]?.[0]).toEqual({
+      method: "POST",
+      path: "/stage-proposals/p1/decision",
+      body: { decision: "accept" },
+    })
+  })
+
+  it("turns {error: {code, message}} into an ApiError with the server's code and sentence", async () => {
+    setTransport(answer(409, { error: { code: "version_conflict", message: "The item changed.", currentVersion: 5 } }))
+    const error = await api.updateItem("i1", 4, { title: "x" }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).toMatchObject({ status: 409, code: "version_conflict", serverMessage: "The item changed." })
+  })
+
+  it("names an answer without a known code by its HTTP status", async () => {
+    setTransport(answer(502, "<html>bad gateway</html>"))
+    await expect(api.morning()).rejects.toMatchObject({ status: 502, code: "unknown", serverMessage: null })
+    setTransport(answer(404, null))
+    await expect(api.morning()).rejects.toMatchObject({ code: "not_found" })
+  })
+
+  it("reports a 401 once to the app, which shows pairing", async () => {
+    const handler = vi.fn()
+    onUnauthorized(handler)
+    setTransport(answer(401, { error: { code: "unauthorized", message: "No device." } }))
+    await expect(api.morning()).rejects.toMatchObject({ code: "unauthorized" })
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it("calls a request that got no answer a network failure", async () => {
+    setTransport(async () => {
+      throw new TypeError("Failed to fetch")
+    })
+    await expect(api.inbox()).rejects.toMatchObject({ status: 0, code: "network" })
+  })
+
+  it("reads a missing Telegram status route (404) as a bot that is not configured", async () => {
+    setTransport(answer(404, { error: { code: "not_found", message: "Nothing is here." } }))
+    expect(await api.telegramStatus()).toEqual({ configured: false, lastMorning: null })
+    setTransport(answer(500, { error: { code: "internal_error", message: "Boom." } }))
+    await expect(api.telegramStatus()).rejects.toMatchObject({ code: "internal_error" })
+  })
+
+  it("builds a query string from defined values only", () => {
+    expect(query({ cursor: null, limit: 50, q: "", projectId: undefined })).toBe("?limit=50")
+    expect(query({})).toBe("")
+  })
+})
