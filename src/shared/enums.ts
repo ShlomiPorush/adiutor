@@ -1,0 +1,68 @@
+import { z } from "zod"
+
+// Codes stored in the database and sent over the API. They are English and never shown as-is:
+// user-visible labels for the labelled groups come from src/shared/locales/*.json.
+
+// --- Labelled codes (every code has a label in each locale file) ---
+
+export const STAGES = ["idea", "poc", "development", "production", "redesign", "frozen"] as const
+export const ITEM_STATUSES = ["future", "todo", "in_progress", "waiting_on_you", "done", "not_relevant"] as const
+export const ITEM_TYPES = ["bug", "decision", "security", "task", "idea"] as const
+export const SEVERITIES = ["critical", "high", "medium", "low"] as const
+
+/** Statuses that close an item. A closed item has closed_at set and is archived by query. */
+export const CLOSED_STATUSES = ["done", "not_relevant"] as const satisfies readonly ItemStatus[]
+
+// --- Internal codes ---
+
+/** Who made a change. Services enforce the rights of each. */
+export const ACTOR_KINDS = ["owner", "agent", "bot", "sync", "system"] as const
+/** Where a change came in. */
+export const AUDIT_SOURCES = ["ui", "api", "mcp", "telegram", "sync"] as const
+export const PROPOSAL_STATES = ["open", "accepted", "rejected"] as const
+export const SECURITY_FAMILIES = ["dependabot", "code_scanning", "secret_scanning", "overview"] as const
+export const SECURITY_COVERAGES = ["enabled", "not_enabled", "no_access", "error", "unknown"] as const
+/** What a suppression keeps the sync from recreating. */
+export const SUPPRESSION_KINDS = ["thread", "project"] as const
+export const SYNC_OUTCOMES = ["succeeded", "partial", "failed"] as const
+export const JOB_STATES = ["sending", "sent", "failed", "unknown"] as const
+export const TELEGRAM_OUTCOMES = ["item_created", "ignored", "refused"] as const
+export const LANGUAGES = ["he", "en"] as const
+
+export type Stage = (typeof STAGES)[number]
+export type ItemStatus = (typeof ITEM_STATUSES)[number]
+export type ItemType = (typeof ITEM_TYPES)[number]
+export type Severity = (typeof SEVERITIES)[number]
+export type ActorKind = (typeof ACTOR_KINDS)[number]
+export type AuditSource = (typeof AUDIT_SOURCES)[number]
+export type ProposalState = (typeof PROPOSAL_STATES)[number]
+export type SecurityFamily = (typeof SECURITY_FAMILIES)[number]
+export type SecurityCoverage = (typeof SECURITY_COVERAGES)[number]
+export type SuppressionKind = (typeof SUPPRESSION_KINDS)[number]
+export type SyncOutcome = (typeof SYNC_OUTCOMES)[number]
+export type JobState = (typeof JOB_STATES)[number]
+export type TelegramOutcome = (typeof TELEGRAM_OUTCOMES)[number]
+export type Language = (typeof LANGUAGES)[number]
+
+export const stageSchema = z.enum(STAGES)
+export const itemStatusSchema = z.enum(ITEM_STATUSES)
+export const itemTypeSchema = z.enum(ITEM_TYPES)
+export const severitySchema = z.enum(SEVERITIES)
+export const actorKindSchema = z.enum(ACTOR_KINDS)
+export const auditSourceSchema = z.enum(AUDIT_SOURCES)
+export const proposalStateSchema = z.enum(PROPOSAL_STATES)
+export const securityFamilySchema = z.enum(SECURITY_FAMILIES)
+export const securityCoverageSchema = z.enum(SECURITY_COVERAGES)
+export const suppressionKindSchema = z.enum(SUPPRESSION_KINDS)
+export const syncOutcomeSchema = z.enum(SYNC_OUTCOMES)
+export const jobStateSchema = z.enum(JOB_STATES)
+export const telegramOutcomeSchema = z.enum(TELEGRAM_OUTCOMES)
+export const languageSchema = z.enum(LANGUAGES)
+
+/** The labelled groups, keyed by their section name in the locale files. */
+export const LABELLED_CODES = {
+  stage: STAGES,
+  itemStatus: ITEM_STATUSES,
+  itemType: ITEM_TYPES,
+  severity: SEVERITIES,
+} as const

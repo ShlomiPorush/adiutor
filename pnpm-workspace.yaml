@@ -1,0 +1,5 @@
+# pnpm settings only. Mikud is one package; pnpm reads its settings from this file, not from package.json.
+
+# Packages allowed to run install scripts. esbuild verifies its platform binary.
+allowBuilds:
+  esbuild: true
