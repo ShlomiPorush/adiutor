@@ -229,6 +229,34 @@ describe("browser pairing", () => {
     expect(view.json.data.since).toBe(visit.json.data.at)
     expect((await call("/visits", { method: "POST", token: OWNER })).status).toBe(403)
   })
+
+  it("keeps a page's boundary on refresh and records a visit no later than the read that was shown", async () => {
+    const { cookie } = await pair()
+    const first = await call("/morning", { cookie })
+    const { since, now: asOf } = first.json.data
+    expect(new Date(asOf).getTime()).toBeLessThanOrEqual(t.ctx.clock().getTime())
+    // Arrives after the read was shown: never marked seen by the visit that follows it.
+    t.clock.travel(60_000)
+    await call("/items", { method: "POST", token: AGENT, body: { type: "task", title: "Arrived later" } })
+    const visit = await call("/visits", { method: "POST", cookie, headers: browser, body: { at: asOf } })
+    expect(visit.status).toBe(201)
+    expect(visit.json.data.at).toBe(asOf)
+
+    const titles = (view: { json: { data: { new: { item: { title: string } }[] } } }) =>
+      view.json.data.new.map((n) => n.item.title)
+    const refresh = await call(`/morning?since=${encodeURIComponent(since)}`, { cookie })
+    expect(refresh.json.data.since).toBe(since)
+    expect(titles(refresh)).toContain("Arrived later")
+    const next = await call("/morning", { cookie })
+    expect(next.json.data.since).toBe(asOf)
+    expect(titles(next)).toContain("Arrived later")
+
+    // A time after the server's clock is recorded as now; a bad one is refused.
+    const future = new Date(t.ctx.clock().getTime() + 86_400_000).toISOString()
+    const late = await call("/visits", { method: "POST", cookie, headers: browser, body: { at: future } })
+    expect(new Date(late.json.data.at).getTime()).toBeLessThanOrEqual(t.ctx.clock().getTime())
+    expect((await call("/morning?since=yesterday", { cookie })).status).toBe(400)
+  })
 })
 
 describe("routes and error codes", () => {

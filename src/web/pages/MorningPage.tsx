@@ -4,7 +4,7 @@
 // is stale. One column, so the reading order on screen is the order in the page.
 
 import { ChevronRight } from "lucide-react"
-import { type CSSProperties, useEffect, useRef } from "react"
+import { type CSSProperties, useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router"
 import { api, qk } from "../api/endpoints.ts"
 import type { AgentUpdateGroup, Morning, MorningProject, SecurityLine } from "../api/types.ts"
@@ -19,22 +19,32 @@ import { Time } from "../ui/Time.tsx"
 import { Progress, StageTag, StatusTag } from "../ui/tags.tsx"
 import { ItemRow, Panel, rowKeys, selecting } from "./parts.tsx"
 
-/** One visit per opening of the morning view, not per refresh (and not twice in development). */
-let lastVisitPost = 0
-
 export function MorningPage() {
   const { t } = useI18n()
   usePageMeta(t("morning.title"))
-  const morning = usePageQuery({ queryKey: qk.morning, queryFn: api.morning, every: EVERY.live })
+  // "New since your last visit" stays as the first read showed it for as long as the page is open:
+  // every refresh passes that read's boundary back, so nothing disappears unseen.
+  const [since, setSince] = useState<string | null>(null)
+  const morning = usePageQuery({
+    queryKey: since ? qk.morningSince(since) : qk.morning,
+    queryFn: () => (since ? api.morningSince(since) : api.morning()),
+    every: EVERY.live,
+    keepPrevious: true,
+  })
   const page = useRef<HTMLDivElement>(null)
+  const visited = useRef(false)
+  const shown = morning.data
 
   useEffect(() => {
-    if (Date.now() - lastVisitPost < 60_000) return
-    lastVisitPost = Date.now()
-    api.visit().catch(() => {
+    if (!shown) return
+    if (since === null) setSince(shown.since)
+    if (visited.current) return
+    visited.current = true
+    // After a read was shown, at that read's server time: nothing newer than what was shown is marked seen.
+    api.visit(shown.now).catch(() => {
       // A visit that was not recorded only means the next "new since" list is longer.
     })
-  }, [])
+  }, [shown, since])
 
   const scrollTo = (id: string) => {
     const scroller = page.current

@@ -77,8 +77,8 @@ Fields are always present; `null` when unset.
 |---|---|---|---|
 | `GET /session` | any | | `{actor: {kind, label}, via: "token"\|"cookie", deviceId}` |
 | `DELETE /session` | browser | | `204`; revokes this device and clears the cookie. `forbidden` with a token |
-| `GET /morning` | any | | Morning (below). `since` is this device's previous visit |
-| `POST /visits` | browser | | `201 {at, previous}`. Call after the morning view was shown. `forbidden` with a token |
+| `GET /morning` | any | `since?` (time) | Morning (below). `since` is this device's previous visit unless the query gives one |
+| `POST /visits` | browser | `{at?}` (time) | `201 {at, previous}`. Call after the morning view was shown, with that read's `now`; recorded at `at`, or now when `at` is missing or later than the server's clock. `forbidden` with a token |
 
 **Morning**:
 
@@ -101,7 +101,8 @@ Fields are always present; `null` when unset.
 }
 ```
 
-- `since`: the device's latest recorded visit; 24 hours before now on a device's first visit, and always for token callers. Each device keeps its own.
+- `now`: the server's time when this read started. A visit recorded with it marks nothing newer than what this read showed as seen.
+- `since`: the `since` query when given; else the device's latest recorded visit; 24 hours before now on a device's first visit, and always for token callers. Each device keeps its own. The UI keeps the `since` of the page's first read and passes it on every refresh, so "new since your last visit" stays stable while the page is open.
 - Items shown anywhere in the view: open items, and closed ones closed within `closedItemDays`. Older closed items are only in the archive.
 - `new`: created after `since` (`change: "created"`, except items imported by the first sync run) or changed after `since` and after their creation (`"updated"`). Newest first.
 - `security`: one line per project with something to say. `critical` counts in every project, `high` only at stage `production` (0 elsewhere). Counts come from enabled `dependabot`, `code_scanning` and `secret_scanning` sources plus open `security` items of the project. `asOf` is the oldest as-of time of the project's enabled sources (null when it has none); `stale` is true when that time is unknown or older than 26 hours.

@@ -9,6 +9,7 @@ import {
   createProjectBody,
   decideProposalBody,
   linkThreadBody,
+  morningQuery,
   pairBody,
   proposeStageBody,
   securitySnapshotBody,
@@ -17,6 +18,7 @@ import {
   t3SnapshotBody,
   updateItemBody,
   updateProjectBody,
+  visitBody,
 } from "../../shared/api.ts"
 import { itemStatusSchema, itemTypeSchema } from "../../shared/enums.ts"
 import { AppError, forbidden, invalid, notFound } from "../errors.ts"
@@ -181,12 +183,17 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
     deleteCookie(c, DEVICE_COOKIE, { path: "/" })
     return c.body(null, 204)
   })
-  api.get("/morning", async (c) => c.json({ data: await morning(ctx, { deviceId: c.get("auth").deviceId }) }))
+  api.get("/morning", async (c) => {
+    const { since } = query(c, morningQuery)
+    return c.json({ data: await morning(ctx, { deviceId: c.get("auth").deviceId, since }) })
+  })
   api.post("/visits", async (c) => {
     const deviceId = c.get("auth").deviceId
     if (!deviceId) throw forbidden("Visits are recorded for paired browsers only.")
+    // An empty body records the visit now; the UI sends the time of the read it showed.
+    const { at } = (await c.req.text()).trim() ? await body(c, visitBody) : {}
     const previous = await previousVisit(ctx, deviceId)
-    return c.json({ data: { at: await recordVisit(ctx, deviceId), previous } }, 201)
+    return c.json({ data: { at: await recordVisit(ctx, deviceId, at), previous } }, 201)
   })
 
   // --- Projects ---

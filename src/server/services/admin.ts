@@ -180,9 +180,13 @@ export async function lastVisitAnyDevice(ctx: Ctx): Promise<Date | null> {
   return row?.at ?? null
 }
 
-/** Records that the device's owner saw the board now. Bookkeeping, not a change: no audit row. */
-export async function recordVisit(ctx: Ctx, deviceId: string): Promise<Date> {
-  const at = ctx.clock()
+/**
+ * Records that the device's owner saw the board, at the time of the read that was shown (never later than
+ * now; now when it is not given). Bookkeeping, not a change: no audit row.
+ */
+export async function recordVisit(ctx: Ctx, deviceId: string, shownAt?: Date): Promise<Date> {
+  const now = ctx.clock()
+  const at = shownAt && shownAt.getTime() < now.getTime() ? shownAt : now
   await ctx.db.insert(visits).values({ deviceId, at })
   return at
 }

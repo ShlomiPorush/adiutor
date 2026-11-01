@@ -279,6 +279,8 @@ async function visibleItems(ctx: Ctx, closedItemDays: number): Promise<ItemRow[]
  * caller gives one (the morning message).
  */
 export async function morning(ctx: Ctx, options: { deviceId?: string | null; since?: Date } = {}) {
+  // The time of this read, taken before anything is read: a visit recorded with it marks nothing newer seen.
+  const now = ctx.clock()
   const settingsRow = await getSettings(ctx.db)
   const since = options.since ?? (await previousVisit(ctx, options.deviceId))
   const allProjects = await ctx.db.select().from(projects).orderBy(asc(projects.name))
@@ -340,7 +342,7 @@ export async function morning(ctx: Ctx, options: { deviceId?: string | null; sin
     }))
 
   return {
-    now: ctx.clock(),
+    now,
     since,
     waiting,
     new: fresh,

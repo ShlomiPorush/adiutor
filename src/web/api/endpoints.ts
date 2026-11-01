@@ -45,8 +45,10 @@ export const api = {
   pair: (token: string, label: string) => data<{ device: Device }>("POST", "/pair", { token, label }),
 
   morning: () => data<Morning>("GET", "/morning"),
-  /** Records that the morning view was shown; the next "new since" counts from now. */
-  visit: () => data<{ at: string; previous: string | null }>("POST", "/visits", {}),
+  /** The morning view with a fixed "new since" boundary: the morning page keeps its first read's. */
+  morningSince: (since: string) => data<Morning>("GET", `/morning?since=${encodeURIComponent(since)}`),
+  /** Records that the morning view was shown, at the time of the read shown (its `now`). */
+  visit: (at: string) => data<{ at: string; previous: string | null }>("POST", "/visits", { at }),
 
   projects: () => data<ProjectListEntry[]>("GET", "/projects"),
   project: (projectId: string) => data<ProjectDetail>("GET", `/projects/${id(projectId)}`),
@@ -101,6 +103,7 @@ export const api = {
 export const qk = {
   session: ["session"] as const,
   morning: ["morning"] as const,
+  morningSince: (since: string) => ["morning", since] as const,
   projects: ["projects"] as const,
   project: (projectId: string) => ["project", projectId] as const,
   item: (itemId: string) => ["item", itemId] as const,

@@ -78,6 +78,20 @@ test("the morning view shows what waits on the owner, and the bell counts it", a
   await expect(bell).toHaveAttribute("aria-label", new RegExp(`^${he.bell.title}`))
 })
 
+test("new since the last visit stays on the page when it refreshes", async () => {
+  const newTitle = `Fresh note ${run}`
+  await api("POST", "/items", { type: "task", title: newTitle })
+  const visited = page.waitForResponse((r) => r.url().endsWith("/api/v1/visits") && r.status() === 201)
+  await page.goto("/")
+  await expect(page.locator("#new")).toContainText(newTitle)
+  // The visit is recorded after the first read; a refresh after it must still show what was new then.
+  await visited
+  const refreshed = page.waitForResponse((r) => r.url().includes("/api/v1/morning?since=") && r.ok())
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")))
+  await refreshed
+  await expect(page.locator("#new")).toContainText(newTitle)
+})
+
 test("an item opens over the page, changes status at once, and Undo puts it back", async () => {
   await page.locator("#waiting .ui-item", { hasText: itemTitle }).click()
   await expect(page).toHaveURL(/[?&]item=/)
