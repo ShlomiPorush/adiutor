@@ -247,7 +247,11 @@ restore() {
   fi
   rm -f "$ENV_FILE" "$COMPOSE_FILE" "$STATE_FILE"
   rmdir "$STATE_DIR" 2>/dev/null || true
-  info "Removed${PR:+ pull request #$PR}: stack, database, image, tokens and worktree"
+  if [ -n "$PR" ]; then
+    info "Removed pull request #$PR: stack, database, image, tokens and worktree"
+  else
+    info "Nothing of a pull request stack is left"
+  fi
 }
 
 main() {

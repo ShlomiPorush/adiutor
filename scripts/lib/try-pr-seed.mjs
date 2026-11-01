@@ -97,7 +97,13 @@ const items = [
   { projectId: lantern, type: "decision", status: "waiting_on_you", title: "Metric or imperial units by default?" },
   { projectId: lantern, type: "task", status: "not_relevant", title: "Port the old calendar widget" },
   { projectId: ledger, type: "task", status: "todo", title: "Write the import format notes" },
-  { projectId: ledger, type: "bug", status: "waiting_on_you", title: "Totals differ after rounding", body: "Which rounding rule?" },
+  {
+    projectId: ledger,
+    type: "bug",
+    status: "waiting_on_you",
+    title: "Totals differ after rounding",
+    body: "Which rounding rule?",
+  },
   {
     projectId: ledger,
     type: "security",
