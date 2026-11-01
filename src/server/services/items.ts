@@ -110,18 +110,27 @@ export async function createItem(ctx: Ctx, by: By, input: CreateItemInput): Prom
   return inTx(ctx, (tx) => createItemTx(ctx, tx, by, input))
 }
 
+export type CaptureInput = { text: string; projectId?: string | null }
+
 /** Quick capture: an idea in the inbox (or in the given project), status future. */
-export async function captureItem(
-  ctx: Ctx,
-  by: By,
-  input: { text: string; projectId?: string | null },
-): Promise<ItemRow> {
+export async function captureItem(ctx: Ctx, by: By, input: CaptureInput): Promise<ItemRow> {
+  return inTx(ctx, (tx) => captureItemTx(ctx, tx, by, input))
+}
+
+/** Quick capture inside a transaction the caller holds (the Telegram bot records its update in it). */
+export async function captureItemTx(ctx: Ctx, tx: Tx, by: By, input: CaptureInput): Promise<ItemRow> {
   const text = input.text.trim()
   if (!text) throw invalid("The text is empty.")
   const firstLine = text.split(/\r?\n/, 1)[0] ?? text
   const title = cleanTitle(firstLine)
   const body = text === title ? "" : text
-  return createItem(ctx, by, { projectId: input.projectId ?? null, type: "idea", status: "future", title, body })
+  return createItemTx(ctx, tx, by, {
+    projectId: input.projectId ?? null,
+    type: "idea",
+    status: "future",
+    title,
+    body,
+  })
 }
 
 export type ItemPatch = {

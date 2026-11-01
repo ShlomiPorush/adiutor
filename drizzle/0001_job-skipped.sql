@@ -1,0 +1,2 @@
+ALTER TABLE "job_runs" DROP CONSTRAINT "job_runs_state_check";--> statement-breakpoint
+ALTER TABLE "job_runs" ADD CONSTRAINT "job_runs_state_check" CHECK ("state" in ('sending', 'sent', 'failed', 'unknown', 'skipped'));

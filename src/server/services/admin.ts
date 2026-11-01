@@ -169,6 +169,17 @@ export async function previousVisit(ctx: Ctx, deviceId: string | null | undefine
   return new Date(now.getTime() - FIRST_VISIT_WINDOW_MS)
 }
 
+/** The owner's latest visit on any device before now, or null when there is none. */
+export async function lastVisitAnyDevice(ctx: Ctx): Promise<Date | null> {
+  const [row] = await ctx.db
+    .select({ at: visits.at })
+    .from(visits)
+    .where(lt(visits.at, ctx.clock()))
+    .orderBy(desc(visits.at))
+    .limit(1)
+  return row?.at ?? null
+}
+
 /** Records that the device's owner saw the board now. Bookkeeping, not a change: no audit row. */
 export async function recordVisit(ctx: Ctx, deviceId: string): Promise<Date> {
   const at = ctx.clock()
