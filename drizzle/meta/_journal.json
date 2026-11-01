@@ -22,6 +22,20 @@
       "when": 1793556316078,
       "tag": "0002_morning-covers-until",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793562580106,
+      "tag": "0003_better-auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793566686546,
+      "tag": "0004_auth-epoch",
+      "breakpoints": true
     }
   ]
 }

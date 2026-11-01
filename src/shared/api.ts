@@ -1,5 +1,11 @@
 import { z } from "zod"
 import {
+  SESSION_IDLE_MINUTES_MAX,
+  SESSION_IDLE_MINUTES_MIN,
+  SESSION_MAX_DAYS_MAX,
+  SESSION_MAX_DAYS_MIN,
+} from "./auth.ts"
+import {
   itemStatusSchema,
   itemTypeSchema,
   languageSchema,
@@ -100,6 +106,9 @@ export const settingsBody = z.object({
   dateFormat: text(40).optional(),
   timeFormat: text(40).optional(),
   language: languageSchema.optional(),
+  sessionMaxDays: z.number().int().min(SESSION_MAX_DAYS_MIN).max(SESSION_MAX_DAYS_MAX).optional(),
+  sessionIdle: z.boolean().optional(),
+  sessionIdleMinutes: z.number().int().min(SESSION_IDLE_MINUTES_MIN).max(SESSION_IDLE_MINUTES_MAX).optional(),
 })
 
 /** A page keeps the boundary of its first read: later refreshes pass it back. */
@@ -107,11 +116,6 @@ export const morningQuery = z.object({ since: isoDate.optional() })
 
 /** The visit is recorded at the time of the read that was shown (its `now`), never later than the server's now. */
 export const visitBody = z.object({ at: isoDate.optional() })
-
-export const pairBody = z.object({
-  token: z.string().min(1).max(500),
-  label: text(100).optional(),
-})
 
 // --- Sync (pushed by the sync tool on the owner's PC) ---
 

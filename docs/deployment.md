@@ -43,11 +43,12 @@ These notes are for the owner, who deploys production himself. Agents never depl
 
 1. Copy `docker-compose.yml` and `.env.example` from the release's tag into a deploy directory on the server, and rename the copy to `.env`.
 2. Restrict it: `chmod 600 .env`.
-3. Generate the two tokens. Run the command twice; the server refuses to start when they are equal or shorter than 32 characters:
+3. Generate the two tokens and the auth secret. Run the command three times; the server refuses to start when a value is shorter than 32 characters (32 bytes for the secret) or two of them are equal:
 
    ```bash
    openssl rand -hex 32   # MIKUD_OWNER_TOKEN
    openssl rand -hex 32   # MIKUD_AGENT_TOKEN
+   openssl rand -hex 32   # MIKUD_AUTH_SECRET
    ```
 
 4. Fill in every value; `.env.example` explains each one:
@@ -55,7 +56,8 @@ These notes are for the owner, who deploys production himself. Agents never depl
    - `DOMAIN`: the host name you open, for example `mikud.example.com`.
    - `DATABASE_URL`: from step 1.
    - `MIKUD_PUBLIC_URL`: `https://` and `DOMAIN`, exactly what the browser's address bar shows. Browser changes whose `Origin` differs are refused, and Telegram links use it.
-   - `MIKUD_OWNER_TOKEN`, `MIKUD_AGENT_TOKEN`: from step 3. The owner token is only for you. Agents get only the agent token.
+   - `MIKUD_OWNER_TOKEN`, `MIKUD_AGENT_TOKEN`: from step 3. The owner token is only for you, for scripts and the API; a browser never uses it. Agents get only the agent token.
+   - `MIKUD_AUTH_SECRET`: from step 3. It signs the browsers' sign-in cookies and encrypts the TOTP secret. Keep it with the backup of `.env`: with another value every browser is signed out and the stored TOTP secret cannot be read, so you would need the recovery command (step 8).
    - `MIKUD_PRIVATE_DOMAINS`: optional; your private network's domains, so agents cannot write host names under them into Mikud.
    - `MIKUD_TELEGRAM_BOT_TOKEN` and `MIKUD_TELEGRAM_CHAT_ID`: optional, both or neither (the server refuses to start with one). Without them the bot and the morning message are off. Leave `TELEGRAM_API_URL` empty.
 
@@ -73,10 +75,10 @@ Mikud must be reachable only over your NetBird network. The shipped `docker-comp
 1. Put a NetBird private service in front of the proxy: a NetBird network resource (or route) for the proxy host, with an access policy that allows only your own peers.
 2. Make `DOMAIN` resolve only inside NetBird, for example with a NetBird DNS zone or a private DNS record that points at the proxy's NetBird address.
 3. Bind the proxy's entry point for Mikud to the NetBird interface, or firewall it so that only the NetBird interface reaches it. Never publish the `mikud` container's port on a public interface.
-4. Serve HTTPS with a certificate the browsers trust; for a private name, a DNS challenge or your own CA works. The pairing cookie is `Secure`, so plain HTTP does not work in production.
+4. Serve HTTPS with a certificate the browsers trust; for a private name, a DNS challenge or your own CA works. With an `https://` public URL the sign-in cookies are `Secure`, so plain HTTP does not work in production.
 5. With a reverse proxy other than Traefik: remove the `labels:`, attach `mikud` to the proxy's Docker network and proxy `https://mikud.example.com` to `http://mikud:8080`. Pass the `Origin` header through unchanged.
 
-Behind a proxy, every client has the proxy's address, so the limit of 10 failed token attempts a minute applies to all your devices together.
+Mikud counts attempts by the address of the connection it receives and never trusts a forwarding header, which a client could forge. Behind a proxy every client has the proxy's address, so the limits apply to all your devices together: 10 failed token attempts a minute, and 5 sign-ins, 5 TOTP codes and 5 password changes per 5 minutes. For one owner that is acceptable and fails safe; if you lock yourself out by mistyping, wait 5 minutes.
 
 ## 4. Start and check
 
@@ -100,14 +102,17 @@ Behind a proxy, every client has the proxy's address, so the limit of 10 failed 
 
 `/healthz` answers 503 with `"database":"down"` when PostgreSQL does not answer; Docker then marks the container unhealthy.
 
-## 5. Pair your browsers
+## 5. Create your account and sign in
 
-Each browser is paired once; there is no login.
+The browser signs in with a username, a password and a code from an authenticator app (TOTP). There is one account, yours.
 
-1. Open `https://mikud.example.com` on the desktop. The board shows the pairing page.
-2. Paste the owner token and give the device a name, for example `Desktop`. The token is sent once and never stored in the browser; the browser keeps a device cookie.
-3. On the phone, with NetBird connected, open the same URL and pair it as `Phone`.
-4. Settings, Devices lists every paired device. End one there when you lose it.
+1. Open `https://mikud.example.com` on the desktop. On a new database it shows the setup: choose a username (3 to 30 letters, digits, dots or underscores) and a password of at least 12 characters.
+2. Set up two-factor authentication right away; it is required. Scan the QR code with an authenticator app such as 1Password, Aegis or Google Authenticator, or type the key shown under it, then enter the code the app shows. Mikud has no backup codes: keep the TOTP key in your password manager, and use the recovery command (step 8) when you lose it.
+3. On the phone, with NetBird connected, open the same URL and sign in with the username, the password and a code.
+4. A browser stays signed in for 30 days after it signs in, then asks again. Settings, General changes that length (1 to 90 days) and can also sign a browser out after a time without activity (off by default). Settings, Account lists the signed-in browsers, changes the password, signs this browser out, signs the others out, or signs out everywhere.
+5. Telegram links open the item after you sign in, when the browser is not signed in.
+
+**Upgrading from a version with pairing.** The first start of a version with sign-in shows the setup once; paired browsers are signed out (their device cookie no longer counts). Your data, and "new since your last visit" history, stay. Each browser starts a new "last visit" once.
 
 ## 6. Connect the agents and the reconciler
 
@@ -123,6 +128,7 @@ The dry run runs on the development stack on your PC with real data. Move its da
 ```text
 MIKUD_OWNER_TOKEN=<openssl rand -hex 32>
 MIKUD_AGENT_TOKEN=<openssl rand -hex 32>
+MIKUD_AUTH_SECRET=<openssl rand -hex 32>
 MIKUD_TELEGRAM_BOT_TOKEN=<from BotFather>
 MIKUD_TELEGRAM_CHAT_ID=<your chat id>
 ```
@@ -158,27 +164,28 @@ Restrict it (`chmod 600 .env.dev`). A `docker-compose-dev.yml` copied before thi
    The dump carries everything, including the applied migrations, `job_runs` (so today's morning message is not sent twice) and `telegram_updates` (so no Telegram update is handled twice).
 
 6. Start production and check it (step 4).
-7. End every device carried over from the dry run (step 8, "After any restore"), then pair your browsers again (step 5). Device cookies belong to a host, so the browsers paired on the PC do not work on the production host anyway.
+7. Sign in with your dry-run account and sign out everywhere (step 8, "After any restore"). Sign-in cookies belong to a host, so the browsers signed in on the PC are not signed in on the production host anyway. When production's `MIKUD_AUTH_SECRET` differs from the dry run's, the stored TOTP secret cannot be read: run the recovery command (step 8) and set up TOTP again.
 8. Point the reconciler's env file at production: `MIKUD_URL=https://mikud.example.com` and the production agent token. Resume its scheduled task and check its first run.
 9. Point the agents' MCP configuration at production (step 6).
 10. Keep the local stack off: `scripts/local.sh down`. Remove the bot settings from `.env.dev` (or delete the file) before you ever start it again.
 11. Delete the dump: `rm -r ~/mikud-move`.
 
-## 8. After any restore
+## 8. Recovery and after any restore
 
-A restored database can hold devices that you ended after the backup was taken. After every restore, whether a dry-run move or a backup:
+**Locked out** (password or authenticator app lost): on the server, in the deploy directory, run
 
-1. End all devices: Settings, Devices, "End all devices". Before a browser is paired, use the API with the owner token:
+```bash
+docker compose exec mikud node dist/server/cli.js reset-password
+```
 
-   ```bash
-   read -rs OWNER_TOKEN
-   curl -fsS -X POST -H "Authorization: Bearer $OWNER_TOKEN" https://mikud.example.com/api/v1/devices/end-all
-   unset OWNER_TOKEN
-   ```
+It prints the username and a new random password once, removes two-factor authentication, signs out every browser and ends any sign-in in progress, and records the reset in the activity log (actor "system", source "server command"). Sign in with that password, set up TOTP again (the setup shows by itself), then change the password in Settings, Account. Only someone with shell access to the server can run it; Mikud has no other way back in.
 
-2. If the owner token may have leaked (for example, the backup or `.env` was exposed), replace it: generate a new one, set `MIKUD_OWNER_TOKEN` in `.env`, run `docker compose up -d`, and end all devices again, because a new token does not end existing devices.
-3. If the agent token may have leaked, replace `MIKUD_AGENT_TOKEN` the same way and update it in the agents' environment and the reconciler's env file.
-4. Pair your browsers again (step 5).
+**After any restore**, whether a dry-run move or a backup: a restored database can hold sign-ins that you ended after the backup was taken, and their browsers' cookies would count again. So:
+
+1. Sign in and choose Settings, Account, "Sign out everywhere", then sign in again. When you cannot sign in, the recovery command above also signs out every browser.
+2. If `.env` or the backup may have leaked, replace `MIKUD_AUTH_SECRET`: every browser is signed out at once, and the stored TOTP secret can no longer be read, so run the recovery command and set up TOTP again.
+3. If the owner token may have leaked, generate a new one, set `MIKUD_OWNER_TOKEN` in `.env` and run `docker compose up -d`.
+4. If the agent token may have leaked, replace `MIKUD_AGENT_TOKEN` the same way and update it in the agents' environment and the reconciler's env file.
 
 ## 9. Upgrade
 
@@ -195,4 +202,4 @@ A restored database can hold devices that you ended after the backup was taken. 
 
 5. Check `/healthz` (step 4) and open the board.
 
-To go back to an earlier version, restore the backup from step 2, set the earlier `VERSION`, start it, and follow "After any restore".
+To go back to an earlier version, restore the backup from step 2, set the earlier `VERSION`, start it, and follow "Recovery and after any restore" (step 8).

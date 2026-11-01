@@ -15,6 +15,14 @@ import {
   uuid,
 } from "drizzle-orm/pg-core"
 import {
+  SESSION_IDLE_MINUTES_DEFAULT,
+  SESSION_IDLE_MINUTES_MAX,
+  SESSION_IDLE_MINUTES_MIN,
+  SESSION_MAX_DAYS_DEFAULT,
+  SESSION_MAX_DAYS_MAX,
+  SESSION_MAX_DAYS_MIN,
+} from "../../shared/auth.ts"
+import {
   ACTOR_KINDS,
   AUDIT_SOURCES,
   CLOSED_STATUSES,
@@ -278,10 +286,11 @@ export const telegramUpdates = pgTable(
   () => [check("telegram_updates_outcome_check", oneOf("outcome", TELEGRAM_OUTCOMES))],
 )
 
-// Paired browser sessions. Only the hash of the device secret is stored.
+// A browser's identity for "new since your last visit", named by the mikud_browser cookie. Never a credential:
+// signing in is Better Auth's (auth_session). Rows from before sign-in existed were paired browsers; their
+// visits stay with them, and revoked_at is set only on those that were ended then.
 export const devices = pgTable("devices", {
   id: uuid("id").primaryKey().defaultRandom(),
-  secretHash: text("secret_hash").notNull().unique(),
   label: text("label").notNull(),
   createdAt: createdAt(),
   lastSeenAt: at("last_seen_at"),
@@ -308,12 +317,25 @@ export const settings = pgTable(
     dateFormat: text("date_format").notNull().default("dd/MM/yyyy"),
     timeFormat: text("time_format").notNull().default("HH:mm"),
     language: text("language", { enum: LANGUAGES }).notNull().default("he"),
+    /** A browser session ends this many days after sign-in. */
+    sessionMaxDays: integer("session_max_days").notNull().default(SESSION_MAX_DAYS_DEFAULT),
+    /** When on, a session also ends after sessionIdleMinutes without real input. */
+    sessionIdle: boolean("session_idle").notNull().default(false),
+    sessionIdleMinutes: integer("session_idle_minutes").notNull().default(SESSION_IDLE_MINUTES_DEFAULT),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
     check("settings_single_row_check", sql`${t.id} = 1`),
     check("settings_closed_item_days_check", sql`${t.closedItemDays} between 1 and 365`),
     check("settings_language_check", oneOf("language", LANGUAGES)),
+    check(
+      "settings_session_max_days_check",
+      sql.raw(`"session_max_days" between ${SESSION_MAX_DAYS_MIN} and ${SESSION_MAX_DAYS_MAX}`),
+    ),
+    check(
+      "settings_session_idle_minutes_check",
+      sql.raw(`"session_idle_minutes" between ${SESSION_IDLE_MINUTES_MIN} and ${SESSION_IDLE_MINUTES_MAX}`),
+    ),
   ],
 )
 
@@ -337,4 +359,102 @@ export const audit = pgTable(
     index("audit_at_idx").on(t.at),
     index("audit_entity_idx").on(t.entityType, t.entityId),
   ],
+)
+
+// --- Better Auth (property names are Better Auth's field names) ---
+// One user, the owner. Better Auth writes these tables itself on sign-in, enrolment and sign-out; Mikud's
+// services write them for setup, the password change, ending sessions and the recovery CLI.
+
+export const authUser = pgTable("auth_user", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  image: text("image"),
+  username: text("username").unique(),
+  displayUsername: text("display_username"),
+  twoFactorEnabled: boolean("two_factor_enabled").default(false),
+  /**
+   * Incremented by every credentials reset (the recovery CLI). A session is valid only while its auth_epoch equals
+   * this, so a session issued by a request that started before a reset is dead whatever the timing.
+   */
+  authEpoch: integer("auth_epoch").notNull().default(0),
+  createdAt: createdAt(),
+  updatedAt: at("updated_at").notNull().defaultNow(),
+})
+
+export const authSession = pgTable(
+  "auth_session",
+  {
+    id: text("id").primaryKey(),
+    expiresAt: at("expires_at").notNull(),
+    token: text("token").notNull().unique(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+    // The session clocks (services/session-policy.ts). Better Auth neither knows nor returns these columns.
+    /** When the owner signed in: the maximum length counts from here. A replacement session keeps it. */
+    authenticatedAt: at("authenticated_at").notNull().defaultNow(),
+    /** The last real input the page reported: the idle limit counts from here. Polling never moves it. */
+    activeAt: at("active_at").notNull().defaultNow(),
+    /** The owner's auth_epoch when Mikud recorded this session. Null until then: such a session is not valid. */
+    authEpoch: integer("auth_epoch"),
+    /** When this session proved the TOTP code. Null until then: the API refuses it with totp_required. */
+    twoFactorAt: at("two_factor_at"),
+    /** Why the clocks ended it (max, idle); every request after that is answered session_ended. */
+    endedReason: text("ended_reason"),
+    endedAt: at("ended_at"),
+  },
+  (t) => [index("auth_session_user_idx").on(t.userId)],
+)
+
+export const authAccount = pgTable(
+  "auth_account",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: at("access_token_expires_at"),
+    refreshTokenExpiresAt: at("refresh_token_expires_at"),
+    scope: text("scope"),
+    password: text("password"),
+    createdAt: createdAt(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  (t) => [index("auth_account_user_idx").on(t.userId)],
+)
+
+export const authVerification = pgTable("auth_verification", {
+  id: text("id").primaryKey(),
+  identifier: text("identifier").notNull(),
+  value: text("value").notNull(),
+  expiresAt: at("expires_at").notNull(),
+  createdAt: createdAt(),
+  updatedAt: at("updated_at").notNull().defaultNow(),
+})
+
+export const authTwoFactor = pgTable(
+  "auth_two_factor",
+  {
+    id: text("id").primaryKey(),
+    secret: text("secret").notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    verified: boolean("verified").default(true),
+    failedVerificationCount: integer("failed_verification_count").default(0),
+    lockedUntil: at("locked_until"),
+  },
+  (t) => [index("auth_two_factor_secret_idx").on(t.secret), index("auth_two_factor_user_idx").on(t.userId)],
 )

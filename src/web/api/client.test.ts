@@ -38,8 +38,12 @@ describe("fetch transport", () => {
 
 describe("request and endpoints", () => {
   it("unwraps {data} and paged {data, nextCursor}", async () => {
-    setTransport(answer(200, { data: { actor: { kind: "owner", label: "owner" }, via: "cookie", deviceId: "d1" } }))
-    expect((await api.session()).deviceId).toBe("d1")
+    setTransport(
+      answer(200, {
+        data: { actor: { kind: "owner", label: "owner" }, via: "session", browserId: "b1", clocks: null },
+      }),
+    )
+    expect((await api.session()).browserId).toBe("b1")
     const paged = answer(200, { data: [{ id: 1 }], nextCursor: "abc" })
     setTransport(paged)
     expect(await api.audit("first")).toEqual({ entries: [{ id: 1 }], nextCursor: "abc" })
@@ -77,12 +81,25 @@ describe("request and endpoints", () => {
     await expect(api.morning()).rejects.toMatchObject({ code: "not_found" })
   })
 
-  it("reports a 401 once to the app, which shows pairing", async () => {
+  it("reports a 401 and totp_required to the app, with the reason a session ended", async () => {
     const handler = vi.fn()
     onUnauthorized(handler)
-    setTransport(answer(401, { error: { code: "unauthorized", message: "No device." } }))
+    setTransport(answer(401, { error: { code: "unauthorized", message: "Sign in." } }))
     await expect(api.morning()).rejects.toMatchObject({ code: "unauthorized" })
-    expect(handler).toHaveBeenCalledTimes(1)
+    setTransport(answer(401, { error: { code: "session_ended", message: "Ended.", reason: "idle" } }))
+    await expect(api.morning()).rejects.toMatchObject({ code: "session_ended", reason: "idle" })
+    setTransport(answer(403, { error: { code: "totp_required", message: "Code." } }))
+    await expect(api.morning()).rejects.toMatchObject({ code: "totp_required" })
+    setTransport(answer(403, { error: { code: "forbidden", message: "No." } }))
+    await expect(api.morning()).rejects.toMatchObject({ code: "forbidden" })
+    expect(handler.mock.calls.map(([e]) => e.code)).toEqual(["unauthorized", "session_ended", "totp_required"])
+  })
+
+  it("sends setup to /api/setup, not under /api/v1", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: { hasUser: false, session: "none" } })))
+    vi.stubGlobal("fetch", fetchMock)
+    await fetchTransport({ method: "GET", path: "/api/setup/status" })
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe("/api/setup/status")
   })
 
   it("calls a request that got no answer a network failure", async () => {

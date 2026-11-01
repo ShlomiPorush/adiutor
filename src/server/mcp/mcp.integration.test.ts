@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { createApp } from "../app.ts"
 import { RateLimiter } from "../http/auth.ts"
 import { createProject } from "../services/projects.ts"
+import { testCore } from "../testing/app.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 
 const OWNER = "owner-token-for-tests-only-000000000000"
@@ -19,11 +20,10 @@ beforeAll(async () => {
   t = await createTestDatabase("mcp")
   const app = createApp({
     checkDatabase: async () => true,
-    core: {
-      ctx: t.ctx,
+    core: testCore(t, {
       config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: new URL("http://127.0.0.1:8090"), version: "test" },
       limiter: new RateLimiter(),
-    },
+    }),
   })
   server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" })
   await new Promise<void>((resolve) => server.once("listening", () => resolve()))

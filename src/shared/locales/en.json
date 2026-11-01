@@ -103,7 +103,7 @@
     "refreshFailed": "Could not update. Showing what was loaded last.",
     "secretSuspected": "This text looks like it holds a secret (a token, key or server detail). Remove it and try again.",
     "code": {
-      "unauthorized": "This browser is not paired",
+      "unauthorized": "You are not signed in",
       "forbidden": "This is not allowed",
       "not_found": "It no longer exists",
       "validation_failed": "Some values are not valid",
@@ -115,7 +115,12 @@
       "rate_limited": "Too many attempts. Wait a minute",
       "telegram_failed": "Telegram did not take the message",
       "telegram_uncertain": "Telegram gave no clear answer; the message may have been sent",
-      "internal_error": "The server failed"
+      "internal_error": "The server failed",
+      "session_ended": "Your session ended",
+      "totp_required": "Two-factor authentication is not finished",
+      "already_set_up": "Mikud already has its owner",
+      "wrong_password": "The password is not right",
+      "busy": "Mikud is busy. Try again in a moment"
     }
   },
   "copy": {
@@ -506,7 +511,18 @@
       "device_pair": "paired a device",
       "device_revoke": "revoked a device",
       "device_revoke_all": "ended all devices",
-      "telegram_test_message": "sent a test morning message"
+      "telegram_test_message": "sent a test morning message",
+      "account_setup": "created the owner account",
+      "account_totp_enable": "set up two-factor authentication",
+      "account_password_change": "changed the password",
+      "account_password_reset": "reset the password on the server",
+      "session_sign_in": "signed in",
+      "session_sign_out": "signed out",
+      "session_end": "was signed out by the session clock",
+      "session_end_others": "signed out the other browsers",
+      "session_end_all": "signed out everywhere",
+      "session_sweep": "removed ended sessions",
+      "auth_repair": "repaired the two-factor setting"
     },
     "field": {
       "status": "Status",
@@ -531,19 +547,22 @@
       "goal": "A goal",
       "proposal": "A proposal",
       "comment": "A comment",
-      "thread": "A thread"
+      "thread": "A thread",
+      "session": "A session",
+      "account": "The account"
     },
     "source": {
       "ui": "Board",
       "api": "API",
       "mcp": "MCP",
       "telegram": "Telegram",
-      "sync": "Sync"
+      "sync": "Sync",
+      "cli": "Server command"
     }
   },
   "settings": {
     "title": "Settings",
-    "description": "Language, dates, the morning view, this browser's theme, paired devices and what the sync may not recreate.",
+    "description": "Language, dates, the morning view, your account and sessions, this browser's theme and what the sync may not recreate.",
     "loading": "Loading settings...",
     "failed": "Could not load settings",
     "general": "General",
@@ -605,26 +624,17 @@
     "botPolling": "Connected",
     "botNotPolling": "Not reaching Telegram",
     "lastUpdate": "Last message to the bot",
-    "noUpdateYet": "None yet"
-  },
-  "devices": {
-    "title": "Paired devices",
-    "loading": "Loading devices...",
-    "failed": "Could not load devices",
-    "empty": "No paired devices.",
-    "thisDevice": "This device",
-    "paired": "Paired",
-    "lastSeen": "last seen",
-    "revoke": "Revoke",
-    "revokeTitle": "Revoke {label}?",
-    "revokeThis": "This is the browser you are using. It must be paired again with the owner token.",
-    "revokeOther": "That browser must be paired again with the owner token.",
-    "revoked": "{label} revoked",
-    "revokeFailed": "Could not revoke {label}: {reason}",
-    "endAll": "End all devices",
-    "endAllTitle": "End all devices?",
-    "endAllMessage": "All {count} paired browsers, this one included, must be paired again with the owner token. Do this after restoring a backup or when a device is lost.",
-    "endAllFailed": "Could not end the devices: {reason}"
+    "noUpdateYet": "None yet",
+    "session": {
+      "maxDays": "Session length",
+      "maxDaysHint": "Days after signing in until a browser must sign in again. Default: 30.",
+      "idle": "Sign out when idle",
+      "idleHint": "Ends a session after a time without typing, clicking or scrolling on the page. Default: off.",
+      "idleOff": "Off",
+      "idleOn": "On",
+      "idleMinutes": "Minutes without activity",
+      "daysInvalid": "a whole number from {min} to {max}"
+    }
   },
   "suppressions": {
     "title": "Suppressions",
@@ -643,30 +653,6 @@
     "removeMessage": "The next sync may create its item or project again.",
     "removed": "Suppression of {label} removed",
     "removeFailed": "Could not remove the suppression of {label}: {reason}"
-  },
-  "pair": {
-    "title": "Pair this browser",
-    "description": "Paste the owner token once on each browser you use. Mikud then remembers this browser; the token itself is not kept here.",
-    "token": "Owner token",
-    "tokenHint": "MIKUD_OWNER_TOKEN from the server's .env file.",
-    "show": "Show token",
-    "hide": "Hide token",
-    "capsLock": "Caps Lock is on",
-    "label": "Device name",
-    "labelHint": "Shown in Settings, where you can revoke it.",
-    "defaultDesktop": "Desktop",
-    "defaultPhone": "Phone",
-    "submit": "Pair this browser",
-    "pairing": "Pairing...",
-    "tokenRequired": "Paste the owner token.",
-    "tooShort": "The owner token has at least {min} characters. Paste the whole token.",
-    "labelRequired": "Give this device a name.",
-    "rejected": "This token was not accepted. Paste the owner token from the server's .env file and try again.",
-    "forbidden": "Pair with the owner token, not the agent token.",
-    "rateLimited": "Too many attempts. Wait a minute and try again.",
-    "network": "Mikud did not answer. Check the connection and try again.",
-    "failed": "Could not pair: {reason}",
-    "footnote": "Revoke this browser at any time in Settings → Paired devices."
   },
   "notFound": {
     "title": "This page does not exist",
@@ -695,5 +681,108 @@
       "syncNever": "No T3 sync yet",
       "openBoard": "Open the board"
     }
+  },
+  "auth": {
+    "username": "Username",
+    "usernameHint": "{min} to {max} letters, digits, dots or underscores.",
+    "password": "Password",
+    "passwordHint": "At least {min} characters.",
+    "repeatPassword": "Repeat the password",
+    "show": "Show password",
+    "hide": "Hide password",
+    "capsLock": "Caps Lock is on",
+    "code": "Code",
+    "codeHint": "The 6 digits your authenticator app shows for Mikud. They change every 30 seconds.",
+    "recovery": "Locked out? On the server, run:",
+    "error": {
+      "network": "Mikud did not answer. Check the connection and try again.",
+      "wrongPassword": "The username or password is not right.",
+      "wrongCode": "That code is not right. Enter the code your app shows now.",
+      "codeExpired": "The sign-in took too long. Enter your password again.",
+      "rateLimited": "Too many attempts. Wait 5 minutes and try again.",
+      "busy": "Mikud is busy with another sign-in change. Try again in a moment.",
+      "server": "The server failed. Try again in a moment.",
+      "failed": "Could not sign in: {reason}",
+      "usernameInvalid": "Use {min} to {max} letters, digits, dots or underscores, without spaces.",
+      "passwordShort": "The password needs at least {min} characters.",
+      "passwordLong": "The password can have at most {max} characters.",
+      "mismatch": "The passwords do not match.",
+      "codeFormat": "Enter the 6 digits of the code."
+    },
+    "ended": {
+      "max": "Your session reached its maximum length. Sign in again.",
+      "idle": "You were signed out after a time without activity. Sign in again.",
+      "revoked": "You were signed out. Sign in again."
+    }
+  },
+  "login": {
+    "title": "Sign in",
+    "description": "Sign in to Mikud with your username and password.",
+    "submit": "Continue",
+    "signingIn": "Signing in...",
+    "codeTitle": "Enter your code",
+    "codeDescription": "Open your authenticator app and enter the 6-digit code for Mikud.",
+    "verify": "Sign in",
+    "verifying": "Checking...",
+    "back": "Back"
+  },
+  "setup": {
+    "title": "Welcome to Mikud",
+    "description": "Create the owner account. Two-factor authentication is set up next and is required.",
+    "steps": "Setup steps",
+    "stepAccount": "Account",
+    "stepTotp": "Two-factor",
+    "stepDone": "done",
+    "create": "Create account",
+    "creating": "Creating...",
+    "alreadySetUp": "Mikud already has its owner. Sign in instead.",
+    "signInFailed": "The account was created, but signing in failed. Sign in to continue.",
+    "totpTitle": "Set up two-factor authentication",
+    "totpDescription": "Required. Scan the QR code with an authenticator app such as 1Password, Aegis or Google Authenticator.",
+    "confirmPassword": "Your password",
+    "confirmPasswordHint": "Needed once to start the setup.",
+    "start": "Continue",
+    "starting": "Checking...",
+    "qrAlt": "QR code to add Mikud to an authenticator app",
+    "manual": "Can't scan it? Enter this key in the app:",
+    "enterCode": "Then enter the code the app shows:",
+    "finish": "Finish setup",
+    "finishing": "Checking...",
+    "loadFailed": "Could not load the setup"
+  },
+  "account": {
+    "title": "Account",
+    "signedInAs": "Signed in as",
+    "sessions": "Signed-in browsers",
+    "sessionsHint": "Each browser where you are signed in. It signs in again after the session length set above.",
+    "thisBrowser": "This browser",
+    "signedIn": "Signed in",
+    "lastActive": "last active",
+    "unknownBrowser": "Unknown browser",
+    "browserOn": "{browser} on {system}",
+    "loading": "Loading your account...",
+    "failed": "Could not load your account",
+    "signOut": "Sign out",
+    "signOutFailed": "Could not sign out: {reason}",
+    "endOthers": "Sign out other browsers",
+    "endOthersTitle": "Sign out the other browsers?",
+    "endOthersMessage": "Every browser except this one must sign in again.",
+    "endOthersDone": "The other browsers were signed out",
+    "endAll": "Sign out everywhere",
+    "endAllTitle": "Sign out everywhere?",
+    "endAllMessage": "Every browser, this one included, must sign in again. Do this after restoring a backup or when a device is lost.",
+    "endFailed": "Could not sign out the browsers: {reason}",
+    "password": "Change password",
+    "passwordHint": "Other browsers are signed out; this one stays signed in.",
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "repeatNewPassword": "Repeat the new password",
+    "change": "Change password",
+    "changing": "Changing...",
+    "changed": "Password changed. The other browsers were signed out.",
+    "wrongCurrent": "The current password is not right.",
+    "changeFailed": "Could not change the password: {reason}",
+    "recovery": "Recovery",
+    "recoveryHint": "Locked out of every browser? On the server, this prints a new password once and removes two-factor authentication, which you set up again after signing in:"
   }
 }

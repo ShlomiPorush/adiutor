@@ -3,11 +3,13 @@ import type { Server } from "node:http"
 import { join } from "node:path"
 import { serve } from "@hono/node-server"
 import { createApp } from "./app.ts"
+import { createAuth } from "./auth/auth.ts"
 import { ConfigError, loadConfig } from "./config.ts"
 import { createDatabase } from "./db/client.ts"
 import { MorningJob } from "./jobs/morning.ts"
-import { log } from "./log.ts"
+import { errorFacts, log } from "./log.ts"
 import { createSecretScanner } from "./services/secrets.ts"
+import { sweepSessions } from "./services/session-policy.ts"
 import { BotApi } from "./telegram/api.ts"
 import { TelegramBot } from "./telegram/bot.ts"
 import { TELEGRAM_OFF, type TelegramRuntime } from "./telegram/status.ts"
@@ -66,7 +68,19 @@ if (config.telegram) {
 // The image holds the built UI in dist/web next to the server bundle; a checkout without a UI build serves the API only.
 const webRoot = process.env.MIKUD_WEB_DIR ?? "dist/web"
 const web = existsSync(join(webRoot, "index.html")) ? { root: webRoot } : undefined
-const app = createApp({ checkDatabase: database.ping, core: { ctx, config, telegram }, web })
+const auth = createAuth({ db: database.db, secret: config.authSecret, publicUrl: config.publicUrl })
+const app = createApp({
+  checkDatabase: database.ping,
+  core: { ctx, config, auth, lockAuth: database.lockAuth, telegram },
+  web,
+})
+
+// Ended and expired browser sessions are removed every hour.
+const sweep = () =>
+  void sweepSessions(ctx).catch((error: unknown) => log.error("the session sweep failed", errorFacts(error)))
+sweep()
+const sweeper = setInterval(sweep, 3_600_000)
+sweeper.unref()
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   log.info(`Mikud ${config.version} listening`, { port })
 }) as Server
@@ -80,6 +94,7 @@ try {
 
 const shutdown = (signal: string) => {
   log.info("shutting down", { signal })
+  clearInterval(sweeper)
   void Promise.all([bot?.stop(), morningJob?.stop()]).finally(() => {
     server.close(() => {
       void database.close().then(() => process.exit(0))

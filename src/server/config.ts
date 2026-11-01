@@ -3,6 +3,8 @@ export type ServerConfig = {
   databaseUrl: string
   ownerToken: string
   agentToken: string
+  /** Signs Better Auth's cookies and encrypts the TOTP secret (MIKUD_AUTH_SECRET, at least 32 bytes). */
+  authSecret: string
   /** The URL the owner opens; browsers' Origin must match it. */
   publicUrl: URL
   migrationsDir: string
@@ -24,6 +26,7 @@ export type TelegramConfig = {
 export const DEFAULT_TELEGRAM_API_URL = "https://api.telegram.org"
 
 export const MIN_TOKEN_LENGTH = 32
+export const MIN_AUTH_SECRET_BYTES = 32
 
 /** Configuration that refuses to start the server. Its message never includes a value. */
 export class ConfigError extends Error {
@@ -32,7 +35,8 @@ export class ConfigError extends Error {
 
 /**
  * Reads the server configuration from the environment and refuses an unsafe one: both tokens are
- * required, at least MIN_TOKEN_LENGTH characters long and different from each other.
+ * required, at least MIN_TOKEN_LENGTH characters long and different from each other; the auth secret is
+ * required, at least MIN_AUTH_SECRET_BYTES bytes long and different from both tokens.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const problems: string[] = []
@@ -46,6 +50,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const ownerToken = required("MIKUD_OWNER_TOKEN")
   const agentToken = required("MIKUD_AGENT_TOKEN")
   const publicUrlText = required("MIKUD_PUBLIC_URL")
+  const authSecret = required("MIKUD_AUTH_SECRET")
 
   for (const [name, token] of [
     ["MIKUD_OWNER_TOKEN", ownerToken],
@@ -55,6 +60,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       problems.push(`${name} must be at least ${MIN_TOKEN_LENGTH} characters (use 32 random bytes)`)
   }
   if (ownerToken && ownerToken === agentToken) problems.push("MIKUD_OWNER_TOKEN and MIKUD_AGENT_TOKEN must differ")
+  if (authSecret && Buffer.byteLength(authSecret, "utf8") < MIN_AUTH_SECRET_BYTES)
+    problems.push(`MIKUD_AUTH_SECRET must be at least ${MIN_AUTH_SECRET_BYTES} bytes (use 32 random bytes)`)
+  if (authSecret && (authSecret === ownerToken || authSecret === agentToken))
+    problems.push("MIKUD_AUTH_SECRET must differ from both tokens")
 
   let publicUrl: URL | undefined
   if (publicUrlText) {
@@ -89,6 +98,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     databaseUrl,
     ownerToken,
     agentToken,
+    authSecret,
     publicUrl,
     migrationsDir: env.MIGRATIONS_DIR || "drizzle",
     version: env.MIKUD_VERSION || "dev",

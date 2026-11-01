@@ -4,9 +4,9 @@
 
 import type { ItemStatus, ItemType, Severity, Stage } from "../../../shared/enums.ts"
 import type {
+  AccountSession,
   AuditEntry,
   Comment,
-  Device,
   Item,
   Project,
   SecuritySource,
@@ -47,7 +47,9 @@ export type MockState = {
   proposals: StageProposal[]
   sources: SecuritySource[]
   audit: AuditEntry[]
-  devices: Device[]
+  browserId: string
+  sessions: AccountSession[]
+  endedOthers: boolean
   suppressions: Suppression[]
   settings: {
     id: string
@@ -55,10 +57,12 @@ export type MockState = {
     dateFormat: string
     timeFormat: string
     language: "he" | "en"
+    sessionMaxDays: number
+    sessionIdle: boolean
+    sessionIdleMinutes: number
     updatedAt: string
   }
   previousVisit: string
-  paired: boolean
 }
 
 function project(
@@ -388,10 +392,13 @@ export function createState(): MockState {
     })
   }
 
-  const devices: Device[] = [
-    { id: uuid(), label: "Desktop", createdAt: ago(24 * 9), lastSeenAt: ago(0.01), revokedAt: null },
-    { id: uuid(), label: "Phone", createdAt: ago(24 * 9), lastSeenAt: ago(11), revokedAt: null },
-    { id: uuid(), label: "Old laptop", createdAt: ago(24 * 40), lastSeenAt: ago(24 * 30), revokedAt: ago(24 * 29) },
+  const desktop =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339 Safari/537.36"
+  const phone =
+    "Mozilla/5.0 (Linux; Android 15; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339 Mobile Safari/537.36"
+  const sessions: AccountSession[] = [
+    { id: uuid(), current: true, signedInAt: ago(24 * 3), activeAt: ago(0.01), userAgent: desktop },
+    { id: uuid(), current: false, signedInAt: ago(24 * 9), activeAt: ago(11), userAgent: phone },
   ]
   const suppressions: Suppression[] = [
     {
@@ -413,7 +420,9 @@ export function createState(): MockState {
     proposals,
     sources,
     audit,
-    devices,
+    browserId: uuid(),
+    sessions,
+    endedOthers: false,
     suppressions,
     settings: {
       id: uuid(),
@@ -421,9 +430,11 @@ export function createState(): MockState {
       dateFormat: "dd/MM/yyyy",
       timeFormat: "HH:mm",
       language: storedLanguage(),
+      sessionMaxDays: 30,
+      sessionIdle: false,
+      sessionIdleMinutes: 30,
       updatedAt: ago(50),
     },
     previousVisit: ago(14),
-    paired: false,
   }
 }

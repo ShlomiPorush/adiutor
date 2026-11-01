@@ -191,7 +191,7 @@ export function buildMcpServer(ctx: Ctx, by: By, version: string): McpServer {
 /** MCP over Streamable HTTP at /mcp, stateless, with the owner or agent token as a bearer token. */
 export function mcpRoutes(deps: AuthDeps & { version: string }) {
   const app = new Hono<Env>()
-  app.use("*", authenticate(deps, { allowCookie: false }))
+  app.use("*", authenticate(deps, { allowSession: false }))
   app.all("/", async (c) => {
     const by: By = { actor: c.get("auth").actor, source: "mcp" }
     const server = buildMcpServer(deps.ctx, by, deps.version)

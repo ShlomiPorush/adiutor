@@ -7,6 +7,7 @@ import { updateSettings } from "../services/admin.ts"
 import type { Ctx } from "../services/context.ts"
 import { BotApi } from "../telegram/api.ts"
 import type { TelegramRuntime } from "../telegram/status.ts"
+import { testCore } from "../testing/app.ts"
 import { StandInBotApi } from "../testing/bot-api.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { RateLimiter } from "./auth.ts"
@@ -24,13 +25,12 @@ let standIn: StandInBotApi
 function build(telegram?: TelegramRuntime) {
   return createApp({
     checkDatabase: async () => true,
-    core: {
-      ctx: t.ctx,
+    core: testCore(t, {
       config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: new URL(ORIGIN), version: "test" },
       limiter: new RateLimiter(10, 60_000),
       clientIp: () => "client",
       telegram,
-    },
+    }),
   })
 }
 

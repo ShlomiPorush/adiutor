@@ -1,14 +1,82 @@
-// Seeds a pull request stack (scripts/try-pr.sh) with invented fixtures through the HTTP API, using
-// the agent token only, so the board has something to show: projects from a T3 snapshot, items in
-// every status, goals, a stage proposal, security sources, comments and an inbox item.
-// Reads MIKUD_URL and MIKUD_AGENT_TOKEN from the environment. Never prints the token.
+// Seeds a pull request stack (scripts/try-pr.sh) through the HTTP API. First the owner, as the first-run setup
+// does it from the browser: the setup API with a generated password, then TOTP enrolment; the username, password
+// and TOTP secret go to MIKUD_OWNER_FILE (0600) and are never printed. Then invented fixtures with the agent
+// token only, so the board has something to show: projects from a T3 snapshot, items in every status, goals, a
+// stage proposal, security sources, comments and an inbox item.
+// Reads MIKUD_URL, MIKUD_ORIGIN (the stack's public URL, for the CSRF check), MIKUD_OWNER_FILE and
+// MIKUD_AGENT_TOKEN from the environment. Never prints a token, password or secret.
+
+import { createHmac, randomBytes } from "node:crypto"
+import { writeFileSync } from "node:fs"
 
 const base = process.env.MIKUD_URL
+const origin = process.env.MIKUD_ORIGIN
+const ownerFile = process.env.MIKUD_OWNER_FILE
 const token = process.env.MIKUD_AGENT_TOKEN
-if (!base || !token) {
-  console.error("MIKUD_URL and MIKUD_AGENT_TOKEN are required")
+if (!base || !origin || !ownerFile || !token) {
+  console.error("MIKUD_URL, MIKUD_ORIGIN, MIKUD_OWNER_FILE and MIKUD_AGENT_TOKEN are required")
   process.exit(2)
 }
+
+// --- The owner ---
+
+/** RFC 6238 TOTP (SHA-1, 6 digits, 30 seconds) from a base32 secret. */
+function totp(secret) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+  let bits = ""
+  for (const char of secret.replace(/=+$/, "").toUpperCase())
+    bits += alphabet.indexOf(char).toString(2).padStart(5, "0")
+  const key = Buffer.from(bits.match(/.{8}/g).map((byte) => Number.parseInt(byte, 2)))
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)))
+  const hmac = createHmac("sha1", key).update(counter).digest()
+  const offset = hmac[hmac.length - 1] & 0xf
+  return String((hmac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, "0")
+}
+
+const cookies = new Map()
+async function page(path, body) {
+  const res = await fetch(`${base}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin,
+      "x-mikud-request": "1",
+      cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join("; "),
+    },
+    body: JSON.stringify(body),
+  })
+  for (const cookie of res.headers.getSetCookie()) {
+    const [pair] = cookie.split(";")
+    const at = pair.indexOf("=")
+    cookies.set(pair.slice(0, at), pair.slice(at + 1))
+  }
+  const json = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(`POST ${path} answered ${res.status} ${json?.error?.code ?? json?.code ?? "unknown"}`)
+  return json
+}
+
+const username = "owner"
+const password = randomBytes(18).toString("base64url")
+const setup = await page("/api/setup/account", { username, password })
+if (!setup?.data?.signedIn) throw new Error("setup created the owner but did not sign in")
+const { totpURI } = await page("/api/auth/two-factor/enable", { password })
+const totpSecret = new URL(totpURI).searchParams.get("secret")
+await page("/api/auth/two-factor/verify-totp", { code: totp(totpSecret) })
+writeFileSync(
+  ownerFile,
+  [
+    "# Pull request stack only. Sign in at MIKUD_PUBLIC_URL; add the TOTP secret to an authenticator app.",
+    `MIKUD_OWNER_USERNAME=${username}`,
+    `MIKUD_OWNER_PASSWORD=${password}`,
+    `MIKUD_OWNER_TOTP_SECRET=${totpSecret}`,
+    "",
+  ].join("\n"),
+  { mode: 0o600 },
+)
+console.log("    owner created with TOTP; sign-in written to the owner file")
+
+// --- Fixtures, with the agent token ---
 
 const now = Date.now()
 const ago = (hours) => new Date(now - hours * 3_600_000).toISOString()

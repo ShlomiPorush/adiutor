@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { insecureCookieAllowed, RateLimiter, tokenKind } from "./auth.ts"
+import { RateLimiter, tokenKind } from "./auth.ts"
 
 const config = {
   ownerToken: "o".repeat(40),
@@ -28,17 +28,5 @@ describe("RateLimiter", () => {
     expect(limiter.blocked("b")).toBe(false)
     now = 60_000
     expect(limiter.blocked("a")).toBe(false)
-  })
-})
-
-describe("insecureCookieAllowed", () => {
-  it.each([
-    ["http://127.0.0.1:8090", true],
-    ["http://localhost:8090", true],
-    ["https://127.0.0.1", false],
-    ["http://mikud.example.com", false],
-    ["https://mikud.example.com", false],
-  ])("%s → %s", (url, allowed) => {
-    expect(insecureCookieAllowed(new URL(url))).toBe(allowed)
   })
 })

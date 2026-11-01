@@ -1,6 +1,5 @@
 import { type Context, Hono } from "hono"
 import { bodyLimit } from "hono/body-limit"
-import { deleteCookie, setCookie } from "hono/cookie"
 import { z } from "zod"
 import {
   captureBody,
@@ -10,7 +9,6 @@ import {
   decideProposalBody,
   linkThreadBody,
   morningQuery,
-  pairBody,
   proposeStageBody,
   securitySnapshotBody,
   settingsBody,
@@ -20,20 +18,19 @@ import {
   updateProjectBody,
   visitBody,
 } from "../../shared/api.ts"
+import { changePasswordBody } from "../../shared/auth.ts"
 import { itemStatusSchema, itemTypeSchema } from "../../shared/enums.ts"
+import { passwordHasher } from "../auth/auth.ts"
+import { cookieNames } from "../auth/cookies.ts"
 import { AppError, forbidden, invalid, notFound } from "../errors.ts"
 import { sendTestMorningMessage } from "../jobs/morning.ts"
+import { changePassword, endAllSessions, endOtherSessions, listSessions } from "../services/account.ts"
 import {
   getSettings,
-  listDevices,
   listSuppressions,
-  pairDevice,
   previousVisit,
-  publicDevice,
   recordVisit,
   removeSuppression,
-  revokeAllDevices,
-  revokeDevice,
   updateSettings,
 } from "../services/admin.ts"
 import { addComment, captureItem, createItem, deleteItem, linkThread, updateItem } from "../services/items.ts"
@@ -48,21 +45,11 @@ import {
   morning,
   projectDetail,
 } from "../services/reads.ts"
+import { checkSession } from "../services/session-policy.ts"
 import { applySecuritySnapshot, applyT3Snapshot, recentSyncRuns } from "../services/sync.ts"
 import { startThread } from "../services/threads.ts"
 import { TELEGRAM_OFF, type TelegramRuntime, telegramStatus } from "../telegram/status.ts"
-import {
-  type AuthDeps,
-  authenticate,
-  byOf,
-  checkBrowserRequest,
-  DEVICE_COOKIE,
-  DEVICE_COOKIE_MAX_AGE,
-  type Env,
-  insecureCookieAllowed,
-  requireOwnerAuth,
-  tokenKind,
-} from "./auth.ts"
+import { type Auth, type AuthDeps, authenticate, byOf, type Env, type RateLimiter, requireOwnerAuth } from "./auth.ts"
 
 /** Parses and validates a JSON body; anything else is `validation_failed` with the issues. */
 async function body<T>(c: Context, schema: z.ZodType<T>): Promise<T> {
@@ -128,13 +115,20 @@ const auditQuery = z.object({
 })
 const versionQuery = z.object({ version: z.coerce.number().int().min(1).optional() })
 
+/** The owner's signed-in browser session; tokens are refused. */
+function requireSession(c: Context<Env>): Extract<Auth, { via: "session" }> {
+  const auth = c.get("auth")
+  if (auth.via !== "session") throw forbidden("Only a signed-in browser can do this.")
+  return auth
+}
+
 /** Sync pushes come from the sync tool with a token, never from a browser. */
 function requireToken(c: Context<Env>) {
   if (c.get("auth").via !== "token") throw forbidden("Sync data is pushed with a token.")
 }
 
-export function apiRoutes(deps: AuthDeps & { version: string; telegram?: TelegramRuntime }) {
-  const { ctx, config, limiter } = deps
+export function apiRoutes(deps: AuthDeps & { version: string; telegram?: TelegramRuntime; attempts: RateLimiter }) {
+  const { ctx } = deps
   const api = new Hono<Env>()
 
   // Snapshots from the sync tool are large; everything else is small.
@@ -142,59 +136,65 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   const defaultLimit = bodyLimit({ maxSize: 512 * 1024, onError: tooLarge })
   api.use("*", (c, next) => (c.req.path.includes("/sync/") ? syncLimit : defaultLimit)(c, next))
 
-  // Pairing: the owner pastes the owner token once on a new browser; it gets a device cookie.
-  api.post("/pair", async (c) => {
-    const ip = deps.clientIp(c)
-    if (limiter.blocked(ip))
-      throw new AppError("rate_limited", "Too many failed attempts. Wait a minute and try again.")
-    checkBrowserRequest(c, config.publicUrl)
-    const input = await body(c, pairBody)
-    const kind = tokenKind(input.token, config)
-    if (!kind) {
-      limiter.fail(ip)
-      throw new AppError("unauthorized", "The token is not valid.")
-    }
-    if (kind !== "owner") throw forbidden("Pair a browser with the owner token.")
-    const { device, secret } = await pairDevice(
-      ctx,
-      { actor: { kind: "owner", label: "owner" }, source: "ui" },
-      input.label ?? "Browser",
-    )
-    setCookie(c, DEVICE_COOKIE, secret, {
-      httpOnly: true,
-      sameSite: "Lax",
-      secure: !insecureCookieAllowed(config.publicUrl),
-      path: "/",
-      maxAge: DEVICE_COOKIE_MAX_AGE,
-    })
-    return c.json({ data: { device: publicDevice(device) } }, 201)
-  })
+  api.use("*", authenticate(deps, { allowSession: true }))
 
-  api.use("*", authenticate(deps, { allowCookie: true }))
-
-  // --- Session and visits ---
+  // --- Session, account and visits ---
+  api.use("/session/*", noStore)
+  api.use("/account/*", noStore)
   api.get("/session", (c) => {
     const auth = c.get("auth")
-    return c.json({ data: { actor: auth.actor, via: auth.via, deviceId: auth.deviceId ?? null } })
+    return c.json({
+      data: {
+        actor: auth.actor,
+        via: auth.via,
+        browserId: auth.via === "session" ? auth.browserId : null,
+        clocks: auth.via === "session" ? auth.status : null,
+      },
+    })
   })
-  api.delete("/session", async (c) => {
-    const auth = c.get("auth")
-    if (!auth.deviceId) throw forbidden("Only a paired browser can end its own session.")
-    await revokeDevice(ctx, byOf(c), auth.deviceId)
-    deleteCookie(c, DEVICE_COOKIE, { path: "/" })
-    return c.body(null, 204)
+  // Real input on the page (keys, pointer, wheel, touch), sent at most every 30 seconds: restarts the idle clock.
+  api.post("/session/activity", async (c) => {
+    const auth = requireSession(c)
+    const check = await checkSession(ctx, auth.sessionId, "activity")
+    if (!check.ok) throw new AppError("session_ended", "Your session ended. Sign in again.", { reason: check.reason })
+    return c.json({ data: { clocks: check.session.status } })
+  })
+  api.get("/account/sessions", async (c) => {
+    const auth = requireSession(c)
+    return c.json({ data: { username: auth.actor.label, sessions: await listSessions(ctx, auth.sessionId) } })
+  })
+  api.post("/account/password", async (c) => {
+    const auth = requireSession(c)
+    const key = `password:${deps.clientIp(c)}`
+    if (deps.attempts.blocked(key))
+      throw new AppError("rate_limited", "Too many attempts. Wait a few minutes and try again.")
+    deps.attempts.fail(key)
+    const input = await body(c, changePasswordBody)
+    return c.json({ data: await changePassword(ctx, await passwordHasher(deps.auth), auth.sessionId, input) })
+  })
+  api.post("/account/sessions/end-others", async (c) => {
+    const auth = requireSession(c)
+    return c.json({ data: { ended: await endOtherSessions(ctx, auth.sessionId) } })
+  })
+  api.post("/account/sessions/end-all", async (c) => {
+    const auth = requireSession(c)
+    const ended = await endAllSessions(ctx, auth.sessionId)
+    const response = c.json({ data: { ended } })
+    for (const cookie of (await cookieNames(deps.auth)).clearing) response.headers.append("set-cookie", cookie)
+    return response
   })
   api.get("/morning", async (c) => {
     const { since } = query(c, morningQuery)
-    return c.json({ data: await morning(ctx, { deviceId: c.get("auth").deviceId, since }) })
+    const auth = c.get("auth")
+    return c.json({ data: await morning(ctx, { deviceId: auth.via === "session" ? auth.browserId : null, since }) })
   })
   api.post("/visits", async (c) => {
-    const deviceId = c.get("auth").deviceId
-    if (!deviceId) throw forbidden("Visits are recorded for paired browsers only.")
+    const auth = c.get("auth")
+    if (auth.via !== "session") throw forbidden("Visits are recorded for signed-in browsers only.")
     // An empty body records the visit now; the UI sends the time of the read it showed.
     const { at } = (await c.req.text()).trim() ? await body(c, visitBody) : {}
-    const previous = await previousVisit(ctx, deviceId)
-    return c.json({ data: { at: await recordVisit(ctx, deviceId, at), previous } }, 201)
+    const previous = await previousVisit(ctx, auth.browserId)
+    return c.json({ data: { at: await recordVisit(ctx, auth.browserId, at), previous } }, 201)
   })
 
   // --- Projects ---
@@ -259,7 +259,7 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
     c.json({ data: await recentSyncRuns(ctx, query(c, z.object({ limit })).limit ?? 20) }),
   )
 
-  // --- Owner only: settings, suppressions, devices ---
+  // --- Owner only: settings, suppressions ---
   api.get("/settings", requireOwnerAuth, async (c) => c.json({ data: await getSettings(ctx.db) }))
   api.patch("/settings", async (c) => c.json({ data: await updateSettings(ctx, byOf(c), await body(c, settingsBody)) }))
   api.get("/suppressions", async (c) => c.json({ data: await listSuppressions(ctx, byOf(c)) }))
@@ -274,20 +274,14 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
     const send = deps.telegram?.configured ? deps.telegram.send?.bind(deps.telegram) : undefined
     return c.json({ data: await sendTestMorningMessage(ctx, byOf(c), deps.config.publicUrl, send) })
   })
-  api.get("/devices", async (c) => c.json({ data: await listDevices(ctx, byOf(c)) }))
-  api.delete("/devices/:id", async (c) => {
-    await revokeDevice(ctx, byOf(c), idParam(c))
-    return c.body(null, 204)
-  })
-  api.post("/devices/end-all", async (c) => {
-    const ended = await revokeAllDevices(ctx, byOf(c))
-    if (c.get("auth").via === "cookie") deleteCookie(c, DEVICE_COOKIE, { path: "/" })
-    return c.json({ data: { ended } })
-  })
-
   return api
 }
 
 function tooLarge(c: Context) {
   return c.json({ error: { code: "validation_failed", message: "The request body is too large." } }, 413)
+}
+
+async function noStore(c: Context, next: () => Promise<void>) {
+  await next()
+  c.header("Cache-Control", "no-store")
 }

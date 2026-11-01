@@ -3,7 +3,9 @@ import { ConfigError, loadConfig } from "./config.ts"
 
 const owner = "o".repeat(32)
 const agent = "a".repeat(32)
+const secret = "s".repeat(32)
 const valid = {
+  MIKUD_AUTH_SECRET: secret,
   DATABASE_URL: "postgres://mikud:example@db.example.com:5432/mikud",
   MIKUD_OWNER_TOKEN: owner,
   MIKUD_AGENT_TOKEN: agent,
@@ -21,6 +23,16 @@ function refusal(env: Record<string, string | undefined>): string {
 }
 
 describe("loadConfig", () => {
+  it("refuses an auth secret shorter than 32 bytes or equal to a token, without printing it", () => {
+    const short = "x".repeat(31)
+    const message = refusal({ ...valid, MIKUD_AUTH_SECRET: short })
+    expect(message).toContain("MIKUD_AUTH_SECRET must be at least 32 bytes")
+    expect(message).not.toContain(short)
+    expect(refusal({ ...valid, MIKUD_AUTH_SECRET: owner })).toContain("MIKUD_AUTH_SECRET must differ from both tokens")
+    // Counted in bytes: 16 two-byte characters are enough.
+    expect(loadConfig({ ...valid, MIKUD_AUTH_SECRET: "é".repeat(16) }).authSecret).toHaveLength(16)
+  })
+
   it("accepts a complete configuration with defaults", () => {
     const config = loadConfig(valid)
     expect(config.port).toBe(8080)
@@ -28,7 +40,7 @@ describe("loadConfig", () => {
     expect(config.publicUrl.origin).toBe("https://mikud.example.com")
   })
 
-  it.each(["DATABASE_URL", "MIKUD_OWNER_TOKEN", "MIKUD_AGENT_TOKEN", "MIKUD_PUBLIC_URL"])(
+  it.each(["DATABASE_URL", "MIKUD_OWNER_TOKEN", "MIKUD_AGENT_TOKEN", "MIKUD_PUBLIC_URL", "MIKUD_AUTH_SECRET"])(
     "refuses without %s",
     (name) => {
       expect(refusal({ ...valid, [name]: undefined })).toContain(`${name} is required`)

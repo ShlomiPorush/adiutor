@@ -1,10 +1,13 @@
 import { connect, createServer } from "node:net"
+import { resetState } from "./helpers.ts"
 
 /**
- * With E2E_TARGET (host:port, set by scripts/verify.sh), forwards 127.0.0.1:8090 to the Mikud
+ * Forgets the shared state of an earlier run. With E2E_TARGET (host:port, set by scripts/verify.sh), forwards 127.0.0.1:8090 to the Mikud
  * container, so the pages load from the server's public URL and every request carries its Origin.
  */
 export default async function globalSetup(): Promise<(() => Promise<void>) | undefined> {
+  // The TOTP secret and stored sessions of an earlier run belong to another database.
+  resetState()
   const target = process.env.E2E_TARGET
   if (!target) return undefined
   const [host = "mikud", port = "8080"] = target.split(":")
