@@ -23,9 +23,16 @@ function lookup(tree: unknown, key: string): string | undefined {
   return typeof node === "string" ? node : undefined
 }
 
+// Every filled value is wrapped in a first-strong isolate (U+2068 ... U+2069), so a value in the
+// other direction (an English title in a Hebrew sentence) keeps the sentence's punctuation in place.
+const FSI = "⁨"
+const PDI = "⁩"
+
 function fill(text: string, vars?: Vars): string {
   if (!vars) return text
-  return text.replace(/\{(\w+)\}/g, (match, name: string) => (name in vars ? String(vars[name]) : match))
+  return text.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in vars ? `${FSI}${String(vars[name])}${PDI}` : match,
+  )
 }
 
 /** A string by key; a missing key falls back to English, then to the key itself. */
