@@ -1,7 +1,8 @@
 // An item, opened as a dialog over the current page (a sheet on phones) with its own address
 // (?item=<id>). Status, type, severity, project and goal act at once (status, type and project offer
 // Undo). Title, body and a new comment are typed: the foot's Save changes sends the title and body,
-// and closing, Escape, Back or a link asks before dropping anything typed (v3 DS-9, SV-1).
+// and closing, Escape, Back or a link asks before dropping anything typed (v3 DS-9, SV-1). A save sends
+// the version the typing started on (draft.ts): a change made meanwhile is a conflict, never overwritten.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { type FormEvent, useId, useRef, useState } from "react"
@@ -17,12 +18,13 @@ import { Copyable } from "../ui/Copyable.tsx"
 import { confirmDialog } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
 import { EVERY } from "../ui/refresh.ts"
-import { Empty, ErrorState, errorReason, Loading } from "../ui/states.tsx"
+import { Banner, Empty, ErrorState, errorReason, Loading } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { ActorTag, Tag } from "../ui/tags.tsx"
 import { useUnsaved } from "../ui/unsaved.tsx"
 import { actionText, changesOf } from "./audit.ts"
+import { afterOwnChange, draftBase, saveVersion } from "./draft.ts"
 
 const TITLE_MAX = LIMITS.title
 const BODY_MAX = LIMITS.body
@@ -42,7 +44,18 @@ export function ItemDialog({ itemId }: { itemId: string }) {
   const [title, setTitle] = useState<string | null>(null)
   const [body, setBody] = useState<string | null>(null)
   const [comment, setComment] = useState("")
+  const [baseVersion, setBaseVersion] = useState<number | null>(null)
+  const [conflict, setConflict] = useState(false)
   const leaving = useRef(false)
+  const startDraft = () => {
+    if (item) setBaseVersion((base) => draftBase(base, item.version))
+  }
+  const dropDraft = () => {
+    setTitle(null)
+    setBody(null)
+    setBaseVersion(null)
+    setConflict(false)
+  }
 
   const titleDirty = item && title !== null && title !== item.title
   const bodyDirty = item && body !== null && body !== (item.body ?? "")
@@ -83,9 +96,12 @@ export function ItemDialog({ itemId }: { itemId: string }) {
             dirty={!!(titleDirty || bodyDirty)}
             title={title}
             body={body}
-            onSaved={() => {
-              setTitle(null)
-              setBody(null)
+            baseVersion={baseVersion}
+            onSaved={dropDraft}
+            onConflict={(currentVersion) => {
+              // The owner is told; saving again replaces the change with the draft knowingly.
+              setConflict(true)
+              setBaseVersion(currentVersion)
             }}
             onDeleted={() => {
               leaving.current = true
@@ -103,6 +119,19 @@ export function ItemDialog({ itemId }: { itemId: string }) {
           <ErrorState title={t("item.failed")} error={query.error} onRetry={() => void query.refetch()} />
         )
       ) : null}
+      {conflict && item && (titleDirty || bodyDirty) ? (
+        <Banner
+          tone="warn"
+          title={t("item.conflictTitle")}
+          action={
+            <button type="button" className="ui-btn" onClick={dropDraft}>
+              {t("item.conflictReload")}
+            </button>
+          }
+        >
+          {t("item.conflictBody")}
+        </Banner>
+      ) : null}
       {detail && item ? (
         <ItemBody
           detail={detail}
@@ -110,9 +139,16 @@ export function ItemDialog({ itemId }: { itemId: string }) {
           title={title ?? item.title}
           body={body ?? item.body ?? ""}
           comment={comment}
-          onTitle={setTitle}
-          onBody={setBody}
+          onTitle={(value) => {
+            startDraft()
+            setTitle(value)
+          }}
+          onBody={(value) => {
+            startDraft()
+            setBody(value)
+          }}
           onComment={setComment}
+          onOwnChange={(before, next) => setBaseVersion((base) => afterOwnChange(base, before, next))}
         />
       ) : null}
     </Dialog>
@@ -124,14 +160,18 @@ function ItemFoot({
   dirty,
   title,
   body,
+  baseVersion,
   onSaved,
+  onConflict,
   onDeleted,
 }: {
   item: Item
   dirty: boolean
   title: string | null
   body: string | null
+  baseVersion: number | null
   onSaved: () => void
+  onConflict: (currentVersion: number | null) => void
   onDeleted: () => void
 }) {
   const { t, language } = useI18n()
@@ -151,15 +191,16 @@ function ItemFoot({
     if (body !== null && body !== (item.body ?? "")) patch.body = body.trim()
     setBusy(true)
     try {
-      const next = await api.updateItem(item.id, item.version, patch)
+      const next = await api.updateItem(item.id, saveVersion(baseVersion, item.version), patch)
       queryClient.setQueryData<ItemDetail>(qk.item(item.id), (old) => (old ? { ...old, item: next } : old))
       onSaved()
       await refresh()
       showToast(t("item.saved", { title: next.title }), "success")
     } catch (error) {
       if (error instanceof ApiError && error.code === "version_conflict") {
-        showToast(t("item.conflictKept"), "warning")
+        // The draft stays; the item underneath is read again and the dialog says so (with Reload).
         await queryClient.invalidateQueries({ queryKey: qk.item(item.id) })
+        onConflict(queryClient.getQueryData<ItemDetail>(qk.item(item.id))?.item.version ?? null)
       } else if (error instanceof ApiError && error.code === "secret_suspected") {
         showToast(t("errors.secretSuspected"), "error")
       } else {
@@ -208,6 +249,7 @@ function ItemBody({
   onTitle,
   onBody,
   onComment,
+  onOwnChange,
 }: {
   detail: ItemDetail
   item: Item
@@ -217,10 +259,24 @@ function ItemBody({
   onTitle: (value: string) => void
   onBody: (value: string) => void
   onComment: (value: string) => void
+  onOwnChange: (before: number, next: number) => void
 }) {
   const { t, language } = useI18n()
   const ids = { status: useId(), type: useId(), severity: useId(), project: useId(), body: useId(), comment: useId() }
-  const actions = useItemActions()
+  const itemActions = useItemActions()
+  // The owner's own one-click changes move an unsaved draft's base with them (draft.ts).
+  const own = async (change: Promise<Item | null>) => {
+    const before = item.version
+    const next = await change
+    if (next) onOwnChange(before, next.version)
+    return next
+  }
+  const actions = {
+    setStatus: (...args: Parameters<typeof itemActions.setStatus>) => own(itemActions.setStatus(...args)),
+    setType: (...args: Parameters<typeof itemActions.setType>) => own(itemActions.setType(...args)),
+    moveTo: (...args: Parameters<typeof itemActions.moveTo>) => own(itemActions.moveTo(...args)),
+    update: (...args: Parameters<typeof itemActions.update>) => own(itemActions.update(...args)),
+  }
   const queryClient = useQueryClient()
   const refresh = useRefreshItems()
   const projects = useQuery({ queryKey: qk.projects, queryFn: api.projects, staleTime: 60_000 })

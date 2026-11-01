@@ -111,6 +111,32 @@ test("an item opens over the page, changes status at once, and Undo puts it back
   await expect(page.getByRole("dialog")).toHaveCount(0)
 })
 
+test("saving over a change made meanwhile keeps the draft and offers Reload", async () => {
+  const created = await api<{ id: string; version: number }>("POST", "/items", {
+    type: "task",
+    title: `Draft target ${run}`,
+  })
+  await page.goto(`/?item=${created.id}`)
+  const dialog = page.getByRole("dialog")
+  const bodyField = dialog.getByLabel(he.item.body, { exact: true })
+  await bodyField.fill("The owner's text")
+  // Someone else changes the same field; the dialog's background refresh then shows the new version.
+  await api("PATCH", `/items/${created.id}`, { version: created.version, body: "Changed meanwhile" })
+  const refreshed = page.waitForResponse((r) => r.url().endsWith(`/api/v1/items/${created.id}`) && r.ok())
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")))
+  await refreshed
+
+  await dialog.getByRole("button", { name: he.item.saveChanges }).click()
+  await expect(dialog.getByRole("status").filter({ hasText: he.item.conflictTitle })).toBeVisible()
+  await expect(bodyField).toHaveValue("The owner's text")
+  expect((await api<{ item: { body: string } }>("GET", `/items/${created.id}`)).item.body).toBe("Changed meanwhile")
+
+  await dialog.getByRole("button", { name: he.item.conflictReload }).click()
+  await expect(bodyField).toHaveValue("Changed meanwhile")
+  await page.keyboard.press("Escape")
+  await expect(page.getByRole("dialog")).toHaveCount(0)
+})
+
 test("quick add files a note in the inbox", async () => {
   await page.goto("/")
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(he.morning.title)
