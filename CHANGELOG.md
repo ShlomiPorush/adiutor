@@ -11,3 +11,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Hebrew and English labels** for every stage, item status, item type and severity.
 - **Container image and Compose files**: the image runs as `node` on a read-only root file system with no capabilities; a development stack with its own PostgreSQL; a production Compose file behind Traefik.
 - **Workflow scripts and CI**: `scripts/local.sh` for the development stack, `scripts/verify.sh` with repository guards, lint, types, unit and database tests, and a container check; a CI workflow and weekly Dependabot updates.
+- **Sync tool** (`dist/sync/mikud-sync.js`) for the owner's PC: runs the `overview` collector, reads every T3 project's threads through the T3 CLI, and sends the threads and each project repository's security and Issues counts to Mikud. Security data keeps the time of its last successful read, and a missing or failed source is reported as such, never as zero alerts. The agent token is never accepted on the command line, printed, or passed to a child process.
+- **Reconciler prompt** (`prompts/reconcile.md`) for the T3 scheduled task that runs the sync tool every morning.
+- **Agent instruction draft** (`docs/agent-instruction.md`): proposed text for the shared agent configuration and the MCP connection for Claude Code and Codex, awaiting the owner.
