@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { audit, items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
+import { lockExternalId } from "./context.ts"
 import { createItem, deleteItem, getItemRow, linkThread, updateItem } from "./items.ts"
 import { createProject, deleteProject } from "./projects.ts"
 import { REDACTED } from "./secrets.ts"
@@ -149,6 +150,32 @@ describe("applyT3Snapshot", () => {
       afterLoad: () => deleteProject(t.ctx, owner, p?.id ?? ""),
     })
     expect(again.counts).toMatchObject({ projectsSuppressed: 1 })
+    expect(await t.ctx.db.select().from(projects)).toHaveLength(0)
+  })
+
+  it("takes the delete's locks in the sync's order, so a project delete and a sync never deadlock", async () => {
+    await applyT3Snapshot(t.ctx, snapshot([]))
+    const [p] = await t.ctx.db.select().from(projects)
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // Like the sync's project step: the advisory lock first, then the project row.
+    const syncLike = t.ctx.db.transaction(async (tx) => {
+      await lockExternalId(tx, "project", "t3-garden")
+      await held
+      await tx
+        .select()
+        .from(projects)
+        .where(eq(projects.id, p?.id ?? ""))
+        .for("update")
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const deleting = deleteProject(t.ctx, owner, p?.id ?? "")
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    release()
+    await syncLike
+    await deleting
     expect(await t.ctx.db.select().from(projects)).toHaveLength(0)
   })
 
