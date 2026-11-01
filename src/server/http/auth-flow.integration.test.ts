@@ -3,7 +3,7 @@ import { count, eq, sql } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
 import { passwordHasher } from "../auth/auth.ts"
-import { createDatabase } from "../db/client.ts"
+import { createDatabase, type Database } from "../db/client.ts"
 import { audit, authAccount, authSession, authTwoFactor, authUser, authVerification, settings } from "../db/schema.ts"
 import { changePassword, resetPassword } from "../services/account.ts"
 import { AUTH_LOCK_KEY } from "../services/context.ts"
@@ -22,7 +22,7 @@ let t: TestDatabase
 let app: ReturnType<typeof createApp>
 let core: ReturnType<typeof testCore>
 
-function build(lockAuth?: () => Promise<() => Promise<void>>) {
+function build(lockAuth?: Database["lockAuth"], beforeAuthRecord?: (route: string) => Promise<void>) {
   core = testCore(t, {
     config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: new URL(TEST_ORIGIN), version: "test" },
     limiter: new RateLimiter(10, 60_000),
@@ -30,6 +30,7 @@ function build(lockAuth?: () => Promise<() => Promise<void>>) {
     clientIp: (c) => c.req.header("x-test-ip") ?? "client",
   })
   if (lockAuth) core.lockAuth = lockAuth
+  core.beforeAuthRecord = beforeAuthRecord
   app = createApp({ checkDatabase: async () => true, core })
 }
 
@@ -521,7 +522,7 @@ describe("the auth lock", () => {
     try {
       build(quick.lockAuth)
       await browser().owner()
-      const holder = await quick.lockAuth()
+      const holder = (await quick.lockAuth()).release
       try {
         // A request of this process waits its turn behind the holder and gives up after the timeout.
         const res = await browser("b").passwordSignIn()
@@ -613,7 +614,7 @@ describe("result review fixes", () => {
     try {
       await browser().owner()
       const hasher = await passwordHasher(core.auth)
-      const unlock = await short.lockAuth()
+      const unlock = (await short.lockAuth()).release
       let resetDone = false
       const reset = resetPassword(t.ctx, hasher).then((result) => {
         resetDone = true
@@ -703,7 +704,7 @@ describe("result review fixes", () => {
     try {
       build(own.lockAuth)
       const secret = await browser().owner()
-      const unlock = await own.lockAuth()
+      const unlock = (await own.lockAuth()).release
       const holders = await t.ctx.db.execute<{ pid: number }>(sql`
         select pid from pg_locks
         where locktype = 'advisory' and granted and classid = 0 and objsubid = 1
@@ -749,5 +750,46 @@ describe("result review fixes", () => {
     expect((await actions()).length - beforeSweep.length).toBe(2)
     expect((await api(quiet)).json.error).toMatchObject({ code: "session_ended", reason: "idle" })
     expect((await api(owner)).status).toBe(200)
+  })
+
+  it("fails closed when the lock is lost during a sign-in and a reset runs before it is recorded", async () => {
+    const own = createDatabase(t.url)
+    let pause: (() => Promise<void>) | undefined
+    try {
+      build(own.lockAuth, async (route) => {
+        if (route === "verify" && pause) await pause()
+      })
+      const secret = await browser().owner()
+      const hasher = await passwordHasher(core.auth)
+      const b = browser("b")
+      expect((await b.passwordSignIn()).json.twoFactorRedirect).toBe(true)
+      let resetPassword_: string | undefined
+      // Better Auth has created the session; before it is recorded, the lock's backend dies and a reset completes.
+      pause = async () => {
+        pause = undefined
+        const holders = await t.ctx.db.execute<{ pid: number }>(sql`
+          select pid from pg_locks
+          where locktype = 'advisory' and granted and classid = 0 and objsubid = 1
+            and objid = ${sql.raw(String(AUTH_LOCK_KEY))}
+            and database = (select oid from pg_database where datname = current_database())`)
+        const [holder] = [...holders]
+        await t.ctx.db.execute(sql`select pg_terminate_backend(${holder?.pid ?? 0})`)
+        resetPassword_ = (await resetPassword(t.ctx, hasher))?.password
+      }
+      const res = await b.verify(totp(secret))
+      expect(resetPassword_).toBeDefined()
+      expect([res.status, res.json.code]).toEqual([503, "busy"])
+      expect(res.setCookies.filter((c) => c.includes("session_token=") && !/max-age=0/i.test(c))).toEqual([])
+      expect(res.setCookies.some((c) => /session_token=;.*max-age=0/i.test(c))).toBe(true)
+      expect(await sessions()).toHaveLength(0)
+      expect((await api(b)).status).toBe(401)
+      // The reset's password works; the old one does not.
+      expect((await browser("old").passwordSignIn()).status).toBe(401)
+      const after = browser("after")
+      expect((await after.passwordSignIn("owner.name", resetPassword_)).status).toBe(200)
+      expect((await api(after)).json.error.code).toBe("totp_required")
+    } finally {
+      await own.close()
+    }
   })
 })

@@ -1,11 +1,12 @@
-import { and, eq, inArray, ne } from "drizzle-orm"
+import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import type { Context } from "hono"
 import { type Auth, CLIENT_IP_HEADER } from "../auth/auth.ts"
 import { challengeRows, cookieNames, signedFromRequest, signedFromSetCookie } from "../auth/cookies.ts"
-import { authSession, authUser, authVerification } from "../db/schema.ts"
+import { type AuthLock, AuthLockLost } from "../db/client.ts"
+import { authSession, authTwoFactor, authUser, authVerification } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
-import { type By, type Ctx, writeAudit } from "../services/context.ts"
+import { AUTH_LOCK_KEY, type By, type Ctx, type DbOrTx, writeAudit } from "../services/context.ts"
 import { type Clocks, checkSession } from "../services/session-policy.ts"
 import { type RateLimiter, REQUEST_HEADER } from "./auth.ts"
 
@@ -25,6 +26,12 @@ import { type RateLimiter, REQUEST_HEADER } from "./auth.ts"
  * transaction fails the sign-in fails closed: the new session and the challenge rows the request created are
  * deleted and the answer is 500 with the session cookie cleared. A sign-out whose audit fails still succeeds.
  *
+ * Success is acted on only while the lock is still held: the lock's connection can die during the request (a
+ * network drop, a terminated backend), and then a reset may already have run. So the recording transaction checks
+ * first that the backend that took the lock still holds it (lockHeld); when it does not, the request fails closed
+ * like a failed audit, with 503 busy: its new session and challenge rows are deleted, its cookies cleared, and
+ * nothing is marked. TOTP enable undoes its unverified secret the same way; sign-out has nothing to undo and logs.
+ *
  * That transaction runs on a pool connection while this request's own connection holds the lock, so it must
  * never take AUTH_LOCK_KEY itself (inAuthTx would wait for the lock this request holds, until lock_timeout):
  * it is a plain ctx.db.transaction.
@@ -37,7 +44,9 @@ export type AuthGuardDeps = {
   /** Sign-in and TOTP attempts per socket address: 5 per 5 minutes per route. */
   attempts: RateLimiter
   clientIp: (c: Context) => string
-  lockAuth: () => Promise<() => Promise<void>>
+  lockAuth: () => Promise<AuthLock>
+  /** Tests only: runs after Better Auth answered with success, before the request is recorded. */
+  beforeRecord?: (route: string) => Promise<void>
 }
 
 type Route = "sign-in" | "sign-out" | "get-session" | "enable" | "verify"
@@ -133,9 +142,9 @@ async function handle(auth: Auth, request: Request): Promise<Response> {
  * setup to sign the new owner in. The request has passed the checks above.
  */
 export async function runLocked(deps: AuthGuardDeps, route: Route, request: Request): Promise<Response> {
-  let release: () => Promise<void>
+  let lock: AuthLock
   try {
-    release = await deps.lockAuth()
+    lock = await deps.lockAuth()
   } catch (error) {
     if (error instanceof AppError && error.code === "busy") return answer(503, "busy", error.message)
     throw error
@@ -164,9 +173,23 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
 
     const response = await handle(deps.auth, request)
     if (response.status < 200 || response.status >= 300) return response
+    await deps.beforeRecord?.(route)
 
-    if (route === "enable") return withoutBackupCodes(response)
+    if (route === "enable") {
+      if (!(await lockHeld(deps.ctx.db, lock))) {
+        log.error("the auth lock was lost during a two-factor setup", { route })
+        // The secret this request made is not a factor until verified: removing it undoes the request.
+        await deps.ctx.db
+          .delete(authTwoFactor)
+          .where(and(eq(authTwoFactor.userId, prior?.userId ?? ""), eq(authTwoFactor.verified, false)))
+          .catch((error: unknown) => log.error("an unverified secret could not be removed", errorFacts(error)))
+        return answer(503, "busy", LOCK_LOST_MESSAGE)
+      }
+      return withoutBackupCodes(response)
+    }
     if (route === "sign-out") {
+      // The session is gone either way, which is the safe direction: a lost lock is only worth a log line.
+      if (!(await lockHeld(deps.ctx.db, lock))) log.error("the auth lock was lost during a sign-out", { route })
       if (signOutOf) await auditSignOut(deps, signOutOf.user.id)
       return response
     }
@@ -176,6 +199,7 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
     try {
       // Not inAuthTx: this request already holds the auth lock (see the comment at the top).
       await deps.ctx.db.transaction(async (tx) => {
+        if (!(await lockHeld(tx, lock))) throw new AuthLockLost()
         const [created] = newToken
           ? await tx
               .select({ id: authSession.id, userId: authSession.userId, userAgent: authSession.userAgent })
@@ -231,25 +255,34 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
         }
       })
     } catch (error) {
+      if (error instanceof AuthLockLost) {
+        log.error("the auth lock was lost during a sign-in", { route })
+        return failClosed(deps, names.clearing, newToken, [answered, opened], answer(503, "busy", LOCK_LOST_MESSAGE))
+      }
       log.error("a sign-in could not be recorded", { route, ...errorFacts(error) })
       return failClosed(deps, names.clearing, newToken, [answered, opened])
     }
     return response
   } finally {
-    await release().catch((error: unknown) => log.error("the auth lock was not released", errorFacts(error)))
+    // A lock lost after the check above needs nothing more: everything this request committed, it committed while
+    // the lock was held, so it is older than any reset that could take the lock afterwards, and that reset deletes
+    // it (sessions, challenges, the factor). The release then only reports the loss.
+    await lock.release().catch((error: unknown) => log.error("the auth lock was not released", errorFacts(error)))
   }
 }
 
 /**
  * Deletes what the failed request created (its new session, and the rows of the two-factor challenge it opened
- * or answered: the challenge and its attempt counter) and answers 500 with the session cookies cleared and no
- * other Set-Cookie. The two-factor row (the enrolled factor) is never touched.
+ * or answered: the challenge and its attempt counter) and answers `failed` (500, or 503 busy when the lock was
+ * lost) with the session cookies cleared and no other Set-Cookie. The two-factor row (the enrolled factor) is never
+ * touched.
  */
 async function failClosed(
   deps: AuthGuardDeps,
   clearing: string[],
   newToken: string | null,
   challenges: (string | null)[],
+  failed = answer(500, "internal_error", "The sign-in could not be recorded. Try again."),
 ): Promise<Response> {
   try {
     if (newToken) await deps.ctx.db.delete(authSession).where(eq(authSession.token, newToken))
@@ -258,9 +291,24 @@ async function failClosed(
   } catch (error) {
     log.error("a refused sign-in could not be cleaned up", errorFacts(error))
   }
-  const failed = answer(500, "internal_error", "The sign-in could not be recorded. Try again.")
   for (const cookie of clearing) failed.headers.append("set-cookie", cookie)
   return failed
+}
+
+const LOCK_LOST_MESSAGE = "Another sign-in change got in the way. Try again."
+
+/**
+ * Whether the backend that took the auth lock for this request still holds it. Its connection may have died
+ * meanwhile (PostgreSQL then released the lock, and a reset may have run).
+ */
+async function lockHeld(db: DbOrTx, lock: AuthLock): Promise<boolean> {
+  if (lock.lost()) return false
+  const rows = await db.execute(sql`
+    select 1 from pg_locks
+    where locktype = 'advisory' and pid = ${lock.pid} and granted
+      and classid = 0 and objid = ${sql.raw(String(AUTH_LOCK_KEY))} and objsubid = 1
+      and database = (select oid from pg_database where datname = current_database())`)
+  return [...rows].length > 0
 }
 
 async function auditSignOut(deps: AuthGuardDeps, userId: string): Promise<void> {

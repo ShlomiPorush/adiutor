@@ -43,15 +43,25 @@ export class AuthLockLost extends Error {
   }
 }
 
+/** A held auth lock: the backend that holds it, whether its connection closed, and its release. */
+export type AuthLock = {
+  /** The PostgreSQL backend pid of the reserved connection that holds the lock. */
+  pid: number
+  /** True once that connection closed: PostgreSQL released the lock with the backend. */
+  lost(): boolean
+  /** Unlocks and gives the connection back; rejects with AuthLockLost when the connection had closed. */
+  release(): Promise<void>
+}
+
 export type Database = {
   db: Db
   /**
    * Takes the auth lock (AUTH_LOCK_KEY) as a session-level advisory lock on a reserved connection of its own,
-   * outside the pool, and returns the function that unlocks it and gives the connection back. Requests of this process wait their turn in memory, so
-   * at most one holds or waits on that connection and a queue of waiting requests never takes pool connections.
-   * Throws `busy` when the lock is not free within AUTH_LOCK_TIMEOUT_MS.
+   * outside the pool. Requests of this process wait their turn in memory, so at most one holds or waits on that
+   * connection and a queue of waiting requests never takes pool connections. Throws `busy` when the lock is not
+   * free within AUTH_LOCK_TIMEOUT_MS.
    */
-  lockAuth(): Promise<() => Promise<void>>
+  lockAuth(): Promise<AuthLock>
   migrate(migrationsFolder: string): Promise<void>
   ping(): Promise<boolean>
   close(): Promise<void>
@@ -121,6 +131,7 @@ export function createDatabase(
       lockPool ??= openLockPool()
       const pool = lockPool
       let reserved: postgres.ReservedSql
+      let pid = 0
       try {
         reserved = await pool.sql.reserve()
       } catch (error) {
@@ -131,6 +142,9 @@ export function createDatabase(
       try {
         if (pool.closed) throw new AuthLockLost()
         await reserved`select pg_advisory_lock(${AUTH_LOCK_KEY})`
+        const [row] = await reserved<{ pid: number }[]>`select pg_backend_pid() as pid`
+        if (!row) throw new AuthLockLost()
+        pid = row.pid
       } catch (error) {
         if (pool.closed) retire(pool)
         else reserved.release()
@@ -138,7 +152,7 @@ export function createDatabase(
         if ((error as { code?: string }).code === "55P03") throw busy()
         throw error
       }
-      return async () => {
+      const release = async () => {
         try {
           // A closed connection lost the lock with it: PostgreSQL released it when the backend ended.
           if (pool.closed) throw new AuthLockLost()
@@ -152,6 +166,7 @@ export function createDatabase(
           done()
         }
       }
+      return { pid, lost: () => pool.closed, release }
     },
     async migrate(migrationsFolder) {
       // A connection of its own, without the pool's transaction bound: a migration may take longer.
