@@ -1,0 +1,57 @@
+# Production deployment. Runs the image the release workflow publishes to GHCR; nothing is built here.
+# Behind Traefik on the external "traefik" network, so no port is published. Configure through .env
+# (copy .env.example); every variable is documented there.
+#
+# Mikud keeps no files: all state is in the PostgreSQL database DATABASE_URL points at, which the
+# owner runs and backs up. This file runs only the application container.
+#
+# Compose interpolation is limited to VERSION and DOMAIN. Everything the server reads comes through
+# env_file.
+name: mikud
+
+services:
+  mikud:
+    image: ghcr.io/shlomiporush/mikud:${VERSION:?Set VERSION in .env to the release to run}
+    container_name: mikud
+    # Runs as node (set in the image) with no capability and no way to gain privileges, on a
+    # read-only root file system.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 512m
+    cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.services.mikud.loadbalancer.server.port=8080"
+      - "traefik.http.routers.mikud.entrypoints=https"
+      - "traefik.http.routers.mikud.rule=Host(`${DOMAIN:?Set DOMAIN in .env}`)"
+      - "traefik.http.routers.mikud.tls=true"
+      - "traefik.http.routers.mikud.service=mikud"
+      - "traefik.http.routers.mikud.middlewares=default@file"
+    # Calls /healthz, which includes the database; the same check as the image's, written out here.
+    healthcheck:
+      test: ["CMD", "node", "dist/server/healthcheck.js"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+networks:
+  # Adapt to the private network setup; see docs/deployment.md once it exists.
+  traefik:
+    external: true

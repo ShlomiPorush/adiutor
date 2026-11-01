@@ -1,0 +1,32 @@
+{
+  "inbox": "Inbox",
+  "stage": {
+    "idea": "Idea",
+    "poc": "POC",
+    "development": "Development",
+    "production": "Production",
+    "redesign": "Redesign",
+    "frozen": "Frozen"
+  },
+  "itemStatus": {
+    "future": "Future",
+    "todo": "To do",
+    "in_progress": "In progress",
+    "waiting_on_you": "Waiting on you",
+    "done": "Done",
+    "not_relevant": "Not relevant"
+  },
+  "itemType": {
+    "bug": "Bug",
+    "decision": "Decision",
+    "security": "Security",
+    "task": "Task",
+    "idea": "Idea"
+  },
+  "severity": {
+    "critical": "Critical",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low"
+  }
+}

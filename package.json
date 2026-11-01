@@ -1,0 +1,35 @@
+{
+  "name": "mikud",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Personal project-focus system: a morning board, a Telegram morning message and an MCP server for AI agents",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "esbuild src/server/index.ts src/server/healthcheck.ts --bundle --platform=node --target=node24 --format=esm --outdir=dist/server",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config config/vitest.config.ts",
+    "test:integration": "vitest run --config config/vitest.integration.config.ts",
+    "lint": "biome ci .",
+    "db:generate": "drizzle-kit generate --config config/drizzle.config.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.5",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.13",
+    "postgres": "3.4.9",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.2",
+    "drizzle-kit": "0.31.11",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

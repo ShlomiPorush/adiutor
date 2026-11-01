@@ -1,0 +1,32 @@
+{
+  "inbox": "לא ממוין",
+  "stage": {
+    "idea": "רעיון",
+    "poc": "POC",
+    "development": "פיתוח",
+    "production": "פרודקשן",
+    "redesign": "עיצוב מחדש",
+    "frozen": "מוקפא"
+  },
+  "itemStatus": {
+    "future": "עתידי",
+    "todo": "לביצוע",
+    "in_progress": "בעבודה",
+    "waiting_on_you": "מחכה לך",
+    "done": "בוצע",
+    "not_relevant": "לא רלוונטי"
+  },
+  "itemType": {
+    "bug": "באג",
+    "decision": "החלטה",
+    "security": "אבטחה",
+    "task": "משימה",
+    "idea": "רעיון"
+  },
+  "severity": {
+    "critical": "קריטי",
+    "high": "גבוה",
+    "medium": "בינוני",
+    "low": "נמוך"
+  }
+}

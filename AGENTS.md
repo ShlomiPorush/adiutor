@@ -4,7 +4,7 @@
 
 Mikud is a personal, single-user project-focus system: a morning board, a Telegram morning message and an MCP server that AI agents use to keep work items current. One application container with PostgreSQL, reachable only over the owner's private network.
 
-**Stage: preparation.** Read these before any change:
+**Stage: foundation.** Read these before any change:
 
 - Product requirements: `docs/requirements.md`
 - Foundation plan, decisions and status: `docs/project-foundation.md`
@@ -13,12 +13,50 @@ The foundation plan is the desired state. Items marked planned do not exist yet.
 
 UI follows the `v3-ui-style` skill.
 
+## Layout
+
+One pnpm package (no workspace apps).
+
+- `src/server/`: Hono server. `index.ts` starts it, `config.ts` reads and checks the environment, `app.ts` holds the routes (only `/healthz` so far), `healthcheck.ts` is the container health check, `db/` holds the Drizzle schema and client.
+- `src/shared/`: enum codes as `const` arrays with zod schemas (`enums.ts`) and the locale files `locales/en.json` and `locales/he.json`.
+- `drizzle/`: generated SQL migrations and their snapshots. Never edit by hand.
+- `config/`: TypeScript base config, Vitest configs, Drizzle Kit config.
+- `docker/`: toolchain and application Dockerfiles, the development Compose template and `dev.env` (fake development values).
+- `scripts/`: `local.sh`, `verify.sh`; `lib/common.sh` (shared helpers) and `lib/guards.sh` (repository guards).
+- `src/web/`, `src/sync/`, `e2e/`, `prompts/`: planned, not created yet.
+
+## Commands
+
+Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfmt run in the toolchain container; the host needs Docker only.
+
+- `scripts/verify.sh`: guards, Biome, types, unit tests, build, schema-versus-migration check, database tests against a disposable PostgreSQL (`mikud-verify`), then the image with health, UID and hardening checks. `--guards-only` for the guards alone; `--changed [BASE]` runs guards only when every change is documentation; `--skip-e2e` is accepted (no end-to-end tests yet).
+- `scripts/local.sh build|up|start|down|status|logs|nuke`: the development stack (`mikud-dev`) from the ignored `docker-compose-dev.yml`. Create it once with `cp docker/docker-compose-dev.example.yml docker-compose-dev.yml`. Serves `http://127.0.0.1:8090`; `MIKUD_PORT` changes the port.
+- A single tool in the toolchain: `source scripts/lib/common.sh && build_toolchain && in_toolchain "pnpm test"`.
+- New migration after a schema change: `in_toolchain "pnpm db:generate --name <change>"`. `verify.sh` fails when the schema and the migrations disagree.
+
+## Traps
+
+- pnpm 12 reads its settings only from `pnpm-workspace.yaml` (not from `package.json`), and refuses to install when a dependency's build script is not allowed there. The file holds settings only; it lists no packages.
+- `grep -P` with `\x{...}` code points needs a UTF-8 locale; `scripts/lib/guards.sh` sets `LC_ALL=C.UTF-8` and stops on any grep error, so a broken pattern cannot pass silently.
+- Tests named `*.integration.test.ts` run only from `verify.sh`, which passes `MIKUD_TEST_DATABASE_URL`. `pnpm test` skips them.
+- `ON DELETE RESTRICT` (items of a project) fails with SQLSTATE `23001`, not `23503`.
+- Codes are text columns with database checks generated from `src/shared/enums.ts`: adding a code needs a new migration.
+- The guards scan tracked files and new files that are not ignored. The deny list `docs/private/deny-list.txt` exists only on the owner's machine; in CI the guard is skipped, and its output never repeats a matched line.
+
+## Docker
+
+- One image, `docker/mikud.Dockerfile`: esbuild bundle and migrations on `node:24.21.0-bookworm-slim`, `USER node`, no `node_modules`, health check `node dist/server/healthcheck.js` (calls `/healthz`, which runs `select 1`). State lives only in PostgreSQL; the container has no volume and runs with a read-only root file system, no capabilities and `no-new-privileges`.
+- `docker-compose.yml` (production) runs only `mikud` from `ghcr.io/shlomiporush/mikud:${VERSION}` behind Traefik on the external `traefik` network, with no published port and no database; `DATABASE_URL` in `.env` points at the owner's PostgreSQL. Interpolation is limited to `VERSION` and `DOMAIN`.
+- `docker/docker-compose-dev.example.yml` adds a `postgres` service with data in `${MIKUD_DATA_DIR}/postgres` (default `~/.local/share/mikud-dev`, on the WSL file system; the scripts refuse a path under `/mnt`). `mikud` binds to `127.0.0.1` only.
+- Images are built only by the scripts; a guard fails on `build:` in a Compose file. Never stop or remove containers, networks or volumes of other projects.
+
 ## Repository policies
 
 - The repository is public. Everything tracked is in English, except the Hebrew locale file `src/shared/locales/he.json`. Tests read Hebrew text from that file.
 - Never commit environment-specific details: hostnames, IP addresses, bucket names, network details, tokens, real project names or real project data. They belong in the ignored `docs/private/` or in the server's `.env`. Fixtures and screenshots use invented projects.
 - Store statuses, stages, types and severities as English codes; user-visible labels come from the locale files only.
 - Keep the repository root minimal. Every root file is listed and justified in the foundation plan.
+- Never commit `docs/private/`, `.env` or `docker-compose-dev.yml`. `docker/dev.env` holds only fake development values.
 - Kanzo (AGPL) inspired the idea. Never copy its code.
 - Commit email is the GitHub noreply address.
 
