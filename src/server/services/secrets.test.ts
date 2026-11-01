@@ -1,0 +1,114 @@
+import { describe, expect, it } from "vitest"
+import { createSecretScanner, isPlaceholder, REDACTED } from "./secrets.ts"
+
+// Every fake secret is assembled at run time, so no file in the repository holds a string that looks
+// like a real credential (and GitHub push protection has nothing to flag).
+const rep = (chars: string, n: number) => chars.repeat(Math.ceil(n / chars.length)).slice(0, n)
+const ip = (...octets: number[]) => octets.join(".")
+
+const fake = {
+  github_classic: `${"gh"}p_${rep("aB3dE6gH9k", 36)}`,
+  github_oauth: `${"gh"}o_${rep("Zx8Cv7Bn6M", 36)}`,
+  github_pat: `${"github"}_pat_${rep("11ABCDEFG0", 22)}_${rep("aZ09bY18cX", 59)}`,
+  openai: `${"sk"}-proj-${rep("Ab12Cd34Ef", 48)}`,
+  openai_legacy: `${"sk"}-${rep("T3BlbkFJx9", 48)}`,
+  anthropic: `${"sk"}-ant-api03-${rep("Qw-Er_Ty12", 90)}`,
+  slack: `${"xo"}xb-${rep("1234567890", 12)}-${rep("abcdEFGH12", 24)}`,
+  slack_webhook: `https://hooks.${"slack"}.com/services/T0${rep("A1B2C3", 8)}/B0${rep("D4E5F6", 8)}/${rep("x9Y8z7", 24)}`,
+  aws: `${"AK"}IA${rep("Q2W3E4R5T6", 16)}`,
+  google: `${"AI"}za${rep("Sy9_x-Lk2P", 35)}`,
+  telegram: `${"123456"}789:${rep("AAF-xY_12z", 35)}`,
+  jwt: `${"ey"}JhbGciOiJIUzI1NiJ9.${"ey"}JzdWIiOiIxMjM0NTY3ODkwIn0.${rep("dBjftJeZ4C", 43)}`,
+  privateKey: `-----BEGIN ${"OPENSSH"} PRIVATE KEY-----\n${rep("b3BlbnNzaC1rZXk", 60)}\n-----END OPENSSH PRIVATE KEY-----`,
+  rsaKey: `-----BEGIN ${"RSA"} PRIVATE KEY-----`,
+}
+
+const scanner = createSecretScanner(["corp.example", "internal.test"])
+
+describe("secret scanner", () => {
+  it.each([
+    ["github_token", `Pushed with ${fake.github_classic} today`],
+    ["github_token", fake.github_oauth],
+    ["github_token", `token was ${fake.github_pat}`],
+    ["openai_key", `OPENAI ${fake.openai}`],
+    ["openai_key", fake.openai_legacy],
+    ["anthropic_key", fake.anthropic],
+    ["slack_token", fake.slack],
+    ["slack_webhook", `posts to ${fake.slack_webhook}`],
+    ["aws_access_key", `key id ${fake.aws}`],
+    ["google_api_key", `maps key ${fake.google}`],
+    ["telegram_bot_token", `bot ${fake.telegram}`],
+    ["jwt", `Authorization header had ${fake.jwt}`],
+    ["private_key", fake.privateKey],
+    ["private_key", fake.rsaKey],
+    ["url_credentials", "connect to postgres://app:S3cretPassw0rd@db.example.com:5432/app"],
+    ["url_credentials", "https://deploy:hunter22@git.example.org/repo.git"],
+    ["secret_assignment", "set password=Winter2026! in the env"],
+    ["secret_assignment", 'config {"api_key": "a8f5f167f44f4964e6c998dee827110c"}'],
+    ["secret_assignment", "TOKEN: Zq81-kd92-xx01"],
+    ["secret_assignment", "client_secret = 9f8e7d6c5b4a"],
+    ["ipv4_address", `server at ${ip(10, 1, 20, 30)}`],
+    ["ipv4_address", `ssh to ${ip(192, 168, 1, 50)}:22`],
+    ["ipv4_address", `public ${ip(8, 8, 4, 4)}`],
+    ["private_host", "deployed on app01.corp.example yesterday"],
+    ["private_host", "see CORP.EXAMPLE for the VPN"],
+    ["private_host", "db.internal.test."],
+  ])("refuses %s", (rule, text) => {
+    expect(scanner.find(text)).toBe(rule)
+  })
+
+  it.each([
+    ["a commit SHA", "Fixed in 9fceb02d0ae598e95dc970b74767f19372d61af8 and merged"],
+    ["a short SHA", "see 9fceb02 on main"],
+    ["a sha256 checksum", "sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+    ["a UUID", "item 0b8f2d4e-6c1a-4f3e-9d2b-7a5c8e1f3b6d moved"],
+    ["a version number", "upgraded to 1.32.2, then 24.21.0-bookworm-slim and v1.2.3.4"],
+    ["a dotted version run", "release 1.2.3.4.5"],
+    [
+      "loopback and documentation addresses",
+      `binds ${ip(127, 0, 0, 1)}, example ${ip(192, 0, 2, 10)} and ${ip(203, 0, 113, 7)}`,
+    ],
+    ["a masked password", "password=***"],
+    ["a placeholder token", "token: <token>"],
+    ["a redacted value", "api_key=[redacted]"],
+    ["an environment variable reference", `token=${"$"}{GITHUB_TOKEN} and secret: MIKUD_AGENT_TOKEN`],
+    ["prose about tokens", "The token: expired after a week. Rotate the secret: done."],
+    ["a placeholder in a URL", "postgres://mikud:<password>@db.example.com/mikud"],
+    ["a URL with a port", "open https://example.com:8443/path@v2"],
+    ["the public domain of a private one", "corp.example.org is someone else's"],
+    ["a time", "meet at 10:30, deploy at 12:00:01"],
+    ["plain words", "Agents may not delete items. Mark it done when the PR is merged."],
+  ])("passes %s", (_, text) => {
+    expect(scanner.find(text)).toBeNull()
+  })
+
+  it("finds host names only when private domains are configured", () => {
+    expect(createSecretScanner().find("app01.corp.example")).toBeNull()
+    expect(createSecretScanner([" .Corp.Example. "]).find("app01.corp.example")).toBe("private_host")
+  })
+
+  it("redacts every match and keeps the rest of the text", () => {
+    const text = `Thread: fix ${fake.github_classic} leak on ${ip(10, 0, 0, 5)}, password=Winter2026! at app.corp.example, commit 9fceb02`
+    const out = scanner.redact(text)
+    expect(out).toBe(`Thread: fix ${REDACTED} leak on ${REDACTED}, password=${REDACTED} at ${REDACTED}, commit 9fceb02`)
+    expect(scanner.find(out)).toBeNull()
+  })
+
+  it("redacts only the password of URL credentials", () => {
+    expect(scanner.redact("postgres://app:S3cretPassw0rd@db.example.com/app")).toBe(
+      `postgres://app:${REDACTED}@db.example.com/app`,
+    )
+  })
+
+  it("leaves text without secrets unchanged", () => {
+    const text = "Refactor the sync, version 1.2.3, see 0b8f2d4e-6c1a-4f3e-9d2b-7a5c8e1f3b6d"
+    expect(scanner.redact(text)).toBe(text)
+  })
+
+  it.each(["***", "<token>", "[redacted]", `${"$"}{VAR}`, "MIKUD_OWNER_TOKEN", "changeme", ""])(
+    "treats %s as a placeholder",
+    (value) => {
+      expect(isPlaceholder(value)).toBe(true)
+    },
+  )
+})
