@@ -30,3 +30,19 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Release workflow**: a manual Release workflow on `main` (patch, minor or major) runs the whole CI, then `scripts/release.sh`: the version from `package.json`, the `Unreleased` section closed, a release commit and an annotated tag pushed together, `ghcr.io/shlomiporush/mikud:<version>` then `:latest` with provenance and an SBOM, and the GitHub Release from the changelog section. An existing tag is never moved; a run that stopped halfway is finished by the next run; `--dry-run` changes nothing. `scripts/test-release.sh` covers the refusals and the resume paths against a local remote and runs with the guards.
 - **Pull request preview**: `scripts/try-pr.sh <number>|status|restore` builds a pull request's head in a disposable worktree and runs it as its own Compose project (`mikud-pr`) with its own PostgreSQL, generated tokens, Telegram off and invented fixtures, on `127.0.0.1:8091`. It never touches the development stack.
 - **Deployment notes** (`docs/deployment.md`): the database and `.env`, fitting the network behind a NetBird-only reverse proxy, first start, pairing, agents and the reconciler, the one-time move from the dry run, what to do after a restore, and upgrades.
+- **Test morning message**: Settings, Telegram, "Send a test morning message" (`POST /api/v1/telegram/test-message`, owner only) sends today's morning message to the owner's chat at once, audited, without touching the 08:00 run.
+- **Local settings for a dry run**: the development stack also reads an optional, ignored `.env.dev` at the repository root after `docker/dev.env`, for real tokens and the Telegram settings; `scripts/verify.sh` and `scripts/try-pr.sh` never read it.
+
+### Fixed
+
+- **Morning message never sent twice**: a 5xx or an answer that is not Telegram's own JSON (a gateway's error page) may hide a message that went out, so it is `unknown` and never resent; only Telegram's 4xx refusal or no connection at all is retried.
+- **Owner deletes always win over the sync**: the sync checks a suppression inside the transaction that would recreate the item or project, serialized with the owner's delete by an advisory lock, so a delete during a sync run is never undone.
+- **Older snapshots never roll back**: a thread record not newer than the stored activity, and security or Issues counts older than the stored ones, are ignored.
+- **Incomplete T3 reads are not a fresh sync**: the sync tool sends the projects it could not read (`failedProjects`); the run is `partial`, their items are not decided, and the board's freshness comes from the last complete run, with a later partial run shown as such.
+- **No query text or parameters in logs**: unexpected errors are logged as their class name, PostgreSQL SQLSTATE and error code only.
+- **Secret check**: a private key block is redacted whole (to the end of the text when its END line is missing), and environment-style assignments such as `MIKUD_OWNER_TOKEN=...` or `DB_PASSWORD: ...` are caught.
+- **New since your last visit stays put**: the morning page keeps its first read's boundary on every refresh and records the visit only after that read was shown, at the server's time of the read.
+- **Item drafts never overwrite a change made meanwhile**: saving sends the version the typing started on; a conflict keeps the text and offers Reload.
+- **Undo restores everything**: Undo after a type or project change also restores the severity or the goal that the change cleared.
+- **Times in the morning message** follow the same Date Format and Time Format settings as the UI, including `h:mm a`; `browser` writes the default numeric date and the 24-hour clock.
+- **Telegram status**: a failed read shows as a failure, not as an unconfigured bot.

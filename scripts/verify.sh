@@ -80,7 +80,8 @@ run_checks() {
 }
 
 stack() {
-  MIKUD_IMAGE_TAG=verify MIKUD_PORT=0 \
+  # MIKUD_LOCAL_ENV_FILE=/dev/null: a developer's .env.dev (real tokens) never reaches the verification stack.
+  MIKUD_IMAGE_TAG=verify MIKUD_PORT=0 MIKUD_LOCAL_ENV_FILE=/dev/null \
     docker compose -p "$PROJECT" --project-directory "$REPO_ROOT" -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
 }
 

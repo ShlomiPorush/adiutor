@@ -1,6 +1,6 @@
 # Deploying Mikud
 
-Status: written ahead of the launch; nothing here has been run against a production server. The board UI and the Telegram bot are not built yet (rows 7 and 8 of the [foundation plan](project-foundation.md)), so the steps that pair a browser and the bot settings apply once they exist.
+Status: written ahead of the launch; nothing here has been run against a production server. The board UI and the Telegram bot are on `main` (rows 7 and 8 of the [foundation plan](project-foundation.md)); the dry run on the development stack comes first (step 7).
 
 These notes are for the owner, who deploys production himself. Agents never deploy. Replace every example value (`mikud.example.com`, `db.example.com`, `<...>`) with your own; keep the real values in `.env` on the server and in your private notes, never in the repository.
 
@@ -57,7 +57,7 @@ These notes are for the owner, who deploys production himself. Agents never depl
    - `MIKUD_PUBLIC_URL`: `https://` and `DOMAIN`, exactly what the browser's address bar shows. Browser changes whose `Origin` differs are refused, and Telegram links use it.
    - `MIKUD_OWNER_TOKEN`, `MIKUD_AGENT_TOKEN`: from step 3. The owner token is only for you. Agents get only the agent token.
    - `MIKUD_PRIVATE_DOMAINS`: optional; your private network's domains, so agents cannot write host names under them into Mikud.
-   - The Telegram bot settings, once `.env.example` lists them.
+   - `MIKUD_TELEGRAM_BOT_TOKEN` and `MIKUD_TELEGRAM_CHAT_ID`: optional, both or neither (the server refuses to start with one). Without them the bot and the morning message are off. Leave `TELEGRAM_API_URL` empty.
 
 ## 3. Fit the network
 
@@ -118,6 +118,17 @@ Each browser is paired once; there is no login.
 
 The dry run runs on the development stack on your PC with real data. Move its data once, after you approved the dry run (requirements section 9). Production must not run before step 5: the migrations would create empty tables that the restore cannot overwrite.
 
+**Real settings for the dry run.** `docker/dev.env` holds only fake values. Put the real ones in `.env.dev` at the root of the Mikud checkout in WSL; git ignores it, and the development stack reads it after `docker/dev.env`, so its values win:
+
+```text
+MIKUD_OWNER_TOKEN=<openssl rand -hex 32>
+MIKUD_AGENT_TOKEN=<openssl rand -hex 32>
+MIKUD_TELEGRAM_BOT_TOKEN=<from BotFather>
+MIKUD_TELEGRAM_CHAT_ID=<your chat id>
+```
+
+Restrict it (`chmod 600 .env.dev`). A `docker-compose-dev.yml` copied before this change does not read `.env.dev`: copy `docker/docker-compose-dev.example.yml` again, then `scripts/local.sh up`. `scripts/verify.sh` and `scripts/try-pr.sh` never read `.env.dev`. To check the bot without waiting for 08:00, use Settings, "Send a test morning message": it sends today's message now and does not change the 08:00 send.
+
 1. Pause the reconciler's T3 scheduled task.
 2. Stop the local application, and keep its database running. The local stack is the only consumer of the Telegram bot; two consumers would take each other's updates. In the Mikud checkout in WSL:
 
@@ -150,7 +161,7 @@ The dry run runs on the development stack on your PC with real data. Move its da
 7. End every device carried over from the dry run (step 8, "After any restore"), then pair your browsers again (step 5). Device cookies belong to a host, so the browsers paired on the PC do not work on the production host anyway.
 8. Point the reconciler's env file at production: `MIKUD_URL=https://mikud.example.com` and the production agent token. Resume its scheduled task and check its first run.
 9. Point the agents' MCP configuration at production (step 6).
-10. Keep the local stack off: `scripts/local.sh down`. Remove the bot settings from the development stack's environment before you ever start it again.
+10. Keep the local stack off: `scripts/local.sh down`. Remove the bot settings from `.env.dev` (or delete the file) before you ever start it again.
 11. Delete the dump: `rm -r ~/mikud-move`.
 
 ## 8. After any restore
