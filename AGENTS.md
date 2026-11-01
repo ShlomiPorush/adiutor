@@ -25,10 +25,11 @@ One pnpm package (no workspace apps).
 - `drizzle/`: generated SQL migrations and their snapshots. Never edit by hand.
 - `config/`: TypeScript base config, Vitest configs, Drizzle Kit config.
 - `docker/`: toolchain and application Dockerfiles, the development Compose template and `dev.env` (fake development values).
-- `scripts/`: `local.sh`, `verify.sh`; `lib/common.sh` (shared helpers) and `lib/guards.sh` (repository guards).
+- `scripts/`: `local.sh`, `verify.sh`, `try-pr.sh`, `release.sh` and its tests `test-release.sh`; `lib/common.sh` (shared helpers), `lib/guards.sh` (repository guards) and `lib/try-pr-seed.mjs` (invented fixtures for `try-pr.sh`).
 - `src/sync/`: the sync tool that runs on the owner's PC, bundled to `dist/sync/mikud-sync.js` (Node stdlib only at runtime; no imports from `src/server/`). `main.ts` is the entry, `run.ts` one run, `fixtures/` invented T3 and `overview` data for its tests. See `docs/sync.md`.
 - `prompts/`: `reconcile.md`, the instructions of the T3 scheduled task that runs the sync tool.
 - `docs/api.md`: the HTTP API and MCP contract. Change it together with the routes.
+- `docs/deployment.md`: the owner's deployment notes. `.github/workflows/`: `ci.yml` and `release.yml`.
 - `src/web/`, `e2e/`: planned, not created yet.
 
 ## Commands
@@ -37,6 +38,8 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 
 - `scripts/verify.sh`: guards, Biome, types, unit tests, build, schema-versus-migration check, database tests against a disposable PostgreSQL (`mikud-verify`), then the image with health, UID and hardening checks. `--guards-only` for the guards alone; `--changed [BASE]` runs guards only when every change is documentation; `--skip-e2e` is accepted (no end-to-end tests yet).
 - `scripts/local.sh build|up|start|down|status|logs|nuke`: the development stack (`mikud-dev`) from the ignored `docker-compose-dev.yml`. Create it once with `cp docker/docker-compose-dev.example.yml docker-compose-dev.yml`. Serves `http://127.0.0.1:8090`; `MIKUD_PORT` changes the port.
+- `scripts/try-pr.sh <number>|status|restore`: runs a pull request's head as the separate Compose project `mikud-pr` (own PostgreSQL, generated tokens in a 0600 file under `~/.cache/mikud/try-pr`, Telegram off, invented fixtures) on `http://127.0.0.1:8091`; `MIKUD_PR_PORT` changes the port. Never touches `mikud-dev`. `restore` removes the stack, its data, image and worktree.
+- `scripts/release.sh --target ghcr --bump <patch|minor|major> [--dry-run]`: run by the manual Release workflow on `main`; never by agents except `--dry-run`. `scripts/test-release.sh` tests it offline and runs with the guards.
 - A single tool in the toolchain: `source scripts/lib/common.sh && build_toolchain && in_toolchain "pnpm test"`.
 - New migration after a schema change: `in_toolchain "pnpm db:generate --name <change>"`. `verify.sh` fails when the schema and the migrations disagree.
 
