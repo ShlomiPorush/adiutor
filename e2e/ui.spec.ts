@@ -78,18 +78,35 @@ test("the morning view shows what waits on the owner, and the bell counts it", a
   await expect(bell).toHaveAttribute("aria-label", new RegExp(`^${he.bell.title}`))
 })
 
-test("new since the last visit stays on the page when it refreshes", async () => {
+/**
+ * Another tab of the paired browser with a clock the test moves: pages refresh every 30 seconds, so moving
+ * the clock 31 seconds brings the background refresh at once. The caller closes its context.
+ */
+async function tabWithClock(browser: Browser, use: object): Promise<Page> {
+  const context = await browser.newContext({ ...use, storageState: await page.context().storageState() })
+  await context.clock.install()
+  return context.newPage()
+}
+
+const REFRESH = 31_000
+
+test("new since the last visit stays on the page when it refreshes", async ({ browser }, testInfo) => {
   const newTitle = `Fresh note ${run}`
   await api("POST", "/items", { type: "task", title: newTitle })
-  const visited = page.waitForResponse((r) => r.url().endsWith("/api/v1/visits") && r.status() === 201)
-  await page.goto("/")
-  await expect(page.locator("#new")).toContainText(newTitle)
-  // The visit is recorded after the first read; a refresh after it must still show what was new then.
-  await visited
-  const refreshed = page.waitForResponse((r) => r.url().includes("/api/v1/morning?since=") && r.ok())
-  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")))
-  await refreshed
-  await expect(page.locator("#new")).toContainText(newTitle)
+  const tab = await tabWithClock(browser, testInfo.project.use)
+  try {
+    const visited = tab.waitForResponse((r) => r.url().endsWith("/api/v1/visits") && r.status() === 201)
+    await tab.goto("/")
+    await expect(tab.locator("#new")).toContainText(newTitle)
+    // The visit is recorded after the first read; a refresh after it must still show what was new then.
+    await visited
+    const refreshed = tab.waitForResponse((r) => r.url().includes("/api/v1/morning?since=") && r.ok())
+    await tab.clock.fastForward(REFRESH)
+    await refreshed
+    await expect(tab.locator("#new")).toContainText(newTitle)
+  } finally {
+    await tab.context().close()
+  }
 })
 
 test("an item opens over the page, changes status at once, and Undo puts it back", async () => {
@@ -111,30 +128,34 @@ test("an item opens over the page, changes status at once, and Undo puts it back
   await expect(page.getByRole("dialog")).toHaveCount(0)
 })
 
-test("saving over a change made meanwhile keeps the draft and offers Reload", async () => {
+test("saving over a change made meanwhile keeps the draft and offers Reload", async ({ browser }, testInfo) => {
   const created = await api<{ id: string; version: number }>("POST", "/items", {
     type: "task",
     title: `Draft target ${run}`,
   })
-  await page.goto(`/?item=${created.id}`)
-  const dialog = page.getByRole("dialog")
-  const bodyField = dialog.getByLabel(he.item.body, { exact: true })
-  await bodyField.fill("The owner's text")
-  // Someone else changes the same field; the dialog's background refresh then shows the new version.
-  await api("PATCH", `/items/${created.id}`, { version: created.version, body: "Changed meanwhile" })
-  const refreshed = page.waitForResponse((r) => r.url().endsWith(`/api/v1/items/${created.id}`) && r.ok())
-  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")))
-  await refreshed
+  const tab = await tabWithClock(browser, testInfo.project.use)
+  try {
+    await tab.goto(`/?item=${created.id}`)
+    const dialog = tab.getByRole("dialog")
+    const bodyField = dialog.getByLabel(he.item.body, { exact: true })
+    await bodyField.fill("The owner's text")
+    // Someone else changes the same field; the dialog's background refresh then shows the new version.
+    await api("PATCH", `/items/${created.id}`, { version: created.version, body: "Changed meanwhile" })
+    const refreshed = tab.waitForResponse((r) => r.url().endsWith(`/api/v1/items/${created.id}`) && r.ok())
+    await tab.clock.fastForward(REFRESH)
+    await refreshed
 
-  await dialog.getByRole("button", { name: he.item.saveChanges }).click()
-  await expect(dialog.getByRole("status").filter({ hasText: he.item.conflictTitle })).toBeVisible()
-  await expect(bodyField).toHaveValue("The owner's text")
-  expect((await api<{ item: { body: string } }>("GET", `/items/${created.id}`)).item.body).toBe("Changed meanwhile")
+    await dialog.getByRole("button", { name: he.item.saveChanges }).click()
+    await expect(dialog.getByRole("status").filter({ hasText: he.item.conflictTitle })).toBeVisible()
+    await expect(bodyField).toHaveValue("The owner's text")
+    const stored = await api<{ item: { body: string } }>("GET", `/items/${created.id}`)
+    expect(stored.item.body).toBe("Changed meanwhile")
 
-  await dialog.getByRole("button", { name: he.item.conflictReload }).click()
-  await expect(bodyField).toHaveValue("Changed meanwhile")
-  await page.keyboard.press("Escape")
-  await expect(page.getByRole("dialog")).toHaveCount(0)
+    await dialog.getByRole("button", { name: he.item.conflictReload }).click()
+    await expect(bodyField).toHaveValue("Changed meanwhile")
+  } finally {
+    await tab.context().close()
+  }
 })
 
 test("quick add files a note in the inbox", async () => {
