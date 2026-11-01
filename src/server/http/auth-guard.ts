@@ -111,7 +111,21 @@ async function getSession(deps: AuthGuardDeps, c: Context): Promise<Response> {
     const check = await checkSession(deps.ctx, found.session.id, "check")
     if (!check.ok) return new Response("null", { headers: { "content-type": "application/json" } })
   }
-  return deps.auth.handler(c.req.raw)
+  return handle(deps.auth, c.req.raw)
+}
+
+/**
+ * Runs Better Auth's handler. An error it throws (anything but its own APIError answers, which come back as they
+ * are) is logged by errorFacts only, never by its message or query, and answered with a flat, safe 500 whose code
+ * the UI turns into its own sentence.
+ */
+async function handle(auth: Auth, request: Request): Promise<Response> {
+  try {
+    return await auth.handler(request)
+  } catch (error) {
+    log.error("a sign-in request failed", errorFacts(error))
+    return answer(500, "internal_error", "The server failed. Try again in a moment.")
+  }
 }
 
 /**
@@ -148,7 +162,7 @@ export async function runLocked(deps: AuthGuardDeps, route: Route, request: Requ
     // The challenge this request answers (verify), from its signed two_factor cookie.
     const answered = route === "verify" ? signedFromRequest(request.headers, names.twoFactor, names.secret) : null
 
-    const response = await deps.auth.handler(request)
+    const response = await handle(deps.auth, request)
     if (response.status < 200 || response.status >= 300) return response
 
     if (route === "enable") return withoutBackupCodes(response)

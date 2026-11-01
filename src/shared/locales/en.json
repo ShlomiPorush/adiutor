@@ -700,6 +700,7 @@
       "codeExpired": "The sign-in took too long. Enter your password again.",
       "rateLimited": "Too many attempts. Wait 5 minutes and try again.",
       "busy": "Mikud is busy with another sign-in change. Try again in a moment.",
+      "server": "The server failed. Try again in a moment.",
       "failed": "Could not sign in: {reason}",
       "usernameInvalid": "Use {min} to {max} letters, digits, dots or underscores, without spaces.",
       "passwordShort": "The password needs at least {min} characters.",

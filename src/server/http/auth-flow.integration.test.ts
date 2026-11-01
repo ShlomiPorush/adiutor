@@ -1,3 +1,4 @@
+import { inspect } from "node:util"
 import { count, eq, sql } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
@@ -648,33 +649,83 @@ describe("result review fixes", () => {
     expect((await api(desk)).status).toBe(200)
   })
 
-  it("logs a failure inside Better Auth without its query, parameters or token", async () => {
+  it("logs a failure inside Better Auth without its query, parameters or token, and answers a safe 500", async () => {
     await browser().setup()
     await t.ctx.db.execute(
       sql`alter table auth_session add constraint test_no_session check (token <> token) not valid`,
     )
-    const lines: string[] = []
-    const capture = (line: unknown) => void lines.push(String(line))
-    const error = vi.spyOn(console, "error").mockImplementation(capture)
-    const warn = vi.spyOn(console, "warn").mockImplementation(capture)
-    const info = vi.spyOn(console, "log").mockImplementation(capture)
+    // Every argument of every console method, and every raw write to stdout and stderr, serialized in full.
+    const output: string[] = []
+    const keep = (...args: unknown[]) =>
+      void output.push(args.map((arg) => inspect(arg, { depth: 10, showHidden: true })).join(" "))
+    const spies = (["error", "warn", "log", "info", "debug", "trace"] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation(keep),
+    )
+    const writes = [process.stdout, process.stderr].map((stream) =>
+      vi.spyOn(stream, "write").mockImplementation(((chunk: unknown) => {
+        output.push(String(chunk))
+        return true
+      }) as typeof stream.write),
+    )
     let res: Awaited<ReturnType<TestBrowser["passwordSignIn"]>>
     try {
       res = await browser("b").passwordSignIn()
     } finally {
-      error.mockImplementation(() => {})
-      warn.mockRestore()
-      info.mockRestore()
+      for (const spy of [...spies, ...writes]) spy.mockRestore()
+      vi.spyOn(console, "error").mockImplementation(() => {})
       await t.ctx.db.execute(sql`alter table auth_session drop constraint if exists test_no_session`)
     }
-    expect(res.status).toBe(500)
-    expect(lines.length).toBeGreaterThan(0)
-    const logged = `${lines.join("\n")}\n${JSON.stringify(res.json)}`
+    expect([res.status, res.json]).toEqual([500, { code: "internal_error", message: expect.any(String) }])
+    expect(output.length).toBeGreaterThan(0)
+    const logged = `${output.join("\n")}\n${JSON.stringify(res.json)}`
     expect(logged).toContain('"sqlstate":"23514"')
-    for (const leak of [/insert into/i, /auth_session/, /params/i, /failed query/i, /test_no_session/, /\$\d/])
+    for (const leak of [
+      /SERVER_ERROR/,
+      /insert into/i,
+      /auth_session/,
+      /params/i,
+      /parameters/i,
+      /failed query/i,
+      /test_no_session/,
+      /\$\d/,
+    ])
       expect(logged).not.toMatch(leak)
     // No value of the rows it tried to write: tokens and ids are long random strings.
     expect(logged).not.toMatch(/[A-Za-z0-9]{32,}/)
+  })
+
+  it("survives the lock connection dying while the lock is held; the next request takes the lock", async () => {
+    const own = createDatabase(t.url)
+    const uncaught: unknown[] = []
+    const onUncaught = (error: unknown) => void uncaught.push(error)
+    process.on("uncaughtException", onUncaught)
+    process.on("unhandledRejection", onUncaught)
+    try {
+      build(own.lockAuth)
+      const secret = await browser().owner()
+      const unlock = await own.lockAuth()
+      const holders = await t.ctx.db.execute<{ pid: number }>(sql`
+        select pid from pg_locks
+        where locktype = 'advisory' and granted and classid = 0 and objsubid = 1
+          and objid = ${sql.raw(String(AUTH_LOCK_KEY))}
+          and database = (select oid from pg_database where datname = current_database())`)
+      const [holder] = [...holders]
+      expect(holder?.pid).toBeGreaterThan(0)
+      // The server ends the backend that holds the lock, as a network drop or an administrator would.
+      await t.ctx.db.execute(sql`select pg_terminate_backend(${holder?.pid ?? 0})`)
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      // A controlled failure: the release says the lock was lost, and sends nothing to the dead connection.
+      await expect(unlock()).rejects.toMatchObject({ name: "AuthLockLost" })
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      expect(uncaught).toEqual([])
+      // The next auth request opens a new connection, takes the lock and succeeds.
+      await browser("next").signIn(secret)
+      expect(uncaught).toEqual([])
+    } finally {
+      process.off("uncaughtException", onUncaught)
+      process.off("unhandledRejection", onUncaught)
+      await own.close()
+    }
   })
 
   it("lists only the sessions the clocks allow, and the sweep ends one that expired silently", async () => {

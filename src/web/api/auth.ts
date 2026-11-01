@@ -19,6 +19,7 @@ export type AuthFailure =
   | "code_expired"
   | "rate_limited"
   | "busy"
+  | "server"
   | "session_ended"
   | "other"
 
@@ -34,6 +35,7 @@ export function authFailure(error: AuthError, step: "password" | "code"): AuthFa
   if (code === "SESSION_ENDED") return "session_ended"
   if (error.status === 429 || code === "RATE_LIMITED") return "rate_limited"
   if (error.status === 503) return "busy"
+  if (error.status >= 500) return "server"
   if (code === "INVALID_TWO_FACTOR_COOKIE" || code === "TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE") return "code_expired"
   if (step === "code" && (code === "INVALID_CODE" || error.status === 401)) return "wrong_code"
   if (code === "INVALID_PASSWORD" || code === "INVALID_USERNAME_OR_PASSWORD" || error.status === 401)
@@ -49,4 +51,5 @@ export const FAILURE_TEXT: Record<Exclude<AuthFailure, "other" | "session_ended"
   code_expired: "auth.error.codeExpired",
   rate_limited: "auth.error.rateLimited",
   busy: "auth.error.busy",
+  server: "auth.error.server",
 }

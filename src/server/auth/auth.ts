@@ -1,6 +1,5 @@
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
-import { isAPIError } from "better-auth/api"
 import { twoFactor, username } from "better-auth/plugins"
 import { SESSION_LIBRARY_DAYS } from "../../shared/auth.ts"
 import type { Db } from "../db/client.ts"
@@ -26,15 +25,12 @@ export function createAuth(options: { db: Db; secret: string; publicUrl: URL }) 
     baseURL: publicUrl.origin,
     trustedOrigins: [publicUrl.origin],
     telemetry: { enabled: false },
-    // Better Auth would log the raw error, whose message can hold a failed query with its parameters (a session
-    // token, a password hash). Only what errorFacts allows is logged: the error class, its SQLSTATE, its code.
+    // Better Auth and its router would log the raw error, whose message can hold a failed query with its
+    // parameters (a session token, a password hash). Its own log lines go through logBetterAuth, and an error that
+    // is not an APIError is thrown out of the handler (APIError answers stay as they are), where Mikud's wrapper
+    // (http/auth-guard.ts) logs only what errorFacts allows and answers a safe 500.
     logger: { level: "error", log: logBetterAuth },
-    onAPIError: {
-      onError: (error) => {
-        if (isAPIError(error) && error.statusCode < 500) return
-        log.error("a sign-in request failed", errorFacts(error))
-      },
-    },
+    onAPIError: { throw: true },
     database: drizzleAdapter(options.db, {
       provider: "pg",
       schema: {
