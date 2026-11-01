@@ -259,7 +259,12 @@ export type Morning = {
   agentUpdates: AgentUpdateGroup[]
   projects: MorningProject[]
   inboxCount: number
-  sync: { lastSuccessAt: string | null; stale: boolean; securityLastSuccessAt: string | null }
+  sync: {
+    lastSuccessAt: string | null
+    stale: boolean
+    lastPartialAt: string | null
+    securityLastSuccessAt: string | null
+  }
 }
 
 export type Page<T> = { entries: T[]; nextCursor: string | null }

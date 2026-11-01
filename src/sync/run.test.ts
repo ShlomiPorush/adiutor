@@ -115,7 +115,12 @@ describe("runSync", () => {
     expect(received.map((r) => r.url)).toEqual(["/api/v1/sync/t3", "/api/v1/sync/security"])
     expect(received.every((r) => r.method === "POST" && r.auth === `Bearer ${token}`)).toBe(true)
 
-    const t3 = received[0]?.body as { collectedAt: string; projects: unknown[]; threads: Array<{ threadId: string }> }
+    const t3 = received[0]?.body as {
+      collectedAt: string
+      projects: unknown[]
+      threads: Array<{ threadId: string }>
+      failedProjects: string[]
+    }
     expect(t3.collectedAt).toBe("2026-11-01T05:31:00.000Z")
     expect(t3.projects).toEqual([
       { t3ProjectId: "p-widget", title: "Widget", repo: "acme/widget" },
@@ -125,6 +130,8 @@ describe("runSync", () => {
       { t3ProjectId: "p-missing", title: "Missing", repo: "acme/missing" },
     ])
     expect(t3.threads.map((t) => t.threadId)).toEqual(["thread-w1", "thread-w2", "thread-w3", "thread-g1", "thread-z1"])
+    // The server must not take the missing threads of an unread project as a complete picture.
+    expect(t3.failedProjects).toEqual(["p-notes"])
 
     const security = received[1]?.body as { collectedAt: string; repos: Array<{ repo: string }> }
     expect(security.collectedAt).toBe("2026-11-01T05:31:00.000Z")

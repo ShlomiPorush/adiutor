@@ -150,13 +150,15 @@
     "discard": "Discard"
   },
   "sync": {
-    "title": "Last successful sync of T3 threads",
+    "title": "Last complete sync of T3 threads",
     "last": "Synced",
     "never": "Never synced",
     "staleTitle": "The T3 sync is out of date",
     "staleBody": "Items and statuses may have changed since the last successful sync, at",
     "neverTitle": "T3 has not been synced yet",
-    "neverBody": "Items appear once the sync tool on your PC runs for the first time."
+    "neverBody": "Items appear once the sync tool on your PC runs for the first time.",
+    "partial": "Partial sync",
+    "partialBody": "A later sync could not read every project, at"
   },
   "bell": {
     "title": "Needs you",

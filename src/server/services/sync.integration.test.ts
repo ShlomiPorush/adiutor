@@ -331,6 +331,20 @@ describe("applyT3Snapshot", () => {
     expect(logged).not.toMatch(/insert into|params/i)
   })
 
+  it("records a run with unread projects as partial and never decides their items", async () => {
+    await applyT3Snapshot(t.ctx, snapshot([thread("n1", { t3ProjectId: "t3-notes", status: "waiting" })]))
+    const item = await itemOf("n1")
+    await updateItem(t.ctx, agent, item?.id ?? "", item?.version ?? 0, { status: "in_progress" })
+    // The threads of t3-notes could not be read: its item keeps the agent's status in this run.
+    const result = await applyT3Snapshot(t.ctx, snapshot([thread("a")], { failedProjects: ["t3-notes"] }))
+    expect(result.outcome).toBe("partial")
+    expect(result.errors).toEqual([{ record: "threads:t3-notes", code: "threads_not_read" }])
+    expect(result.counts).toMatchObject({ itemsCreated: 1, itemsNotDecided: 1 })
+    expect(await itemOf("n1")).toMatchObject({ status: "in_progress" })
+    const runs = await t.ctx.db.select().from(syncRuns)
+    expect(runs.map((r) => r.outcome)).toEqual(["succeeded", "partial"])
+  })
+
   it("leaves items an agent linked through startThread to the agent's status until the threads say otherwise", async () => {
     const started = await startThread(t.ctx, agent, { threadId: "s-1", parentThreadId: null, title: "Started" })
     await applyT3Snapshot(t.ctx, snapshot([thread("s-1", { status: "running" })]))

@@ -86,6 +86,12 @@ function MorningBody({
           ) : (
             t("sync.neverBody")
           )}
+          {morning.sync.lastPartialAt ? (
+            <>
+              {" "}
+              {t("sync.partialBody")} <Time value={morning.sync.lastPartialAt} mode="full" />.
+            </>
+          ) : null}
         </Banner>
       ) : null}
 
@@ -113,7 +119,15 @@ function MorningBody({
             {morning.sync.lastSuccessAt ? <Time value={morning.sync.lastSuccessAt} /> : "-"}
           </b>
           <small>
-            {morning.sync.lastSuccessAt ? <Time value={morning.sync.lastSuccessAt} mode="ago" /> : t("sync.never")}
+            {morning.sync.lastPartialAt ? (
+              <>
+                {t("sync.partial")} <Time value={morning.sync.lastPartialAt} mode="ago" />
+              </>
+            ) : morning.sync.lastSuccessAt ? (
+              <Time value={morning.sync.lastSuccessAt} mode="ago" />
+            ) : (
+              t("sync.never")
+            )}
           </small>
         </div>
       </div>

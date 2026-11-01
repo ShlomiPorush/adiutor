@@ -135,6 +135,8 @@ export const t3SnapshotBody = z.object({
       }),
     )
     .max(20_000),
+  /** T3 projects whose threads could not be read in this run: their items are not decided. */
+  failedProjects: z.array(externalId).max(2_000).optional(),
 })
 
 const count = z.number().int().min(0)

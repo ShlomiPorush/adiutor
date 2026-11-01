@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { items, securitySources } from "../db/schema.ts"
+import { items, securitySources, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { pairDevice, recordVisit, updateSettings } from "./admin.ts"
 import { addComment, captureItem, createItem, linkThread, updateItem } from "./items.ts"
@@ -176,6 +176,16 @@ describe("morning", () => {
     expect((await morning(t.ctx)).sync.stale).toBe(false)
     t.clock.travel(27 * HOUR)
     expect((await morning(t.ctx)).sync.stale).toBe(true)
+  })
+
+  it("takes freshness from the last complete sync and shows a later partial one as such", async () => {
+    await applyT3Snapshot(t.ctx, { collectedAt: t.ctx.clock(), projects: [], threads: [] })
+    t.clock.travel(27 * HOUR)
+    await applyT3Snapshot(t.ctx, { collectedAt: t.ctx.clock(), projects: [], threads: [], failedProjects: ["t3-a"] })
+    const [complete, partial] = await t.ctx.db.select().from(syncRuns).orderBy(syncRuns.startedAt)
+    expect(partial?.outcome).toBe("partial")
+    const sync = (await morning(t.ctx)).sync
+    expect(sync).toMatchObject({ lastSuccessAt: complete?.finishedAt, stale: true, lastPartialAt: partial?.finishedAt })
   })
 })
 

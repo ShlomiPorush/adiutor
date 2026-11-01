@@ -26,6 +26,7 @@ class Run {
   readonly errors: { record: string; code: string }[] = []
   private attempted = 0
   private failed = 0
+  private incomplete = false
 
   constructor(readonly kind: string) {}
 
@@ -46,8 +47,14 @@ class Run {
     }
   }
 
+  /** The input itself was incomplete (projects the sync tool could not read): at best partial. */
+  missing(name: string, code: string) {
+    this.incomplete = true
+    this.errors.push({ record: name, code })
+  }
+
   get outcome(): SyncResult["outcome"] {
-    if (this.failed === 0) return "succeeded"
+    if (this.failed === 0) return this.incomplete ? "partial" : "succeeded"
     return this.failed === this.attempted ? "failed" : "partial"
   }
 }
@@ -110,6 +117,8 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
     const firstRun = !previous
 
     const projectIds = new Map<string, string>()
+    const unread = new Set(snapshot.failedProjects ?? [])
+    for (const id of unread) run.missing(`threads:${id}`, "threads_not_read")
     await hooks.afterLoad?.()
 
     // 1. Projects: upsert by T3 project id, except those the owner deleted.
@@ -253,7 +262,16 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       entry.links.push(link)
       grouped.set(item.id, entry)
     }
+    // An item of a project whose threads were not read is not decided in this run.
+    const unreadProjectIds = new Set([...unread].map((id) => projectIds.get(id)).filter((id) => id !== undefined))
     const decisions = [...grouped.values()]
+      .filter(({ item, links }) => {
+        const notRead =
+          (item.projectId !== null && unreadProjectIds.has(item.projectId)) ||
+          links.some((l) => l.t3ProjectId !== null && unread.has(l.t3ProjectId))
+        if (notRead) run.add("itemsNotDecided")
+        return !notRead
+      })
       .map(({ item, links }) => ({ item, target: syncDecision(item, links) }))
       .filter((d) => d.target !== null)
 

@@ -97,7 +97,7 @@ Fields are always present; `null` when unset.
   projects: [ {id, name, slug, stage, goal: GoalProgress | null, whereWeAre, openItems,
                openIssues, openIssuesAsOf, repo} ],
   inboxCount,
-  sync: {lastSuccessAt, stale, securityLastSuccessAt}
+  sync: {lastSuccessAt, stale, lastPartialAt, securityLastSuccessAt}
 }
 ```
 
@@ -107,7 +107,8 @@ Fields are always present; `null` when unset.
 - `security`: one line per project with something to say. `critical` counts in every project, `high` only at stage `production` (0 elsewhere). Counts come from enabled `dependabot`, `code_scanning` and `secret_scanning` sources plus open `security` items of the project. `asOf` is the oldest as-of time of the project's enabled sources (null when it has none); `stale` is true when that time is unknown or older than 26 hours.
 - `agentUpdates`: comments and status changes by agents and the sync after `since`, grouped by project (`projectId: null` for the inbox), groups and updates newest first, at most 300 of each kind.
 - `projects`: projects with at least one open item, by name.
-- `sync.stale`: no successful T3 sync, or the last one finished more than 26 hours ago.
+- `sync.lastSuccessAt`: when the last complete T3 run (`succeeded`) finished; a `partial` run may have missed whole projects, so it never counts as fresh. `sync.lastPartialAt`: when the latest `partial` T3 run finished, only when it is later than `lastSuccessAt` (else null). `sync.securityLastSuccessAt`: the latest security run that was `succeeded` or `partial`.
+- `sync.stale`: no complete T3 sync, or the last one finished more than 26 hours ago.
 
 ### Projects
 
@@ -152,7 +153,7 @@ Item rules: entering `done` or `not_relevant` sets `closedAt`; any other status 
 
 **Start of thread**, in one transaction: refuses `not_top_level` when `parentThreadId` is set; returns the item already linked to `threadId` (also on a retry or a race); otherwise links `itemId`, or creates a `task` in `projectId`, or in the project whose `t3ProjectId` matches, or in the inbox. The item is set `in_progress` (a closed item reopens). `suppressed` when the owner deleted this thread's item; `conflict` when `itemId` differs from the item the thread is linked to.
 
-**Sync routes** accept a bearer token only (a browser cookie is `forbidden`). Changes are recorded with actor kind `sync`. Per-record failures are collected in `errors` (`record` is `project:<t3ProjectId>`, `thread:<threadId>`, `item:<id>` or `repo:<owner/name>`; `code` is an error code) and never stop the run; `outcome` is `partial` when some failed, `failed` when all did.
+**Sync routes** accept a bearer token only (a browser cookie is `forbidden`). Changes are recorded with actor kind `sync`. Per-record failures are collected in `errors` (`record` is `project:<t3ProjectId>`, `thread:<threadId>`, `item:<id>`, `repo:<owner/name>` or `threads:<t3ProjectId>`; `code` is an error code) and never stop the run; `outcome` is `partial` when some failed or the snapshot lists `failedProjects`, `failed` when all failed.
 
 T3 snapshot, a full read of every top-level and child thread of every T3 project, never a delta:
 
@@ -161,15 +162,18 @@ T3 snapshot, a full read of every top-level and child thread of every T3 project
   collectedAt,
   projects: [ {t3ProjectId, title, repo?: "owner/name" | null} ],
   threads:  [ {threadId, t3ProjectId | null, title, status, settled, settledAt?: time | null,
-               parentThreadId?: id | null, updatedAt} ]
+               parentThreadId?: id | null, updatedAt} ],
+  failedProjects?: [ t3ProjectId ]
 }
 ```
+
+- `failedProjects`: T3 projects whose threads the sync tool could not read in this run. Each is recorded in `errors` as `{record: "threads:<t3ProjectId>", code: "threads_not_read"}`, the run is `partial`, and no item of those projects (by its project or by a link's `t3ProjectId`) is decided in this run (`counts.itemsNotDecided`).
 
 - Projects: created by `t3ProjectId` with the redacted title as name, `stage: null` and the repository; an existing project keeps its name and only gets a repository when it has none; a suppressed project id is skipped.
 - A thread with a `parentThreadId` never gets an item. When it is linked, the link moves to its top-level thread (the parent's parent, as far as the snapshot knows): deleted when that thread has its own link, re-pointed otherwise.
 - A top-level thread without an item and without a suppression (of the thread or its project) gets a `task` titled from the redacted thread title, in the mapped project or the inbox: when unsettled, whatever its age (`waiting` → `waiting_on_you`, otherwise `in_progress`); when settled, only if it settled (`settledAt`, else `updatedAt`) at most 7 days before `collectedAt` (status `done`). Items created by the first successful run are `imported`.
-- Every link is refreshed (title, status, settled, `updatedAt` as last activity), then every item with a link is decided over all its links: any `running`, `starting`, `queued` or `preparing` → `in_progress`; otherwise any `waiting` → `waiting_on_you`; otherwise all settled → `done`; otherwise no change. The sync never moves an item out of `done` or `not_relevant`, never sets `done` on `future` or `todo`, and leaves a status the owner set at or after the threads' latest activity. Each change is a compare-and-set on the version read in that run; a changed or deleted item is skipped (`counts.itemsSkipped`) and decided again next run.
-- Counts: `projectsCreated`, `projectsUpdated`, `projectsSuppressed`, `childLinksFolded`, `threadsUpdated`, `threadsSuppressed`, `threadsTooOld`, `itemsCreated`, `itemsUpdated`, `itemsSkipped` (only the non-zero ones are present).
+- Every link is refreshed (title, status, settled, `updatedAt` as last activity) when the record's `updatedAt` is newer than the stored last activity (an older or equal record is ignored, so snapshots applied out of order never roll back), then every item with a link is decided over all its links: any `running`, `starting`, `queued` or `preparing` → `in_progress`; otherwise any `waiting` → `waiting_on_you`; otherwise all settled → `done`; otherwise no change. The sync never moves an item out of `done` or `not_relevant`, never sets `done` on `future` or `todo`, and leaves a status the owner set at or after the threads' latest activity. Each change is a compare-and-set on the version read in that run; a changed or deleted item is skipped (`counts.itemsSkipped`) and decided again next run.
+- Counts: `projectsCreated`, `projectsUpdated`, `projectsSuppressed`, `childLinksFolded`, `threadsUpdated`, `threadsSuppressed`, `threadsTooOld`, `itemsCreated`, `itemsUpdated`, `itemsSkipped`, `itemsNotDecided` (only the non-zero ones are present).
 
 Security snapshot, from the `overview` collector:
 
@@ -181,7 +185,7 @@ Security snapshot, from the `overview` collector:
 }
 ```
 
-Each repository is matched to every project whose `githubRepo` equals it, ignoring case (`counts.reposUnmatched` otherwise). The project's open Issues count and its time are replaced; each listed family is upserted; families not listed keep their last values. `asOf` is the source's last success, not the sync time. An unchanged project writes nothing.
+Each repository is matched to every project whose `githubRepo` equals it, ignoring case (`counts.reposUnmatched` otherwise). The project's open Issues count and its time are replaced; each listed family is upserted; families not listed keep their last values. A family, or the open Issues count, whose as-of time is older than the stored one is ignored. `asOf` is the source's last success, not the sync time. An unchanged project writes nothing.
 
 ### Owner settings
 

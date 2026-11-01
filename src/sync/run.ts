@@ -165,7 +165,8 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
       (invalid ? `, ${invalid} records skipped` : "") +
       (failed.length ? `, ${failed.length} of ${projects.length} projects not read` : ""),
   )
-  const t3Payload = { collectedAt, projects: projectRecords, threads: threadRecords }
+  // The server must not read the missing threads of an unread project as "no threads".
+  const t3Payload = { collectedAt, projects: projectRecords, threads: threadRecords, failedProjects: failed }
   const canSendT3 = config.cliPath !== undefined && failed.length < projects.length
 
   // 4. Security for the GitHub repositories of the projects.
