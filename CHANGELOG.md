@@ -46,3 +46,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Undo restores everything**: Undo after a type or project change also restores the severity or the goal that the change cleared.
 - **Times in the morning message** follow the same Date Format and Time Format settings as the UI, including `h:mm a`; `browser` writes the default numeric date and the 24-hour clock.
 - **Telegram status**: a failed read shows as a failure, not as an unconfigured bot.
+- **Owner deletes win over child-thread folding**: folding a child thread's link onto its top-level thread takes the same thread locks as a delete and locks the item, and a delete suppresses the thread ids it actually removes, so a deleted item is not recreated from the moved link.
+- **New since your last visit never hides a slow write**: every transaction of the server ends after 30 seconds (`transaction_timeout`, so PostgreSQL 17 or newer is required), and a visit is recorded one minute before the read it marks as seen. Items written in that minute may show as new twice.
+- **A failed security or Issues read never overwrites known counts**: a record without a time is ignored when the stored one has a time.
+- **Partly read T3 projects**: a project whose thread list had invalid records is sent as `failedProjects`, so its items are not decided from an incomplete picture.
+- **Secret check**: after an environment-style secret name, any value of 8 or more characters that is not a placeholder is caught, lower-case hex and passphrases included.
+- **Security audit rows** record the Issues count that was stored, not one that was refused as older.
+- **Test morning message**: a send that may have gone out (a timeout, a lost connection, a 5xx) is reported as `telegram_uncertain` with "check the chat before sending again", not as refused. The send is audited before it goes out and again with its outcome; when only the outcome cannot be recorded, the answer is still success, with a warning.
