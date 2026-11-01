@@ -257,6 +257,9 @@ export const jobRuns = pgTable(
     state: text("state", { enum: JOB_STATES }).notNull(),
     at: at("at").notNull().defaultNow(),
     detail: text("detail"),
+    // A sent morning message: the start of its read minus VISIT_SAFETY_MARGIN_MS, where the next message's
+    // "new since" starts (see the invariant in db/client.ts). Null on runs from before it was recorded.
+    coversUntil: at("covers_until"),
   },
   (t) => [
     unique("job_runs_job_local_date_unique").on(t.job, t.localDate),

@@ -1,0 +1,1 @@
+ALTER TABLE "job_runs" ADD COLUMN "covers_until" timestamp with time zone;

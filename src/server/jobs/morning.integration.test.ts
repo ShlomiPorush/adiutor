@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import he from "../../shared/locales/he.json"
+import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { jobRuns, securitySources, syncRuns, visits } from "../db/schema.ts"
 import { updateSettings } from "../services/admin.ts"
 import type { Ctx } from "../services/context.ts"
@@ -202,5 +203,48 @@ describe("morning job", () => {
     expect(await job().tick()).toMatchObject({ action: "sent" })
     expect(standIn.sent[1]?.text.split("\n")[1]).toBe(m.new.replace("{count}", "0"))
     expect((await t.ctx.db.select().from(jobRuns).where(eq(jobRuns.localDate, "2026-11-02")))[0]?.state).toBe("sent")
+  })
+
+  it("counts a write that committed between the message's read and its send in the next message", async () => {
+    await freshSync()
+    const readAt = SUNDAY_0800
+    const api = new BotApi(TOKEN, standIn.url)
+    const sending = new MorningJob({
+      ctx,
+      publicUrl: PUBLIC_URL,
+      send: async (text, signal) => {
+        // A write whose transaction began before the read (so its time is earlier) and committed after it.
+        now = new Date(readAt.getTime() - 10_000)
+        await createItem(ctx, agent, { type: "task", title: "Committed during the send" })
+        now = new Date(readAt.getTime() + 5_000)
+        await api.sendMessage(CHAT, text, signal)
+      },
+    })
+    expect(await sending.tick()).toMatchObject({ action: "sent" })
+    // The read did not see the item.
+    expect(standIn.sent[0]?.text).toBe(
+      'Nothing is waiting on you today. <a href="http://127.0.0.1:8090/">Open the board</a>',
+    )
+
+    now = new Date("2026-11-02T06:00:00Z")
+    await freshSync()
+    expect(await job().tick()).toMatchObject({ action: "sent" })
+    expect(standIn.sent[1]?.text.split("\n")[1]).toBe("New since your last visit: 1")
+    const [sunday] = await t.ctx.db.select().from(jobRuns).where(eq(jobRuns.localDate, "2026-11-01"))
+    expect(sunday?.coversUntil).toEqual(new Date(readAt.getTime() - VISIT_SAFETY_MARGIN_MS))
+  })
+
+  it("counts from the send time of a message sent before covers_until was recorded", async () => {
+    await freshSync()
+    const sentAt = new Date("2026-10-30T06:00:30Z")
+    await t.ctx.db.insert(jobRuns).values({ job: "morning", localDate: "2026-10-30", state: "sent", at: sentAt })
+    now = new Date(sentAt.getTime() - 10_000)
+    await createItem(ctx, agent, { type: "task", title: "Before the old message" })
+    now = new Date(sentAt.getTime() + 10_000)
+    await createItem(ctx, agent, { type: "task", title: "After the old message" })
+
+    now = SUNDAY_0800
+    expect(await job().tick()).toMatchObject({ action: "sent" })
+    expect(standIn.sent[0]?.text.split("\n")[1]).toBe("New since your last visit: 1")
   })
 })

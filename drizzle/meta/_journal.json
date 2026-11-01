@@ -15,6 +15,13 @@
       "when": 1793547928092,
       "tag": "0001_job-skipped",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793556316078,
+      "tag": "0002_morning-covers-until",
+      "breakpoints": true
     }
   ]
 }

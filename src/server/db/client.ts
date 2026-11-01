@@ -15,8 +15,10 @@ export type Db = PostgresJsDatabase<typeof schema>
  * 2. A visit is recorded VISIT_SAFETY_MARGIN_MS before the start of the read it marks as seen. The margin
  *    is larger than the transaction bound, so every write the read did not see has a later time than the
  *    visit.
+ * 3. The morning message counts "new" the same way: its job_runs row stores, as `covers_until`, the start
+ *    of its read minus VISIT_SAFETY_MARGIN_MS, and the next message counts from there.
  *
- * Items written in the margin may show as new on two visits; none is ever hidden.
+ * Items written in the margin may show as new twice; none is ever hidden.
  */
 export const TRANSACTION_TIMEOUT_MS = 30_000
 export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 15_000

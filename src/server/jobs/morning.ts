@@ -1,5 +1,6 @@
 import { and, desc, eq } from "drizzle-orm"
 import type { JobState } from "../../shared/enums.ts"
+import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { jobRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
@@ -98,8 +99,14 @@ async function claim(ctx: Ctx, localDate: string, retry: boolean): Promise<JobRu
   return row ?? null
 }
 
-async function finish(ctx: Ctx, id: string, state: JobState, detail: string | null): Promise<void> {
-  await ctx.db.update(jobRuns).set({ state, detail, at: ctx.clock() }).where(eq(jobRuns.id, id))
+async function finish(
+  ctx: Ctx,
+  id: string,
+  state: JobState,
+  detail: string | null,
+  coversUntil: Date | null = null,
+): Promise<void> {
+  await ctx.db.update(jobRuns).set({ state, detail, at: ctx.clock(), coversUntil }).where(eq(jobRuns.id, id))
 }
 
 /** Marks the day skipped: no row yet, or a failed one. A run in progress or finished is left alone. */
@@ -119,36 +126,54 @@ async function skip(ctx: Ctx, localDate: string): Promise<boolean> {
   return updated.length > 0
 }
 
-/** The time of the last morning message that went out, or null. */
-async function lastSentAt(ctx: Ctx): Promise<Date | null> {
+/**
+ * Where the last morning message that went out stopped counting "new", or null: its `covers_until` (the
+ * start of its read minus the safety margin), or its send time on a run from before that was recorded.
+ */
+async function lastMessageBoundary(ctx: Ctx): Promise<Date | null> {
   const [row] = await ctx.db
-    .select({ at: jobRuns.at })
+    .select({ at: jobRuns.at, coversUntil: jobRuns.coversUntil })
     .from(jobRuns)
     .where(and(eq(jobRuns.job, MORNING_JOB), eq(jobRuns.state, "sent")))
     .orderBy(desc(jobRuns.at))
     .limit(1)
-  return row?.at ?? null
+  return row ? (row.coversUntil ?? row.at) : null
+}
+
+export type MorningRead = {
+  summary: MorningSummary
+  /**
+   * Where the next message's "new since" starts once this one went out: VISIT_SAFETY_MARGIN_MS before the
+   * start of this read, so a write that committed after the read is counted next time (see the invariant
+   * in db/client.ts).
+   */
+  coversUntil: Date
 }
 
 /**
  * The message's content: the morning read model since the owner's last visit on any device, or since the
  * last morning message when that is later (24 hours back when there is neither).
  */
-export async function morningSummary(ctx: Ctx): Promise<MorningSummary> {
-  const times = [await lastVisitAnyDevice(ctx), await lastSentAt(ctx)].filter((d): d is Date => d !== null)
+export async function morningSummary(ctx: Ctx): Promise<MorningRead> {
+  const times = [await lastVisitAnyDevice(ctx), await lastMessageBoundary(ctx)].filter((d): d is Date => d !== null)
   const since = times.length > 0 ? new Date(Math.max(...times.map((d) => d.getTime()))) : undefined
   const view = await morning(ctx, { since })
-  return { waiting: view.waiting, newCount: view.new.length, security: view.security, sync: view.sync }
+  return {
+    summary: { waiting: view.waiting, newCount: view.new.length, security: view.security, sync: view.sync },
+    coversUntil: new Date(view.now.getTime() - VISIT_SAFETY_MARGIN_MS),
+  }
 }
 
-export async function buildTodaysMessage(ctx: Ctx, publicUrl: URL): Promise<TelegramHtml> {
+export async function buildTodaysMessage(ctx: Ctx, publicUrl: URL): Promise<{ text: TelegramHtml; coversUntil: Date }> {
   const settings = await getSettings(ctx.db)
-  return buildMorningMessage(await morningSummary(ctx), {
+  const read = await morningSummary(ctx)
+  const text = buildMorningMessage(read.summary, {
     language: settings.language,
     publicUrl,
     dateFormat: settings.dateFormat,
     timeFormat: settings.timeFormat,
   })
+  return { text, coversUntil: read.coversUntil }
 }
 
 export type TestMessageResult = {
@@ -176,7 +201,7 @@ export async function sendTestMorningMessage(
       "conflict",
       "Telegram is not configured: set MIKUD_TELEGRAM_BOT_TOKEN and MIKUD_TELEGRAM_CHAT_ID on the server.",
     )
-  const text = await buildTodaysMessage(ctx, publicUrl)
+  const { text } = await buildTodaysMessage(ctx, publicUrl)
   const record = (after: Record<string, string>) =>
     writeAudit(ctx, ctx.db, by, { action: "telegram.test_message", entityType: "settings", entityId: null, after })
   await record({ state: "sending" })
@@ -266,9 +291,9 @@ export class MorningJob {
     if (!run) return { action: "lost", localDate: decision.localDate }
     const localDate = decision.localDate
 
-    let text: TelegramHtml
+    let message: { text: TelegramHtml; coversUntil: Date }
     try {
-      text = await buildTodaysMessage(ctx, this.deps.publicUrl)
+      message = await buildTodaysMessage(ctx, this.deps.publicUrl)
     } catch (error) {
       // Nothing went out: retried on the next tick until the cutoff.
       await finish(ctx, run.id, "failed", "build_failed")
@@ -277,7 +302,7 @@ export class MorningJob {
     }
 
     try {
-      await this.deps.send(text, this.stopping.signal)
+      await this.deps.send(message.text, this.stopping.signal)
     } catch (error) {
       const definite = error instanceof TelegramError && (error.failure === "answer" || error.failure === "not_sent")
       const code = error instanceof TelegramError ? error.code : "unexpected"
@@ -290,7 +315,7 @@ export class MorningJob {
       return { action: definite ? "failed" : "unknown", localDate }
     }
 
-    await finish(ctx, run.id, "sent", null)
+    await finish(ctx, run.id, "sent", null, message.coversUntil)
     log.info("morning message sent", { localDate })
     return { action: "sent", localDate }
   }
