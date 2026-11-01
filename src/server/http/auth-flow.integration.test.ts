@@ -270,7 +270,7 @@ describe("session clocks", () => {
     expect((await actions()).filter((a) => a === "session.end")).toHaveLength(1)
     // Ended sessions are swept a day later.
     t.clock.travel(DAY + 1000)
-    expect(await sweepSessions(t.ctx)).toBe(1)
+    expect(await sweepSessions(t.ctx)).toEqual({ ended: 0, removed: 1 })
     expect(await sessions()).toHaveLength(0)
   })
 
@@ -601,5 +601,102 @@ describe("settings", () => {
   it("starts with a 30-day session and the idle limit off", async () => {
     const [row] = await t.ctx.db.insert(settings).values({ id: 1 }).returning()
     expect(row).toMatchObject({ sessionMaxDays: 30, sessionIdle: false, sessionIdleMinutes: 30 })
+  })
+})
+
+describe("result review fixes", () => {
+  it("keeps the auth lock on its reserved connection when the pool recycles connections", async () => {
+    // A lock pool that ends its connections after one second: an unreserved connection would be closed while
+    // idle, and its advisory lock with it.
+    const short = createDatabase(t.url, { authLockMaxLifetimeSec: 1 })
+    try {
+      await browser().owner()
+      const hasher = await passwordHasher(core.auth)
+      const unlock = await short.lockAuth()
+      let resetDone = false
+      const reset = resetPassword(t.ctx, hasher).then((result) => {
+        resetDone = true
+        return result
+      })
+      await new Promise((resolve) => setTimeout(resolve, 2_500))
+      expect(resetDone).toBe(false)
+      await unlock()
+      expect((await reset)?.username).toBe("owner.name")
+    } finally {
+      await short.close()
+    }
+  })
+
+  it("deletes the challenges opened with the old password when the password changes", async () => {
+    const secret = await browser().owner()
+    const desk = browser("desk")
+    await desk.signIn(secret)
+    // Another browser opens a sign-in challenge with the old password.
+    const other = browser("other")
+    expect((await other.passwordSignIn()).json.twoFactorRedirect).toBe(true)
+    expect(await t.ctx.db.select().from(authVerification)).toHaveLength(2)
+
+    const changed = await desk.call("POST", "/api/v1/account/password", {
+      body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new passphrase" },
+    })
+    expect(changed.status).toBe(200)
+    expect(await t.ctx.db.select().from(authVerification)).toHaveLength(0)
+    const before = (await sessions()).length
+    expect((await other.verify(totp(secret))).status).toBe(401)
+    expect((await sessions()).length).toBe(before)
+    expect((await api(other)).status).toBe(401)
+    expect((await api(desk)).status).toBe(200)
+  })
+
+  it("logs a failure inside Better Auth without its query, parameters or token", async () => {
+    await browser().setup()
+    await t.ctx.db.execute(
+      sql`alter table auth_session add constraint test_no_session check (token <> token) not valid`,
+    )
+    const lines: string[] = []
+    const capture = (line: unknown) => void lines.push(String(line))
+    const error = vi.spyOn(console, "error").mockImplementation(capture)
+    const warn = vi.spyOn(console, "warn").mockImplementation(capture)
+    const info = vi.spyOn(console, "log").mockImplementation(capture)
+    let res: Awaited<ReturnType<TestBrowser["passwordSignIn"]>>
+    try {
+      res = await browser("b").passwordSignIn()
+    } finally {
+      error.mockImplementation(() => {})
+      warn.mockRestore()
+      info.mockRestore()
+      await t.ctx.db.execute(sql`alter table auth_session drop constraint if exists test_no_session`)
+    }
+    expect(res.status).toBe(500)
+    expect(lines.length).toBeGreaterThan(0)
+    const logged = `${lines.join("\n")}\n${JSON.stringify(res.json)}`
+    expect(logged).toContain('"sqlstate":"23514"')
+    for (const leak of [/insert into/i, /auth_session/, /params/i, /failed query/i, /test_no_session/, /\$\d/])
+      expect(logged).not.toMatch(leak)
+    // No value of the rows it tried to write: tokens and ids are long random strings.
+    expect(logged).not.toMatch(/[A-Za-z0-9]{32,}/)
+  })
+
+  it("lists only the sessions the clocks allow, and the sweep ends one that expired silently", async () => {
+    const secret = await browser().owner()
+    const owner = browser()
+    await owner.signIn(secret)
+    const quiet = browser("quiet")
+    await quiet.signIn(secret)
+    await owner.call("PATCH", "/api/v1/settings", { body: { sessionIdle: true, sessionIdleMinutes: 5 } })
+    t.clock.travel(4 * 60_000)
+    await owner.call("POST", "/api/v1/session/activity")
+    t.clock.travel(2 * 60_000)
+    // The quiet browser went past its idle limit without another request; the owner kept working.
+    const list = await owner.call("GET", "/api/v1/account/sessions")
+    expect(list.json.data.sessions).toHaveLength(1)
+    expect(list.json.data.sessions[0].current).toBe(true)
+    const beforeSweep = await actions()
+    expect(await sweepSessions(t.ctx)).toEqual({ ended: 2, removed: 0 })
+    const ended = (await sessions()).filter((s) => s.endedReason)
+    expect(ended.map((s) => s.endedReason)).toEqual(["idle", "idle"])
+    expect((await actions()).length - beforeSweep.length).toBe(2)
+    expect((await api(quiet)).json.error).toMatchObject({ code: "session_ended", reason: "idle" })
+    expect((await api(owner)).status).toBe(200)
   })
 })

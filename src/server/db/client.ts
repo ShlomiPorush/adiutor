@@ -38,8 +38,8 @@ export const AUTH_LOCK_TIMEOUT_MS = 10_000
 export type Database = {
   db: Db
   /**
-   * Takes the auth lock (AUTH_LOCK_KEY) as a session-level advisory lock on a connection of its own, outside
-   * the pool, and returns the function that releases it. Requests of this process wait their turn in memory, so
+   * Takes the auth lock (AUTH_LOCK_KEY) as a session-level advisory lock on a reserved connection of its own,
+   * outside the pool, and returns the function that unlocks it and gives the connection back. Requests of this process wait their turn in memory, so
    * at most one holds or waits on that connection and a queue of waiting requests never takes pool connections.
    * Throws `busy` when the lock is not free within AUTH_LOCK_TIMEOUT_MS.
    */
@@ -49,7 +49,13 @@ export type Database = {
   close(): Promise<void>
 }
 
-export function createDatabase(url: string, options: { authLockTimeoutMs?: number } = {}): Database {
+export function createDatabase(
+  url: string,
+  options: {
+    authLockTimeoutMs?: number /** Tests only: recycle the lock pool's connections this fast. */
+    authLockMaxLifetimeSec?: number
+  } = {},
+): Database {
   const lockTimeout = options.authLockTimeoutMs ?? AUTH_LOCK_TIMEOUT_MS
   const sql = postgres(url, { max: 10, onnotice: () => {}, connection: POOL_CONNECTION_SETTINGS })
   const db = drizzle(sql, { schema })
@@ -78,22 +84,39 @@ export function createDatabase(url: string, options: { authLockTimeoutMs?: numbe
         void previous.then(done)
         throw busy()
       }
+      // The lock belongs to one database connection: it is reserved for the whole request, so the pool can never
+      // recycle it (max_lifetime) or hand it to another query while the lock is held.
+      lockSql ??= postgres(url, {
+        max: 1,
+        onnotice: () => {},
+        connection: { lock_timeout: lockTimeout },
+        ...(options.authLockMaxLifetimeSec ? { max_lifetime: options.authLockMaxLifetimeSec } : {}),
+      })
+      const pool = lockSql
+      let reserved: postgres.ReservedSql
       try {
-        lockSql ??= postgres(url, {
-          max: 1,
-          onnotice: () => {},
-          connection: { lock_timeout: lockTimeout },
-        })
-        await lockSql`select pg_advisory_lock(${AUTH_LOCK_KEY})`
+        reserved = await pool.reserve()
       } catch (error) {
+        done()
+        throw error
+      }
+      try {
+        await reserved`select pg_advisory_lock(${AUTH_LOCK_KEY})`
+      } catch (error) {
+        reserved.release()
         done()
         if ((error as { code?: string }).code === "55P03") throw busy()
         throw error
       }
-      const held = lockSql
       return async () => {
         try {
-          await held`select pg_advisory_unlock(${AUTH_LOCK_KEY})`
+          await reserved`select pg_advisory_unlock(${AUTH_LOCK_KEY})`
+          reserved.release()
+        } catch (error) {
+          // A connection that may still hold the lock never goes back to the pool: closing it frees the lock.
+          if (lockSql === pool) lockSql = undefined
+          await pool.end({ timeout: 5 }).catch(() => {})
+          throw error
         } finally {
           done()
         }

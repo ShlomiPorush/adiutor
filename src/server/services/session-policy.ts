@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, lt, or } from "drizzle-orm"
+import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm"
 import type { SessionEndReason } from "../../shared/auth.ts"
 import { authSession, authUser } from "../db/schema.ts"
 import { getSettings, type SettingsRow } from "./admin.ts"
@@ -143,12 +143,51 @@ export function checkSession(ctx: Ctx, sessionId: string, mode: CheckMode): Prom
 export const ENDED_KEPT_MS = DAY
 
 /**
- * Removes sessions that ended a day ago or more and those past Better Auth's own expiry, with one audit row
- * for the batch in the same transaction. Returns how many it removed.
+ * The hourly sweep, in one transaction under the auth lock. First it ends every session the clocks ended without
+ * another request noticing (a closed browser past its maximum length or idle limit), each with its audit row
+ * `session.end`, as a request would have. Then it removes sessions that ended a day ago or more and those past
+ * Better Auth's own expiry, with one audit row for the batch. Returns how many it ended and removed.
  */
-export async function sweepSessions(ctx: Ctx): Promise<number> {
+export async function sweepSessions(ctx: Ctx): Promise<{ ended: number; removed: number }> {
   return inAuthTx(ctx, async (tx) => {
     const now = ctx.clock()
+    const policy = policyOf(await getSettings(tx))
+    const live = await tx
+      .select({
+        id: authSession.id,
+        authenticatedAt: authSession.authenticatedAt,
+        activeAt: authSession.activeAt,
+        username: authUser.username,
+        name: authUser.name,
+      })
+      .from(authSession)
+      .innerJoin(authUser, eq(authUser.id, authSession.userId))
+      .where(isNull(authSession.endedReason))
+      .for("update", { of: authSession })
+    let ended = 0
+    for (const row of live) {
+      const end = endedBy(row, policy, now)
+      if (!end) continue
+      await tx.update(authSession).set({ endedReason: end.reason, endedAt: now }).where(eq(authSession.id, row.id))
+      await writeAudit(
+        ctx,
+        tx,
+        { actor: { kind: "system", label: "system" }, source: "api" },
+        {
+          action: "session.end",
+          entityType: "session",
+          entityId: null,
+          after: {
+            reason: end.reason,
+            deadline: end.deadline,
+            noticed: now,
+            by: "sweep",
+            user: row.username ?? row.name,
+          },
+        },
+      )
+      ended++
+    }
     const removed = await tx
       .delete(authSession)
       .where(
@@ -165,6 +204,6 @@ export async function sweepSessions(ctx: Ctx): Promise<number> {
         { actor: { kind: "system", label: "system" }, source: "api" },
         { action: "session.sweep", entityType: "session", entityId: null, after: { count: removed.length } },
       )
-    return removed.length
+    return { ended, removed: removed.length }
   })
 }

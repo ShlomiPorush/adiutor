@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto"
-import { and, count, desc, eq, inArray, isNotNull, isNull, like, ne, notLike } from "drizzle-orm"
+import { and, count, desc, eq, gt, inArray, isNotNull, isNull, like, ne, notLike } from "drizzle-orm"
 import { normalizeUsername, ownerEmail } from "../../shared/auth.ts"
 import { challengeRows } from "../auth/cookies.ts"
 import { authAccount, authSession, authTwoFactor, authUser, authVerification, devices } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
+import { getSettings } from "./admin.ts"
 import { type By, type Ctx, inAuthTx, type Tx, writeAudit } from "./context.ts"
-import { checkSessionIn, type LiveSession } from "./session-policy.ts"
+import { checkSessionIn, endedBy, type LiveSession, policyOf } from "./session-policy.ts"
 
 // The owner's account and sessions, written by Mikud (not by Better Auth): setup, the password change, ending
 // sessions and the recovery CLI. Each runs in one transaction that takes the auth lock first (AUTH_LOCK_KEY)
@@ -82,6 +83,27 @@ async function requireLiveSession(ctx: Ctx, tx: Tx, sessionId: string): Promise<
   return check.session
 }
 
+/**
+ * Deletes the user's pending two-factor challenges (identifier 2fa-<random>, value the user id) and their attempt
+ * counters (2fa-attempts-<identifier>): a challenge opened with a password that is no longer valid can never be
+ * completed. Returns how many challenges there were.
+ */
+async function deleteChallenges(tx: Tx, userId: string): Promise<number> {
+  const challenges = await tx
+    .select({ identifier: authVerification.identifier })
+    .from(authVerification)
+    .where(
+      and(
+        eq(authVerification.value, userId),
+        like(authVerification.identifier, "2fa-%"),
+        notLike(authVerification.identifier, "2fa-attempts-%"),
+      ),
+    )
+  const rows = challenges.flatMap((c) => challengeRows(c.identifier))
+  if (rows.length > 0) await tx.delete(authVerification).where(inArray(authVerification.identifier, rows))
+  return challenges.length
+}
+
 const ownerBy = (session: LiveSession): By => ({ actor: { kind: "owner", label: session.username }, source: "ui" })
 
 export type PasswordChangeHooks = { afterRead?: () => Promise<void> }
@@ -89,7 +111,8 @@ export type PasswordChangeHooks = { afterRead?: () => Promise<void> }
 /**
  * Changes the owner's password from a signed-in session. Under the auth lock: the session is re-read and must
  * be live with TOTP proved, the current password is checked against the hash read under the lock, the new hash
- * is written, and every other session ends; this session keeps its TOTP proof and clocks.
+ * is written, every other session ends and every pending sign-in challenge (opened with the old password) is
+ * deleted; this session keeps its TOTP proof and clocks.
  */
 export async function changePassword(
   ctx: Ctx,
@@ -116,11 +139,12 @@ export async function changePassword(
       .delete(authSession)
       .where(and(eq(authSession.userId, session.userId), ne(authSession.id, sessionId)))
       .returning({ id: authSession.id })
+    const challenges = await deleteChallenges(tx, session.userId)
     await writeAudit(ctx, tx, ownerBy(session), {
       action: "account.password_change",
       entityType: "account",
       entityId: null,
-      after: { endedSessions: ended.length },
+      after: { endedSessions: ended.length, endedChallenges: challenges },
     })
     return { endedSessions: ended.length }
   })
@@ -134,8 +158,14 @@ export type SessionEntry = {
   userAgent: string | null
 }
 
-/** The owner's signed-in sessions (TOTP proved, not ended), the current one first, then by sign-in. */
+/**
+ * The owner's signed-in sessions: TOTP proved, not ended, and still allowed by the session clocks now (a browser
+ * that went past them without another request is not listed; the sweep ends it), the current one first, then by
+ * sign-in.
+ */
 export async function listSessions(ctx: Ctx, sessionId: string): Promise<SessionEntry[]> {
+  const policy = policyOf(await getSettings(ctx.db))
+  const now = ctx.clock()
   const [own] = await ctx.db
     .select({ userId: authSession.userId })
     .from(authSession)
@@ -149,9 +179,17 @@ export async function listSessions(ctx: Ctx, sessionId: string): Promise<Session
       userAgent: authSession.userAgent,
     })
     .from(authSession)
-    .where(and(eq(authSession.userId, own.userId), isNotNull(authSession.twoFactorAt), isNull(authSession.endedReason)))
+    .where(
+      and(
+        eq(authSession.userId, own.userId),
+        isNotNull(authSession.twoFactorAt),
+        isNull(authSession.endedReason),
+        gt(authSession.expiresAt, now),
+      ),
+    )
     .orderBy(desc(authSession.authenticatedAt))
   return rows
+    .filter((row) => !endedBy({ authenticatedAt: row.signedInAt, activeAt: row.activeAt }, policy, now))
     .map((row) => ({ ...row, current: row.id === sessionId }))
     .sort((a, b) => Number(b.current) - Number(a.current))
 }
@@ -226,20 +264,7 @@ export async function resetPassword(
       .delete(authSession)
       .where(eq(authSession.userId, user.id))
       .returning({ id: authSession.id })
-    // The user's pending two-factor challenges (identifier 2fa-<random>, value the user id) and their attempt
-    // counters (2fa-attempts-<identifier>).
-    const challenges = await tx
-      .select({ identifier: authVerification.identifier })
-      .from(authVerification)
-      .where(
-        and(
-          eq(authVerification.value, user.id),
-          like(authVerification.identifier, "2fa-%"),
-          notLike(authVerification.identifier, "2fa-attempts-%"),
-        ),
-      )
-    const rows = challenges.flatMap((c) => challengeRows(c.identifier))
-    if (rows.length > 0) await tx.delete(authVerification).where(inArray(authVerification.identifier, rows))
+    await deleteChallenges(tx, user.id)
     const username = user.username ?? user.name
     await writeAudit(
       ctx,

@@ -1813,7 +1813,6 @@ html.ui-layer-on .ui-page {
   text-align: start;
 }
 /* A long key or command wraps instead of being cut: it is read and typed, not only copied. */
-/* biome-ignore lint/style/noDescendingSpecificity: the wrapping variant of the copy text, only on these pages */
 .ui-auth-note .ui-copy bdi,
 .ui-secret .ui-copy bdi {
   overflow: visible;
