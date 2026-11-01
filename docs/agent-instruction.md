@@ -1,6 +1,6 @@
 # Agent instruction (proposal)
 
-Status: **proposal awaiting the owner.** It is not in the shared agent configuration. The owner adds it after the dry run (requirements section 9). The tool names match the planned MCP server (implementation row 6); check them against the server's tool list before adopting this text.
+Status: **proposal awaiting the owner.** It is not in the shared agent configuration. The owner adds it after the dry run (requirements section 9). The tool names and parameters match the MCP server (see `docs/api.md`).
 
 The section "Instruction text" is what goes into the shared agent configuration. The section "Connecting to Mikud" is set up once per machine.
 
@@ -17,9 +17,9 @@ Mikud is the owner's board of work items. Keep it current from T3 threads throug
 
 **At thread start**, before other work, call `mikud_start_thread` once with:
 - `threadId` and `parentThreadId`;
-- `projectId`: the T3 project id of this thread;
+- `t3ProjectId`: the T3 project id of this thread;
 - `title`: what the work is, in at most 80 characters, in the conversation's language;
-- `itemId`: only when the user names an existing Mikud item (its id or link). Otherwise Mikud finds the item linked to this thread or creates one.
+- `itemId`: only when the user names an existing Mikud item (its id or link; `mikud_find_items` searches by text). Otherwise Mikud finds the item linked to this thread or creates one.
 
 It sets the item to `in_progress`. Remember the item id it returns.
 
