@@ -1,3 +1,5 @@
+import { DEFAULT_DATE_FORMAT, isDateFormat, write24h, writeNumericDate } from "../../shared/datetime-formats.ts"
+
 /** The owner's time zone. The morning schedule and every time in a message use it. */
 export const TIME_ZONE = "Asia/Jerusalem"
 
@@ -43,25 +45,32 @@ export function localTime(at: Date): LocalTime {
   }
 }
 
-const pad = (n: number, width = 2) => String(n).padStart(width, "0")
+const twelveHour = new Map<string, Intl.DateTimeFormat>()
+
+/** The 12-hour clock with the day half in the message's language: "12:05 AM". */
+function write12h(at: Date, language: string): string {
+  let format = twelveHour.get(language)
+  if (!format) {
+    format = new Intl.DateTimeFormat(language, {
+      timeZone: TIME_ZONE,
+      hour: "numeric",
+      minute: "2-digit",
+      hourCycle: "h12",
+    })
+    twelveHour.set(language, format)
+  }
+  return format.format(at)
+}
 
 /**
- * A time as numbers in Asia/Jerusalem, by the owner's date and time formats (settings). Tokens: yyyy, yy,
- * MM, M, dd, d, HH, H, mm; anything else is kept as written. Never a month name.
+ * A time in Asia/Jerusalem by the owner's Date Format and Time Format settings, written as the UI writes
+ * them (src/shared/datetime-formats.ts). "browser", and a value the settings do not offer, write the
+ * default numeric date and the 24-hour clock: the server has no browser. Never a month name.
  */
-export function formatLocal(at: Date, dateFormat: string, timeFormat: string): string {
+export function formatLocal(at: Date, dateFormat: string, timeFormat: string, language = "en"): string {
   const t = localTime(at)
-  const tokens: Record<string, string> = {
-    yyyy: String(t.year),
-    yy: pad(t.year % 100),
-    MM: pad(t.month),
-    M: String(t.month),
-    dd: pad(t.day),
-    d: String(t.day),
-    HH: pad(t.hour),
-    H: String(t.hour),
-    mm: pad(t.minute),
-  }
-  const apply = (format: string) => format.replace(/yyyy|yy|MM|M|dd|d|HH|H|mm/g, (token) => tokens[token] ?? token)
-  return `${apply(dateFormat)} ${apply(timeFormat)}`.trim()
+  const date =
+    (isDateFormat(dateFormat) ? writeNumericDate(t, dateFormat) : null) ?? writeNumericDate(t, DEFAULT_DATE_FORMAT)
+  const time = timeFormat === "h:mm a" ? write12h(at, language) : write24h(t.hour, t.minute)
+  return `${date} ${time}`
 }

@@ -23,7 +23,7 @@ One pnpm package (no workspace apps).
   - `telegram/`: `api.ts` (Bot API client; a failure is `answer`, `not_sent`, `uncertain` or `aborted`), `html.ts` (Telegram HTML that escapes every value), `bot.ts` (long polling, one transaction per update), `texts.ts` (locale texts), `status.ts` (the status route's read).
   - `jobs/`: `morning.ts` (the 08:00 schedule and its durable runs in `job_runs`), `morning-message.ts` (the message, a pure function), `time.ts` (Asia/Jerusalem wall clock and number formats).
   - `testing/db.ts`: a migrated database per integration test file, and a movable clock. `testing/bot-api.ts`: a stand-in Telegram Bot API on `127.0.0.1` for tests (getUpdates with Telegram's offset rules, sendMessage recorded, failures on demand).
-- `src/shared/`: enum codes as `const` arrays with zod schemas (`enums.ts`), the API request schemas (`api.ts`), the UI paths that messages link to (`routes.ts`) and the locale files `locales/en.json` and `locales/he.json`.
+- `src/shared/`: enum codes as `const` arrays with zod schemas (`enums.ts`), the API request schemas (`api.ts`), the Date Format and Time Format settings that the UI and the morning message share (`datetime-formats.ts`), the UI paths that messages link to (`routes.ts`) and the locale files `locales/en.json` and `locales/he.json`.
 - `drizzle/`: generated SQL migrations and their snapshots. Never edit by hand.
 - `config/`: TypeScript base config, Vitest configs, Drizzle Kit config, `vite.config.ts` (the UI build) and `playwright.config.ts` (end-to-end tests).
 - `docker/`: toolchain and application Dockerfiles, the development Compose template and `dev.env` (fake development values).

@@ -64,7 +64,7 @@ Fields are always present; `null` when unset.
 - **SyncResult**: `runId, outcome, counts, errors`.
 - **Device**: `id, label, createdAt, lastSeenAt, revokedAt`. Never its hash.
 - **Suppression**: `id, kind (thread, project), externalId, label (what was deleted), createdAt`.
-- **Settings**: `id, closedItemDays (1 to 365, default 7), dateFormat, timeFormat, language (he, en), updatedAt`.
+- **Settings**: `id, closedItemDays (1 to 365, default 7), dateFormat, timeFormat, language (he, en), updatedAt`. The formats the UI offers are in `src/shared/datetime-formats.ts`: `dateFormat` is `dd/MM/yyyy` (default), `MM/dd/yyyy`, `dd.MM.yyyy`, `yyyy-MM-dd` or `browser`; `timeFormat` is `HH:mm` (default), `h:mm a` or `browser`. The morning message writes `browser`, and any value not offered, as the default numeric date and the 24-hour clock.
 - **AuditEntry**: `id (number), at, actorKind, actorLabel, action, entityType, entityId, before, after, source`. Actions: `item.create|update|delete`, `comment.create`, `thread.link|update|move|unlink`, `project.create|update|delete`, `goal.create|close`, `proposal.create|update|accept|reject`, `security.update`, `suppression.create|delete`, `settings.update`, `device.pair|revoke|revoke_all`. Comment, thread, goal and proposal entries carry the entity of their item (`item`) or project (`project`), so an item's history includes them.
 
 ## Routes

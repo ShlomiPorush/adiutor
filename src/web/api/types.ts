@@ -3,6 +3,7 @@
 // src/shared/enums.ts; labels come from the locale files. Times are ISO 8601 strings in UTC. When
 // the contract changes, this file and endpoints.ts are the only places to follow it.
 
+import type { DateFormat, TimeFormat } from "../../shared/datetime-formats.ts"
 import type {
   ActorKind,
   AuditSource,
@@ -270,8 +271,7 @@ export type Morning = {
 export type Page<T> = { entries: T[]; nextCursor: string | null }
 
 /** Date and time formats as the server stores them (free text up to 40; these are the ones the UI offers). */
-export type DateFormat = "browser" | "dd/MM/yyyy" | "MM/dd/yyyy" | "dd.MM.yyyy" | "yyyy-MM-dd"
-export type TimeFormat = "HH:mm" | "h:mm a" | "browser"
+export type { DateFormat, TimeFormat }
 
 export type Settings = {
   id: string

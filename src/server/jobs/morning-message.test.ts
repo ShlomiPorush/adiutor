@@ -134,8 +134,9 @@ describe("buildMorningMessage", () => {
       sync: { lastSuccessAt: new Date("2026-07-04T21:05:00Z"), stale: true },
     }
     expect(lines(buildMorningMessage(summary, options))[2]).toBe("Last T3 sync: 05/07/2026 00:05")
-    expect(lines(buildMorningMessage(summary, { ...options, dateFormat: "yyyy-MM-dd", timeFormat: "H:mm" }))[2]).toBe(
-      "Last T3 sync: 2026-07-05 0:05",
-    )
+    const twelve = buildMorningMessage(summary, { ...options, dateFormat: "yyyy-MM-dd", timeFormat: "h:mm a" })
+    expect(lines(twelve)[2]).toMatch(/^Last T3 sync: 2026-07-05 12:05\sAM$/u)
+    const browser = buildMorningMessage(summary, { ...options, dateFormat: "browser", timeFormat: "browser" })
+    expect(lines(browser)[2]).toBe("Last T3 sync: 05/07/2026 00:05")
   })
 })
