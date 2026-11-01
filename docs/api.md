@@ -25,7 +25,8 @@ Status: implemented in `src/server/http/` and `src/server/mcp/`; request bodies 
 | `suppressed` | 409 | The owner deleted the item of this thread | |
 | `conflict` | 409 | Another state conflict: a thread linked to another item, a project that still has items, a proposal decided already, a duplicate T3 project id | `itemId` or `projectId` when useful |
 | `rate_limited` | 429 | 10 failed token attempts from this client within a minute | |
-| `telegram_failed` | 502 | `POST /telegram/test-message`: Telegram did not take the message (refused, unreachable, or no clear answer) | |
+| `telegram_failed` | 502 | `POST /telegram/test-message`: Telegram did not take the message (it refused it, or the server could not reach Telegram at all) | |
+| `telegram_uncertain` | 502 | `POST /telegram/test-message`: Telegram gave no clear answer (a timeout, a lost connection, a 5xx): the message may have been sent. Check the chat before sending again | |
 | `internal_error` | 500 | Unexpected server error | |
 
 ## Authentication
@@ -201,7 +202,7 @@ Each repository is matched to every project whose `githubRepo` equals it, ignori
 | `DELETE /devices/:id` | owner | | `204`; the device's cookie stops working |
 | `POST /devices/end-all` | owner | | `{ended}`: every device is revoked, the caller's too (its cookie is cleared) |
 | `GET /telegram/status` | owner | | `TelegramStatus` (below) |
-| `POST /telegram/test-message` | owner | | `{sent: true}`. Sends today's morning message (below) to the owner's chat now. `conflict` when Telegram is not configured, `telegram_failed` when Telegram did not take it |
+| `POST /telegram/test-message` | owner | | `{sent: true, warning?}`. Sends today's morning message (below) to the owner's chat now. `warning: "outcome_not_recorded"` when it was sent but the outcome's audit row could not be written. `conflict` when Telegram is not configured, `telegram_failed` when Telegram did not take it, `telegram_uncertain` when it may have been sent |
 
 ### Telegram
 
@@ -221,7 +222,7 @@ The bot and the morning message run inside the server, never through this API. T
 - `lastMorning.state`: `sending` (in progress), `sent`, `failed` (Telegram refused it with a 4xx answer, or there was no connection; retried every 30 seconds until 11:00), `unknown` (it may have gone out: a timeout, a dropped connection, a 5xx or an answer that is not Telegram's, or a restart during the send; never resent) or `skipped` (11:00 passed without a send). `at` is the time of the latest state change.
 - **Quick add**: plain text from the owner's chat becomes an inbox item exactly like `POST /capture` (type `idea`, status `future`), created by actor kind `bot` with audit source `telegram`. The bot answers with a link to `<MIKUD_PUBLIC_URL>/items/<id>`. Text that looks like a secret is refused as agent text is, and the bot answers that nothing was saved without repeating the text. `/start`, `/help` and other commands answer with a help text; photos and other non-text messages with a short note. Other chats get no answer.
 - **Morning message**: 08:00 Asia/Jerusalem, Sunday to Friday, in the language of the settings, built from the morning view (above) with `since` set to the owner's last visit on any device or the last morning message, whichever is later. Deep links: `<MIKUD_PUBLIC_URL>/` and `<MIKUD_PUBLIC_URL>/items/<id>`.
-- **Test message**: `POST /telegram/test-message` (Settings, "Send a test morning message") builds the same message the job would send now and sends it to the owner's chat at once. It never reads or writes `job_runs`, so the 08:00 message still goes out, and it records an audit row (action `telegram.test_message`, `after: {outcome}`: `sent` or the failure code). Not retried.
+- **Test message**: `POST /telegram/test-message` (Settings, "Send a test morning message") builds the same message the job would send now and sends it to the owner's chat at once. It never reads or writes `job_runs`, so the 08:00 message still goes out, and it records two audit rows (action `telegram.test_message`): `after: {state: "sending"}`, committed before the send, then `after: {state, code?}` with `sent`, `failed` or `uncertain` and the failure code. Not retried.
 
 ## MCP
 

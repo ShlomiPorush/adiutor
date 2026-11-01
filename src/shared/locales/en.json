@@ -114,6 +114,7 @@
       "conflict": "It conflicts with the current state",
       "rate_limited": "Too many attempts. Wait a minute",
       "telegram_failed": "Telegram did not take the message",
+      "telegram_uncertain": "Telegram gave no clear answer; the message may have been sent",
       "internal_error": "The server failed"
     }
   },
@@ -586,6 +587,9 @@
     "telegramTestHint": "Sends today's morning message to your Telegram chat now. The 08:00 message still goes out.",
     "telegramTestSending": "Sending...",
     "telegramTestSent": "The test morning message was sent",
+    "telegramTestSentUnrecorded": "The test morning message was sent, but it could not be recorded in the activity log",
+    "telegramTestRefused": "Telegram did not take the test message. Check the bot token and the chat ID, then try again.",
+    "telegramTestUncertain": "Telegram gave no clear answer, so the test message may have been sent. Check the chat before you send it again.",
     "telegramTestFailed": "Could not send the test message: {reason}",
     "job": {
       "sending": "Sending",

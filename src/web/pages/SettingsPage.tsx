@@ -422,10 +422,15 @@ function StatusPanel() {
   const sendTest = async () => {
     setSendingTest(true)
     try {
-      await api.telegramTestMessage()
-      showToast(t("settings.telegramTestSent"), "success")
+      const result = await api.telegramTestMessage()
+      if (result.warning) showToast(t("settings.telegramTestSentUnrecorded"), "warning")
+      else showToast(t("settings.telegramTestSent"), "success")
     } catch (error) {
-      showToast(t("settings.telegramTestFailed", { reason: errorReason(language, error) }), "error")
+      if (error instanceof ApiError && error.code === "telegram_uncertain")
+        showToast(t("settings.telegramTestUncertain"), "warning")
+      else if (error instanceof ApiError && error.code === "telegram_failed")
+        showToast(t("settings.telegramTestRefused"), "error")
+      else showToast(t("settings.telegramTestFailed", { reason: errorReason(language, error) }), "error")
     } finally {
       setSendingTest(false)
     }

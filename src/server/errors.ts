@@ -13,6 +13,7 @@ export const ERROR_CODES = [
   "conflict",
   "rate_limited",
   "telegram_failed",
+  "telegram_uncertain",
   "internal_error",
 ] as const
 
@@ -30,6 +31,7 @@ export const ERROR_STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 422 |
   conflict: 409,
   rate_limited: 429,
   telegram_failed: 502,
+  telegram_uncertain: 502,
   internal_error: 500,
 }
 

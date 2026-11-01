@@ -114,6 +114,7 @@
       "conflict": "זה מתנגש במצב הנוכחי",
       "rate_limited": "יותר מדי ניסיונות. צריך לחכות דקה",
       "telegram_failed": "Telegram לא קיבל את ההודעה",
+      "telegram_uncertain": "לא התקבלה תשובה ברורה מ-Telegram, ייתכן שההודעה נשלחה",
       "internal_error": "השרת נכשל"
     }
   },
@@ -586,6 +587,9 @@
     "telegramTestHint": "שולח עכשיו את הודעת הבוקר של היום לצ'אט שלך ב-Telegram. ההודעה של 08:00 עדיין תישלח.",
     "telegramTestSending": "שולח...",
     "telegramTestSent": "הודעת הבוקר לבדיקה נשלחה",
+    "telegramTestSentUnrecorded": "הודעת הבוקר לבדיקה נשלחה, אבל לא הצלחתי לרשום אותה ביומן הפעילות",
+    "telegramTestRefused": "Telegram לא קיבל את הודעת הבדיקה. כדאי לבדוק את הטוקן של הבוט ואת מזהה הצ'אט ולנסות שוב.",
+    "telegramTestUncertain": "לא התקבלה תשובה ברורה מ-Telegram, ולכן ייתכן שהודעת הבדיקה נשלחה. כדאי לבדוק בצ'אט לפני ששולחים שוב.",
     "telegramTestFailed": "לא הצלחתי לשלוח את הודעת הבדיקה: {reason}",
     "job": {
       "sending": "נשלחת",

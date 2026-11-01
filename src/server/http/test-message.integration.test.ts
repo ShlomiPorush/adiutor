@@ -1,8 +1,10 @@
-import { eq } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
 import { audit, jobRuns } from "../db/schema.ts"
+import { sendTestMorningMessage } from "../jobs/morning.ts"
 import { updateSettings } from "../services/admin.ts"
+import type { Ctx } from "../services/context.ts"
 import { BotApi } from "../telegram/api.ts"
 import type { TelegramRuntime } from "../telegram/status.ts"
 import { StandInBotApi } from "../testing/bot-api.ts"
@@ -68,7 +70,8 @@ beforeEach(async () => {
   await updateSettings(t.ctx, owner, { language: "en" })
 })
 
-const testAudits = () => t.ctx.db.select().from(audit).where(eq(audit.action, "telegram.test_message"))
+const testAudits = () =>
+  t.ctx.db.select().from(audit).where(eq(audit.action, "telegram.test_message")).orderBy(asc(audit.id))
 
 describe("POST /telegram/test-message", () => {
   it("sends the morning message once to the owner's chat, never touches job_runs and writes an audit row", async () => {
@@ -83,7 +86,8 @@ describe("POST /telegram/test-message", () => {
     expect(standIn.sent[0]?.text).toContain(`<a href="${ORIGIN}/">Open the board</a>`)
     expect(await t.ctx.db.select().from(jobRuns)).toEqual([])
     expect(await testAudits()).toMatchObject([
-      { actorKind: "owner", source: "api", entityType: "settings", after: { outcome: "sent" } },
+      { actorKind: "owner", source: "api", entityType: "settings", after: { state: "sending" } },
+      { actorKind: "owner", source: "api", entityType: "settings", after: { state: "sent" } },
     ])
   })
 
@@ -101,7 +105,42 @@ describe("POST /telegram/test-message", () => {
     expect(res.status).toBe(502)
     expect(res.json.error.code).toBe("telegram_failed")
     expect(JSON.stringify(res.json)).not.toContain(BOT_TOKEN)
-    expect(await testAudits()).toMatchObject([{ after: { outcome: "telegram_400" } }])
+    expect(await testAudits()).toMatchObject([
+      { after: { state: "sending" } },
+      { after: { state: "failed", code: "telegram_400" } },
+    ])
     expect(await t.ctx.db.select().from(jobRuns)).toEqual([])
+  })
+
+  it("reports a send that may have gone out (a 5xx, a lost connection) as uncertain, not as refused", async () => {
+    for (const failure of [500, "drop"] as const) {
+      await t.reset()
+      standIn.sendFailures.push(failure)
+      const res = await post(build(configured()), OWNER)
+      expect(res.status).toBe(502)
+      expect(res.json.error.code).toBe("telegram_uncertain")
+      expect(res.json.error.message).toContain("may have been sent")
+      expect(await testAudits()).toMatchObject([{ after: { state: "sending" } }, { after: { state: "uncertain" } }])
+    }
+  })
+
+  it("records the send before it goes out, and answers success when only the outcome row fails", async () => {
+    let broken = false
+    const db = new Proxy(t.ctx.db, {
+      get(target, prop) {
+        if (prop === "insert" && broken) throw new Error("the database went away")
+        const value = Reflect.get(target, prop, target)
+        return typeof value === "function" ? value.bind(target) : value
+      },
+    })
+    const ctx: Ctx = { ...t.ctx, db }
+    let seenBeforeSend: unknown[] = []
+    const result = await sendTestMorningMessage(ctx, owner, new URL(ORIGIN), async () => {
+      seenBeforeSend = (await testAudits()).map((a) => a.after)
+      broken = true
+    })
+    expect(seenBeforeSend).toEqual([{ state: "sending" }])
+    expect(result).toEqual({ sent: true, warning: "outcome_not_recorded" })
+    expect((await testAudits()).map((a) => a.after)).toEqual([{ state: "sending" }])
   })
 })

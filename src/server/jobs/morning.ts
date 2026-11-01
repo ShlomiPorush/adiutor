@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm"
 import type { JobState } from "../../shared/enums.ts"
 import { jobRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
-import { log } from "../log.ts"
+import { errorFacts, log } from "../log.ts"
 import { getSettings, lastVisitAnyDevice } from "../services/admin.ts"
 import { type By, type Ctx, requireOwner, writeAudit } from "../services/context.ts"
 import { morning } from "../services/reads.ts"
@@ -151,16 +151,25 @@ export async function buildTodaysMessage(ctx: Ctx, publicUrl: URL): Promise<Tele
   })
 }
 
+export type TestMessageResult = {
+  sent: true
+  /** The message went out, but its outcome could not be recorded in the audit log. */
+  warning?: "outcome_not_recorded"
+}
+
 /**
  * The owner's test of the morning message: today's message, built exactly as the job builds it, sent to
- * the owner's chat now. It never touches job_runs, so the 08:00 message still goes out. Audited.
+ * the owner's chat now. It never touches job_runs, so the 08:00 message still goes out. Audited twice: a
+ * `sending` row committed before the send, so a crash after it still leaves a trace, then the outcome
+ * (`sent`, `failed` or `uncertain`). A definite failure is `telegram_failed`; a send that may have gone
+ * out (a timeout, a lost connection, a 5xx) is `telegram_uncertain`.
  */
 export async function sendTestMorningMessage(
   ctx: Ctx,
   by: By,
   publicUrl: URL,
   send: ((text: TelegramHtml) => Promise<void>) | undefined,
-): Promise<{ sent: true }> {
+): Promise<TestMessageResult> {
   requireOwner(by, "send a test morning message")
   if (!send)
     throw new AppError(
@@ -168,21 +177,36 @@ export async function sendTestMorningMessage(
       "Telegram is not configured: set MIKUD_TELEGRAM_BOT_TOKEN and MIKUD_TELEGRAM_CHAT_ID on the server.",
     )
   const text = await buildTodaysMessage(ctx, publicUrl)
-  let outcome = "sent"
+  const record = (after: Record<string, string>) =>
+    writeAudit(ctx, ctx.db, by, { action: "telegram.test_message", entityType: "settings", entityId: null, after })
+  await record({ state: "sending" })
+
+  let state: "sent" | "failed" | "uncertain" = "sent"
+  let code: string | undefined
   try {
     await send(text)
   } catch (error) {
-    outcome = error instanceof TelegramError ? error.code : "unexpected"
+    const definite = error instanceof TelegramError && (error.failure === "answer" || error.failure === "not_sent")
+    state = definite ? "failed" : "uncertain"
+    code = error instanceof TelegramError ? error.code : "unexpected"
   }
-  await writeAudit(ctx, ctx.db, by, {
-    action: "telegram.test_message",
-    entityType: "settings",
-    entityId: null,
-    after: { outcome },
-  })
-  if (outcome !== "sent") {
-    log.warn("test morning message failed", { code: outcome })
-    throw new AppError("telegram_failed", `Telegram did not take the message (${outcome}). Check the bot settings.`)
+  try {
+    await record(code ? { state, code } : { state })
+  } catch (error) {
+    log.error("test morning message: the outcome was not recorded", { state, ...errorFacts(error) })
+    // The message went out: answering with an error would invite a second send.
+    if (state === "sent") return { sent: true, warning: "outcome_not_recorded" }
+  }
+  if (state === "failed") {
+    log.warn("test morning message failed", { code })
+    throw new AppError("telegram_failed", `Telegram did not take the message (${code}). Check the bot settings.`)
+  }
+  if (state === "uncertain") {
+    log.warn("test morning message may have been sent", { code })
+    throw new AppError(
+      "telegram_uncertain",
+      `Telegram gave no clear answer (${code}): the message may have been sent. Check the chat before sending again.`,
+    )
   }
   return { sent: true }
 }

@@ -33,6 +33,7 @@ export const API_ERROR_CODES = [
   "conflict",
   "rate_limited",
   "telegram_failed",
+  "telegram_uncertain",
   "internal_error",
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
