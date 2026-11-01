@@ -71,7 +71,10 @@ test("the morning view shows what waits on the owner, and the bell counts it", a
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(he.morning.title)
   await expect(page.locator("#waiting")).toContainText(itemTitle)
   const bell = page.locator(isPhone() ? ".ui-mtop .ui-bell" : ".ui-topbar .ui-bell")
-  await expect(bell).toHaveAttribute("aria-label", /\d/)
+  // The badge shows the count; the name says it in words ("1 item" is written as a word in Hebrew).
+  await expect(bell.locator(".ui-bell-n")).toBeVisible()
+  await expect(bell).not.toHaveAttribute("aria-label", he.bell.none)
+  await expect(bell).toHaveAttribute("aria-label", new RegExp(`^${he.bell.title}`))
 })
 
 test("an item opens over the page, changes status at once, and Undo puts it back", async () => {
