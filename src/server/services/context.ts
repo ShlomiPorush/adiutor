@@ -25,9 +25,12 @@ export function requireOwner(by: By, what: string): void {
   if (by.actor.kind !== "owner") throw forbidden(`Only the owner can ${what}.`)
 }
 
-/** Agent text is refused when it looks like a secret; the answer names the rule and the field only. */
+/**
+ * Text from agents and the Telegram bot is refused when it looks like a secret; the answer names the rule and
+ * the field only. The owner's own text and the sync (it redacts instead) are not checked.
+ */
 export function checkAgentText(ctx: Ctx, by: By, fields: Record<string, string | null | undefined>): void {
-  if (by.actor.kind !== "agent") return
+  if (by.actor.kind !== "agent" && by.actor.kind !== "bot") return
   for (const [field, value] of Object.entries(fields)) {
     if (!value) continue
     const rule = ctx.secrets.find(value)

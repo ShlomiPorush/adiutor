@@ -8,6 +8,7 @@ import { RateLimiter } from "./http/auth.ts"
 import { log } from "./log.ts"
 import { mcpRoutes } from "./mcp/server.ts"
 import type { Ctx } from "./services/context.ts"
+import type { TelegramRuntime } from "./telegram/status.ts"
 
 export type AppDeps = {
   /** True when the database answers a trivial query. */
@@ -18,6 +19,8 @@ export type AppDeps = {
     config: Pick<ServerConfig, "ownerToken" | "agentToken" | "publicUrl" | "version">
     limiter?: RateLimiter
     clientIp?: (c: Context) => string
+    /** The bot, for the status route; off when absent. */
+    telegram?: TelegramRuntime
   }
 }
 
@@ -47,6 +50,7 @@ export function createApp(deps: AppDeps) {
       limiter: deps.core.limiter ?? new RateLimiter(),
       clientIp: deps.core.clientIp ?? socketAddress,
       version: config.version,
+      telegram: deps.core.telegram,
     }
     app.route("/api/v1", apiRoutes(auth))
     app.route("/mcp", mcpRoutes(auth))

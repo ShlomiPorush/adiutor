@@ -265,10 +265,13 @@ async function visibleItems(ctx: Ctx, closedItemDays: number): Promise<ItemRow[]
     .where(or(isNull(items.closedAt), gte(items.closedAt, cutoff)))
 }
 
-/** The home screen. `since` is this device's previous visit, or 24 hours ago on its first visit. */
-export async function morning(ctx: Ctx, options: { deviceId?: string | null } = {}) {
+/**
+ * The home screen. `since` is this device's previous visit, or 24 hours ago on its first visit, unless the
+ * caller gives one (the morning message).
+ */
+export async function morning(ctx: Ctx, options: { deviceId?: string | null; since?: Date } = {}) {
   const settingsRow = await getSettings(ctx.db)
-  const since = await previousVisit(ctx, options.deviceId)
+  const since = options.since ?? (await previousVisit(ctx, options.deviceId))
   const allProjects = await ctx.db.select().from(projects).orderBy(asc(projects.name))
   const names = new Map(allProjects.map((p) => [p.id, p.name]))
   const visible = await visibleItems(ctx, settingsRow.closedItemDays)

@@ -25,7 +25,11 @@ export const SECURITY_COVERAGES = ["enabled", "not_enabled", "no_access", "error
 /** What a suppression keeps the sync from recreating. */
 export const SUPPRESSION_KINDS = ["thread", "project"] as const
 export const SYNC_OUTCOMES = ["succeeded", "partial", "failed"] as const
-export const JOB_STATES = ["sending", "sent", "failed", "unknown"] as const
+/**
+ * A morning run: `sending` before the send, then `sent`; `failed` (Telegram refused it; retried until the
+ * cutoff), `unknown` (it may have gone out; never resent) or `skipped` (the cutoff passed without a send).
+ */
+export const JOB_STATES = ["sending", "sent", "failed", "unknown", "skipped"] as const
 export const TELEGRAM_OUTCOMES = ["item_created", "ignored", "refused"] as const
 export const LANGUAGES = ["he", "en"] as const
 

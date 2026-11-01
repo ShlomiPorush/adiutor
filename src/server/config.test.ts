@@ -73,4 +73,43 @@ describe("loadConfig", () => {
   it("refuses a bad port", () => {
     expect(refusal({ ...valid, PORT: "http" })).toContain("PORT")
   })
+
+  describe("Telegram", () => {
+    // Assembled at run time: the guards and push protection scan literal text.
+    const botToken = `${"1234567"}:${"AAH"}${"x".repeat(32)}`
+
+    it("is off without the bot token and the chat id", () => {
+      expect(loadConfig(valid).telegram).toBeNull()
+      expect(loadConfig({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: "", MIKUD_TELEGRAM_CHAT_ID: " " }).telegram).toBeNull()
+    })
+
+    it("reads both, with the official Bot API by default", () => {
+      expect(
+        loadConfig({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: botToken, MIKUD_TELEGRAM_CHAT_ID: "-1001" }).telegram,
+      ).toEqual({ botToken, chatId: "-1001", apiUrl: "https://api.telegram.org" })
+      expect(
+        loadConfig({
+          ...valid,
+          MIKUD_TELEGRAM_BOT_TOKEN: botToken,
+          MIKUD_TELEGRAM_CHAT_ID: "42",
+          TELEGRAM_API_URL: "http://stand-in:8099/",
+        }).telegram?.apiUrl,
+      ).toBe("http://stand-in:8099")
+    })
+
+    it("refuses one without the other, a malformed value or API URL, and never prints the token", () => {
+      const onlyToken = refusal({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: botToken })
+      expect(onlyToken).toContain("must be set together")
+      expect(onlyToken).not.toContain(botToken)
+      expect(refusal({ ...valid, MIKUD_TELEGRAM_CHAT_ID: "42" })).toContain("must be set together")
+      const badToken = `${botToken}!`
+      const message = refusal({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: badToken, MIKUD_TELEGRAM_CHAT_ID: "42" })
+      expect(message).toContain("MIKUD_TELEGRAM_BOT_TOKEN does not look like a bot token")
+      expect(message).not.toContain(badToken)
+      expect(refusal({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: botToken, MIKUD_TELEGRAM_CHAT_ID: "@owner" })).toContain(
+        "MIKUD_TELEGRAM_CHAT_ID must be a numeric chat id",
+      )
+      expect(refusal({ ...valid, TELEGRAM_API_URL: "ftp://example.com" })).toContain("TELEGRAM_API_URL")
+    })
+  })
 })

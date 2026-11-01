@@ -17,11 +17,13 @@ UI follows the `v3-ui-style` skill.
 
 One pnpm package (no workspace apps).
 
-- `src/server/`: Hono server. `index.ts` starts it, `config.ts` reads and checks the environment, `app.ts` mounts `/healthz`, `/api/v1` and `/mcp` and maps errors, `healthcheck.ts` is the container health check, `errors.ts` holds the stable error codes, `db/` the Drizzle schema and client.
+- `src/server/`: Hono server. `index.ts` starts it (and the bot and the morning job when Telegram is configured), `config.ts` reads and checks the environment, `app.ts` mounts `/healthz`, `/api/v1` and `/mcp` and maps errors, `healthcheck.ts` is the container health check, `errors.ts` holds the stable error codes, `db/` the Drizzle schema and client.
   - `services/`: every write and read model. `context.ts` (actor, audit row, agent secret check), `items.ts`, `projects.ts`, `threads.ts` (start of thread), `sync.ts` and `sync-rules.ts` (T3 and security snapshots), `reads.ts` (morning, project, item, archive, inbox, audit), `admin.ts` (settings, suppressions, devices, visits), `secrets.ts`.
   - `http/`: `auth.ts` (bearer token, device cookie, CSRF check, rate limit) and `api.ts` (the `/api/v1` routes). `mcp/server.ts`: the MCP tools.
-  - `testing/db.ts`: a migrated database per integration test file, and a movable clock.
-- `src/shared/`: enum codes as `const` arrays with zod schemas (`enums.ts`), the API request schemas (`api.ts`) and the locale files `locales/en.json` and `locales/he.json`.
+  - `telegram/`: `api.ts` (Bot API client; a failure is `answer`, `not_sent`, `uncertain` or `aborted`), `html.ts` (Telegram HTML that escapes every value), `bot.ts` (long polling, one transaction per update), `texts.ts` (locale texts), `status.ts` (the status route's read).
+  - `jobs/`: `morning.ts` (the 08:00 schedule and its durable runs in `job_runs`), `morning-message.ts` (the message, a pure function), `time.ts` (Asia/Jerusalem wall clock and number formats).
+  - `testing/db.ts`: a migrated database per integration test file, and a movable clock. `testing/bot-api.ts`: a stand-in Telegram Bot API on `127.0.0.1` for tests (getUpdates with Telegram's offset rules, sendMessage recorded, failures on demand).
+- `src/shared/`: enum codes as `const` arrays with zod schemas (`enums.ts`), the API request schemas (`api.ts`), the UI paths that messages link to (`routes.ts`) and the locale files `locales/en.json` and `locales/he.json`.
 - `drizzle/`: generated SQL migrations and their snapshots. Never edit by hand.
 - `config/`: TypeScript base config, Vitest configs, Drizzle Kit config.
 - `docker/`: toolchain and application Dockerfiles, the development Compose template and `dev.env` (fake development values).
@@ -54,6 +56,10 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 - Services take their time from `ctx.clock()`, never `now()` in SQL or `new Date()`, so tests can move time; integration tests use `createTestDatabase` from `src/server/testing/db.ts`.
 - Exported service functions are `async`: a refusal must be a rejected promise, not a synchronous throw.
 - Fake secrets in tests are assembled at run time (`${"gh"}p_...`) and private IPv4 addresses with `[10, 1, 2, 3].join(".")`: the guards and GitHub push protection scan the literal text.
+- Telegram is off unless `MIKUD_TELEGRAM_BOT_TOKEN` and `MIKUD_TELEGRAM_CHAT_ID` are both set. Tests never reach the real Bot API: they start `StandInBotApi` (`src/server/testing/bot-api.ts`) and give its URL to `BotApi`. `TELEGRAM_API_URL` exists for the same purpose and stays empty in production. The token is part of every Bot API path: never log a URL, a fetch error's message or message text; log `TelegramError.code`.
+- The morning message goes out at most once a day: its `job_runs` row is taken as `sending` before the send. Only a definite failure (`answer`, `not_sent`) becomes `failed` and is retried; anything else becomes `unknown` and is never resent. Do not add a resend path for `unknown`.
+- Bot text goes through the same secret check as agent text: `checkAgentText` covers actor kinds `agent` and `bot`.
+- Write bidirectional control characters in source as escapes (backslash, `u`, four hex digits), never as literal characters. Some editing tools turn the escapes into the characters; check new files before committing.
 - The guards scan tracked files and new files that are not ignored. The deny list `docs/private/deny-list.txt` exists only on the owner's machine; in CI the guard is skipped, and its output never repeats a matched line.
 
 ## Docker
@@ -77,7 +83,8 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 
 - Agents may not delete items or projects and may not change a stage (they propose one). Only the owner, in the UI, does that.
 - Every write goes through the services layer and writes an audit row in the same transaction.
-- Text written by agents is checked for secrets and refused with `secret_suspected`.
+- Text written by agents and the Telegram bot is checked for secrets and refused with `secret_suspected`.
+- The bot serves only the configured owner chat and never answers another chat.
 - The server never calls T3 or GitHub. Their data arrives through the sync tool on the owner's PC.
 - The sync never overrides the owner: see "Agent and sync rules" in the foundation plan.
 

@@ -47,6 +47,7 @@ import {
 } from "../services/reads.ts"
 import { applySecuritySnapshot, applyT3Snapshot, recentSyncRuns } from "../services/sync.ts"
 import { startThread } from "../services/threads.ts"
+import { TELEGRAM_OFF, type TelegramRuntime, telegramStatus } from "../telegram/status.ts"
 import {
   type AuthDeps,
   authenticate,
@@ -129,7 +130,7 @@ function requireToken(c: Context<Env>) {
   if (c.get("auth").via !== "token") throw forbidden("Sync data is pushed with a token.")
 }
 
-export function apiRoutes(deps: AuthDeps & { version: string }) {
+export function apiRoutes(deps: AuthDeps & { version: string; telegram?: TelegramRuntime }) {
   const { ctx, config, limiter } = deps
   const api = new Hono<Env>()
 
@@ -258,6 +259,9 @@ export function apiRoutes(deps: AuthDeps & { version: string }) {
     await removeSuppression(ctx, byOf(c), idParam(c))
     return c.body(null, 204)
   })
+  api.get("/telegram/status", requireOwnerAuth, async (c) =>
+    c.json({ data: await telegramStatus(ctx, deps.telegram ?? TELEGRAM_OFF) }),
+  )
   api.get("/devices", async (c) => c.json({ data: await listDevices(ctx, byOf(c)) }))
   api.delete("/devices/:id", async (c) => {
     await revokeDevice(ctx, byOf(c), idParam(c))

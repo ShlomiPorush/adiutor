@@ -9,7 +9,19 @@ export type ServerConfig = {
   version: string
   /** Domains whose host names agents must not write (MIKUD_PRIVATE_DOMAINS, comma-separated, optional). */
   privateDomains: string[]
+  /** The bot and the morning message; null (both off) until the bot token and the owner's chat id are set. */
+  telegram: TelegramConfig | null
 }
+
+export type TelegramConfig = {
+  botToken: string
+  /** The owner's chat: the only chat the bot serves and the one the morning message goes to. */
+  chatId: string
+  /** The Bot API base URL. Only tests and the verify stack change it, to a stand-in. */
+  apiUrl: string
+}
+
+export const DEFAULT_TELEGRAM_API_URL = "https://api.telegram.org"
 
 export const MIN_TOKEN_LENGTH = 32
 
@@ -68,6 +80,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const port = Number(env.PORT ?? 8080)
   if (!Number.isInteger(port) || port <= 0 || port > 65535) problems.push("PORT must be a port number")
 
+  const telegram = telegramConfig(env, problems)
+
   if (problems.length > 0 || !publicUrl) throw new ConfigError(`Invalid configuration: ${problems.join("; ")}`)
 
   return {
@@ -79,5 +93,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     migrationsDir: env.MIGRATIONS_DIR || "drizzle",
     version: env.MIKUD_VERSION || "dev",
     privateDomains,
+    telegram,
   }
+}
+
+/**
+ * Both Telegram values, or neither (the bot and the morning message stay off). One without the other is a
+ * mistake and refuses to start. Problems name the variable, never its value.
+ */
+function telegramConfig(env: NodeJS.ProcessEnv, problems: string[]): TelegramConfig | null {
+  const botToken = env.MIKUD_TELEGRAM_BOT_TOKEN?.trim() ?? ""
+  const chatId = env.MIKUD_TELEGRAM_CHAT_ID?.trim() ?? ""
+  const apiUrlText = (env.TELEGRAM_API_URL?.trim() || DEFAULT_TELEGRAM_API_URL).replace(/\/+$/, "")
+  const apiUrl = URL.canParse(apiUrlText) ? new URL(apiUrlText) : undefined
+  if (!apiUrl || (apiUrl.protocol !== "https:" && apiUrl.protocol !== "http:"))
+    problems.push("TELEGRAM_API_URL must be an http or https URL")
+  if (!botToken && !chatId) return null
+  if (!botToken || !chatId) {
+    problems.push("MIKUD_TELEGRAM_BOT_TOKEN and MIKUD_TELEGRAM_CHAT_ID must be set together, or both left empty")
+    return null
+  }
+  if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(botToken))
+    problems.push("MIKUD_TELEGRAM_BOT_TOKEN does not look like a bot token from BotFather")
+  if (!/^-?\d{1,20}$/.test(chatId)) problems.push("MIKUD_TELEGRAM_CHAT_ID must be a numeric chat id")
+  return { botToken, chatId, apiUrl: apiUrlText }
 }

@@ -194,6 +194,26 @@ Each repository is matched to every project whose `githubRepo` equals it, ignori
 | `GET /devices` | owner | | `Device[]`, newest first |
 | `DELETE /devices/:id` | owner | | `204`; the device's cookie stops working |
 | `POST /devices/end-all` | owner | | `{ended}`: every device is revoked, the caller's too (its cookie is cleared) |
+| `GET /telegram/status` | owner | | `TelegramStatus` (below) |
+
+### Telegram
+
+The bot and the morning message run inside the server, never through this API. They are on only when `MIKUD_TELEGRAM_BOT_TOKEN` and `MIKUD_TELEGRAM_CHAT_ID` are both set; the server refuses to start with only one of them.
+
+**TelegramStatus**:
+
+```text
+{
+  configured,          // both Telegram values are set
+  polling,             // the bot's latest getUpdates call succeeded (false when not configured)
+  lastUpdateAt,        // when the bot last recorded an update from any chat, or null
+  lastMorning: {localDate: "YYYY-MM-DD", state, at} | null   // the latest morning run
+}
+```
+
+- `lastMorning.state`: `sending` (in progress), `sent`, `failed` (Telegram refused it; retried every 30 seconds until 11:00), `unknown` (it may have gone out: a timeout, a dropped connection, or a restart during the send; never resent) or `skipped` (11:00 passed without a send). `at` is the time of the latest state change.
+- **Quick add**: plain text from the owner's chat becomes an inbox item exactly like `POST /capture` (type `idea`, status `future`), created by actor kind `bot` with audit source `telegram`. The bot answers with a link to `<MIKUD_PUBLIC_URL>/items/<id>`. Text that looks like a secret is refused as agent text is, and the bot answers that nothing was saved without repeating the text. `/start`, `/help` and other commands answer with a help text; photos and other non-text messages with a short note. Other chats get no answer.
+- **Morning message**: 08:00 Asia/Jerusalem, Sunday to Friday, in the language of the settings, built from the morning view (above) with `since` set to the owner's last visit on any device or the last morning message, whichever is later. Deep links: `<MIKUD_PUBLIC_URL>/` and `<MIKUD_PUBLIC_URL>/items/<id>`.
 
 ## MCP
 

@@ -28,5 +28,28 @@
     "high": "High",
     "medium": "Medium",
     "low": "Low"
+  },
+  "telegram": {
+    "help": "Send me any text and I will save it in Mikud, under {inbox}. Every morning, Sunday to Friday at 08:00, I send you what is waiting on you.",
+    "saved": "Saved under {inbox}: {title}",
+    "open": "Open",
+    "refusedSecret": "Nothing was saved: the text looks like it holds a secret (a password, token, key or server address). Remove it and send it again.",
+    "onlyText": "I save text messages only. Nothing was saved.",
+    "morning": {
+      "allClear": "Nothing is waiting on you today.",
+      "waiting": "Waiting on you: {count}",
+      "nothingWaiting": "Nothing is waiting on you.",
+      "proposal": "{project}: stage proposal",
+      "new": "New since your last visit: {count}",
+      "security": "Security, {project}: {counts}",
+      "critical": "{count} critical",
+      "high": "{count} high",
+      "dataFrom": "data from {time}",
+      "dataUnknown": "data age unknown",
+      "more": "+{count} more",
+      "syncStale": "Last T3 sync: {time}",
+      "syncNever": "No T3 sync yet",
+      "openBoard": "Open the board"
+    }
   }
 }
