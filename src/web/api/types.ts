@@ -54,6 +54,8 @@ export type SetupStatus = { hasUser: boolean; session: "none" | "enrol" | "activ
 /** GET /api/auth/list-sessions (Better Auth): the owner's signed-in browsers. Dates arrive as Date or string. */
 export type BrowserSession = {
   id: string
+  /** The raw token: Better Auth's revokeSession takes it (G10). Never shown. */
+  token: string
   createdAt: Date | string
   updatedAt: Date | string
   expiresAt: Date | string
@@ -66,6 +68,7 @@ export type AgentKey = {
   name: string | null
   start: string | null
   createdAt: Date | string
+  expiresAt: Date | string | null
   lastRequest: Date | string | null
 }
 

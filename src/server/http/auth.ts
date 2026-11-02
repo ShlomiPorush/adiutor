@@ -79,6 +79,15 @@ export function checkBrowserRequest(c: Context, publicUrl: URL): void {
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"])
 
+/**
+ * The request's cookie header and nothing else, for Better Auth's getSession. With bearer() an `Authorization:
+ * Bearer <session token>` header is a session too; a browser route reads the session from its cookie alone.
+ */
+export function cookieOnly(headers: Headers): Headers {
+  const cookie = headers.get("cookie")
+  return new Headers(cookie ? { cookie } : {})
+}
+
 function agentLabel(c: Context): string {
   const raw = c.req.header(AGENT_LABEL_HEADER)?.trim() ?? ""
   const clean = raw.replace(/[^A-Za-z0-9 ._:-]/g, "").slice(0, 60)
@@ -87,8 +96,9 @@ function agentLabel(c: Context): string {
 
 /**
  * Authenticates a request: `Authorization: Bearer <agent key>` (Better Auth's api-key plugin, verified with the
- * server-only verifyApiKey), or (when allowed) the owner's browser session (Better Auth's getSession, which never
- * extends it: deferSessionRefresh). Better Auth has no option that requires two-factor, so a session counts only when
+ * server-only verifyApiKey), or (when allowed) the owner's browser session from its cookie alone (Better Auth's
+ * getSession, which never extends it: deferSessionRefresh). A request with an Authorization header is an agent
+ * request: a wrong key is refused, never read as the cookie's session. Better Auth has no option that requires two-factor, so a session counts only when
  * the account has two-factor on; otherwise the answer is `totp_required` and the UI shows enrolment. A key never
  * becomes a session and a session never stands in for a key. Failed keys count toward the rate limit.
  */
@@ -108,7 +118,7 @@ export function authenticate(deps: AuthDeps, options: { allowSession: boolean })
       return next()
     }
     if (!options.allowSession) throw unauthorized("A valid key is required.")
-    const found = await deps.auth.current.api.getSession({ headers: c.req.raw.headers })
+    const found = await deps.auth.current.api.getSession({ headers: cookieOnly(c.req.raw.headers) })
     if (!found) throw unauthorized()
     if (found.user.twoFactorEnabled !== true)
       throw new AppError("totp_required", "Set up two-factor authentication to use Mikud.")

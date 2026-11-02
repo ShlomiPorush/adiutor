@@ -43,28 +43,20 @@ It sets the item to `in_progress`. Remember the item id it returns.
 
 ## Connecting to Mikud
 
-Both clients use the MCP Streamable HTTP transport and read an agent key (Mikud's Settings, Agent access) from the `MIKUD_AGENT_TOKEN` environment variable, so the token never appears in a configuration file. Replace the example URL with the owner's Mikud address.
+Both clients use the MCP Streamable HTTP transport with an agent key of their own. Get it with `mikud connect` (the sync bundle, [sync.md](sync.md)); the owner approves it in the browser. Replace the example URL with the owner's Mikud address.
 
-Claude Code (user scope, `~/.claude.json`, or a `.mcp.json`):
+Claude Code: run `node dist/sync/mikud-sync.js connect --url https://mikud.example.com --name claude --for claude` in the Mikud checkout, then the command it prints once:
 
-```json
-{
-  "mcpServers": {
-    "mikud": {
-      "type": "http",
-      "url": "https://mikud.example.com/mcp",
-      "headers": { "Authorization": "Bearer ${MIKUD_AGENT_TOKEN}" }
-    }
-  }
-}
+```
+claude mcp add --transport http --scope user mikud https://mikud.example.com/mcp --header "Authorization: Bearer <key>"
 ```
 
-Codex (`~/.codex/config.toml`):
+Codex: run `... connect --url https://mikud.example.com --name codex --for codex`. It prints these lines for `~/.codex/config.toml` and the `setx MIKUD_AGENT_KEY` command that sets the key for the Windows user:
 
 ```toml
 [mcp_servers.mikud]
 url = "https://mikud.example.com/mcp"
-bearer_token_env_var = "MIKUD_AGENT_TOKEN"
+bearer_token_env_var = "MIKUD_AGENT_KEY"
 ```
 
-Give agents only the agent token, never the owner token.
+Each agent gets its own key, which ends after `--days` (default 90) or when the owner disconnects it in Settings, Agent access. A printed command can stay in the shell history.

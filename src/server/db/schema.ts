@@ -487,3 +487,28 @@ export const authApiKey = pgTable(
     index("auth_api_key_key_idx").on(t.key),
   ],
 )
+
+/**
+ * Device codes of Better Auth's core deviceAuthorization plugin (model `deviceCode`): one row per `mikud connect`
+ * request, from `/device/code` until the CLI collects its answer, denies it or the code expires. Its two unique
+ * indexes are the plugin's own (`deviceCode` and `userCode`).
+ */
+export const authDeviceCode = pgTable(
+  "auth_device_code",
+  {
+    id: text("id").primaryKey(),
+    deviceCode: text("device_code").notNull(),
+    userCode: text("user_code").notNull(),
+    userId: text("user_id"),
+    expiresAt: at("expires_at").notNull(),
+    status: text("status").notNull(),
+    lastPolledAt: at("last_polled_at"),
+    pollingInterval: integer("polling_interval"),
+    clientId: text("client_id"),
+    scope: text("scope"),
+  },
+  (t) => [
+    uniqueIndex("auth_device_code_device_code_idx").on(t.deviceCode),
+    uniqueIndex("auth_device_code_user_code_idx").on(t.userCode),
+  ],
+)

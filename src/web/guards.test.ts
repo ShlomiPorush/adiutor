@@ -136,6 +136,8 @@ const NO_REFRESH: Record<string, string> = {
   NotFoundPage: "says the address names no page; it reads nothing",
   LoginPage: "signs in; it reads only whether an owner exists, once",
   SetupPage: "creates the owner and sets up TOTP; it reads the setup state once and after each step",
+  ConnectDevicePage:
+    "approves one agent request: it reads the request once (Better Auth allows 5 reads of a code), and only this page changes it",
 }
 /** Route elements that are not pages (Component is the element of each PAGES entry, checked by name above). */
 const NOT_PAGES = new Set(["Root", "Shell", "ItemLink", "Component"])

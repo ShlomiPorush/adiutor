@@ -1,11 +1,12 @@
-// The Better Auth client: sign-up, sign-in, two-factor, the password, the browser sessions and the agent keys, all
+// The Better Auth client: sign-up, sign-in, two-factor, the password, the browser sessions, the agent keys and the
+// agent approvals (device authorization), all
 // on Better Auth's own routes under /api/auth. Mikud adds nothing to these requests: Better Auth checks the origin
 // itself. Its useSession is the only thing that extends a session (deferSessionRefresh on the server): it refreshes
 // when the page opens, comes back to the front or online, or another tab changes the session. Never call
 // getSession or useSession().refetch from background polling, and keep sessionOptions.refetchInterval at 0.
 
 import { apiKeyClient } from "@better-auth/api-key/client"
-import { twoFactorClient, usernameClient } from "better-auth/client/plugins"
+import { deviceAuthorizationClient, twoFactorClient, usernameClient } from "better-auth/client/plugins"
 import { createAuthClient } from "better-auth/react"
 
 /** Development and screenshot builds answer /api/auth from the mock; the production build drops this branch. */
@@ -17,7 +18,7 @@ const mockFetch =
 
 export const authClient = createAuthClient({
   basePath: "/api/auth",
-  plugins: [usernameClient(), twoFactorClient(), apiKeyClient()],
+  plugins: [usernameClient(), twoFactorClient(), apiKeyClient(), deviceAuthorizationClient()],
   sessionOptions: { refetchInterval: 0 },
   ...(mockFetch ? { fetchOptions: { customFetchImpl: mockFetch } } : {}),
 })

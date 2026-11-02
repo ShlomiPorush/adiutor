@@ -64,6 +64,13 @@
       "when": 1793629986828,
       "tag": "0008_readable-email",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793638514377,
+      "tag": "0009_device-authorization",
+      "breakpoints": true
     }
   ]
 }

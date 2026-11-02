@@ -391,12 +391,40 @@ export function createState(): MockState {
   const phone =
     "Mozilla/5.0 (Linux; Android 15; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339 Mobile Safari/537.36"
   const sessions: BrowserSession[] = [
-    { id: uuid(), createdAt: ago(24 * 3), updatedAt: ago(0.5), expiresAt: ago(-24 * 30), userAgent: desktop },
-    { id: uuid(), createdAt: ago(24 * 9), updatedAt: ago(11), expiresAt: ago(-24 * 29), userAgent: phone },
+    {
+      id: uuid(),
+      token: uuid(),
+      createdAt: ago(24 * 3),
+      updatedAt: ago(0.5),
+      expiresAt: ago(-24 * 30),
+      userAgent: desktop,
+    },
+    {
+      id: uuid(),
+      token: uuid(),
+      createdAt: ago(24 * 9),
+      updatedAt: ago(11),
+      expiresAt: ago(-24 * 29),
+      userAgent: phone,
+    },
   ]
   const agentKeys: AgentKey[] = [
-    { id: uuid(), name: "sync on the desktop", start: "mkd_Qe", createdAt: ago(24 * 20), lastRequest: ago(0.2) },
-    { id: uuid(), name: "agents", start: "mkd_tR", createdAt: ago(24 * 20), lastRequest: ago(3) },
+    {
+      id: uuid(),
+      name: "sync",
+      start: "mkd_Qe",
+      createdAt: ago(24 * 20),
+      expiresAt: ago(-24 * 70),
+      lastRequest: ago(0.2),
+    },
+    {
+      id: uuid(),
+      name: "claude",
+      start: "mkd_tR",
+      createdAt: ago(24 * 20),
+      expiresAt: ago(-24 * 70),
+      lastRequest: ago(3),
+    },
   ]
   const suppressions: Suppression[] = [
     {

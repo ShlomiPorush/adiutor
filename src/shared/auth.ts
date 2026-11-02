@@ -48,3 +48,14 @@ export const SESSION_IDLE_DAYS_DEFAULT = 30
 /** Every agent key starts with this; the secret check refuses it in agent text. */
 export const AGENT_KEY_PREFIX = "mkd_"
 export const AGENT_KEY_NAME_MAX = 32
+
+/** How long a key made by `mikud connect` lives (`--days`): the api-key plugin's keyExpiration limits, in days. */
+export const AGENT_KEY_DAYS_MIN = 1
+export const AGENT_KEY_DAYS_MAX = 365
+
+// --- Agent approval in the browser (Better Auth's core deviceAuthorization plugin) ---
+
+/** The one client id the device plugin accepts (validateClient); the CLI also sends it as its User-Agent. */
+export const CONNECT_CLIENT_ID = "mikud-connect"
+/** The page where the owner approves a `mikud connect` request (the plugin's verificationUri). */
+export const CONNECT_DEVICE_PATH = "/connect/device"

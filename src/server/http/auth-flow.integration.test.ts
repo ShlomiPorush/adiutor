@@ -480,7 +480,6 @@ describe("the allow-list in hooks.before", () => {
       ["POST", "/request-password-reset", { email: ownerEmail("owner.name") }],
       ["POST", "/reset-password", { token: "x", newPassword: TEST_PASSWORD }],
       ["GET", "/list-accounts", undefined],
-      ["POST", "/revoke-session", { token: "x" }],
       ["POST", "/api-key/update", { keyId: "x", name: "y" }],
       ["GET", "/api-key/get?id=x", undefined],
       ["POST", "/two-factor/get-totp-uri", { password: TEST_PASSWORD }],
@@ -808,11 +807,14 @@ describe("agent keys (Better Auth's api-key plugin)", () => {
     const key = created.json.key as string
     const agent = await app.request("/api/v1/session", { headers: { authorization: `Bearer ${key}` } })
     expect(((await agent.json()) as { data: { actor: unknown } }).data.actor).toEqual({ kind: "agent", label: "agent" })
-    // Never a session: Better Auth does not take it as one.
-    const asSession = await app.request("/api/auth/get-session", {
-      headers: { authorization: `Bearer ${key}`, "x-api-key": key },
-    })
+    // Never a session: Better Auth does not take it as one, and the Authorization header is refused outright.
+    const asSession = await app.request("/api/auth/get-session", { headers: { "x-api-key": key } })
     expect(await asSession.json()).toBeNull()
+    const asBearer = await app.request("/api/auth/get-session", { headers: { authorization: `Bearer ${key}` } })
+    expect([asBearer.status, ((await asBearer.json()) as { code: string }).code]).toEqual([
+      403,
+      "AUTHORIZATION_NOT_ALLOWED",
+    ])
     // Many verifications in a row: the plugin's own limit (10 a day by default) is off.
     for (let i = 0; i < 12; i++)
       expect((await app.request("/api/v1/projects", { headers: { authorization: `Bearer ${key}` } })).status).toBe(200)

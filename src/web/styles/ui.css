@@ -1891,6 +1891,70 @@ html.ui-layer-on .ui-page {
   color: var(--ui-ok);
 }
 
+/* ---------- Agent approval (/connect/device), after v3's consent page ---------- */
+
+.ui-consent-sec {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius);
+  background: var(--ui-bg);
+}
+.ui-auth-col .ui-consent-sec p {
+  color: var(--ui-ink);
+}
+.ui-consent-h {
+  margin: 0;
+  font-size: var(--ui-fs-panel);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ui-consent-id {
+  margin: 0;
+  font-size: var(--ui-fs-sm);
+  line-height: 1.6;
+}
+.ui-consent-code {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-panel);
+}
+.ui-consent-code b {
+  font-size: var(--ui-fs-kpi);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  justify-self: start;
+}
+.ui-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ui-consent-actions .ui-btn {
+  flex: 1;
+  width: auto;
+}
+.ui-connect-cmds {
+  display: grid;
+  gap: 10px;
+}
+.ui-connect-cmds .ui-copy {
+  justify-self: start;
+  max-width: 100%;
+  text-align: start;
+}
+/* A command wraps instead of being cut: it is read before it is pasted. */
+.ui-connect-cmds .ui-copy bdi {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
 /* ---------- Account (Settings) ---------- */
 
 .ui-h3 {

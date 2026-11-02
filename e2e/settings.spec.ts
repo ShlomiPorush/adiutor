@@ -1,4 +1,4 @@
-// Settings against the real server, in the browser auth.spec.ts stored: an agent key shown once and revoked, the
+// Settings against the real server, in the browser auth.spec.ts stored: how agents connect (connect.spec.ts runs it), the
 // password changed and changed back without leaving the page, the browsers list, and the Telegram fields editable
 // when no environment variable sets them. Stores the browser again at the end: a password change replaces this
 // browser's session.
@@ -23,33 +23,14 @@ test.afterAll(async () => {
   await page.context().close()
 })
 
-test("an agent key is shown once, works as a bearer key, and is gone after Revoke", async () => {
+test("Agent access has no manual key: it shows how to connect, with this address", async () => {
   const panel = page.locator("#agents")
-  const name = `e2e ${test.info().project.name}`
-  await panel.getByRole("button", { name: he.agentKeys.create }).click()
-  const dialog = page.getByRole("dialog", { name: he.agentKeys.createTitle })
-  await dialog.getByLabel(he.agentKeys.name, { exact: true }).fill(name)
-  await dialog.getByRole("button", { name: he.agentKeys.createSubmit }).click()
-  const shown = page.getByRole("dialog", { name: he.agentKeys.createdTitle })
-  const key = ((await shown.getByTestId("agent-key").textContent()) ?? "").trim()
-  expect(key).toMatch(/^mkd_[A-Za-z]{64}$/)
-  await shown.getByRole("button", { name: he.agentKeys.done }).click()
-
-  const row = panel.locator(".ui-item", { hasText: name })
-  await expect(row).toContainText(key.slice(0, 6))
-  await expect(row).not.toContainText(key.slice(6))
-  const asAgent = (k: string) =>
-    page.evaluate(
-      async (bearer) => (await fetch("/api/v1/projects", { headers: { authorization: `Bearer ${bearer}` } })).status,
-      k,
-    )
-  expect(await asAgent(key)).toBe(200)
-
-  await row.getByRole("button", { name: he.agentKeys.revoke, exact: true }).click()
-  const confirm = page.getByRole("alertdialog")
-  await confirm.getByRole("button", { name: he.agentKeys.revoke, exact: true }).click()
-  await expect(panel.locator(".ui-item", { hasText: name })).toHaveCount(0)
-  expect(await asAgent(key)).toBe(401)
+  await expect(panel.getByRole("heading", { name: he.agentKeys.howTitle })).toBeVisible()
+  await expect(panel).toContainText(
+    "node dist/sync/mikud-sync.js connect --url http://127.0.0.1:8090 --name sync --for sync",
+  )
+  await expect(panel).toContainText("--name claude --for claude")
+  await expect(panel).toContainText("--name codex --for codex")
 })
 
 test("the password changes and changes back without leaving the page", async () => {
