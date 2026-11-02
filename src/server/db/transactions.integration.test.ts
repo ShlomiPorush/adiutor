@@ -45,8 +45,10 @@ describe("a lost connection", () => {
   // The driver races the transaction against the connection's close, so the transaction can reject while its
   // callback is still running. Each test keeps the callback's own promise and waits for it to settle before it
   // asserts on what the callback reached.
-  it("rejects the transaction and the savepoint when the connection is lost inside the savepoint", async () => {
-    let savepointResolved = false
+  // The savepoint itself may still resolve after its connection was lost (porsager/postgres#1281, unreleased fix;
+  // the owner accepted it with 4.0.0). What holds is that the next write and the transaction fail and nothing is
+  // stored, so the test asserts only that.
+  it("rejects the transaction when the connection is lost inside a savepoint, and stores nothing", async () => {
     let body: Promise<void> | undefined
     const run = t.ctx.db.transaction((tx) => {
       body = (async () => {
@@ -55,14 +57,12 @@ describe("a lost connection", () => {
           await record(sp, 2)
           await loseConnection(sp)
         })
-        savepointResolved = true
         await record(tx, 3)
       })()
       return body
     })
     await expect(run).rejects.toThrow()
     await expect(body).rejects.toThrow()
-    expect(savepointResolved).toBe(false)
     expect(await stored()).toEqual([])
   })
 
