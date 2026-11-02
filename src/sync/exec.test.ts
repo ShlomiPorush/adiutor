@@ -2,7 +2,15 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
-import { buildInvocation, childEnv, findCommand, lastLine, runProcess, UnsafeArgumentError } from "./exec.ts"
+import {
+  buildInvocation,
+  childEnv,
+  findCommand,
+  lastLine,
+  runProcess,
+  systemCommand,
+  UnsafeArgumentError,
+} from "./exec.ts"
 
 const args = ["thread", "list", "--project", "mcp:p-1", "--json"]
 
@@ -87,6 +95,25 @@ describe("findCommand", () => {
     } finally {
       process.chdir(before)
     }
+  })
+})
+
+describe("systemCommand", () => {
+  const root = mkdtempSync(join(tmpdir(), "mikud-system-"))
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, "System32"))
+  writeFileSync(join(root, "System32", "icacls.exe"), "")
+  mkdirSync(join(root, "System32", "setx.exe"))
+
+  it("finds a Windows component only in %SystemRoot%\\System32, never on PATH or in the current folder", async () => {
+    expect(await systemCommand("icacls", { SystemRoot: root })).toBe(join(root, "System32", "icacls.exe"))
+    expect(await systemCommand("icacls", { SYSTEMROOT: ` ${root} ` })).toBe(join(root, "System32", "icacls.exe"))
+    // A folder with the name is not the tool; a missing tool is undefined.
+    expect(await systemCommand("setx", { SystemRoot: root })).toBeUndefined()
+    expect(await systemCommand("rundll32", { SystemRoot: root })).toBeUndefined()
+    // No SystemRoot, or a relative one, finds nothing; PATH is not consulted.
+    expect(await systemCommand("icacls", { PATH: join(root, "System32") })).toBeUndefined()
+    expect(await systemCommand("icacls", { SystemRoot: "." })).toBeUndefined()
   })
 })
 

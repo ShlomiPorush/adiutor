@@ -43,6 +43,8 @@ export type ConnectDeps = {
   runner: Runner
   /** The full path of a client's command (claude, codex), or undefined when it is not installed. */
   findCommand: (name: string) => Promise<string | undefined>
+  /** The full path of a Windows component in System32 (icacls, rundll32, setx), or undefined. */
+  systemCommand: (name: string) => Promise<string | undefined>
   platform: NodeJS.Platform
   env: Record<string, string | undefined>
   sleep: (ms: number) => Promise<void>
@@ -128,7 +130,10 @@ function reason(answer: Answer | { error: string }): string {
 // --- The env file of the sync ---
 
 /** An env file that only the current user can read, checked before the key is written into it. */
-export async function prepareEnvFile(path: string, deps: Pick<ConnectDeps, "platform" | "runner" | "env">) {
+export async function prepareEnvFile(
+  path: string,
+  deps: Pick<ConnectDeps, "platform" | "runner" | "env" | "systemCommand">,
+) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 })
   // Created empty if missing; an existing file keeps its values.
   const handle: FileHandle = await open(path, "a", 0o600)
@@ -155,11 +160,16 @@ function windowsUser(env: Record<string, string | undefined>): string {
  * icacls: inheritance removed and full control for the current user only, then read back. Anything else in the list
  * (an inherited entry, another account) refuses the file.
  */
-async function restrictOnWindows(path: string, deps: Pick<ConnectDeps, "runner" | "env">): Promise<void> {
+async function restrictOnWindows(
+  path: string,
+  deps: Pick<ConnectDeps, "runner" | "env" | "systemCommand">,
+): Promise<void> {
   const user = windowsUser(deps.env)
-  const set = await deps.runner("icacls", [path, "/inheritance:r", "/grant:r", `${user}:F`], { timeoutMs: 30_000 })
+  const icacls = await deps.systemCommand("icacls")
+  if (!icacls) throw new ConnectError("icacls was not found in %SystemRoot%\\System32")
+  const set = await deps.runner(icacls, [path, "/inheritance:r", "/grant:r", `${user}:F`], { timeoutMs: 30_000 })
   if (set.code !== 0) throw new ConnectError(`icacls could not restrict the env file (${set.error ?? "failed"})`)
-  const read = await deps.runner("icacls", [path], { timeoutMs: 30_000 })
+  const read = await deps.runner(icacls, [path], { timeoutMs: 30_000 })
   if (read.code !== 0) throw new ConnectError(`icacls could not read the env file's access (${read.error ?? "failed"})`)
   const entries = aclEntries(read.stdout, path)
   const only = entries.length === 1 ? entries[0] : undefined
@@ -247,6 +257,15 @@ export function claudeAddArgs(url: string, key: string): string[] {
 
 export const CLAUDE_REMOVE_ARGS = ["mcp", "remove", SERVER_NAME, "--scope", "user"]
 
+/**
+ * Claude Code's refusal when the name already exists in the scope it adds to (its stderr line). Only this refusal
+ * leads to `claude mcp remove`; any other failure, a managed policy for one, removes nothing.
+ */
+export const CLAUDE_NAME_TAKEN = new RegExp(
+  `^MCP server "?${SERVER_NAME}"? already exists in user config\\.?\\r?$`,
+  "m",
+)
+
 export function codexAddArgs(url: string): string[] {
   return ["mcp", "add", SERVER_NAME, "--url", `${url}/mcp`, "--bearer-token-env-var", CODEX_KEY_VARIABLE]
 }
@@ -266,15 +285,19 @@ export function codexVariableLine(key: string, platform: NodeJS.Platform): strin
   return platform === "win32" ? `setx ${CODEX_KEY_VARIABLE} "${key}"` : `export ${CODEX_KEY_VARIABLE}="${key}"`
 }
 
-/** Why a client's command failed, in one line, with the key masked should the client ever echo it. */
+/** Why a client's command failed, in one line, with the key masked (before shortening) should the client echo it. */
 function failure(result: RunResult, key: string): string {
-  const detail = lastLine(result.stderr || result.stdout).replaceAll(key, "[redacted]")
+  const detail = lastLine((result.stderr || result.stdout).replaceAll(key, "[redacted]"))
   return detail ? `${result.error ?? "failed"}: ${detail}` : (result.error ?? "failed")
 }
 
 /**
- * Adds Mikud to Claude Code at user scope. `claude mcp add` refuses a name that exists, so a refused add removes the
+ * Adds Mikud to Claude Code at user scope. `claude mcp add` refuses a name that exists; only that refusal removes the
  * user-scope entry with `claude mcp remove` and adds again. Prints the command instead when that does not work.
+ *
+ * The refusal is read from add's own message rather than checked first with `claude mcp get`: get looks at every
+ * scope (it reports a local entry first) and connects to the server, while the message names the scope add writes to.
+ * Should the wording change, the add simply falls back to the printed command and nothing is removed.
  */
 async function deliverToClaude(url: string, key: string, deps: ConnectDeps): Promise<void> {
   const say = deps.out
@@ -291,8 +314,7 @@ async function deliverToClaude(url: string, key: string, deps: ConnectDeps): Pro
   const add = () => deps.runner(claude, claudeAddArgs(url, key), { timeoutMs: CLIENT_TIMEOUT_MS })
   let added = await add()
   let replaced = false
-  // A command that started and refused: most likely the name exists. One that did not start is not retried.
-  if (added.code !== 0 && added.code !== null) {
+  if (added.code !== 0 && CLAUDE_NAME_TAKEN.test(`${added.stderr}\n${added.stdout}`)) {
     const removed = await deps.runner(claude, CLAUDE_REMOVE_ARGS, { timeoutMs: CLIENT_TIMEOUT_MS })
     if (removed.code === 0) {
       replaced = true
@@ -312,9 +334,8 @@ async function deliverToClaude(url: string, key: string, deps: ConnectDeps): Pro
 async function saveCodexVariable(key: string, deps: ConnectDeps): Promise<string | undefined> {
   const say = deps.out
   if (deps.platform === "win32") {
-    // Found on PATH like the clients, so a planted setx in the current folder never runs.
-    const setx = await deps.findCommand("setx")
-    if (!setx) return "the setx command was not found"
+    const setx = await deps.systemCommand("setx")
+    if (!setx) return "setx was not found in %SystemRoot%\\System32"
     const set = await deps.runner(setx, [CODEX_KEY_VARIABLE, key], { timeoutMs: 30_000 })
     if (set.code !== 0) return `setx ${failure(set, key)}`
     say(`Set ${CODEX_KEY_VARIABLE} for your Windows user.`)
@@ -378,14 +399,19 @@ async function deliverToCodex(url: string, key: string, deps: ConnectDeps): Prom
 // --- The browser ---
 
 /** Opens the approval page with the system's own opener, without a shell. A failure only means: open it yourself. */
-async function openBrowser(link: string, deps: Pick<ConnectDeps, "runner" | "platform">): Promise<boolean> {
-  const [command, args] =
-    deps.platform === "win32"
-      ? ["rundll32.exe", ["url.dll,FileProtocolHandler", link]]
-      : deps.platform === "darwin"
-        ? ["open", [link]]
-        : ["xdg-open", [link]]
-  const result = await deps.runner(command as string, args as string[], { timeoutMs: 15_000 })
+async function openBrowser(
+  link: string,
+  deps: Pick<ConnectDeps, "runner" | "platform" | "systemCommand">,
+): Promise<boolean> {
+  let command = deps.platform === "darwin" ? "open" : "xdg-open"
+  let args = [link]
+  if (deps.platform === "win32") {
+    const rundll32 = await deps.systemCommand("rundll32")
+    if (!rundll32) return false
+    command = rundll32
+    args = ["url.dll,FileProtocolHandler", link]
+  }
+  const result = await deps.runner(command, args, { timeoutMs: 15_000 })
   return result.code === 0
 }
 

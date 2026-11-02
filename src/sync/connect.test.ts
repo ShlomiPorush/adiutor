@@ -11,6 +11,7 @@ import {
 import { connectUrl, DEFAULT_DAYS, main } from "./cli.ts"
 import {
   aclEntries,
+  CLAUDE_NAME_TAKEN,
   CLAUDE_REMOVE_ARGS,
   CONNECT_CLIENT_ID,
   type ConnectDeps,
@@ -117,6 +118,7 @@ function deps(
     runner,
     // No client installed unless a test says so.
     findCommand: async () => undefined,
+    systemCommand: async (name) => `C:\\Windows\\System32\\${name}.exe`,
     platform: "linux",
     env: {},
     sleep: async (ms) => {
@@ -229,7 +231,7 @@ describe("connect: the device flow", () => {
 
   it("opens the approval page without a shell", async () => {
     for (const [platform, command] of [
-      ["win32", "rundll32.exe"],
+      ["win32", "C:\\Windows\\System32\\rundll32.exe"],
       ["darwin", "open"],
       ["linux", "xdg-open"],
     ] as const) {
@@ -239,6 +241,21 @@ describe("connect: the device flow", () => {
       expect(d.ran[0]?.command).toBe(command)
       expect(d.ran[0]?.args.at(-1)).toBe(`${URL_BASE}/connect/device?user_code=ABCDEFGH`)
     }
+  })
+
+  it("on Windows, runs rundll32 only from System32, and asks to open the link by hand when it is missing", async () => {
+    const asked: string[] = []
+    const d = deps(standIn().fetch, {
+      platform: "win32",
+      systemCommand: async (name) => {
+        asked.push(name)
+        return undefined
+      },
+    })
+    expect(await connect(options({ open: true }), d)).toBe(0)
+    expect(asked).toEqual(["rundll32"])
+    expect(d.ran).toEqual([])
+    expect(d.lines.join("\n")).toContain("Could not open the browser; open the link yourself.")
   })
 })
 
@@ -310,14 +327,44 @@ describe("connect: Claude Code", () => {
     expect(d.lines.join("\n")).toContain("shell history")
   })
 
-  it("prints the command once when claude fails, with the reason and never the key in it", async () => {
-    // add refused for a reason other than an existing name: remove finds nothing to remove.
-    const echoed = { code: 1, stdout: "", stderr: `bad header Authorization: Bearer ${KEY}`, error: "exit code 1" }
-    const nothing = { code: 1, stdout: "", stderr: 'No MCP server named "mikud" in user scope', error: "exit code 1" }
-    const failed = scripted([echoed, nothing])
+  it("removes nothing when add fails for any reason other than the name taken in user scope", async () => {
+    const refusals = [
+      // Managed settings that allow only plugin servers (docs: errors, "Cannot add MCP server").
+      "Cannot add MCP server: your organization's managed settings allow only MCP servers that plugins provide",
+      "MCP server mikud already exists in local config",
+      "MCP server mikud-old already exists in user config",
+      "Error: something else went wrong",
+      "",
+    ]
+    for (const stderr of refusals) {
+      const failed = scripted([{ code: 1, stdout: "", stderr, error: "exit code 1" }])
+      const d = deps(standIn().fetch, { runner: failed.runner, findCommand: async () => CLAUDE })
+      expect(await connect(options({ target: "claude" }), d)).toBe(0)
+      expect(failed.ran.map((r) => r.args[1])).toEqual(["add"])
+      expect(d.lines.join("\n")).toContain("Could not add Mikud to Claude Code: claude mcp add exit code 1")
+      expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
+    }
+    expect(CLAUDE_NAME_TAKEN.test("MCP server mikud already exists in user config\r\n")).toBe(true)
+    expect(CLAUDE_NAME_TAKEN.test("warning\nMCP server mikud already exists in user config.\n")).toBe(true)
+  })
+
+  it("masks the key before shortening the reason, so no part of it shows", async () => {
+    // The key crosses the 200-character cut of the reason.
+    const stderr = `${"x".repeat(185)} ${KEY} end`
+    const failed = scripted([{ code: 1, stdout: "", stderr, error: "exit code 1" }])
     const d = deps(standIn().fetch, { runner: failed.runner, findCommand: async () => CLAUDE })
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
-    expect(failed.ran.map((r) => r.args[1])).toEqual(["add", "remove"])
+    const others = d.lines.filter((line) => line !== claudeCommand(URL_BASE, KEY))
+    expect(others.some((line) => line.includes("[redacted]"))).toBe(true)
+    expect(others.filter((line) => line.includes(KEY.slice(0, 6)))).toEqual([])
+  })
+
+  it("prints the command once when claude fails, with the reason and never the key in it", async () => {
+    const echoed = { code: 1, stdout: "", stderr: `bad header Authorization: Bearer ${KEY}`, error: "exit code 1" }
+    const failed = scripted([echoed])
+    const d = deps(standIn().fetch, { runner: failed.runner, findCommand: async () => CLAUDE })
+    expect(await connect(options({ target: "claude" }), d)).toBe(0)
+    expect(failed.ran.map((r) => r.args[1])).toEqual(["add"])
     const text = d.lines.join("\n")
     expect(text).toContain("Could not add Mikud to Claude Code: claude mcp add exit code 1: bad header Authorization:")
     expect(text).toContain("[redacted]")
@@ -456,10 +503,13 @@ describe("connect: Codex", () => {
     const noSetx = deps(standIn().fetch, {
       platform: "win32",
       runner: recording(fine).runner,
-      findCommand: async (name) => (name === "codex" ? CODEX : undefined),
+      findCommand: windowsCommands,
+      systemCommand: async () => undefined,
     })
     expect(await connect(options({ target: "codex" }), noSetx)).toBe(0)
-    expect(noSetx.lines.join("\n")).toContain("Could not set MIKUD_AGENT_KEY: the setx command was not found.")
+    expect(noSetx.lines.join("\n")).toContain(
+      "Could not set MIKUD_AGENT_KEY: setx was not found in %SystemRoot%\\System32.",
+    )
     expect(keyLines(noSetx.lines)).toEqual([`setx MIKUD_AGENT_KEY "${KEY}"`])
 
     // A file where the folder should be: the env file cannot be written.
@@ -554,8 +604,9 @@ describe("connect: the sync's env file", () => {
       },
     })
     expect(await connect(options({ target: "sync", envFile: file }), good)).toBe(0)
-    expect(calls[0]).toEqual(["icacls", file, "/inheritance:r", "/grant:r", "DESKTOP\\owner:F"])
-    expect(calls[1]).toEqual(["icacls", file])
+    const icacls = "C:\\Windows\\System32\\icacls.exe"
+    expect(calls[0]).toEqual([icacls, file, "/inheritance:r", "/grant:r", "DESKTOP\\owner:F"])
+    expect(calls[1]).toEqual([icacls, file])
     expect(readFileSync(file, "utf8")).toContain(KEY)
 
     for (const entries of [
@@ -574,6 +625,26 @@ describe("connect: the sync's env file", () => {
       expect(refused.sent).toEqual([])
       expect(d.lines.join("\n")).toContain("not restricted to the current user")
     }
+  })
+
+  it("on Windows, refuses the env file before asking Mikud when icacls is not in System32", async () => {
+    const file = join(tempDir(), "sync.env")
+    const mikud = standIn()
+    const asked: string[] = []
+    const d = deps(mikud.fetch, {
+      platform: "win32",
+      env: { USERNAME: "owner", USERDOMAIN: "DESKTOP" },
+      systemCommand: async (name) => {
+        asked.push(name)
+        return undefined
+      },
+    })
+    expect(await connect(options({ target: "sync", envFile: file }), d)).toBe(1)
+    expect(asked).toEqual(["icacls"])
+    expect(d.ran).toEqual([])
+    expect(mikud.sent).toEqual([])
+    expect(d.lines.join("\n")).toContain("icacls was not found in %SystemRoot%\\System32")
+    expect(readFileSync(file, "utf8")).toBe("")
   })
 
   it("reads icacls entries and sets only the two keys", () => {

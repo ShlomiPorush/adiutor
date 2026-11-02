@@ -39,6 +39,11 @@ export function buildInvocation(
   return { file: command, args, windowsVerbatimArguments: false }
 }
 
+/** A variable of the environment; Windows names are case-insensitive (Path), and a copied environment keeps them. */
+function envValue(env: Record<string, string | undefined>, name: string, anyCase: boolean): string | undefined {
+  return Object.entries(env).find(([key]) => (anyCase ? key.toUpperCase() === name : key === name))?.[1]
+}
+
 /** The extensions a Windows command can have here: what CreateProcess starts and the batch files above. */
 const WINDOWS_RUNNABLE = [".com", ".exe", ".bat", ".cmd"]
 
@@ -63,9 +68,7 @@ export async function findCommand(
   platform: NodeJS.Platform = process.platform,
   env: Record<string, string | undefined> = process.env,
 ): Promise<string | undefined> {
-  // Windows names the variable Path; a copied environment keeps that spelling.
-  const lookup = (wanted: string) =>
-    Object.entries(env).find(([key]) => (platform === "win32" ? key.toUpperCase() === wanted : key === wanted))?.[1]
+  const lookup = (wanted: string) => envValue(env, wanted, platform === "win32")
   // A relative entry ("." or empty) would search the current folder: skipped.
   const dirs = (lookup("PATH") ?? "")
     .split(platform === "win32" ? ";" : ":")
@@ -89,6 +92,21 @@ export async function findCommand(
     if ((await isFile(candidate)) && (await isExecutable(candidate))) return candidate
   }
   return undefined
+}
+
+/**
+ * A Windows component (icacls, rundll32, setx) by its full path in %SystemRoot%\System32, or undefined. Started by bare
+ * name, Node (libuv) looks in the current folder before PATH, so a planted icacls.exe next to the command would run.
+ * System32 is where Windows installs these tools and only administrators can write to it; PATH is not consulted.
+ */
+export async function systemCommand(
+  name: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<string | undefined> {
+  const root = envValue(env, "SYSTEMROOT", true)?.trim()
+  if (!root || !isAbsolute(root)) return undefined
+  const candidate = join(root, "System32", `${name}.exe`)
+  return (await isFile(candidate)) ? candidate : undefined
 }
 
 /** The environment for a child process: the agent token never leaves this process. */

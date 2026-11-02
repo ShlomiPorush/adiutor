@@ -11,7 +11,7 @@ import {
   type Target,
 } from "./connect.ts"
 import { parseEnvFile } from "./env.ts"
-import { findCommand } from "./exec.ts"
+import { findCommand, systemCommand } from "./exec.ts"
 import { type Deps, EXIT_USAGE, runSync } from "./run.ts"
 
 export const DEFAULT_DAYS = 90
@@ -46,7 +46,7 @@ connect: you approve the agent in Mikud in the browser; it then gets one agent k
   --no-open          do not open the browser; open the printed link yourself
 Exit code: 0 when connected, 1 when not, 2 for bad arguments.`
 
-export type MainDeps = Deps & Partial<Pick<ConnectDeps, "sleep" | "platform" | "findCommand">>
+export type MainDeps = Deps & Partial<Pick<ConnectDeps, "sleep" | "platform" | "findCommand" | "systemCommand">>
 
 export async function main(argv: string[], deps: MainDeps): Promise<number> {
   const parse = (args: string[]) =>
@@ -148,6 +148,7 @@ async function connectCommand(
       out: deps.out,
       runner: deps.runner,
       findCommand: deps.findCommand ?? ((command) => findCommand(command, platform, deps.env)),
+      systemCommand: deps.systemCommand ?? ((command) => systemCommand(command, deps.env)),
       platform,
       env: deps.env,
       sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
