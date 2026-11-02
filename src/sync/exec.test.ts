@@ -2,7 +2,15 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
-import { buildInvocation, childEnv, lastLine, runProcess, UnsafeArgumentError } from "./exec.ts"
+import {
+  buildInvocation,
+  childEnv,
+  findCommand,
+  lastLine,
+  runProcess,
+  systemCommand,
+  UnsafeArgumentError,
+} from "./exec.ts"
 
 const args = ["thread", "list", "--project", "mcp:p-1", "--json"]
 
@@ -42,6 +50,70 @@ describe("buildInvocation", () => {
       args: ['a"b'],
       windowsVerbatimArguments: false,
     })
+  })
+})
+
+describe("findCommand", () => {
+  const root = mkdtempSync(join(tmpdir(), "mikud-find-"))
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+  const folder = (name: string, files: Record<string, number>) => {
+    const dir = join(root, name)
+    mkdirSync(dir, { recursive: true })
+    for (const [file, mode] of Object.entries(files)) {
+      writeFileSync(join(dir, file), "")
+      chmodSync(join(dir, file), mode)
+    }
+    return dir
+  }
+
+  it("on Windows, finds a batch file by PATHEXT's order on Path, never another extension or the current folder", async () => {
+    const npm = folder("npm", { "codex.ps1": 0o644, "codex.cmd": 0o644, codex: 0o644 })
+    const local = folder("local", { "claude.exe": 0o644 })
+    const empty = folder("empty", {})
+    const env = { Path: `${empty};"${local}";${npm}`, PATHEXT: ".COM;.EXE;.BAT;.CMD;.VBS;.PS1" }
+    expect(await findCommand("codex", "win32", env)).toBe(join(npm, "codex.cmd"))
+    expect(await findCommand("claude", "win32", env)).toBe(join(local, "claude.exe"))
+    // .ps1 and a name without an extension are not started here, whatever PATHEXT says.
+    expect(await findCommand("codex", "win32", { Path: npm, PATHEXT: ".PS1" })).toBeUndefined()
+    expect(await findCommand("codex", "win32", { Path: npm })).toBe(join(npm, "codex.cmd"))
+    expect(await findCommand("codex", "win32", {})).toBeUndefined()
+  })
+
+  it.skipIf(process.platform === "win32")("elsewhere, finds an executable file on PATH only", async () => {
+    const plain = folder("plain", { claude: 0o644 })
+    const bin = folder("bin", { claude: 0o755 })
+    folder("bin/codex", {})
+    expect(await findCommand("claude", "linux", { PATH: `${plain}:${bin}` })).toBe(join(bin, "claude"))
+    expect(await findCommand("claude", "linux", { PATH: plain })).toBeUndefined()
+    expect(await findCommand("codex", "linux", { PATH: bin })).toBeUndefined()
+    expect(await findCommand("claude", "linux", { Path: bin })).toBeUndefined()
+    // Relative entries would search the current folder.
+    const before = process.cwd()
+    process.chdir(bin)
+    try {
+      expect(await findCommand("claude", "linux", { PATH: ".::bin" })).toBeUndefined()
+    } finally {
+      process.chdir(before)
+    }
+  })
+})
+
+describe("systemCommand", () => {
+  const root = mkdtempSync(join(tmpdir(), "mikud-system-"))
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, "System32"))
+  writeFileSync(join(root, "System32", "icacls.exe"), "")
+  mkdirSync(join(root, "System32", "setx.exe"))
+
+  it("finds a Windows component only in %SystemRoot%\\System32, never on PATH or in the current folder", async () => {
+    expect(await systemCommand("icacls", { SystemRoot: root })).toBe(join(root, "System32", "icacls.exe"))
+    expect(await systemCommand("icacls", { SYSTEMROOT: ` ${root} ` })).toBe(join(root, "System32", "icacls.exe"))
+    // A folder with the name is not the tool; a missing tool is undefined.
+    expect(await systemCommand("setx", { SystemRoot: root })).toBeUndefined()
+    expect(await systemCommand("rundll32", { SystemRoot: root })).toBeUndefined()
+    // No SystemRoot, or a relative one, finds nothing; PATH is not consulted.
+    expect(await systemCommand("icacls", { PATH: join(root, "System32") })).toBeUndefined()
+    expect(await systemCommand("icacls", { SystemRoot: "." })).toBeUndefined()
   })
 })
 

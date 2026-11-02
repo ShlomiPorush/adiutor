@@ -1,14 +1,16 @@
 // `connect`: approve an agent in the browser and give it one agent key (Better Auth's device authorization, then its
 // api-key plugin). The owner approves at /connect/device; this command then holds a session token for a few
 // seconds, creates one key with it and ends that session at once, whatever happens in between. The key goes to the
-// sync's env file or is printed once for Claude Code or Codex; it is never logged and never put on a command line.
-// The session token is never printed or stored.
+// sync's env file, or into Claude Code or Codex through their own documented commands (`claude mcp add`,
+// `codex mcp add`, and setx or an owner-only env file for Codex's variable). It is printed only when a client's
+// command is missing or fails, as the setup to run by hand, and is never logged. The session token is never printed
+// or stored.
 
 import { chmod, type FileHandle, mkdir, open, readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
 import { parseEnvFile } from "./env.ts"
-import type { Runner } from "./exec.ts"
+import { lastLine, type Runner, type RunResult } from "./exec.ts"
 import type { FetchLike } from "./http.ts"
 
 /** The one client id Mikud's device plugin accepts; also the User-Agent, so Settings can name the session. */
@@ -39,6 +41,10 @@ export type ConnectDeps = {
   fetch: FetchLike
   out: (line: string) => void
   runner: Runner
+  /** The full path of a client's command (claude, codex), or undefined when it is not installed. */
+  findCommand: (name: string) => Promise<string | undefined>
+  /** The full path of a Windows component in System32 (icacls, rundll32, setx), or undefined. */
+  systemCommand: (name: string) => Promise<string | undefined>
   platform: NodeJS.Platform
   env: Record<string, string | undefined>
   sleep: (ms: number) => Promise<void>
@@ -58,6 +64,11 @@ export function defaultEnvFile(platform: NodeJS.Platform, env: Record<string, st
     return win32.join(base, "mikud", "sync.env")
   }
   return join(env.XDG_CONFIG_HOME || join(homedir(), ".config"), "mikud", "sync.env")
+}
+
+/** Where `connect --for codex` keeps Codex's variable outside Windows: next to the sync's env file. */
+export function codexEnvFile(env: Record<string, string | undefined>): string {
+  return join(dirname(defaultEnvFile("linux", env)), "codex.env")
 }
 
 /** ABCDEFGH as ABCD-EFGH, easier to compare with the page. */
@@ -119,7 +130,10 @@ function reason(answer: Answer | { error: string }): string {
 // --- The env file of the sync ---
 
 /** An env file that only the current user can read, checked before the key is written into it. */
-export async function prepareEnvFile(path: string, deps: Pick<ConnectDeps, "platform" | "runner" | "env">) {
+export async function prepareEnvFile(
+  path: string,
+  deps: Pick<ConnectDeps, "platform" | "runner" | "env" | "systemCommand">,
+) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 })
   // Created empty if missing; an existing file keeps its values.
   const handle: FileHandle = await open(path, "a", 0o600)
@@ -146,11 +160,16 @@ function windowsUser(env: Record<string, string | undefined>): string {
  * icacls: inheritance removed and full control for the current user only, then read back. Anything else in the list
  * (an inherited entry, another account) refuses the file.
  */
-async function restrictOnWindows(path: string, deps: Pick<ConnectDeps, "runner" | "env">): Promise<void> {
+async function restrictOnWindows(
+  path: string,
+  deps: Pick<ConnectDeps, "runner" | "env" | "systemCommand">,
+): Promise<void> {
   const user = windowsUser(deps.env)
-  const set = await deps.runner("icacls", [path, "/inheritance:r", "/grant:r", `${user}:F`], { timeoutMs: 30_000 })
+  const icacls = await deps.systemCommand("icacls")
+  if (!icacls) throw new ConnectError("icacls was not found in %SystemRoot%\\System32")
+  const set = await deps.runner(icacls, [path, "/inheritance:r", "/grant:r", `${user}:F`], { timeoutMs: 30_000 })
   if (set.code !== 0) throw new ConnectError(`icacls could not restrict the env file (${set.error ?? "failed"})`)
-  const read = await deps.runner("icacls", [path], { timeoutMs: 30_000 })
+  const read = await deps.runner(icacls, [path], { timeoutMs: 30_000 })
   if (read.code !== 0) throw new ConnectError(`icacls could not read the env file's access (${read.error ?? "failed"})`)
   const entries = aclEntries(read.stdout, path)
   const only = entries.length === 1 ? entries[0] : undefined
@@ -215,37 +234,184 @@ async function saveSyncKey(path: string, url: string, key: string): Promise<void
 
 // --- What the clients get ---
 
-export function claudeCommand(url: string, key: string): string {
-  return `claude mcp add --transport http --scope user mikud ${url}/mcp --header "Authorization: Bearer ${key}"`
+/** The MCP server's name in both clients. */
+export const SERVER_NAME = "mikud"
+const CLIENT_TIMEOUT_MS = 120_000
+const HISTORY_NOTE = "A command you paste can stay in your shell history; clear that entry if others can read it."
+
+/** `claude mcp add` at user scope, the header last: `--header` takes every value after it. */
+export function claudeAddArgs(url: string, key: string): string[] {
+  return [
+    "mcp",
+    "add",
+    "--transport",
+    "http",
+    "--scope",
+    "user",
+    SERVER_NAME,
+    `${url}/mcp`,
+    "--header",
+    `Authorization: Bearer ${key}`,
+  ]
 }
 
-export function codexLines(url: string, key: string, platform: NodeJS.Platform): string[] {
-  return [
-    "Add this to ~/.codex/config.toml:",
-    "",
-    "[mcp_servers.mikud]",
-    `url = "${url}/mcp"`,
-    `bearer_token_env_var = "${CODEX_KEY_VARIABLE}"`,
-    "",
-    platform === "win32"
-      ? "Then set the variable for your Windows user, and open a new terminal before you start Codex:"
-      : "Then set the variable in your shell profile, and open a new terminal before you start Codex:",
-    "",
-    platform === "win32" ? `setx ${CODEX_KEY_VARIABLE} "${key}"` : `export ${CODEX_KEY_VARIABLE}="${key}"`,
-  ]
+export const CLAUDE_REMOVE_ARGS = ["mcp", "remove", SERVER_NAME, "--scope", "user"]
+
+/**
+ * Claude Code's refusal when the name already exists in the scope it adds to (its stderr line). Only this refusal
+ * leads to `claude mcp remove`; any other failure, a managed policy for one, removes nothing.
+ */
+export const CLAUDE_NAME_TAKEN = new RegExp(
+  `^MCP server "?${SERVER_NAME}"? already exists in user config\\.?\\r?$`,
+  "m",
+)
+
+export function codexAddArgs(url: string): string[] {
+  return ["mcp", "add", SERVER_NAME, "--url", `${url}/mcp`, "--bearer-token-env-var", CODEX_KEY_VARIABLE]
+}
+
+/** The fallback for Claude Code: the same command, to run by hand. */
+export function claudeCommand(url: string, key: string): string {
+  return `claude mcp add --transport http --scope user ${SERVER_NAME} ${url}/mcp --header "Authorization: Bearer ${key}"`
+}
+
+/** The fallback for Codex's configuration: no key, only the variable's name. */
+export function codexConfigLines(url: string): string[] {
+  return [`[mcp_servers.${SERVER_NAME}]`, `url = "${url}/mcp"`, `bearer_token_env_var = "${CODEX_KEY_VARIABLE}"`]
+}
+
+/** The fallback for Codex's variable. */
+export function codexVariableLine(key: string, platform: NodeJS.Platform): string {
+  return platform === "win32" ? `setx ${CODEX_KEY_VARIABLE} "${key}"` : `export ${CODEX_KEY_VARIABLE}="${key}"`
+}
+
+/** Why a client's command failed, in one line, with the key masked (before shortening) should the client echo it. */
+function failure(result: RunResult, key: string): string {
+  const detail = lastLine((result.stderr || result.stdout).replaceAll(key, "[redacted]"))
+  return detail ? `${result.error ?? "failed"}: ${detail}` : (result.error ?? "failed")
+}
+
+/**
+ * Adds Mikud to Claude Code at user scope. `claude mcp add` refuses a name that exists; only that refusal removes the
+ * user-scope entry with `claude mcp remove` and adds again. Prints the command instead when that does not work.
+ *
+ * The refusal is read from add's own message rather than checked first with `claude mcp get`: get looks at every
+ * scope (it reports a local entry first) and connects to the server, while the message names the scope add writes to.
+ * Should the wording change, the add simply falls back to the printed command and nothing is removed.
+ */
+async function deliverToClaude(url: string, key: string, deps: ConnectDeps): Promise<void> {
+  const say = deps.out
+  const byHand = (why: string) => {
+    say(`Could not add Mikud to Claude Code: ${why}.`)
+    say("Run this once to add it yourself; Mikud shows the key only now:")
+    say("")
+    say(claudeCommand(url, key))
+    say("")
+    say(HISTORY_NOTE)
+  }
+  const claude = await deps.findCommand("claude")
+  if (!claude) return byHand("the claude command was not found")
+  const add = () => deps.runner(claude, claudeAddArgs(url, key), { timeoutMs: CLIENT_TIMEOUT_MS })
+  let added = await add()
+  let replaced = false
+  if (added.code !== 0 && CLAUDE_NAME_TAKEN.test(`${added.stderr}\n${added.stdout}`)) {
+    const removed = await deps.runner(claude, CLAUDE_REMOVE_ARGS, { timeoutMs: CLIENT_TIMEOUT_MS })
+    if (removed.code === 0) {
+      replaced = true
+      added = await add()
+    }
+  }
+  if (added.code !== 0) return byHand(`claude mcp add ${failure(added, key)}`)
+  say(
+    replaced
+      ? `Replaced the ${SERVER_NAME} server in Claude Code (user scope); it now uses the new key.`
+      : `Added the ${SERVER_NAME} server to Claude Code (user scope).`,
+  )
+  say("Claude Code keeps the key in its own configuration. Start a new Claude Code session to use it.")
+}
+
+/** Saves Codex's variable: setx for the Windows user, an owner-only env file elsewhere. Why not, or undefined. */
+async function saveCodexVariable(key: string, deps: ConnectDeps): Promise<string | undefined> {
+  const say = deps.out
+  if (deps.platform === "win32") {
+    const setx = await deps.systemCommand("setx")
+    if (!setx) return "setx was not found in %SystemRoot%\\System32"
+    const set = await deps.runner(setx, [CODEX_KEY_VARIABLE, key], { timeoutMs: 30_000 })
+    if (set.code !== 0) return `setx ${failure(set, key)}`
+    say(`Set ${CODEX_KEY_VARIABLE} for your Windows user.`)
+    return undefined
+  }
+  const file = codexEnvFile(deps.env)
+  try {
+    await prepareEnvFile(file, deps)
+    // Written in place, like the sync's file; it holds this one line only.
+    const handle = await open(file, "r+")
+    try {
+      await handle.truncate(0)
+      await handle.write(`export ${CODEX_KEY_VARIABLE}=${key}\n`, 0, "utf8")
+    } finally {
+      await handle.close()
+    }
+  } catch (error) {
+    return `cannot write ${file} (${messageOf(error)})`
+  }
+  say(`Saved ${CODEX_KEY_VARIABLE} in ${file}, readable by you only. Add this line to your shell profile once:`)
+  say("")
+  say(`. "${file}"`)
+  say("")
+  return undefined
+}
+
+/**
+ * Codex reads the key from a variable: the variable first, then `codex mcp add` (which replaces an entry of the same
+ * name). A step that does not work prints its own setup instead; only the variable's holds the key.
+ */
+async function deliverToCodex(url: string, key: string, deps: ConnectDeps): Promise<void> {
+  const say = deps.out
+  const variableFailed = await saveCodexVariable(key, deps)
+  if (variableFailed) {
+    say(`Could not set ${CODEX_KEY_VARIABLE}: ${variableFailed}.`)
+    say(
+      deps.platform === "win32"
+        ? "Set it yourself for your Windows user; Mikud shows the key only now:"
+        : "Set it yourself in your shell profile; Mikud shows the key only now:",
+    )
+    say("")
+    say(codexVariableLine(key, deps.platform))
+    say("")
+    say(HISTORY_NOTE)
+  }
+  const codex = await deps.findCommand("codex")
+  const added = codex ? await deps.runner(codex, codexAddArgs(url), { timeoutMs: CLIENT_TIMEOUT_MS }) : undefined
+  if (added?.code === 0) {
+    say(`Added the ${SERVER_NAME} server to Codex; it reads the key from ${CODEX_KEY_VARIABLE}.`)
+  } else {
+    const why = added ? `codex mcp add ${failure(added, key)}` : "the codex command was not found"
+    say(`Could not add Mikud to Codex: ${why}.`)
+    say("Add this to ~/.codex/config.toml yourself:")
+    say("")
+    for (const line of codexConfigLines(url)) say(line)
+    say("")
+  }
+  say(`Restart Codex from a new terminal, so that it sees ${CODEX_KEY_VARIABLE}.`)
 }
 
 // --- The browser ---
 
 /** Opens the approval page with the system's own opener, without a shell. A failure only means: open it yourself. */
-async function openBrowser(link: string, deps: Pick<ConnectDeps, "runner" | "platform">): Promise<boolean> {
-  const [command, args] =
-    deps.platform === "win32"
-      ? ["rundll32.exe", ["url.dll,FileProtocolHandler", link]]
-      : deps.platform === "darwin"
-        ? ["open", [link]]
-        : ["xdg-open", [link]]
-  const result = await deps.runner(command as string, args as string[], { timeoutMs: 15_000 })
+async function openBrowser(
+  link: string,
+  deps: Pick<ConnectDeps, "runner" | "platform" | "systemCommand">,
+): Promise<boolean> {
+  let command = deps.platform === "darwin" ? "open" : "xdg-open"
+  let args = [link]
+  if (deps.platform === "win32") {
+    const rundll32 = await deps.systemCommand("rundll32")
+    if (!rundll32) return false
+    command = rundll32
+    args = ["url.dll,FileProtocolHandler", link]
+  }
+  const result = await deps.runner(command, args, { timeoutMs: 15_000 })
   return result.code === 0
 }
 
@@ -374,19 +540,9 @@ async function createAndDeliver(
     return EXIT_CONNECTED
   }
 
-  say(`Connected "${options.name}".${ends} Mikud shows the key only now.`)
-  say("")
-  if (options.target === "claude") {
-    say("Run this once to add Mikud to Claude Code:")
-    say("")
-    say(claudeCommand(options.url, key))
-    say("")
-    say("Claude Code keeps the key in its own configuration (~/.claude.json).")
-  } else {
-    for (const line of codexLines(options.url, key, deps.platform)) say(line)
-    say("")
-  }
-  say("A command you paste can stay in your shell history; clear that entry if others can read it.")
+  say(`Connected "${options.name}".${ends}`)
+  if (options.target === "claude") await deliverToClaude(options.url, key, deps)
+  else await deliverToCodex(options.url, key, deps)
   return EXIT_CONNECTED
 }
 

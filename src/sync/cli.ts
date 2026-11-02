@@ -11,6 +11,7 @@ import {
   type Target,
 } from "./connect.ts"
 import { parseEnvFile } from "./env.ts"
+import { findCommand, systemCommand } from "./exec.ts"
 import { type Deps, EXIT_USAGE, runSync } from "./run.ts"
 
 export const DEFAULT_DAYS = 90
@@ -34,8 +35,10 @@ connect: you approve the agent in Mikud in the browser; it then gets one agent k
 
   --name <name>      the name Settings, Agent access shows (required, up to ${NAME_MAX} characters)
   --for <target>     sync: save the key in the sync's env file (readable by you only)
-                     claude: print the claude mcp add command once
-                     codex: print the ~/.codex/config.toml lines and the variable to set once
+                     claude: add Mikud to Claude Code with claude mcp add (user scope)
+                     codex: set MIKUD_AGENT_KEY (setx on Windows, ~/.config/mikud/codex.env
+                     elsewhere), then add Mikud with codex mcp add
+                     When claude or codex is missing or fails, it prints the setup once instead.
   --days <days>      how long the key works, ${DAYS_MIN} to ${DAYS_MAX} days (default ${DEFAULT_DAYS})
   --url <url>        Mikud's address (default: MIKUD_URL, then MIKUD_URL in the env file)
   --env <file>       the sync's env file (default: %LOCALAPPDATA%\\mikud\\sync.env on Windows,
@@ -43,7 +46,7 @@ connect: you approve the agent in Mikud in the browser; it then gets one agent k
   --no-open          do not open the browser; open the printed link yourself
 Exit code: 0 when connected, 1 when not, 2 for bad arguments.`
 
-export type MainDeps = Deps & Partial<Pick<ConnectDeps, "sleep" | "platform">>
+export type MainDeps = Deps & Partial<Pick<ConnectDeps, "sleep" | "platform" | "findCommand" | "systemCommand">>
 
 export async function main(argv: string[], deps: MainDeps): Promise<number> {
   const parse = (args: string[]) =>
@@ -144,6 +147,8 @@ async function connectCommand(
       fetch: deps.fetch,
       out: deps.out,
       runner: deps.runner,
+      findCommand: deps.findCommand ?? ((command) => findCommand(command, platform, deps.env)),
+      systemCommand: deps.systemCommand ?? ((command) => systemCommand(command, deps.env)),
       platform,
       env: deps.env,
       sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
