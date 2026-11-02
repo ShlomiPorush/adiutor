@@ -82,24 +82,31 @@ POSTGRES_USER=mikud
 POSTGRES_PASSWORD=$password
 POSTGRES_DB=mikud
 DATABASE_URL=postgres://mikud:$password@postgres:5432/mikud
-MIKUD_OWNER_TOKEN=$(random_hex)
-MIKUD_AGENT_TOKEN=$(random_hex)
+MIKUD_AUTH_SECRETS=1:$(random_hex)
 MIKUD_AUTH_SECRET=$(random_hex)
+MIKUD_SETTINGS_KEYS=1:$(random_hex)
 MIKUD_PUBLIC_URL=http://127.0.0.1:$PORT
 EOF
   )
   chmod 600 "$ENV_FILE"
 }
 
-# A pr.env written before sign-in existed has no MIKUD_AUTH_SECRET, and the server refuses to start without it.
+# An older pr.env lacks the keys the server now requires: they are added. Its old token lines stay; the server
+# only warns about them.
 ensure_auth_secret() {
   [ -f "$ENV_FILE" ] || return 0
-  grep -q '^MIKUD_AUTH_SECRET=' "$ENV_FILE" && return 0
-  info "Adding MIKUD_AUTH_SECRET to $ENV_FILE"
-  (
-    umask 077
-    echo "MIKUD_AUTH_SECRET=$(random_hex)" >>"$ENV_FILE"
-  )
+  local name
+  for name in MIKUD_AUTH_SECRETS MIKUD_SETTINGS_KEYS; do
+    grep -q "^$name=" "$ENV_FILE" && continue
+    info "Adding $name to $ENV_FILE"
+    (
+      umask 077
+      echo "$name=1:$(random_hex)" >>"$ENV_FILE"
+    )
+  done
+  if grep -qE '^MIKUD_(OWNER|AGENT)_TOKEN=' "$ENV_FILE"; then
+    echo "    $ENV_FILE still has MIKUD_OWNER_TOKEN or MIKUD_AGENT_TOKEN; they are no longer used"
+  fi
   chmod 600 "$ENV_FILE"
 }
 
@@ -143,15 +150,12 @@ gh_head() {
 }
 
 seed() {
-  info "Seeding the owner (setup and TOTP) and invented fixtures with the agent token"
+  info "Seeding the owner (sign-up, TOTP and an agent key) and invented fixtures with that key"
   build_toolchain
-  # The token reaches the container through the environment, never through the command line. The seed writes
-  # the owner's sign-in to /state/owner.env (0600), outside the container's environment.
+  # The seed writes the owner's sign-in and the agent key to /state/owner.env (0600) and prints neither.
   TOOLCHAIN_EXTRA_ARGS=(--network "${PR_PROJECT}_default" -v "$STATE_DIR:/state"
-    -e MIKUD_URL=http://mikud:8080 -e "MIKUD_ORIGIN=http://127.0.0.1:$PORT" -e MIKUD_OWNER_FILE=/state/owner.env
-    -e MIKUD_AGENT_TOKEN)
-  MIKUD_AGENT_TOKEN="$(sed -n 's/^MIKUD_AGENT_TOKEN=//p' "$ENV_FILE")" \
-    in_toolchain "node scripts/lib/try-pr-seed.mjs"
+    -e MIKUD_URL=http://mikud:8080 -e "MIKUD_ORIGIN=http://127.0.0.1:$PORT" -e MIKUD_OWNER_FILE=/state/owner.env)
+  in_toolchain "node scripts/lib/try-pr-seed.mjs"
   TOOLCHAIN_EXTRA_ARGS=()
   [ -f "$OWNER_FILE" ] || die "the seed did not write $OWNER_FILE"
   chmod 600 "$OWNER_FILE"
@@ -212,8 +216,8 @@ try_pr() {
   seed || die "seeding failed; the stack still runs. Inspect it, then: scripts/try-pr.sh restore"
 
   info "Pull request #$pr (${COMMIT:0:12}) runs on http://127.0.0.1:$PORT"
-  echo "    sign in with: $OWNER_FILE (username, password, TOTP secret for an authenticator app)"
-  echo "    tokens for API calls: $ENV_FILE (MIKUD_OWNER_TOKEN, MIKUD_AGENT_TOKEN)"
+  echo "    sign in with: $OWNER_FILE (username, password, TOTP secret, backup codes)"
+  echo "    agent key for API calls: $OWNER_FILE (MIKUD_AGENT_KEY)"
   echo "    when done: scripts/try-pr.sh restore"
 }
 
@@ -225,7 +229,7 @@ status() {
   load_state
   info "Pull request #$PR (${COMMIT:0:12}) as $PR_PROJECT on http://127.0.0.1:$PORT"
   echo "    worktree: $WORKTREE"
-  echo "    tokens:   $ENV_FILE"
+  echo "    keys:     $ENV_FILE"
   echo "    sign-in:  $OWNER_FILE"
   ensure_auth_secret
   [ -f "$COMPOSE_FILE" ] || {

@@ -163,7 +163,6 @@ function CreateKeyDialog({ onClose }: { onClose: () => void }) {
               value={name}
               aria-invalid={error ? true : undefined}
               onChange={(event) => setName(event.target.value)}
-              // biome-ignore lint/a11y/noAutofocus: the dialog has one field; it is where the user starts
               autoFocus
             />
             <p className="ui-hint">{t("agentKeys.nameHint")}</p>

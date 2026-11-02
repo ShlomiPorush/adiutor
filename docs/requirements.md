@@ -16,8 +16,8 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 - Users: the owner and his AI agents. No other people, no roles beyond owner and agent.
 - Devices: the owner's desktop and his phone.
 - Network: reachable only over the owner's private overlay network (NetBird). Never published to the internet.
-- Every API and MCP call from an agent, the sync or a script carries a token, in addition to the network restriction.
-- The owner's browsers sign in (owner's decision, 2026-11-01, replacing "There is no login screen" and the paste-a-token pairing of browsers): one account with a username and a password, and a TOTP code from an authenticator app, which is required. The first run creates the account and sets up TOTP. A signed-in browser stays signed in for 30 days by default; the owner sets that length and an optional sign-out after a time without activity (off by default) in Settings, and can see the signed-in browsers, sign out the others or sign out everywhere. Recovery is a command run on the server, never a route over the network.
+- Every API and MCP call from an agent or the sync carries an agent key, in addition to the network restriction. The owner creates and revokes the keys in Settings; a key is shown once. There is no owner key: owner actions happen in the signed-in browser.
+- The owner's browsers sign in (owner's decision, 2026-11-01, replacing "There is no login screen" and the paste-a-token pairing of browsers): one account with a username and a password, and a TOTP code from an authenticator app, which is required. The first run creates the account, sets up TOTP and shows 10 backup codes once. A browser stays signed in while the owner opens Mikud there at least once in 30 days (owner's setting, 1 to 90 days); he can see the signed-in browsers, sign out the others or sign out everywhere, change the password, make new backup codes and set up a new authenticator. A forgotten password is reset by a command run on the server, never a route over the network; a lost authenticator is replaced with a backup code. Authentication uses Better Auth only as it documents itself (owner's decision, 2026-11-02); what it does not guarantee is listed as accepted gaps in the foundation plan, "Security design".
 
 ## 3. Domain model
 
@@ -74,6 +74,7 @@ The inbox count is visible on the home screen and links to the inbox.
 - Morning message at 08:00 Asia/Jerusalem, Sunday to Friday: 3 to 6 lines covering waiting on you, new, and security, with deep links into the board.
 - When the last T3 sync is stale, the message states the time of the last sync.
 - The bot accepts plain text from the owner and files it as an item in the inbox. It ignores every other chat.
+- The bot token and the owner's chat id are set in Settings and take effect without a restart; an environment variable may set either one instead, and Settings then shows it locked. Sign-in codes may be sent to the Telegram chat as a second factor, off by default.
 
 ## 6. Security line
 
@@ -95,7 +96,8 @@ The inbox count is visible on the home screen and links to the inbox.
 - One application container in the same style as n8n-ops: TypeScript, PostgreSQL, an MCP server and a web UI. In production the database is a new database on a PostgreSQL server the owner already runs (owner's decision, 2026-11-01).
 - The owner deploys to production himself, on the server that hosts n8n-ops, reachable only over NetBird. The repository provides the image, a production Compose file and deployment notes; agents do not deploy.
 - The owner backs up the database with his own tools (owner's decision, 2026-11-01). Mikud has no backup feature.
-- Private deployment values (hostnames, addresses, network details, tokens) live only on the server and in ignored local notes, never in the repository.
+- Private deployment values (hostnames, addresses, network details, keys) live only on the server and in ignored local notes, never in the repository.
+- Every setting the owner manages lives in Settings with a default; an environment variable may override one and the UI then shows it locked. Only the database connection, file paths, deployment wiring and the encryption keys live in the environment alone.
 
 ## 9. Launch gate
 

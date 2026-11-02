@@ -43,7 +43,7 @@ It sets the item to `in_progress`. Remember the item id it returns.
 
 ## Connecting to Mikud
 
-Both clients use the MCP Streamable HTTP transport and read the agent token from the `MIKUD_AGENT_TOKEN` environment variable, so the token never appears in a configuration file. Replace the example URL with the owner's Mikud address.
+Both clients use the MCP Streamable HTTP transport and read an agent key (Mikud's Settings, Agent access) from the `MIKUD_AGENT_TOKEN` environment variable, so the token never appears in a configuration file. Replace the example URL with the owner's Mikud address.
 
 Claude Code (user scope, `~/.claude.json`, or a `.mcp.json`):
 

@@ -1,6 +1,6 @@
 // What the spec files share: the owner's invented credentials, the TOTP secret made by the setup test, and each
-// project's signed-in browser state. Sign-in is rate limited (5 per 5 minutes per address, and every test
-// request comes from one address), so specs reuse the stored session instead of signing in again.
+// project's signed-in browser state. Sign-in is rate limited (5 per 5 minutes per address; each project sends one
+// X-Forwarded-For address), so specs reuse the stored session instead of signing in again.
 // Against a stack whose owner exists already, set E2E_USERNAME, E2E_PASSWORD and E2E_TOTP_SECRET.
 import { readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -14,7 +14,7 @@ export const PASSWORD = process.env.E2E_PASSWORD ?? "correct horse battery stapl
 
 const STATE_FILE = join(tmpdir(), "mikud-e2e-auth.json")
 
-type State = { secret?: string; lastStep?: number }
+type State = { secret?: string; lastStep?: number; backupCodes?: string[]; usedCodes?: number }
 
 export function loadState(): State {
   try {
@@ -35,6 +35,14 @@ export function resetState(): void {
 }
 
 export const totpSecret = () => process.env.E2E_TOTP_SECRET || loadState().secret || ""
+
+/** The next backup code saved at setup that no test used yet. */
+export function nextBackupCode(): string | undefined {
+  const { backupCodes = [], usedCodes = 0 } = loadState()
+  const code = backupCodes[usedCodes]
+  if (code) saveState({ usedCodes: usedCodes + 1 })
+  return code
+}
 
 /** Where a project keeps its signed-in browser (cookies) for the next spec file. */
 export const storageFile = (project: string) => join(tmpdir(), `mikud-e2e-${project}.json`)

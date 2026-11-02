@@ -21,7 +21,7 @@ Read from the environment, or from a `--env` file of `KEY=VALUE` lines, which wi
 | Name                 | Purpose                                                                                                                                      |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MIKUD_URL`          | Base URL of the Mikud server, for example `https://mikud.example.com`                                                                        |
-| `MIKUD_AGENT_TOKEN`  | The agent token. Never accepted on the command line, never printed (any echo is replaced with `[redacted]`), never passed to a child process |
+| `MIKUD_AGENT_TOKEN`  | An agent key from Mikud's Settings, Agent access (`mkd_...`). Never accepted on the command line, never printed (any echo is replaced with `[redacted]`), never passed to a child process |
 | `T3CODE_CLI_PATH`    | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                                                        |
 | `MIKUD_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it                                                                                           |
 
