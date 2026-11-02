@@ -990,8 +990,14 @@ a.ui-kpi:focus-visible {
 .ui-pass {
   position: relative;
 }
+/* The toggle sits at the page's inline end, but the field itself is left to right (a password is not
+   Hebrew), so its room for the toggle follows the page's direction, not the field's. */
 .ui-pass .ui-input {
-  padding-inline-end: 44px;
+  padding-right: 44px;
+}
+[dir="rtl"] .ui-pass .ui-input {
+  padding-right: 12px;
+  padding-left: 44px;
 }
 .ui-pass-toggle {
   position: absolute;
