@@ -22,7 +22,7 @@ function sources(dir = WEB): Record<string, string> {
     if (entry.isDirectory()) {
       if (entry.name === "public") continue
       Object.assign(out, sources(full))
-    } else if (/\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith(".test.ts") && !entry.name.endsWith(".d.ts")) {
+    } else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) && !entry.name.endsWith(".d.ts")) {
       out[relative(WEB, full).replaceAll("\\", "/")] = readFileSync(full, "utf8")
     }
   }
@@ -40,8 +40,7 @@ function code(text: string): string {
 const BUILDERS: Record<string, string> = {
   "ui/Dialog.tsx": "the one dialog builder; on phones every dialog is a bottom sheet (DS-1, DS-24)",
   "ui/Toast.tsx": "the one toast (FB-2)",
-  "ui/layers.ts":
-    "creates the body-level root each layer renders into and owns Escape, Back and focus (DS-8, DS-10, DS-15)",
+  "ui/layers.ts": "owns Escape, Back, focus and the inert page behind every layer (DS-8, DS-10, DS-11)",
   "shell/MoreSheet.tsx": "the phone More sheet above the tab bar, which stays usable beside it (NL-9)",
   "shell/Bell.tsx":
     "the Needs attention window anchored under the bell on wide screens; a dialog-builder sheet on phones (NL-19)",

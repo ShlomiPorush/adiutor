@@ -14,7 +14,7 @@ import { api, qk } from "../api/endpoints.ts"
 import type { Morning, WaitingProposal } from "../api/types.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
-import { createLayerRoot, openLayer } from "../ui/layers.ts"
+import { openLayer } from "../ui/layers.ts"
 import { Empty, errorReason } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
@@ -104,7 +104,7 @@ function BellWindow({
   onClose: () => void
 }) {
   const { t, tc, dir } = useI18n()
-  const [root] = useState(() => createLayerRoot("bell"))
+  const rootRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
   const closeRef = useRef(onClose)
   closeRef.current = onClose
@@ -119,22 +119,24 @@ function BellWindow({
     const inset = dir === "rtl" ? rect.left : window.innerWidth - rect.right
     setPlace({ top: rect.bottom + 8, inset: Math.max(16, inset) })
   }, [anchor, dir])
-  useLayoutEffect(() => () => root.remove(), [root])
-  useEffect(
-    () =>
-      openLayer({
-        root,
-        close: () => closeRef.current(),
-        initialFocus: () => root.querySelector<HTMLElement>(".ui-attn-list"),
-      }),
-    [root],
-  )
+  // The click-outside area is the layer's root, portalled into <body> as the dialog builder does.
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    return openLayer({
+      root,
+      close: () => closeRef.current(),
+      initialFocus: () => root.querySelector<HTMLElement>(".ui-attn-list"),
+    })
+  }, [])
 
   return createPortal(
     // biome-ignore lint/a11y/noStaticElementInteractions: a click beside the window closes it; Escape and the X do the same by keyboard
     // biome-ignore lint/a11y/useKeyWithClickEvents: as above
     <div
+      ref={rootRef}
       className="ui-attn-backdrop"
+      data-layer="bell"
       onMouseDown={(event) => {
         pressedOutside.current = event.target === event.currentTarget
       }}
@@ -177,7 +179,7 @@ function BellWindow({
         </div>
       </div>
     </div>,
-    root,
+    document.body,
   )
 }
 

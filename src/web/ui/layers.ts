@@ -5,7 +5,10 @@
 // focus moves into the layer and returns to the control that opened it.
 
 export type LayerOptions = {
-  /** The layer's root element, a direct child of <body>. */
+  /**
+   * The layer's root element: its builder portals it straight into <body>, outside any stacking
+   * context (DS-15), and React owns it, so StrictMode's second effect run finds it still there.
+   */
   root: HTMLElement
   /** Closes the layer the way its X or Cancel does (it may ask first). */
   close: () => void
@@ -76,6 +79,32 @@ function needsEntry(): boolean {
   return stack.some((layer) => !layer.noHistory)
 }
 
+let releaseQueued = false
+
+/**
+ * Closed by hand: takes back the extra entry, so the next Back leaves the page. When a navigation
+ * already left that entry (a link inside the layer), there is nothing to take back.
+ *
+ * Decided in a microtask, so a layer that opens in the same synchronous run as the close keeps the
+ * entry: StrictMode's second effect run in development (an effect, its cleanup and the effect again)
+ * and a synchronous swap of one layer for another. Two cases are not covered, and failed before
+ * this deferral too: a layer opened from a later microtask or task, after the release already went
+ * back, is left without an entry of its own; and a Back that races a close can go one step too far.
+ */
+function releaseEntry(): void {
+  if (releaseQueued) return
+  releaseQueued = true
+  queueMicrotask(() => {
+    releaseQueued = false
+    if (!holdsEntry || needsEntry()) return
+    holdsEntry = false
+    if ((history.state as { mikudLayer?: boolean } | null)?.mikudLayer) {
+      ignorePops++
+      history.back()
+    }
+  })
+}
+
 /** Registers an open layer; returns its removal. */
 export function openLayer(options: LayerOptions): () => void {
   const layer: Layer = { ...options, id: nextId++, opener: document.activeElement }
@@ -90,15 +119,7 @@ export function openLayer(options: LayerOptions): () => void {
     if (index === -1) return
     stack.splice(index, 1)
     syncInert()
-    // Closed by hand: take back the extra entry, so the next Back leaves the page. When a
-    // navigation already left that entry (a link inside the layer), there is nothing to take back.
-    if (holdsEntry && !needsEntry()) {
-      holdsEntry = false
-      if ((history.state as { mikudLayer?: boolean } | null)?.mikudLayer) {
-        ignorePops++
-        history.back()
-      }
-    }
+    if (holdsEntry && !needsEntry()) releaseEntry()
     const opener = layer.opener
     const below = stack.at(-1)
     requestAnimationFrame(() => {
@@ -115,14 +136,6 @@ export function topLayerIs(root: HTMLElement | null): boolean {
 
 export function layerCount(): number {
   return stack.length
-}
-
-/** A layer root: a fresh element directly under <body>, outside any stacking context (DS-15). */
-export function createLayerRoot(kind: string): HTMLElement {
-  const root = document.createElement("div")
-  root.dataset.layer = kind
-  document.body.append(root)
-  return root
 }
 
 if (typeof window !== "undefined") {

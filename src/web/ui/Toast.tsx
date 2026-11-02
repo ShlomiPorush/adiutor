@@ -34,12 +34,6 @@ const ICONS = { success: CircleCheck, error: CircleAlert, warning: TriangleAlert
 
 export function ToastHost() {
   const { t } = useI18n()
-  const [root] = useState(() => {
-    const element = document.createElement("div")
-    element.dataset.layerKeep = "true"
-    document.body.append(element)
-    return element
-  })
   const [toast, setToast] = useState<ToastState | null>(null)
   const [busy, setBusy] = useState(false)
   const timer = useRef<number | undefined>(undefined)
@@ -78,8 +72,6 @@ export function ToastHost() {
     }
   }, [arm])
 
-  useEffect(() => () => root.remove(), [root])
-
   const hold = () => {
     if (held.current || !toast) return
     held.current = true
@@ -92,59 +84,65 @@ export function ToastHost() {
     arm(Math.max(deadline.current - Date.now(), REST_MS))
   }
 
-  if (!toast) return createPortal(null, root)
-  const Icon = ICONS[toast.type]
+  // The wrapper stays in <body> while the host lives, outside every layer and never made inert
+  // (layers.ts skips data-layer-keep). React owns it, so StrictMode's second effect run in
+  // development keeps rendering into the element that is in the page.
+  const Icon = toast ? ICONS[toast.type] : null
   return createPortal(
-    // biome-ignore lint/a11y/noStaticElementInteractions: the toast is a status or alert region; pointer and focus only pause its timer (v3 FB-2)
-    <div
-      ref={boxRef}
-      key={toast.id}
-      className={`ui-toast ui-toast-${toast.type}`}
-      role={toast.type === "error" ? "alert" : "status"}
-      onMouseEnter={hold}
-      onMouseLeave={release}
-      onFocus={hold}
-      onBlur={() => requestAnimationFrame(release)}
-    >
-      <Icon className="ui-toast-icon" aria-hidden="true" />
-      <p>{toast.message}</p>
-      {toast.action ? (
-        <button
-          type="button"
-          className="ui-btn ui-btn-sm ui-toast-action"
-          aria-label={toast.action.ariaLabel}
-          aria-disabled={busy || undefined}
-          onClick={async () => {
-            if (busy || !toast.action) return
-            const result = toast.action.onAction()
-            if (result instanceof Promise) {
-              setBusy(true)
-              hold()
-              try {
-                await result
-              } finally {
-                setBusy(false)
-              }
-              // A toast the action showed meanwhile takes over; otherwise this one goes.
-              setToast((current) => (current?.id === toast.id ? null : current))
-            } else {
-              dismiss()
-            }
-          }}
+    <div data-layer-keep="true">
+      {toast && Icon ? (
+        // biome-ignore lint/a11y/noStaticElementInteractions: the toast is a status or alert region; pointer and focus only pause its timer (v3 FB-2)
+        <div
+          ref={boxRef}
+          key={toast.id}
+          className={`ui-toast ui-toast-${toast.type}`}
+          role={toast.type === "error" ? "alert" : "status"}
+          onMouseEnter={hold}
+          onMouseLeave={release}
+          onFocus={hold}
+          onBlur={() => requestAnimationFrame(release)}
         >
-          {toast.action.label}
-        </button>
+          <Icon className="ui-toast-icon" aria-hidden="true" />
+          <p>{toast.message}</p>
+          {toast.action ? (
+            <button
+              type="button"
+              className="ui-btn ui-btn-sm ui-toast-action"
+              aria-label={toast.action.ariaLabel}
+              aria-disabled={busy || undefined}
+              onClick={async () => {
+                if (busy || !toast.action) return
+                const result = toast.action.onAction()
+                if (result instanceof Promise) {
+                  setBusy(true)
+                  hold()
+                  try {
+                    await result
+                  } finally {
+                    setBusy(false)
+                  }
+                  // A toast the action showed meanwhile takes over; otherwise this one goes.
+                  setToast((current) => (current?.id === toast.id ? null : current))
+                } else {
+                  dismiss()
+                }
+              }}
+            >
+              {toast.action.label}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="ui-icon-btn"
+            aria-label={t("common.close")}
+            title={t("common.close")}
+            onClick={dismiss}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </div>
       ) : null}
-      <button
-        type="button"
-        className="ui-icon-btn"
-        aria-label={t("common.close")}
-        title={t("common.close")}
-        onClick={dismiss}
-      >
-        <X aria-hidden="true" />
-      </button>
     </div>,
-    root,
+    document.body,
   )
 }

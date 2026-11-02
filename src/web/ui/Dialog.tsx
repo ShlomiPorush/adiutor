@@ -6,10 +6,10 @@
 // or layer made anywhere else.
 
 import { X } from "lucide-react"
-import { type ReactNode, type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from "react"
+import { type ReactNode, type RefObject, useEffect, useId, useRef } from "react"
 import { createPortal } from "react-dom"
 import { useI18n } from "../i18n/i18n.tsx"
-import { createLayerRoot, openLayer } from "./layers.ts"
+import { openLayer } from "./layers.ts"
 
 export const DIALOG_SIZES = { sm: 460, md: 680, wide: 1100 } as const
 export type DialogSize = keyof typeof DIALOG_SIZES
@@ -43,7 +43,6 @@ const PHONE = "(max-width: 760px)"
 
 export function Dialog(props: DialogProps) {
   const { t } = useI18n()
-  const [root] = useState(() => createLayerRoot("dialog"))
   const titleId = useId()
   const backdropRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -52,18 +51,19 @@ export function Dialog(props: DialogProps) {
   const closeRef = useRef(close)
   closeRef.current = close
 
-  useLayoutEffect(() => () => root.remove(), [root])
+  // The backdrop is the layer's root. React owns it (a portal into <body>), so StrictMode's second
+  // effect run finds the same element still in the page and opens the layer again on it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the layer lives as long as the dialog; options are read once at opening (DS-6)
-  useEffect(
-    () =>
-      openLayer({
-        root,
-        close: () => closeRef.current(),
-        noHistory: props.noHistory,
-        initialFocus: props.initialFocus,
-      }),
-    [root],
-  )
+  useEffect(() => {
+    const root = backdropRef.current
+    if (!root) return
+    return openLayer({
+      root,
+      close: () => closeRef.current(),
+      noHistory: props.noHistory,
+      initialFocus: props.initialFocus,
+    })
+  }, [])
   useSheet(backdropRef, panelRef, closeRef)
 
   const isQuestion = props.role === "alertdialog"
@@ -73,6 +73,7 @@ export function Dialog(props: DialogProps) {
     <div
       ref={backdropRef}
       className="ui-dialog-backdrop"
+      data-layer="dialog"
       onMouseDown={(event) => {
         pressedOnBackdrop.current = event.target === event.currentTarget
       }}
@@ -111,7 +112,7 @@ export function Dialog(props: DialogProps) {
         {props.foot ? <div className="ui-dialog-foot">{props.foot}</div> : null}
       </div>
     </div>,
-    root,
+    document.body,
   )
 }
 
