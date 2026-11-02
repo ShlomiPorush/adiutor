@@ -13,7 +13,7 @@ import { Bell } from "../shell/Bell.tsx"
 import { MoreSheet } from "../shell/MoreSheet.tsx"
 import { Dialog } from "./Dialog.tsx"
 import { layerCount } from "./layers.ts"
-import { ToastHost, showToast } from "./Toast.tsx"
+import { showToast, ToastHost } from "./Toast.tsx"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
