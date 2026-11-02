@@ -95,7 +95,7 @@ export async function findCommand(
 }
 
 /** A Windows path that names its drive, such as C:\Windows. */
-const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/
+export const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/
 
 /**
  * A Windows component (icacls, rundll32, setx) by its full path in %SystemRoot%\System32, or undefined. Started by bare

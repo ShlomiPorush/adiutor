@@ -10,6 +10,7 @@ import {
   runProcess,
   systemCommand,
   UnsafeArgumentError,
+  WINDOWS_DRIVE_ROOT,
 } from "./exec.ts"
 
 const args = ["thread", "list", "--project", "mcp:p-1", "--json"]
@@ -120,6 +121,15 @@ describe("systemCommand", () => {
     expect(await systemCommand("icacls", { SystemRoot: "\\Windows" }, "win32")).toBeUndefined()
     expect(await systemCommand("icacls", { SystemRoot: "/Windows" }, "win32")).toBeUndefined()
     expect(await systemCommand("icacls", { SystemRoot: "Windows" }, "win32")).toBeUndefined()
+    // The tool exists under this root: only the drive check refuses it as a Windows SystemRoot.
+    expect(await systemCommand("icacls", { SystemRoot: root }, "linux")).toBe(join(root, "System32", "icacls.exe"))
+    expect(await systemCommand("icacls", { SystemRoot: root }, "win32")).toBeUndefined()
+  })
+
+  it("on Windows takes a root that names its drive, with either separator", () => {
+    const named = (path: string) => WINDOWS_DRIVE_ROOT.test(path)
+    expect(["C:\\Windows", "c:/Windows", "D:\\WINNT"].every(named)).toBe(true)
+    expect(["\\Windows", "/Windows", "C:Windows", "\\\\server\\share"].some(named)).toBe(false)
   })
 })
 
