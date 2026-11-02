@@ -44,6 +44,27 @@ function socketAddress(c: Context): string {
   }
 }
 
+/**
+ * A transport fix, not a Better Auth change: a request without content reaches Better Auth with a null body.
+ * - Better Auth's client sends its session refresh (`POST /get-session`, after `needsRefresh`) without a body
+ *   (better-auth `client/session-atom.mjs`).
+ * - @hono/node-server attaches a body stream to every request that is not GET or HEAD, even an empty one
+ *   (`@hono/node-server` `dist/index.mjs`, its request builder).
+ * - better-call's `getBody` then requires a Content-Type for any request whose body is not null and answers 415
+ *   (better-call `dist/utils.mjs`, `getBody`).
+ * Only a request that is not GET or HEAD, has `Content-Length: 0` and no `Transfer-Encoding` is rebuilt with the same
+ * URL, method, headers and signal; everything else passes through unchanged, so a real body still gets Better
+ * Auth's own Content-Type checks. Remove when upstream sends no body for empty requests.
+ */
+export function withoutEmptyBody(raw: Request): Request {
+  const empty =
+    raw.method !== "GET" &&
+    raw.method !== "HEAD" &&
+    raw.headers.get("content-length") === "0" &&
+    !raw.headers.has("transfer-encoding")
+  return empty ? new Request(raw.url, { method: raw.method, headers: raw.headers, signal: raw.signal }) : raw
+}
+
 /** Better Auth's routes take small JSON bodies only. */
 const AUTH_BODY_LIMIT = 16 * 1024
 
@@ -73,7 +94,7 @@ export function createApp(deps: AppDeps) {
       "/api/auth/*",
       bodyLimit({ maxSize: AUTH_BODY_LIMIT, onError: (c) => c.json({ message: "Too large" }, 413) }),
     )
-    app.on(["GET", "POST"], "/api/auth/*", (c) => auth.current.handler(c.req.raw))
+    app.on(["GET", "POST"], "/api/auth/*", (c) => auth.current.handler(withoutEmptyBody(c.req.raw)))
     app.route("/api/setup", setupRoutes({ ctx, auth }))
     app.route("/api/v1", apiRoutes(shared))
     app.route("/mcp", mcpRoutes(shared))

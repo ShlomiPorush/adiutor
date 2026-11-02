@@ -1,4 +1,6 @@
+import type { AddressInfo } from "node:net"
 import { inspect } from "node:util"
+import { type ServerType, serve } from "@hono/node-server"
 import { count, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { ownerEmail } from "../../shared/auth.ts"
@@ -646,7 +648,7 @@ describe("audit rows from the documented hooks, and their refusals", () => {
 describe("signing out after days without Mikud open (sliding expiresIn, deferSessionRefresh)", () => {
   const expiry = async () => (await sessions())[0]?.expiresAt.getTime() ?? 0
 
-  it("never extends a session on a read; a POST /get-session with a JSON body does (the client's own POST is refused, G19)", async () => {
+  it("never extends a session on a read; a POST /get-session does", async () => {
     const b = browser()
     await b.owner()
     await b.call("POST", "/api/auth/revoke-other-sessions", { body: {} })
@@ -658,20 +660,64 @@ describe("signing out after days without Mikud open (sliding expiresIn, deferSes
     await v1(b)
     await core.auth.current.api.getSession({ headers: new Headers({ cookie: b.cookieHeader }) })
     expect(await expiry()).toBe(start)
-    // The Better Auth client sends this POST without a body; through the Node adapter that is a 415 (G19).
-    const bodiless = await app.fetch(
-      new Request(`${TEST_ORIGIN}/api/auth/get-session`, {
-        method: "POST",
-        headers: { cookie: b.cookieHeader, origin: TEST_ORIGIN, "x-forwarded-for": nextIp() },
-        body: new ReadableStream({ start: (controller) => controller.close() }),
-        duplex: "half",
-      } as RequestInit),
-    )
-    expect(bodiless.status).toBe(415)
-    expect(await expiry()).toBe(start)
     const refreshed = await b.call("POST", "/api/auth/get-session", { body: {} })
     expect(refreshed.status).toBe(200)
     expect(await expiry()).toBeGreaterThan(start + HOUR)
+  })
+
+  describe("through the real Node adapter (@hono/node-server), as the browser sends it", () => {
+    let server: ServerType
+    let base = ""
+    beforeEach(async () => {
+      server = serve({ fetch: (request) => app.fetch(request), port: 0, hostname: "127.0.0.1" })
+      await new Promise<void>((resolve) => server.once("listening", () => resolve()))
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    })
+    afterEach(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    })
+
+    it("the client's bodiless POST /get-session extends the session (the transport fix in app.ts)", async () => {
+      const b = browser()
+      await b.owner()
+      await b.call("POST", "/api/auth/revoke-other-sessions", { body: {} })
+      await t.ctx.db.execute(
+        sql`update auth_session set expires_at = expires_at - interval '2 hours', updated_at = updated_at - interval '2 hours'`,
+      )
+      const start = await expiry()
+      // No body: fetch sends Content-Length: 0, and node-server still attaches an (empty) body stream.
+      const answer = await fetch(`${base}/api/auth/get-session`, {
+        method: "POST",
+        headers: { cookie: b.cookieHeader, origin: TEST_ORIGIN, "x-forwarded-for": nextIp() },
+      })
+      expect(answer.status).toBe(200)
+      expect(((await answer.json()) as { session?: unknown }).session).toBeTruthy()
+      expect(await expiry()).toBeGreaterThan(start + HOUR)
+    })
+
+    it("a request with a real body keeps Better Auth's own Content-Type checks", async () => {
+      await browser().owner()
+      const ip = nextIp()
+      const asText = await fetch(`${base}/api/auth/sign-in/username`, {
+        method: "POST",
+        headers: { "content-type": "text/plain", origin: TEST_ORIGIN, "x-forwarded-for": ip },
+        body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD }),
+      })
+      expect(asText.status).toBe(415)
+      const untyped = await fetch(`${base}/api/auth/sign-in/username`, {
+        method: "POST",
+        headers: { origin: TEST_ORIGIN, "x-forwarded-for": ip },
+        body: new Blob([JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD })]),
+      })
+      expect(untyped.status).toBe(415)
+      const asJson = await fetch(`${base}/api/auth/sign-in/username`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: TEST_ORIGIN, "x-forwarded-for": ip },
+        body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD }),
+      })
+      expect(asJson.status).toBe(200)
+      expect(((await asJson.json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBe(true)
+    })
   })
 
   it("lets Mikud's own polling alone run out: the session ends after the set days", async () => {

@@ -1,10 +1,7 @@
-// Better Auth's own client is meant to keep a session alive (deferSessionRefresh on the server): bringing the tab back
-// to the front makes it read the session and, when the answer says needsRefresh, send POST /get-session. A tab that
-// stays visible and idle, with only Mikud's own polling, never extends it.
-// OPEN DEFECT (G19 in the foundation plan, an owner decision): the client sends that POST without a body, the Node
-// adapter of Hono (@hono/node-server) gives every POST a body stream, and better-call then requires a Content-Type
-// and answers 415. So the refresh never extends the session. The first test pins that behaviour; it is not worked
-// around. When it changes, the test fails on purpose: then assert the extension again. Time moves through the
+// Better Auth's own client keeps a session alive (deferSessionRefresh on the server): bringing the tab back to the
+// front makes it read the session and, when the answer says needsRefresh, send POST /get-session, which extends it.
+// That POST has no body; it reaches Better Auth through the transport fix in src/server/app.ts (withoutEmptyBody). A
+// tab that stays visible and idle, with only Mikud's own polling, never extends it. Time moves through the
 // database: the session is made to look refreshed two hours ago (updateAge is one hour), as the integration tests
 // do. Needs E2E_DATABASE_URL (scripts/verify.sh sets it); the client logic is the same on every device, so it runs
 // on the desktop project only.
@@ -15,6 +12,7 @@ import { storageFile } from "./helpers.ts"
 test.describe.configure({ mode: "serial" })
 
 const DATABASE_URL = process.env.E2E_DATABASE_URL
+const HOUR = 3_600_000
 
 let page: Page
 let sql: postgres.Sql
@@ -58,7 +56,7 @@ async function refreshedTwoHoursAgo(): Promise<number> {
 const isRefresh = (request: Request) =>
   request.method() === "POST" && new URL(request.url()).pathname === "/api/auth/get-session"
 
-test("bringing the tab back to the front sends the client's POST /get-session, which is refused with 415 (G19)", async () => {
+test("bringing the tab back to the front extends the session (the client's POST /get-session)", async () => {
   // Better Auth's client refetches on focus at most every 5 seconds.
   await page.waitForTimeout(6_000)
   const before = await refreshedTwoHoursAgo()
@@ -72,10 +70,8 @@ test("bringing the tab back to the front sends the client's POST /get-session, w
     show("visible")
   })
   const answer = await (await refresh).response()
-  expect(answer?.status()).toBe(415)
-  // Not extended: the session ends on its old date.
-  await page.waitForTimeout(1_000)
-  expect(await expiry()).toBe(before)
+  expect(answer?.status()).toBe(200)
+  await expect.poll(expiry, { timeout: 10_000 }).toBeGreaterThan(before + HOUR)
 })
 
 test("a tab that stays visible and idle, with only Mikud's polling, does not extend it", async () => {
