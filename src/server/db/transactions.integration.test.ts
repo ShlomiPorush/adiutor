@@ -5,8 +5,8 @@ import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { telegramUpdates } from "./schema.ts"
 
 // The driver's transaction and savepoint contract that the services rely on (the bot's update and its inbox item
-// share one transaction, the item in a savepoint): a savepoint or a commit whose connection was lost must reject,
-// and a rollback must undo exactly its own writes.
+// share one transaction, the item in a savepoint): a transaction whose connection was lost must reject and store
+// nothing (a savepoint inside it may still resolve, see below), and a rollback must undo exactly its own writes.
 
 let t: TestDatabase
 let killer: postgres.Sql
