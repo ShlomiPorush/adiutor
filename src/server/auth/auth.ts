@@ -3,7 +3,7 @@ import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { APIError, createAuthMiddleware } from "better-auth/api"
 import { twoFactor, username } from "better-auth/plugins"
-import { AGENT_KEY_NAME_MAX, AGENT_KEY_PREFIX, ownerEmail } from "../../shared/auth.ts"
+import { AGENT_KEY_NAME_MAX, AGENT_KEY_PREFIX, isValidUsername, ownerEmail } from "../../shared/auth.ts"
 import type { VersionedKey } from "../config.ts"
 import {
   authAccount,
@@ -337,7 +337,9 @@ export function createAuth(options: AuthOptions) {
       },
     },
     plugins: [
-      username(),
+      // The documented usernameValidator: no dot at either end and no two dots in a row, so the username is the
+      // readable local part of the synthetic e-mail that the authenticator app shows (ownerEmail).
+      username({ usernameValidator: isValidUsername }),
       twoFactor({
         issuer: "Mikud",
         twoFactorCookieMaxAge: TWO_FACTOR_CHALLENGE_S,

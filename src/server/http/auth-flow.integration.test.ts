@@ -107,13 +107,22 @@ describe("first run: Better Auth's sign-up", () => {
     expect((await auditRows())[1]?.after).toEqual({ stage: "password" })
   })
 
-  it.each([".alice", "alice.", "a..b", "A_b.C"])(
-    "makes a valid synthetic e-mail for %s: sign-up, sign-in and the CLI reset work",
+  it.each(["A_b.C", "owner.name"])(
+    "makes a readable synthetic e-mail for %s: sign-up, the authenticator label, sign-in and the CLI reset work",
     async (name) => {
       const b = browser()
-      const { secret } = await b.enrolledOwner(name)
-      expect((await owner())?.email).toBe(ownerEmail(name))
-      expect(ownerEmail(name)).toMatch(/^u-[0-9a-f]+@mikud\.local$/)
+      expect((await b.setup(name)).status).toBe(200)
+      const email = `${name.toLowerCase()}@mikud.local`
+      expect((await owner())?.email).toBe(email)
+      // Better Auth names the authenticator entry after the e-mail: the username, not hex.
+      const enabled = await b.call("POST", "/api/auth/two-factor/enable", { body: { password: TEST_PASSWORD } })
+      expect(enabled.status).toBe(200)
+      const uri: string = enabled.json.totpURI
+      const label = decodeURIComponent(uri.slice("otpauth://totp/".length, uri.indexOf("?")))
+      expect(label).toContain(email)
+      expect(label).not.toMatch(/u-[0-9a-f]+@/)
+      const secret = new URL(uri).searchParams.get("secret") ?? ""
+      expect((await b.verify(totp(secret))).status).toBe(200)
       const again = browser()
       await again.signIn(secret, name)
       expect((await v1(again)).status).toBe(200)
@@ -122,6 +131,15 @@ describe("first run: Better Auth's sign-up", () => {
       const fresh = browser()
       await fresh.signIn(secret, name, reset?.password)
       expect((await v1(fresh)).status).toBe(200)
+    },
+  )
+
+  it.each([".alice", "alice.", "a..b"])(
+    "refuses %s at sign-up through the username plugin's validator",
+    async (name) => {
+      const refused = await browser().setup(name)
+      expect([refused.status, refused.json.code]).toEqual([400, "INVALID_USERNAME"])
+      expect(await t.ctx.db.select().from(authUser)).toHaveLength(0)
     },
   )
 

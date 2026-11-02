@@ -112,7 +112,7 @@ Without `MIKUD_TRUSTED_PROXIES`, every request shares one bucket, which fails sa
 
 The browser signs in with a username, a password and a code from an authenticator app (TOTP). There is one account, yours.
 
-1. Open `https://mikud.example.com` on the desktop. On a new database it shows the setup: choose a username (3 to 30 letters, digits, dots or underscores) and a password of at least 12 characters.
+1. Open `https://mikud.example.com` on the desktop. On a new database it shows the setup: choose a username (3 to 30 letters, digits, underscores or dots; a dot cannot be first, last or next to another dot) and a password of at least 12 characters.
 2. Set up two-factor authentication right away; it is required. Scan the QR code with an authenticator app such as 1Password, Aegis or Google Authenticator, or type the key shown under it, then enter the code the app shows.
 3. Save the 10 backup codes the setup shows next (Copy or Download), somewhere apart from this device. They are shown only once. Each signs in once without the authenticator; Settings, Account makes new ones.
 4. On the phone, with NetBird connected, open the same URL and sign in with the username, the password and a code.
@@ -212,6 +212,8 @@ It runs Better Auth's own password reset: it prints the username and a new rando
    ```
 
 5. Check `/healthz` (step 4) and open the board.
+
+**Upgrading to the readable sign-in e-mail (migration `0008_readable-email`).** Before `docker compose up -d`, rename an owner whose username starts or ends with a dot or has two dots in a row: the sign-in refuses such a name now, so the upgrade stops with `username "<name>" no longer meets the sign-in rule` and changes nothing. In the Mikud database, with `<new>` in lowercase and following the rule of step 5: `update auth_user set username = '<new>', display_username = '<new>', email = '<new>@mikud.local';`. Nothing in production is affected today: the current owner's name follows the rule.
 
 **Upgrading to Better Auth as it documents itself (from 0.x with `MIKUD_OWNER_TOKEN` and `MIKUD_AGENT_TOKEN`).** Before `docker compose up -d`:
 

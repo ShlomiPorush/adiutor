@@ -56,11 +56,16 @@ async function page(path, body) {
 }
 
 const username = "owner"
+// The username rule of src/shared/auth.ts (USERNAME_PATTERN, 3 to 30 characters), checked before the sign-up.
+if (!/^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$/.test(username) || username.length < 3 || username.length > 30) {
+  console.error("the seed username does not follow Mikud's username rule")
+  process.exit(2)
+}
 const password = randomBytes(18).toString("base64url")
 await page("/api/auth/sign-up/email", {
   name: username,
-  // The synthetic e-mail of src/shared/auth.ts (ownerEmail): the lowercased username in hex.
-  email: `u-${Buffer.from(username.toLowerCase(), "utf8").toString("hex")}@mikud.local`,
+  // The synthetic e-mail of src/shared/auth.ts (ownerEmail): the lowercased username at mikud.local.
+  email: `${username.toLowerCase()}@mikud.local`,
   username,
   displayUsername: username,
   password,
