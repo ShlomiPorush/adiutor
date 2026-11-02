@@ -153,6 +153,46 @@ test("the account menu closes on Escape and on Back, and stays on the page", asy
   await expect(page).not.toHaveURL(/\/projects$/)
 })
 
+test("Account settings from the menu takes the menu's Back step: one Back returns, the next one leaves", async () => {
+  await page.goto("/")
+  await page.goto("/projects")
+  await accountButton().click()
+  await page.getByRole("menuitem", { name: he.shell.accountSettings }).click()
+  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page.getByRole("menu")).toHaveCount(0)
+  await page.goBack()
+  await expect(page).toHaveURL(/\/projects$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/127\.0\.0\.1:8090\/$/)
+})
+
+test("More closes when the window grows past 760px: no layer, nothing inert, its Back step given back", async () => {
+  test.skip(isPhone(), "the desktop project resizes its own window")
+  await page.setViewportSize({ width: 390, height: 844 })
+  try {
+    await page.goto("/")
+    await page.goto("/projects")
+    const sheet = page.getByRole("dialog", { name: he.nav.allPages })
+    await page.locator(".ui-tabbar button").last().click()
+    await expect(sheet).toBeVisible()
+    await expect(page.locator(".ui-content")).toHaveJSProperty("inert", true)
+
+    await page.setViewportSize({ width: 1000, height: 844 })
+    await expect(sheet).toHaveCount(0)
+    await expect(page.locator("[data-layer]")).toHaveCount(0)
+    await expect.poll(() => page.evaluate(() => document.querySelectorAll("[inert]").length)).toBe(0)
+    await expect
+      .poll(() => page.evaluate(() => Boolean((history.state as { mikudLayer?: boolean } | null)?.mikudLayer)))
+      .toBe(false)
+    await expect(page).toHaveURL(/\/projects$/)
+    // The sheet's entry is gone: one Back leaves Projects.
+    await page.goBack()
+    await expect(page).toHaveURL(/127\.0\.0\.1:8090\/$/)
+  } finally {
+    await page.setViewportSize({ width: 1440, height: 900 })
+  }
+})
+
 test("More on a phone: Escape and Back close it, a page chosen in it takes its Back step", async () => {
   test.skip(!isPhone(), "the More sheet is the phone's")
   await page.goto("/")

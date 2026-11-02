@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Settings, ShieldCheck, Sun } from "lucide-react"
 import { useRef, useState } from "react"
-import { Link, useNavigate } from "react-router"
+import { Link } from "react-router"
 import { api, qk } from "../api/endpoints.ts"
 import type { Morning } from "../api/types.ts"
 import { useI18n } from "../i18n/i18n.tsx"
@@ -68,7 +68,6 @@ export function ThemeButton() {
 /** The account: its name, the theme, the Account settings and Sign out (R3: unsaved changes asked first). */
 export function AccountMenu({ compact = false }: { compact?: boolean }) {
   const { t } = useI18n()
-  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const button = useRef<HTMLButtonElement>(null)
   const me = useQuery({ queryKey: qk.session, queryFn: api.session, staleTime: Number.POSITIVE_INFINITY })
@@ -134,12 +133,7 @@ export function AccountMenu({ compact = false }: { compact?: boolean }) {
               }),
             },
             { kind: "separator" },
-            {
-              kind: "item",
-              label: t("shell.accountSettings"),
-              icon: <Settings aria-hidden="true" />,
-              onSelect: () => navigate("/settings"),
-            },
+            { kind: "link", label: t("shell.accountSettings"), icon: <Settings aria-hidden="true" />, to: "/settings" },
             {
               kind: "item",
               label: t("account.signOut"),

@@ -20,6 +20,17 @@ export function MoreSheet({ inbox, onClose }: { inbox: number; onClose: () => vo
   closeRef.current = onClose
   const { pathname } = useLocation()
 
+  // Above 760px the sheet and the tab bar are gone: the sheet closes, gives its history entry back and lifts
+  // inert from the page (as n8n-ops' TabBar does).
+  useEffect(() => {
+    const media = matchMedia("(max-width: 760px)")
+    const onChange = () => {
+      if (!media.matches) closeRef.current()
+    }
+    media.addEventListener("change", onChange)
+    return () => media.removeEventListener("change", onChange)
+  }, [])
+
   // The veil is the layer's root, portalled into <body> as the dialog builder does.
   useEffect(() => {
     const root = rootRef.current

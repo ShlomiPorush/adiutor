@@ -120,16 +120,30 @@ const button = (name: string) =>
     (element) => element.getAttribute("aria-label") === name || element.textContent?.trim() === name,
   )
 
+/** matchMedia answering `matches`; `resize()` re-reads every query and tells the listeners whose answer changed. */
 function stubMedia(matches: (query: string) => boolean) {
-  vi.spyOn(window, "matchMedia").mockImplementation(
-    (query: string) =>
-      ({
-        matches: matches(query),
-        media: query,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      }) as unknown as MediaQueryList,
-  )
+  const lists: { query: string; list: { matches: boolean }; listeners: Set<() => void> }[] = []
+  vi.spyOn(window, "matchMedia").mockImplementation((query: string) => {
+    const listeners = new Set<() => void>()
+    const list = {
+      matches: matches(query),
+      media: query,
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    }
+    lists.push({ query, list, listeners })
+    return list as unknown as MediaQueryList
+  })
+  return {
+    resize() {
+      for (const { query, list, listeners } of lists) {
+        const next = matches(query)
+        if (next === list.matches) continue
+        list.matches = next
+        for (const listener of listeners) listener()
+      }
+    },
+  }
 }
 
 beforeEach(() => {
@@ -422,5 +436,25 @@ describe("the More sheet (NL-9, R4)", () => {
     await click(here)
     expect(sheet()).toBeNull()
     expect(where()).toBe("/")
+  })
+
+  it("closes when the window grows past 760px: no layer, nothing inert, its history entry given back", async () => {
+    let width = 390
+    const media = stubMedia((query) => query === "(max-width: 760px)" && width <= 760)
+    const goBack = vi.spyOn(history, "back").mockImplementation(() => {})
+    await render(<More />)
+    await click(button("More"))
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(layerCount()).toBe(1)
+    expect((history.state as { mikudLayer?: boolean } | null)?.mikudLayer).toBe(true)
+
+    width = 1000
+    await act(async () => media.resize())
+    await settle()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(layerCount()).toBe(0)
+    expect(document.querySelectorAll("[inert]")).toHaveLength(0)
+    expect(document.documentElement.classList.contains("ui-layer-on")).toBe(false)
+    expect(goBack).toHaveBeenCalledTimes(1)
   })
 })

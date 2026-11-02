@@ -2,7 +2,9 @@
 // Mikud's layer owner). A menu is a layer of ui/layers.ts: Escape and Back close it and stay on the page, the
 // focus moves to its first item and back to its button, and the page behind is inert. It opens beside its
 // button, clamped 8px inside the screen, and a press beside it closes it. Up and Down move through the items
-// and wrap, Home and End jump, Tab closes it; choosing an item closes the menu first, then runs the item.
+// and wrap, Home and End jump, Tab closes it; choosing an item closes the menu first, then runs the item. A
+// link opens its page in place of the menu's history entry and the menu closes once the move is made, as the
+// More sheet does: so no stale step is left behind, and Stay in the Leave question keeps the menu open.
 // popups.guard.test.ts fails on a menu made anywhere else.
 
 import { Check } from "lucide-react"
@@ -17,11 +19,13 @@ import {
   useState,
 } from "react"
 import { createPortal } from "react-dom"
+import { useLocation, useNavigate } from "react-router"
 import { useI18n } from "../i18n/i18n.tsx"
 import { openLayer } from "./layers.ts"
 
 export type MenuEntry =
   | { kind: "item"; label: string; icon?: ReactNode; onSelect: () => void; danger?: boolean }
+  | { kind: "link"; label: string; icon?: ReactNode; to: string }
   | { kind: "radios"; label: string; options: MenuRadio[] }
   | { kind: "separator" }
   | { kind: "header"; content: ReactNode }
@@ -56,6 +60,14 @@ export function Menu({
   closeRef.current = onClose
   const pressedOutside = useRef(false)
   const [place, setPlace] = useState<CSSProperties>({ visibility: "hidden" })
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const openedOn = useRef(pathname)
+
+  // A link took the menu's history entry: the menu closes once its page shows.
+  useEffect(() => {
+    if (pathname !== openedOn.current) closeRef.current()
+  }, [pathname])
 
   useLayoutEffect(() => {
     const rect = anchor.current?.getBoundingClientRect()
@@ -114,6 +126,10 @@ export function Menu({
   const choose = (run: () => void) => {
     closeRef.current()
     run()
+  }
+  const follow = (to: string) => {
+    if (to === pathname) closeRef.current()
+    else navigate(to, { replace: true })
   }
 
   return createPortal(
@@ -181,8 +197,8 @@ export function Menu({
               type="button"
               role="menuitem"
               tabIndex={-1}
-              className={entry.danger ? "ui-menu-item is-danger" : "ui-menu-item"}
-              onClick={() => choose(entry.onSelect)}
+              className={entry.kind === "item" && entry.danger ? "ui-menu-item is-danger" : "ui-menu-item"}
+              onClick={() => (entry.kind === "link" ? follow(entry.to) : choose(entry.onSelect))}
             >
               {entry.icon}
               <span>{entry.label}</span>
