@@ -178,15 +178,21 @@ export function aclEntries(output: string, path: string): string[] {
   return entries
 }
 
-/** The file's lines with MIKUD_URL and MIKUD_AGENT_TOKEN set; every other line stays as it was. */
+/**
+ * The file's lines with exactly one MIKUD_URL and one MIKUD_AGENT_TOKEN, in the place of the first definition of each
+ * (parseEnvFile keeps the last one, so a leftover duplicate would win); every other line stays as it was.
+ */
 export function withSyncKey(text: string, url: string, key: string): string {
-  const lines = text.replace(/^﻿/, "").split(/\r?\n/)
+  let lines = text.replace(/^﻿/, "").split(/\r?\n/)
   while (lines.length > 0 && lines.at(-1) === "") lines.pop()
   const set = (name: string, value: string) => {
     const pattern = new RegExp(`^\\s*(export\\s+)?${name}\\s*=`)
-    const index = lines.findIndex((line) => pattern.test(line))
-    if (index === -1) lines.push(`${name}=${value}`)
-    else lines[index] = `${name}=${value}`
+    const first = lines.findIndex((line) => pattern.test(line))
+    if (first === -1) {
+      lines.push(`${name}=${value}`)
+      return
+    }
+    lines = lines.flatMap((line, index) => (index === first ? [`${name}=${value}`] : pattern.test(line) ? [] : [line]))
   }
   set("MIKUD_URL", url)
   set("MIKUD_AGENT_TOKEN", key)

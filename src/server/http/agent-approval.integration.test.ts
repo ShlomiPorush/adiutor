@@ -1,11 +1,13 @@
 import { eq, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { CONNECT_CLIENT_ID } from "../../shared/auth.ts"
+import { disconnectEvery } from "../../web/pages/settings/disconnectAll.ts"
 import { createApp } from "../app.ts"
 import { audit, authApiKey, authDeviceCode, authSession } from "../db/schema.ts"
 import { createAgentKey, type TestCore, testCore } from "../testing/app.ts"
 import { TEST_ORIGIN, TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
+import { totp } from "../testing/totp.ts"
 
 // Agent approval in the browser, as Mikud configures Better Auth (src/server/auth/auth.ts): the core
 // deviceAuthorization plugin, bearer() and the api-key plugin, over HTTP through the app. `mikud connect` asks for a
@@ -429,5 +431,75 @@ describe("agent approval: Settings and the audit", () => {
     expect((await sessions()).some((s) => s.token === token)).toBe(false)
     expect((await auditRows()).at(-1)).toEqual({ action: "session.revoke", source: "ui" })
     expect((await b.call("GET", "/api/v1/session")).status).toBe(200)
+  })
+})
+
+describe("Disconnect all with more keys than one list holds", () => {
+  it("one list answers at most 100 of 101 keys; listing again after each round deletes every key", async () => {
+    const b = await owner()
+    const [user] = await t.ctx.db.select({ id: authSession.userId }).from(authSession).limit(1)
+    for (let i = 0; i < 101; i++)
+      await core.auth.current.api.createApiKey({
+        body: { userId: user?.id as string, name: `agent-${i}`, expiresIn: 86_400 },
+      })
+    // The library's limit, shown to the owner as it is: the database adapter's default of 100 rows.
+    const first = (await b.call("GET", "/api/auth/api-key/list")).json as { apiKeys: { id: string }[]; total: number }
+    expect([first.apiKeys.length, first.total]).toEqual([100, 100])
+
+    // Each request from its own address: Better Auth allows 100 a minute per address and route.
+    const result = await disconnectEvery(
+      async () =>
+        (
+          (await b.call("GET", "/api/auth/api-key/list", { headers: { "x-forwarded-for": nextIp() } })).json as {
+            apiKeys: { id: string }[]
+          }
+        ).apiKeys,
+      async (keyId) => {
+        const answer = await b.call("POST", "/api/auth/api-key/delete", {
+          body: { keyId },
+          headers: { "x-forwarded-for": nextIp() },
+        })
+        if (answer.status !== 200) throw new Error(`delete answered ${answer.status}`)
+      },
+    )
+    expect(result).toEqual({ removed: 101, remaining: 0 })
+    expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
+  })
+})
+
+describe("G10, open (owner's decision pending): bearer() hands sign-in's cookie to page script", () => {
+  it("the set-auth-token header of a sign-in is the signed session cookie; replayed as the cookie, without Authorization, it has the owner's rights", async () => {
+    const secret = await browser().owner()
+    const page = browser()
+    expect((await page.passwordSignIn()).json.twoFactorRedirect).toBe(true)
+    const signedIn = await page.verify(totp(secret))
+    expect(signedIn.status).toBe(200)
+    const exposed = signedIn.headers.get("set-auth-token")
+    expect(exposed).toBeTruthy()
+    // bearer() lists it as readable by page script.
+    expect(signedIn.headers.get("access-control-expose-headers")).toContain("set-auth-token")
+    // It is the value of the session cookie the same answer sets (HttpOnly there, readable here), decoded.
+    const cookie = signedIn.setCookies.find((c) => c.startsWith("better-auth.session_token="))
+    expect(decodeURIComponent(cookie?.split(";")[0]?.slice("better-auth.session_token=".length) ?? "")).toBe(exposed)
+
+    // A fresh client with that value as its cookie, no Authorization: an owner-only route answers.
+    const replay = await app.fetch(
+      new Request(`${TEST_ORIGIN}/api/v1/settings`, {
+        headers: {
+          cookie: `better-auth.session_token=${encodeURIComponent(exposed ?? "")}`,
+          "x-forwarded-for": nextIp(),
+        },
+      }),
+    )
+    expect(replay.status).toBe(200)
+    const listed = await app.fetch(
+      new Request(`${TEST_ORIGIN}/api/auth/list-sessions`, {
+        headers: {
+          cookie: `better-auth.session_token=${encodeURIComponent(exposed ?? "")}`,
+          "x-forwarded-for": nextIp(),
+        },
+      }),
+    )
+    expect(listed.status).toBe(200)
   })
 })

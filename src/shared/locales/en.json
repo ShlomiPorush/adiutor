@@ -864,9 +864,10 @@
     },
     "disconnectedAll": "All agents were disconnected",
     "disconnectAllFailed": {
-      "one": "Could not disconnect 1 agent. Try again.",
-      "other": "Could not disconnect {count} agents. Try again."
-    }
+      "one": "1 agent is still connected. Wait a minute and try again.",
+      "other": "{count} agents are still connected. Wait a minute and try again."
+    },
+    "disconnectAllError": "Could not disconnect all agents: {reason}"
   },
   "connect": {
     "title": "Connect an agent",

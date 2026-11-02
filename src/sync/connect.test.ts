@@ -22,6 +22,7 @@ import {
   NAME_MAX,
   withSyncKey,
 } from "./connect.ts"
+import { parseEnvFile } from "./env.ts"
 import type { Runner, RunResult } from "./exec.ts"
 
 // `connect` against a stand-in Mikud: the device flow's answers, the key, and the end of the temporary session.
@@ -266,6 +267,34 @@ describe("connect: the sync's env file", () => {
     )
     expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(readFileSync(file, "utf8")).not.toContain(SESSION)
+  })
+
+  it("leaves exactly one definition of each value when the file holds duplicates, so the new key wins", async () => {
+    const file = join(tempDir(), "sync.env")
+    writeFileSync(
+      file,
+      [
+        "MIKUD_URL=https://old.example.com",
+        "MIKUD_AGENT_TOKEN=old-one",
+        "T3CODE_CLI_PATH=C:\\t3\\t3.cmd",
+        "export MIKUD_AGENT_TOKEN=old-two",
+        "# a comment",
+        "MIKUD_URL=https://older.example.com",
+        "MIKUD_OVERVIEW_DIR=C:\\overview",
+        "",
+      ].join("\n"),
+    )
+    expect(await connect(options({ target: "sync", envFile: file }), deps(standIn().fetch))).toBe(0)
+    const text = readFileSync(file, "utf8")
+    expect(parseEnvFile(text)).toEqual({
+      MIKUD_URL: URL_BASE,
+      MIKUD_AGENT_TOKEN: KEY,
+      T3CODE_CLI_PATH: "C:\\t3\\t3.cmd",
+      MIKUD_OVERVIEW_DIR: "C:\\overview",
+    })
+    expect(text.split("\n").filter((line) => /MIKUD_AGENT_TOKEN=/.test(line))).toEqual([`MIKUD_AGENT_TOKEN=${KEY}`])
+    expect(text.split("\n").filter((line) => /MIKUD_URL=/.test(line))).toEqual([`MIKUD_URL=${URL_BASE}`])
+    expect(text).toContain("# a comment\n")
   })
 
   it("ends the session when the key cannot be saved, and says which key to disconnect", async () => {

@@ -1,8 +1,8 @@
 // Settings, Agent access: the agents connected with `mikud connect`, each with its own key of Better Auth's api-key
 // plugin, through its client. The owner approves every connection in the browser (/connect/device); the key itself
 // never reaches this page. The list shows each key's name, first characters, when it was connected, when it ends and
-// its last request. Disconnect deletes one key, Disconnect all deletes every listed key (the plugin has no bulk
-// delete); both ask first and act at once, outside the save bar.
+// its last request. Disconnect deletes one key, Disconnect all deletes every key (the plugin has no bulk delete, and
+// one list answers at most 100 keys: disconnectAll.ts); both ask first and act at once, outside the save bar.
 
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
@@ -18,6 +18,7 @@ import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag } from "../../ui/tags.tsx"
 import { Panel } from "../parts.tsx"
+import { disconnectEvery } from "./disconnectAll.ts"
 
 const time = (value: Date | string) => (typeof value === "string" ? value : value.toISOString())
 
@@ -70,17 +71,21 @@ export function AgentKeysPanel() {
     })
     if (!ok) return
     setBusy(true)
-    let failed = 0
-    for (const key of keys) {
-      try {
-        await authData(authClient.apiKey.delete({ keyId: key.id }))
-      } catch {
-        failed++
-      }
+    try {
+      // Lists again until the list is empty: one list answers at most 100 keys.
+      const { remaining } = await disconnectEvery(
+        async () => (await authData(authClient.apiKey.list())).apiKeys as AgentKey[],
+        async (keyId) => {
+          await authData(authClient.apiKey.delete({ keyId }))
+        },
+      )
+      if (remaining === 0) showToast(t("agentKeys.disconnectedAll"), "success")
+      else showToast(tc("agentKeys.disconnectAllFailed", remaining), "error")
+    } catch (error) {
+      showToast(t("agentKeys.disconnectAllError", { reason: errorReason(language, error) }), "error")
+    } finally {
+      setBusy(false)
     }
-    setBusy(false)
-    if (failed === 0) showToast(t("agentKeys.disconnectedAll"), "success")
-    else showToast(tc("agentKeys.disconnectAllFailed", failed), "error")
     await queryClient.invalidateQueries({ queryKey: qk.agentKeys })
   }
 
