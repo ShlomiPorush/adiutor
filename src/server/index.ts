@@ -5,7 +5,7 @@ import { serve } from "@hono/node-server"
 import { createApp } from "./app.ts"
 import { AuthHolder } from "./auth/auth.ts"
 import { ConfigError, loadConfig } from "./config.ts"
-import { createDatabase } from "./db/client.ts"
+import { createDatabase, migrationFailure } from "./db/client.ts"
 import { errorFacts, log } from "./log.ts"
 import { getSettings } from "./services/admin.ts"
 import { ReloadableSecretScanner } from "./services/secrets.ts"
@@ -33,8 +33,10 @@ const database = createDatabase(config.databaseUrl)
 try {
   await database.migrate(config.migrationsDir)
 } catch (error) {
-  // The driver's message may include the host but never the password; the URL itself is not logged.
-  fail(`Database migration failed: ${error instanceof Error ? error.message : String(error)}`)
+  // The driver's message may include the host but never the password; the URL itself is not logged. Drizzle wraps a
+  // failed statement in DrizzleQueryError ("Failed query: ..."); PostgreSQL's own message (a migration's RAISE
+  // EXCEPTION, for example) is its cause.
+  fail(`Database migration failed: ${migrationFailure(error)}`)
 }
 
 const scanner = new ReloadableSecretScanner()

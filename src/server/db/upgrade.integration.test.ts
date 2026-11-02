@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { twoFactor, username } from "better-auth/plugins"
+import { sql } from "drizzle-orm"
 import postgres from "postgres"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
@@ -15,7 +16,7 @@ import { TEST_AUTH_SECRET, testAuthBase, testCore } from "../testing/app.ts"
 import { TEST_ORIGIN, TEST_PASSWORD, TestBrowser } from "../testing/browser.ts"
 import type { TestDatabase } from "../testing/db.ts"
 import { totp } from "../testing/totp.ts"
-import { createDatabase, type Database } from "./client.ts"
+import { createDatabase, type Database, migrationFailure } from "./client.ts"
 import { authAccount, authSession, authTwoFactor, authUser, authVerification } from "./schema.ts"
 
 // The upgrade from the schema on main before this change (migrations 0000 to 0004: Better Auth behind Mikud's wrapper,
@@ -163,65 +164,106 @@ describe("upgrading a database from Better Auth behind the wrapper", () => {
 })
 
 // 0008_readable-email: the owner's synthetic e-mail from the username in hex (`u-<hex>@mikud.local`) to the readable
-// one of ownerEmail, only for a username the tightened rule allows. Each case starts from migrations 0000 to 0007.
+// one of ownerEmail. The username plugin checks the tightened rule at sign-in too, so an owner whose name breaks it
+// stops the upgrade with a message instead of being locked out. Each case starts from migrations 0000 to 0007.
 
 const READABLE_EMAIL = 8 // migrations 0000 to 0007
 
 /** The e-mail the previous release derived from a username: `u-` and the lowercased username in hex. */
 const hexEmail = (name: string) => `u-${Buffer.from(name.toLowerCase(), "utf8").toString("hex")}@mikud.local`
 
+/**
+ * A database at migration 0007 with the owner as the previous release created it (Better Auth with the plugins'
+ * defaults, so `.alice` is allowed): `email`, two-factor on. Runs `test` with it, then drops it.
+ */
+async function withOwnerBefore0008(
+  name: string,
+  email: string,
+  test: (db: Database, secret: string) => Promise<void>,
+): Promise<void> {
+  const dbName = `mikud_upgrade_${randomBytes(4).toString("hex")}`
+  await admin.unsafe(`CREATE DATABASE "${dbName}"`)
+  const u = new URL(process.env.MIKUD_TEST_DATABASE_URL ?? "")
+  u.pathname = `/${dbName}`
+  const db = createDatabase(u.toString())
+  const folder = folderBefore(READABLE_EMAIL)
+  try {
+    await db.migrate(folder)
+    const legacy = legacyAuth(db)
+    const old = new TestBrowser((request) => legacy.handler(request), TEST_ORIGIN, {
+      "x-forwarded-for": "198.51.100.9",
+    })
+    const created = await old.call("POST", "/api/auth/sign-up/email", {
+      body: { name, email, username: name, displayUsername: name, password: TEST_PASSWORD },
+    })
+    expect(created.status).toBe(200)
+    const { secret } = await old.enable()
+    expect((await old.verify(totp(secret))).status).toBe(200)
+    await test(db, secret)
+  } finally {
+    await db.close()
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`)
+    rmSync(folder, { recursive: true, force: true })
+  }
+}
+
+/** The owner signs in to the current Mikud with `secret`'s authenticator, then through a CLI reset. */
+async function signsIn(db: Database, secret: string, name: string, ip: number): Promise<void> {
+  const { t, core, auth } = currentCore(db)
+  const app = createApp({ checkDatabase: async () => true, core })
+  const b = new TestBrowser((request) => app.fetch(request), TEST_ORIGIN, { "x-forwarded-for": `198.51.100.${ip}` })
+  await b.signIn(secret, name, TEST_PASSWORD)
+  expect((await b.call("GET", "/api/v1/session")).status).toBe(200)
+  const reset = await resetOwnerPassword({ ...testAuthBase(t, new URL(TEST_ORIGIN), auth), sessionIdleDays: 30 })
+  expect(reset?.username).toBe(name.toLowerCase())
+  const fresh = new TestBrowser((request) => app.fetch(request), TEST_ORIGIN, {
+    "x-forwarded-for": `198.51.100.${ip + 1}`,
+  })
+  await fresh.signIn(secret, name, reset?.password)
+  expect((await fresh.call("GET", "/api/v1/session")).status).toBe(200)
+}
+
+const owners = async (db: Database) =>
+  db.db.select({ email: authUser.email, username: authUser.username }).from(authUser)
+const applied = async (db: Database) =>
+  Number((await db.db.execute<{ n: string }>(sql`select count(*) as n from drizzle.__drizzle_migrations`))[0]?.n)
+
 describe("upgrading to the readable synthetic e-mail", () => {
   it.each([
-    { name: "Owner.Name", email: hexEmail("Owner.Name"), expected: "owner.name@mikud.local", readable: true },
-    { name: "A_b.C", email: hexEmail("A_b.C"), expected: "a_b.c@mikud.local", readable: true },
-    { name: ".alice", email: hexEmail(".alice"), expected: hexEmail(".alice"), readable: false },
-    { name: "a..b", email: hexEmail("a..b"), expected: hexEmail("a..b"), readable: false },
-    { name: "owner", email: "owner@example.com", expected: "owner@example.com", readable: false },
-  ])("turns $email of $name into $expected", async ({ name, email, expected, readable }) => {
-    const adminUrl = process.env.MIKUD_TEST_DATABASE_URL ?? ""
-    const dbName = `mikud_upgrade_${randomBytes(4).toString("hex")}`
-    await admin.unsafe(`CREATE DATABASE "${dbName}"`)
-    const u = new URL(adminUrl)
-    u.pathname = `/${dbName}`
-    const db = createDatabase(u.toString())
-    const folder = folderBefore(READABLE_EMAIL)
-    try {
-      await db.migrate(folder)
-      // The owner as the previous release created it, with the e-mail it derived, and an authenticator.
-      const legacy = legacyAuth(db)
-      const old = new TestBrowser((request) => legacy.handler(request), TEST_ORIGIN, {
-        "x-forwarded-for": "198.51.100.9",
-      })
-      const created = await old.call("POST", "/api/auth/sign-up/email", {
-        body: { name, email, username: name, displayUsername: name, password: TEST_PASSWORD },
-      })
-      expect(created.status).toBe(200)
-      const { secret } = await old.enable()
-      expect((await old.verify(totp(secret))).status).toBe(200)
-
+    { name: "owner.name", email: hexEmail("owner.name"), expected: "owner.name@mikud.local" },
+    { name: "A_b.C", email: hexEmail("A_b.C"), expected: "a_b.c@mikud.local" },
+    { name: "owner", email: "owner@example.com", expected: "owner@example.com" },
+  ])("turns $email of $name into $expected, and the owner signs in with the same authenticator", async (c) => {
+    await withOwnerBefore0008(c.name, c.email, async (db, secret) => {
       await db.migrate(migrations)
-
-      const [row] = await db.db.select({ email: authUser.email, username: authUser.username }).from(authUser)
-      expect(row).toEqual({ email: expected, username: name.toLowerCase() })
-      if (!readable) return
-
-      // The owner signs in as before, with the same authenticator, and the CLI reset finds the new e-mail.
-      const { t, core, auth } = currentCore(db)
-      const app = createApp({ checkDatabase: async () => true, core })
-      const b = new TestBrowser((request) => app.fetch(request), TEST_ORIGIN, { "x-forwarded-for": "198.51.100.10" })
-      await b.signIn(secret, name, TEST_PASSWORD)
-      expect((await b.call("GET", "/api/v1/session")).status).toBe(200)
-      const reset = await resetOwnerPassword({ ...testAuthBase(t, new URL(TEST_ORIGIN), auth), sessionIdleDays: 30 })
-      expect(reset?.username).toBe(name.toLowerCase())
-      const fresh = new TestBrowser((request) => app.fetch(request), TEST_ORIGIN, {
-        "x-forwarded-for": "198.51.100.11",
-      })
-      await fresh.signIn(secret, name, reset?.password)
-      expect((await fresh.call("GET", "/api/v1/session")).status).toBe(200)
-    } finally {
-      await db.close()
-      await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`)
-      rmSync(folder, { recursive: true, force: true })
-    }
+      expect(await owners(db)).toEqual([{ email: c.expected, username: c.name.toLowerCase() }])
+      await signsIn(db, secret, c.name, 10)
+    })
   })
+
+  it.each([".alice", "alice.", "a..b"])(
+    "stops for %s with a message and changes nothing; after the documented rename it upgrades",
+    async (name) => {
+      await withOwnerBefore0008(name, hexEmail(name), async (db, secret) => {
+        const failure = await db.migrate(migrations).then(
+          () => null,
+          (error: unknown) => error,
+        )
+        expect(migrationFailure(failure)).toBe(
+          `username "${name}" no longer meets the sign-in rule; rename it before upgrading (see docs/deployment.md)`,
+        )
+        // The whole run is one transaction: the owner and the list of applied migrations are as they were.
+        expect(await owners(db)).toEqual([{ email: hexEmail(name), username: name }])
+        expect(await applied(db)).toBe(READABLE_EMAIL)
+
+        // docs/deployment.md, Upgrade: rename the owner, then upgrade.
+        await db.db.execute(
+          sql`update auth_user set username = 'alice', display_username = 'alice', email = 'alice@mikud.local'`,
+        )
+        await db.migrate(migrations)
+        expect(await owners(db)).toEqual([{ email: "alice@mikud.local", username: "alice" }])
+        await signsIn(db, secret, "alice", 20)
+      })
+    },
+  )
 })

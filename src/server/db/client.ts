@@ -37,6 +37,13 @@ export type Database = {
   close(): Promise<void>
 }
 
+/** Why a migration failed: the innermost cause's message (PostgreSQL's text), not Drizzle's "Failed query: ...". */
+export function migrationFailure(error: unknown): string {
+  let e = error
+  for (let depth = 0; depth < 5 && e instanceof Error && e.cause instanceof Error; depth++) e = e.cause
+  return e instanceof Error ? e.message : String(e)
+}
+
 export function createDatabase(url: string): Database {
   const sql = postgres(url, { max: 10, onnotice: () => {}, connection: POOL_CONNECTION_SETTINGS })
   const db = drizzle(sql, { schema })

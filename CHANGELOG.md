@@ -45,7 +45,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- **The authenticator app shows the username**, not `u-<hex>@mikud.local`: the synthetic e-mail is the readable username, and a migration changes an owner's hex e-mail to it when the username follows the new rule (any other e-mail stays). An authenticator entry made before keeps its old label: rename it in the app, or set up a new authenticator in Settings.
+- **The authenticator app shows the username**, not `u-<hex>@mikud.local`: the synthetic e-mail is the readable username, and a migration changes an owner's hex e-mail to it (any other e-mail stays). The sign-in checks the new rule too, so an owner whose name breaks it stops the upgrade with a message and nothing changes; rename the owner first (docs/deployment.md, Upgrade). A failed migration now logs PostgreSQL's message instead of the failed query. An authenticator entry made before keeps its old label: rename it in the app, or set up a new authenticator in Settings.
 - **Morning message never sent twice**: a 5xx or an answer that is not Telegram's own JSON (a gateway's error page) may hide a message that went out, so it is `unknown` and never resent; only Telegram's 4xx refusal or no connection at all is retried.
 - **Owner deletes always win over the sync**: the sync checks a suppression inside the transaction that would recreate the item or project, serialized with the owner's delete by an advisory lock, so a delete during a sync run is never undone.
 - **Older snapshots never roll back**: a thread record not newer than the stored activity, and security or Issues counts older than the stored ones, are ignored.

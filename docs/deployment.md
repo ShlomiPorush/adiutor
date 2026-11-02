@@ -213,6 +213,8 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 
 5. Check `/healthz` (step 4) and open the board.
 
+**Upgrading to the readable sign-in e-mail (migration `0008_readable-email`).** Before `docker compose up -d`, rename an owner whose username starts or ends with a dot or has two dots in a row: the sign-in refuses such a name now, so the upgrade stops with `username "<name>" no longer meets the sign-in rule` and changes nothing. In the Mikud database, with `<new>` in lowercase and following the rule of step 5: `update auth_user set username = '<new>', display_username = '<new>', email = '<new>@mikud.local';`. Nothing in production is affected today: the current owner's name follows the rule.
+
 **Upgrading to Better Auth as it documents itself (from 0.x with `MIKUD_OWNER_TOKEN` and `MIKUD_AGENT_TOKEN`).** Before `docker compose up -d`:
 
 1. Add `MIKUD_AUTH_SECRETS=1:<your current MIKUD_AUTH_SECRET>` and keep `MIKUD_AUTH_SECRET` as it is: the TOTP secret was encrypted with it.
