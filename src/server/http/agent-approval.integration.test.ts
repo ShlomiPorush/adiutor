@@ -467,7 +467,7 @@ describe("Disconnect all with more keys than one list holds", () => {
   })
 })
 
-describe("G10, open (owner's decision pending): bearer() hands sign-in's cookie to page script", () => {
+describe("G10, accepted by the owner (2026-11-02): bearer() hands sign-in's cookie to page script", () => {
   it("the set-auth-token header of a sign-in is the signed session cookie; replayed as the cookie, without Authorization, it has the owner's rights", async () => {
     const secret = await browser().owner()
     const page = browser()
