@@ -79,6 +79,28 @@ function needsEntry(): boolean {
   return stack.some((layer) => !layer.noHistory)
 }
 
+let releaseQueued = false
+
+/**
+ * Closed by hand: takes back the extra entry, so the next Back leaves the page. When a navigation
+ * already left that entry (a link inside the layer), there is nothing to take back. Decided after
+ * the current task's own work: a layer that opens again at once keeps the entry, as StrictMode does
+ * in development (an effect, its cleanup, the effect again) and a layer that replaces another.
+ */
+function releaseEntry(): void {
+  if (releaseQueued) return
+  releaseQueued = true
+  queueMicrotask(() => {
+    releaseQueued = false
+    if (!holdsEntry || needsEntry()) return
+    holdsEntry = false
+    if ((history.state as { mikudLayer?: boolean } | null)?.mikudLayer) {
+      ignorePops++
+      history.back()
+    }
+  })
+}
+
 /** Registers an open layer; returns its removal. */
 export function openLayer(options: LayerOptions): () => void {
   const layer: Layer = { ...options, id: nextId++, opener: document.activeElement }
@@ -93,15 +115,7 @@ export function openLayer(options: LayerOptions): () => void {
     if (index === -1) return
     stack.splice(index, 1)
     syncInert()
-    // Closed by hand: take back the extra entry, so the next Back leaves the page. When a
-    // navigation already left that entry (a link inside the layer), there is nothing to take back.
-    if (holdsEntry && !needsEntry()) {
-      holdsEntry = false
-      if ((history.state as { mikudLayer?: boolean } | null)?.mikudLayer) {
-        ignorePops++
-        history.back()
-      }
-    }
+    if (holdsEntry && !needsEntry()) releaseEntry()
     const opener = layer.opener
     const below = stack.at(-1)
     requestAnimationFrame(() => {

@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 // Every layer renders under React's StrictMode, which `main.tsx` turns on for development: the
-// effects run, are cleaned up and run again, and the layer must keep its content in the page.
+// effects run, are cleaned up and run again, and the layer must keep its content in the page and
+// hold exactly one history entry, so Back closes it instead of leaving the page.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, type ReactNode, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "../i18n/i18n.tsx"
 import { Bell } from "../shell/Bell.tsx"
 import { MoreSheet } from "../shell/MoreSheet.tsx"
@@ -79,6 +80,29 @@ describe("layers under StrictMode", () => {
     expect(panel?.textContent).toContain("The new name shows on the morning view.")
     expect(panel?.textContent).toContain("Save")
     await expectGoneAfterUnmount()
+  })
+
+  it("a dialog holds exactly one history entry and gives it back once it closes", async () => {
+    const push = vi.spyOn(history, "pushState")
+    const back = vi.spyOn(history, "back").mockImplementation(() => {})
+    try {
+      await render(
+        <Dialog title="Quick add" size="sm" onClose={() => {}}>
+          <textarea />
+        </Dialog>,
+      )
+      await Promise.resolve()
+      expect(push).toHaveBeenCalledTimes(1)
+      expect(back).not.toHaveBeenCalled()
+      expect((history.state as { mikudLayer?: boolean } | null)?.mikudLayer).toBe(true)
+      await unmount()
+      await Promise.resolve()
+      expect(back).toHaveBeenCalledTimes(1)
+      expect(push).toHaveBeenCalledTimes(1)
+    } finally {
+      push.mockRestore()
+      back.mockRestore()
+    }
   })
 
   it("the bell window keeps its list in the page", async () => {
