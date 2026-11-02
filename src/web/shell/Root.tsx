@@ -1,13 +1,14 @@
 // The app root: the session gate, the unsaved-changes guard, and the one confirm and toast hosts.
-// GET /session answering 401 goes to sign-in (/login?next=...), with the reason when the session clocks ended
-// it (/login?ended=...); totp_required goes to the TOTP setup (/setup). Any later 401 does the same, without
-// asking about unsaved changes, and the page comes back afterwards. A wrong password or code on the sign-in
-// pages stays on its form: those pages are outside the gate.
+// GET /session answering 401 goes to sign-in (/login?next=...); totp_required goes to the two-factor setup
+// (/setup). Any later 401 does the same, without asking about unsaved changes, and the page comes back afterwards.
+// A wrong password or code on the sign-in pages stays on its form: those pages are outside the gate.
+// The gate also mounts Better Auth's useSession: its own refresh (on opening, coming back to the front or online,
+// and another tab's change) is what keeps the session alive; Mikud's polling never extends it.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { type ReactNode, useEffect, useRef } from "react"
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router"
-import { ACTIVITY_REPORT_MS } from "../../shared/auth.ts"
+import { authClient } from "../api/auth.ts"
 import { ApiError, onUnauthorized } from "../api/client.ts"
 import { api, qk } from "../api/endpoints.ts"
 import { useI18n } from "../i18n/i18n.tsx"
@@ -27,10 +28,9 @@ export function safeNext(value: string | null | undefined): string {
   return value
 }
 
-/** Where a 401 or totp_required takes the page: sign-in (with why the session ended) or the TOTP setup. */
+/** Where a 401 or totp_required takes the page: sign-in or the two-factor setup. */
 export function authPath(error: ApiError, here: string): string {
   const params = new URLSearchParams()
-  if (error.code === "session_ended" && error.reason) params.set("ended", error.reason)
   const next = safeNext(here)
   if (next !== "/") params.set("next", next)
   const query = params.toString()
@@ -94,40 +94,25 @@ function SessionGate({ children }: { children: ReactNode }) {
   }
   return (
     <>
-      {session.data.via === "session" ? <ActivityReporter /> : null}
+      <SessionKeeper />
       {children}
     </>
   )
 }
 
-/** Input that shows the owner is at the page. Scrolling alone is left out: the page scrolls by itself too. */
-const INPUT_EVENTS = ["keydown", "pointerdown", "wheel", "touchstart"] as const
-
 /**
- * Reports real input to the server at most every 30 seconds (the idle clock in Settings, and "last active" in
- * the account's session list); the last input of a quiet spell is still sent. Polling never counts.
+ * Better Auth's client session: mounted, it refreshes the session by itself (a GET, then the POST that extends it
+ * when the answer says needsRefresh). When it learns that the session is gone (signed out in another tab), the
+ * gate checks again and goes to sign-in.
  */
-function ActivityReporter() {
+function SessionKeeper() {
+  const queryClient = useQueryClient()
+  const { data, isPending } = authClient.useSession()
+  const seen = useRef(false)
+  const signedIn = Boolean(data)
   useEffect(() => {
-    let last = 0
-    let trailing: number | undefined
-    const report = () => {
-      last = Date.now()
-      trailing = undefined
-      void api.activity().catch(() => {
-        // A 401 is handled by the gate; anything else is retried with the next input.
-      })
-    }
-    const onInput = () => {
-      const wait = last + ACTIVITY_REPORT_MS - Date.now()
-      if (wait <= 0) report()
-      else trailing ??= window.setTimeout(report, wait)
-    }
-    for (const type of INPUT_EVENTS) window.addEventListener(type, onInput, { capture: true, passive: true })
-    return () => {
-      for (const type of INPUT_EVENTS) window.removeEventListener(type, onInput, { capture: true })
-      window.clearTimeout(trailing)
-    }
-  }, [])
+    if (signedIn) seen.current = true
+    else if (!isPending && seen.current) void queryClient.invalidateQueries({ queryKey: qk.session })
+  }, [signedIn, isPending, queryClient])
   return null
 }

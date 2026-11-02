@@ -3,7 +3,6 @@
 
 export const ERROR_CODES = [
   "unauthorized",
-  "session_ended",
   "forbidden",
   "totp_required",
   "not_found",
@@ -13,10 +12,8 @@ export const ERROR_CODES = [
   "not_top_level",
   "suppressed",
   "conflict",
-  "already_set_up",
-  "wrong_password",
   "rate_limited",
-  "busy",
+  "setting_locked",
   "telegram_failed",
   "telegram_uncertain",
   "internal_error",
@@ -26,7 +23,6 @@ export type ErrorCode = (typeof ERROR_CODES)[number]
 
 export const ERROR_STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503> = {
   unauthorized: 401,
-  session_ended: 401,
   forbidden: 403,
   totp_required: 403,
   not_found: 404,
@@ -36,10 +32,8 @@ export const ERROR_STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 422 |
   not_top_level: 422,
   suppressed: 409,
   conflict: 409,
-  already_set_up: 409,
-  wrong_password: 400,
   rate_limited: 429,
-  busy: 503,
+  setting_locked: 409,
   telegram_failed: 502,
   telegram_uncertain: 502,
   internal_error: 500,

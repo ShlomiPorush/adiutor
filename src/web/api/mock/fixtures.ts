@@ -4,12 +4,14 @@
 
 import type { ItemStatus, ItemType, Severity, Stage } from "../../../shared/enums.ts"
 import type {
-  AccountSession,
+  AgentKey,
   AuditEntry,
+  BrowserSession,
   Comment,
   Item,
   Project,
   SecuritySource,
+  Settings,
   StageProposal,
   Suppression,
   ThreadLink,
@@ -48,20 +50,12 @@ export type MockState = {
   sources: SecuritySource[]
   audit: AuditEntry[]
   browserId: string
-  sessions: AccountSession[]
+  /** Better Auth's list-sessions, the current one first. */
+  sessions: BrowserSession[]
   endedOthers: boolean
+  agentKeys: AgentKey[]
   suppressions: Suppression[]
-  settings: {
-    id: string
-    closedItemDays: number
-    dateFormat: string
-    timeFormat: string
-    language: "he" | "en"
-    sessionMaxDays: number
-    sessionIdle: boolean
-    sessionIdleMinutes: number
-    updatedAt: string
-  }
+  settings: Settings
   previousVisit: string
 }
 
@@ -396,9 +390,13 @@ export function createState(): MockState {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339 Safari/537.36"
   const phone =
     "Mozilla/5.0 (Linux; Android 15; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339 Mobile Safari/537.36"
-  const sessions: AccountSession[] = [
-    { id: uuid(), current: true, signedInAt: ago(24 * 3), activeAt: ago(0.01), userAgent: desktop },
-    { id: uuid(), current: false, signedInAt: ago(24 * 9), activeAt: ago(11), userAgent: phone },
+  const sessions: BrowserSession[] = [
+    { id: uuid(), createdAt: ago(24 * 3), updatedAt: ago(0.5), expiresAt: ago(-24 * 30), userAgent: desktop },
+    { id: uuid(), createdAt: ago(24 * 9), updatedAt: ago(11), expiresAt: ago(-24 * 29), userAgent: phone },
+  ]
+  const agentKeys: AgentKey[] = [
+    { id: uuid(), name: "sync on the desktop", start: "mkd_Qe", createdAt: ago(24 * 20), lastRequest: ago(0.2) },
+    { id: uuid(), name: "agents", start: "mkd_tR", createdAt: ago(24 * 20), lastRequest: ago(3) },
   ]
   const suppressions: Suppression[] = [
     {
@@ -423,6 +421,7 @@ export function createState(): MockState {
     browserId: uuid(),
     sessions,
     endedOthers: false,
+    agentKeys,
     suppressions,
     settings: {
       id: uuid(),
@@ -430,10 +429,16 @@ export function createState(): MockState {
       dateFormat: "dd/MM/yyyy",
       timeFormat: "HH:mm",
       language: storedLanguage(),
-      sessionMaxDays: 30,
-      sessionIdle: false,
-      sessionIdleMinutes: 30,
+      sessionIdleDays: 30,
+      otpViaTelegram: false,
       updatedAt: ago(50),
+      telegram: {
+        botToken: { set: true, readable: true, locked: false, variable: null },
+        chatId: { value: "4242", locked: false, variable: null },
+        state: "on",
+        missing: [],
+      },
+      privateDomains: { value: ["corp.example"], locked: false, variable: null },
     },
     previousVisit: ago(14),
   }

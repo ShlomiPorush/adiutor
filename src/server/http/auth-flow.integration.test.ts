@@ -1,48 +1,42 @@
+import type { AddressInfo } from "node:net"
 import { inspect } from "node:util"
-import { count, eq, sql } from "drizzle-orm"
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { type ServerType, serve } from "@hono/node-server"
+import { count, sql } from "drizzle-orm"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { ownerEmail } from "../../shared/auth.ts"
 import { createApp } from "../app.ts"
-import { createAuth, passwordHasher } from "../auth/auth.ts"
-import { createDatabase, type Database } from "../db/client.ts"
-import { audit, authAccount, authSession, authTwoFactor, authUser, authVerification, settings } from "../db/schema.ts"
-import { changePassword, resetPassword } from "../services/account.ts"
-import { AUTH_LOCK_KEY } from "../services/context.ts"
-import { sweepSessions } from "../services/session-policy.ts"
-import { TEST_AUTH_SECRET, testCore } from "../testing/app.ts"
-import { TEST_ORIGIN, TEST_PASSWORD, TestBrowser } from "../testing/browser.ts"
+import { TWO_FACTOR_CHALLENGE_S } from "../auth/auth.ts"
+import { resetOwnerPassword } from "../auth/recovery.ts"
+import { audit, authApiKey, authSession, authTwoFactor, authUser } from "../db/schema.ts"
+import { getSettings } from "../services/admin.ts"
+import { TEST_AUTH_SECRET, type TestCore, type TestCoreOptions, testAuthBase, testCore } from "../testing/app.ts"
+import { StandInBotApi, waitFor } from "../testing/bot-api.ts"
+import { TEST_ORIGIN, TEST_PASSWORD, TEST_USERNAME, TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { totp, wrongTotp } from "../testing/totp.ts"
-import { RateLimiter } from "./auth.ts"
-import type { AuthTestHooks } from "./auth-guard.ts"
 
-const OWNER = "owner-token-for-tests-only-000000000000"
-const AGENT = "agent-token-for-tests-only-000000000000"
+// Better Auth as Mikud configures it (src/server/auth/auth.ts), over HTTP through the app: its own routes, the
+// documented hooks, and the gaps the owner accepted (G1 to G18 in docs/project-foundation.md, "Security design").
+
 const DAY = 86_400_000
+const HOUR = 3_600_000
 
 let t: TestDatabase
+let core: TestCore
 let app: ReturnType<typeof createApp>
-let core: ReturnType<typeof testCore>
+let lastIp = 0
 
-function build(lockAuth?: Database["lockAuth"], authTestHooks?: AuthTestHooks, beforeUserUpdate?: () => Promise<void>) {
-  core = testCore(t, {
-    config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: new URL(TEST_ORIGIN), version: "test" },
-    limiter: new RateLimiter(10, 60_000),
-    attempts: new RateLimiter(5, 300_000),
-    clientIp: (c) => c.req.header("x-test-ip") ?? "client",
-  })
-  if (lockAuth) core.lockAuth = lockAuth
-  core.authTestHooks = authTestHooks
-  if (beforeUserUpdate)
-    core.auth = createAuth({
-      db: t.ctx.db,
-      secret: TEST_AUTH_SECRET,
-      publicUrl: new URL(TEST_ORIGIN),
-      beforeUserUpdate,
-    })
+/** A documentation address of its own for each browser: Better Auth keys its rate limits on X-Forwarded-For. */
+const nextIp = () => `198.51.100.${(lastIp++ % 250) + 1}`
+
+function build(options: Partial<TestCoreOptions> = {}) {
+  core = testCore(t, { config: { publicUrl: new URL(TEST_ORIGIN), version: "test" }, ...options })
   app = createApp({ checkDatabase: async () => true, core })
+  return app
 }
 
-const browser = (ip = "client") => new TestBrowser((request) => app.fetch(request), TEST_ORIGIN, { "x-test-ip": ip })
+const browser = (ip = nextIp(), on = () => app) =>
+  new TestBrowser((request) => on().fetch(request), TEST_ORIGIN, { "x-forwarded-for": ip })
 
 beforeAll(async () => {
   vi.spyOn(console, "error").mockImplementation(() => {})
@@ -56,865 +50,877 @@ beforeEach(async () => {
   await t.reset()
   build()
 })
+afterEach(async () => {
+  vi.useRealTimers()
+  await core.telegramService.stop()
+})
 
 const sessions = async () => t.ctx.db.select().from(authSession)
-const liveProved = async () => (await sessions()).filter((s) => s.twoFactorAt && !s.endedReason)
-const actions = async () => (await t.ctx.db.select({ action: audit.action }).from(audit)).map((a) => a.action)
-const api = (b: TestBrowser, path = "/api/v1/session") => b.call("GET", path)
+const actions = async () =>
+  (await t.ctx.db.select({ action: audit.action }).from(audit).orderBy(audit.id)).map((a) => a.action)
+const auditRows = async () => t.ctx.db.select().from(audit).orderBy(audit.id)
+const v1 = (b: TestBrowser, path = "/session") => b.call("GET", `/api/v1${path}`)
+const owner = async () => (await t.ctx.db.select().from(authUser))[0]
+const trustCookie = (setCookies: string[]) => setCookies.some((c) => /trust_device/.test(c.split("=")[0] ?? ""))
 
-describe("first run", () => {
-  it("creates the owner once, as the username plugin stores it, and signs him in for enrolment", async () => {
+/** Refuses one audit action at the database, so the hook that writes it fails (a broken audit store). */
+async function refuseAudit(action: string) {
+  await t.ctx.db.execute(
+    sql.raw(`alter table audit add constraint test_refuse check (action <> '${action}') not valid`),
+  )
+}
+async function acceptAudit() {
+  await t.ctx.db.execute(sql.raw("alter table audit drop constraint if exists test_refuse"))
+}
+
+/** Fakes Date only (timers and the database keep running), so Better Auth's clocks move. */
+function moveDate(by: number) {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(Date.now() + by)
+}
+
+describe("first run: Better Auth's sign-up", () => {
+  it("creates the owner once, keeps the spelling, and refuses a second sign-up before hashing", async () => {
     const b = browser()
-    expect((await api(b, "/api/setup/status")).json.data).toEqual({ hasUser: false, session: "none" })
+    expect((await b.call("GET", "/api/setup/status")).json.data).toEqual({ hasUser: false, session: "none" })
     const created = await b.setup("Owner.Name")
-    expect([created.status, created.json.data]).toEqual([201, { username: "owner.name", signedIn: true }])
-    const [user] = await t.ctx.db.select().from(authUser)
+    expect(created.status).toBe(200)
+    const user = await owner()
     expect(user).toMatchObject({
       username: "owner.name",
       displayUsername: "Owner.Name",
-      email: "owner.name@mikud.local",
+      email: ownerEmail("owner.name"),
       twoFactorEnabled: false,
     })
-    const [account] = await t.ctx.db.select().from(authAccount)
-    expect(account).toMatchObject({ providerId: "credential", accountId: user?.id, userId: user?.id })
-    expect((await api(b, "/api/setup/status")).json.data).toEqual({ hasUser: true, session: "enrol" })
-    // Signed in by password only: the app refuses it until TOTP is proved.
-    const refused = await api(b)
+    expect((await b.call("GET", "/api/setup/status")).json.data).toEqual({ hasUser: true, session: "enrol" })
+    // Signed in by password only: Mikud's API refuses it until two-factor is on.
+    const refused = await v1(b)
     expect([refused.status, refused.json.error.code]).toEqual([403, "totp_required"])
 
-    const again = await browser("other").setup("someone")
-    expect([again.status, again.json.error.code]).toEqual([409, "already_set_up"])
+    const context = await core.auth.current.$context
+    const hash = vi.spyOn(context.password, "hash")
+    const again = await browser().setup("someone")
+    expect([again.status, again.json.code]).toEqual([403, "ALREADY_SET_UP"])
+    expect(hash).not.toHaveBeenCalled()
+    hash.mockRestore()
     expect(await actions()).toEqual(["account.setup", "session.sign_in"])
+    expect((await auditRows())[1]?.after).toEqual({ stage: "password" })
   })
 
-  it("refuses a setup that does not come from the Mikud page, and a bad name or password", async () => {
-    const b = browser()
-    expect(
-      (
-        await b.call("POST", "/api/setup/account", {
-          body: { username: "owner", password: TEST_PASSWORD },
-          page: false,
-        })
-      ).status,
-    ).toBe(403)
-    const evil = await b.call("POST", "/api/setup/account", {
-      body: { username: "owner", password: TEST_PASSWORD },
-      headers: { origin: "https://evil.example" },
-    })
-    expect(evil.status).toBe(403)
-    for (const body of [
-      { username: "ab", password: TEST_PASSWORD },
-      { username: " owner", password: TEST_PASSWORD },
-      { username: "owner-name", password: TEST_PASSWORD },
-      { username: "a".repeat(31), password: TEST_PASSWORD },
-      { username: "owner", password: "short" },
-      { username: "owner", password: "p".repeat(129) },
-    ])
-      expect((await browser(JSON.stringify(body)).call("POST", "/api/setup/account", { body })).status).toBe(400)
-    expect(await t.ctx.db.select().from(authUser)).toHaveLength(0)
-  })
+  it.each([".alice", "alice.", "a..b", "A_b.C"])(
+    "makes a valid synthetic e-mail for %s: sign-up, sign-in and the CLI reset work",
+    async (name) => {
+      const b = browser()
+      const { secret } = await b.enrolledOwner(name)
+      expect((await owner())?.email).toBe(ownerEmail(name))
+      expect(ownerEmail(name)).toMatch(/^u-[0-9a-f]+@mikud\.local$/)
+      const again = browser()
+      await again.signIn(secret, name)
+      expect((await v1(again)).status).toBe(200)
+      const reset = await resetOwnerPassword({ ...testAuthBase(t, new URL(TEST_ORIGIN)), sessionIdleDays: 30 })
+      expect(reset?.username).toBe(name.toLowerCase())
+      const fresh = browser()
+      await fresh.signIn(secret, name, reset?.password)
+      expect((await v1(fresh)).status).toBe(200)
+    },
+  )
 
-  it("creates one owner when setups race", async () => {
-    const answers = await Promise.all(
-      ["one", "two", "three", "four", "five"].map((name, i) => browser(`ip${i}`).setup(`owner_${name}`)),
-    )
-    expect(answers.map((a) => a.status).sort()).toEqual([201, 409, 409, 409, 409])
+  it("creates one owner when sign-ups race", async () => {
+    const answers = await Promise.all(["one", "two", "three", "four", "five"].map((n) => browser().setup(`owner_${n}`)))
+    expect(answers.filter((a) => a.status === 200)).toHaveLength(1)
     const [row] = await t.ctx.db.select({ n: count() }).from(authUser)
     expect(row?.n).toBe(1)
   })
+
+  it("refuses a sign-up whose e-mail is not the one derived from the username, a bad name or a short password", async () => {
+    const wrongEmail = await browser().call("POST", "/api/auth/sign-up/email", {
+      body: { name: "owner", email: "owner@example.com", username: "owner", password: TEST_PASSWORD },
+    })
+    expect([wrongEmail.status, wrongEmail.json.code]).toEqual([400, "INVALID_EMAIL"])
+    for (const [username, password] of [
+      ["ab", TEST_PASSWORD],
+      ["owner-name", TEST_PASSWORD],
+      ["owner", "short"],
+      ["owner", "p".repeat(129)],
+    ] as const)
+      expect(
+        (
+          await browser().call("POST", "/api/auth/sign-up/email", {
+            body: { name: username, email: ownerEmail(username), username, password },
+          })
+        ).status,
+      ).toBe(400)
+    expect(await t.ctx.db.select().from(authUser)).toHaveLength(0)
+  })
+
+  it("rolls the user back when the sign-up fails after writing it (Drizzle with transaction: true)", async () => {
+    await t.ctx.db.execute(
+      sql.raw("alter table auth_session add constraint test_no_session check (created_at < '2000-01-01') not valid"),
+    )
+    try {
+      const failed = await browser().setup()
+      expect(failed.status).toBe(500)
+    } finally {
+      await t.ctx.db.execute(sql.raw("alter table auth_session drop constraint test_no_session"))
+    }
+    expect(await t.ctx.db.select().from(authUser)).toHaveLength(0)
+    expect((await browser().setup()).status).toBe(200)
+  })
 })
 
-describe("TOTP", () => {
-  it("is set up with a code, proves the new session, and ends every other session of the owner", async () => {
-    const setupTab = browser()
-    await setupTab.setup()
-    // Another browser signs in with the password before enrolment.
-    const early = browser("early")
-    expect((await early.passwordSignIn()).status).toBe(200)
-    expect((await api(early)).json.error.code).toBe("totp_required")
-
-    const enabled = await setupTab.call("POST", "/api/auth/two-factor/enable", { body: { password: TEST_PASSWORD } })
+describe("two-factor, required by Mikud through the account flag", () => {
+  it("enrols with a code: ten backup codes, the flag on, the API open, the audit row", async () => {
+    const b = browser()
+    await b.setup()
+    const enabled = await b.call("POST", "/api/auth/two-factor/enable", { body: { password: TEST_PASSWORD } })
     expect(enabled.status).toBe(200)
     expect(enabled.json.totpURI).toMatch(/^otpauth:\/\/totp\/Mikud:/)
-    expect(enabled.json).not.toHaveProperty("backupCodes")
+    expect(enabled.json.backupCodes).toHaveLength(10)
     const secret = new URL(enabled.json.totpURI).searchParams.get("secret") ?? ""
+    expect((await b.verify(totp(secret))).status).toBe(200)
+    expect((await owner())?.twoFactorEnabled).toBe(true)
+    expect((await v1(b)).json.data).toMatchObject({ actor: { kind: "owner", label: "owner.name" }, via: "session" })
+    expect((await b.call("GET", "/api/setup/status")).json.data).toEqual({ hasUser: true, session: "active" })
+    expect(await actions()).toEqual(["account.setup", "session.sign_in", "account.totp_enable"])
+  })
 
-    // A wrong code keeps the session as it was: no new session, no proof, still refused by the API.
-    const before = (await sessions()).map((s) => s.id).sort()
-    const wrong = await setupTab.verify(wrongTotp(secret))
+  it("keeps a wrong enrolment code out (V1): 401, the flag stays off, the API answers totp_required", async () => {
+    const b = browser()
+    await b.setup()
+    const { secret } = await b.enable()
+    const wrong = await b.verify(wrongTotp(secret))
     expect(wrong.status).toBe(401)
-    expect((await sessions()).map((s) => s.id).sort()).toEqual(before)
-    expect((await sessions()).every((s) => s.twoFactorAt === null)).toBe(true)
-    expect((await api(setupTab)).json.error.code).toBe("totp_required")
-
-    const right = await setupTab.verify(totp(secret))
-    expect(right.status).toBe(200)
-    expect((await api(setupTab)).status).toBe(200)
-    expect(await liveProved()).toHaveLength(1)
-    // The browser signed in before enrolment is ended.
-    expect((await api(early)).status).toBe(401)
-    expect((await t.ctx.db.select().from(authUser))[0]?.twoFactorEnabled).toBe(true)
-    expect(await actions()).toContain("account.totp_enable")
-
-    // Enrolment is over: no second enable, and a proved session cannot verify again.
-    expect(
-      (await setupTab.call("POST", "/api/auth/two-factor/enable", { body: { password: TEST_PASSWORD } })).status,
-    ).toBe(403)
-    const twice = await setupTab.verify(totp(secret))
-    expect([twice.status, twice.json.code]).toEqual([400, "totp_already_proved"])
+    expect((await owner())?.twoFactorEnabled).toBe(false)
+    expect((await v1(b)).json.error.code).toBe("totp_required")
   })
 
-  it("marks the current session when enrolment issues no replacement", async () => {
-    const b = browser()
-    await b.setup()
-    const secret = await b.enable()
-    // The factor is verified already (as after an earlier enrolment that failed to record), the session is not.
-    await t.ctx.db.update(authTwoFactor).set({ verified: true })
-    await t.ctx.db.update(authUser).set({ twoFactorEnabled: true })
-    const [current] = await sessions()
-    expect((await b.verify(totp(secret))).status).toBe(200)
-    const after = await sessions()
-    expect(after.map((s) => s.id)).toEqual([current?.id])
-    expect(after[0]?.twoFactorAt).not.toBeNull()
-    expect((await api(b)).status).toBe(200)
+  it("ends a second browser's password-only session when the setup page signs out the others", async () => {
+    const setupTab = browser()
+    await setupTab.setup()
+    const early = browser()
+    expect((await early.passwordSignIn()).status).toBe(200)
+    expect((await v1(early)).json.error.code).toBe("totp_required")
+    const { secret } = await setupTab.enable()
+    expect((await setupTab.verify(totp(secret))).status).toBe(200)
+    // Better Auth keeps the other session; with two-factor on it would now pass the account check.
+    expect((await v1(early)).status).toBe(200)
+    // The setup page then calls Better Auth's documented revokeOtherSessions.
+    expect((await setupTab.call("POST", "/api/auth/revoke-other-sessions", { body: {} })).status).toBe(200)
+    expect((await v1(early)).status).toBe(401)
+    expect((await v1(setupTab)).status).toBe(200)
+    expect(await actions()).toContain("session.end")
   })
 
-  it("signs in with the password and then the code, case-insensitive in the username", async () => {
-    const secret = await browser().owner()
-    const b = browser("phone")
-    const first = await b.passwordSignIn("OWNER.NAME")
-    expect([first.status, first.json.twoFactorRedirect]).toEqual([200, true])
-    expect(first.setCookies.some((c) => c.includes("session_token=") && !/max-age=0/i.test(c))).toBe(false)
-    const count1 = (await sessions()).length
-
-    // A wrong code without a session creates nothing.
-    expect((await b.verify(wrongTotp(secret))).status).toBe(401)
-    expect((await sessions()).length).toBe(count1)
-    expect((await api(b)).status).toBe(401)
-
-    expect((await b.verify(totp(secret))).status).toBe(200)
-    expect((await api(b)).json.data.actor).toEqual({ kind: "owner", label: "owner.name" })
-    expect(await liveProved()).toHaveLength(2)
-    const wrongPassword = await browser("x").passwordSignIn("owner.name", "not the password at all")
-    expect(wrongPassword.status).toBe(401)
-  })
-})
-
-describe("the guard in front of Better Auth", () => {
-  it("answers 404 to every route Mikud does not use", async () => {
-    const secret = await browser().owner()
-    const b = browser("b")
-    await b.signIn(secret)
-    for (const [method, path] of [
-      ["POST", "/api/auth/sign-up/email"],
-      ["POST", "/api/auth/sign-in/email"],
-      ["GET", "/api/auth/list-sessions"],
-      ["POST", "/api/auth/revoke-sessions"],
-      ["POST", "/api/auth/revoke-other-sessions"],
-      ["POST", "/api/auth/change-password"],
-      ["POST", "/api/auth/two-factor/disable"],
-      ["POST", "/api/auth/two-factor/generate-backup-codes"],
-      ["POST", "/api/auth/two-factor/verify-backup-code"],
-      ["POST", "/api/auth/is-username-available"],
-      ["GET", "/api/auth/sign-out"],
-      ["DELETE", "/api/auth/get-session"],
-    ] as const) {
-      const res = await b.call(method, path, { body: method === "GET" ? undefined : {} })
-      expect([method, path, res.status]).toEqual([method, path, 404])
-    }
-  })
-
-  it("refuses POSTs without the page's headers, before reading the body, and lets get-session read plainly", async () => {
-    const b = browser()
-    await b.setup()
-    const pages: Record<string, string>[] = [{ origin: "https://evil.example" }, { "x-mikud-request": "0" }]
-    for (const headers of pages) {
-      const res = await b.call("POST", "/api/auth/sign-in/username", {
-        body: { username: "owner.name", password: TEST_PASSWORD },
-        headers,
-      })
-      expect(res.status).toBe(403)
-    }
-    const bare = await b.call("POST", "/api/auth/sign-out", { page: false })
-    expect([bare.status, bare.json.code]).toEqual([403, "forbidden"])
-    const session = await b.call("GET", "/api/auth/get-session")
-    expect([session.status, session.json.user.username]).toEqual([200, "owner.name"])
-  })
-
-  it("refuses remember-me off, trusted devices and other second factors", async () => {
-    const secret = await browser().owner()
-    const b = browser("b")
-    const off = await b.call("POST", "/api/auth/sign-in/username", {
-      body: { username: "owner.name", password: TEST_PASSWORD, rememberMe: false },
-    })
-    expect([off.status, off.json.code]).toEqual([400, "remember_me_unsupported"])
-    await b.passwordSignIn()
-    const trust = await b.call("POST", "/api/auth/two-factor/verify-totp", {
-      body: { code: totp(secret), trustDevice: true },
-    })
-    expect([trust.status, trust.json.code]).toEqual([400, "trust_device_unsupported"])
-  })
-
-  it("limits sign-in and code attempts by socket address; a forged forwarding header changes nothing", async () => {
-    await browser().owner()
-    for (let i = 0; i < 5; i++)
-      expect((await browser("attacker").passwordSignIn("owner.name", "wrong password number one")).status).toBe(401)
-    const blocked = await browser("attacker").call("POST", "/api/auth/sign-in/username", {
-      body: { username: "owner.name", password: TEST_PASSWORD },
-      headers: { "x-forwarded-for": "198.51.100.23", "x-real-ip": "198.51.100.24" },
-    })
-    expect([blocked.status, blocked.json.code]).toEqual([429, "rate_limited"])
-    expect((await browser("someone-else").passwordSignIn()).status).toBe(200)
-  })
-})
-
-describe("session clocks", () => {
-  it("ends a session at its maximum length, says why, and audits it once", async () => {
-    const b = browser()
-    await b.owner()
-    t.clock.travel(30 * DAY + 1000)
-    const ended = await api(b)
-    expect([ended.status, ended.json.error.code, ended.json.error.reason]).toEqual([401, "session_ended", "max"])
-    expect((await api(b)).json.error.reason).toBe("max")
-    expect((await b.call("GET", "/api/auth/get-session")).json).toBeNull()
-    expect((await actions()).filter((a) => a === "session.end")).toHaveLength(1)
-    // Ended sessions are swept a day later.
-    t.clock.travel(DAY + 1000)
-    expect(await sweepSessions(t.ctx)).toEqual({ ended: 0, removed: 1 })
-    expect(await sessions()).toHaveLength(0)
-  })
-
-  it("ends an idle session when the owner turned the idle limit on; only reported input counts", async () => {
-    const b = browser()
-    await b.owner()
-    const patched = await b.call("PATCH", "/api/v1/settings", { body: { sessionIdle: true, sessionIdleMinutes: 5 } })
-    expect(patched.json.data).toMatchObject({ sessionIdle: true, sessionIdleMinutes: 5, sessionMaxDays: 30 })
-    t.clock.travel(4 * 60_000)
-    // Polling does not count as activity.
-    expect((await api(b)).status).toBe(200)
-    const activity = await b.call("POST", "/api/v1/session/activity")
-    expect(activity.json.data.clocks.idle).toEqual({ timeoutSec: 300, remainingSec: 300 })
-    t.clock.travel(4 * 60_000)
-    expect((await api(b)).status).toBe(200)
-    t.clock.travel(2 * 60_000)
-    const ended = await api(b)
-    expect([ended.status, ended.json.error.reason]).toEqual([401, "idle"])
-    expect((await b.call("PATCH", "/api/v1/settings", { body: { sessionMaxDays: 91 } })).status).toBe(401)
-  })
-
-  it("refuses clock settings out of range", async () => {
-    const b = browser()
-    await b.owner()
-    for (const body of [
-      { sessionMaxDays: 0 },
-      { sessionMaxDays: 91 },
-      { sessionIdleMinutes: 4 },
-      { sessionIdleMinutes: 1441 },
-    ])
-      expect((await b.call("PATCH", "/api/v1/settings", { body })).status).toBe(400)
-  })
-})
-
-describe("account", () => {
-  it("signs out and audits it; the old cookie is refused", async () => {
-    const b = browser()
-    await b.owner()
-    const cookie = b.cookieHeader
-    expect((await b.call("POST", "/api/auth/sign-out")).status).toBe(200)
-    expect((await app.request("/api/v1/session", { headers: { cookie } })).status).toBe(401)
-    expect(await actions()).toContain("session.sign_out")
-  })
-
-  it("lists sessions, ends the others, then all of them", async () => {
-    const secret = await browser().owner()
-    const desk = browser("desk")
-    await desk.signIn(secret)
-    const phone = browser("phone")
-    await phone.signIn(secret)
-    const list = await desk.call("GET", "/api/v1/account/sessions")
-    expect(list.json.data.username).toBe("owner.name")
-    expect(list.json.data.sessions).toHaveLength(3)
-    expect(list.json.data.sessions[0]).toMatchObject({ current: true })
-    expect(JSON.stringify(list.json)).not.toMatch(/token/i)
-    expect((await desk.call("POST", "/api/v1/account/sessions/end-others", { page: false })).status).toBe(403)
-    expect((await desk.call("POST", "/api/v1/account/sessions/end-others")).json.data).toEqual({ ended: 2 })
-    expect((await api(phone)).status).toBe(401)
-    expect((await desk.call("POST", "/api/v1/account/sessions/end-all")).json.data).toEqual({ ended: 1 })
-    expect((await api(desk)).status).toBe(401)
-    expect(await actions()).toEqual(expect.arrayContaining(["session.end_others", "session.end_all"]))
-  })
-
-  it("changes the password, keeps this session working and ends the others", async () => {
-    const secret = await browser().owner()
-    const b = browser("b")
-    await b.signIn(secret)
-    const other = browser("other")
-    await other.signIn(secret)
-    const before = (await sessions()).find((s) => s.token && b.cookieHeader.includes(s.token))
-    const wrong = await b.call("POST", "/api/v1/account/password", {
-      body: { currentPassword: "not the password", newPassword: "a brand new passphrase" },
-    })
-    expect([wrong.status, wrong.json.error.code]).toEqual([400, "wrong_password"])
-    const changed = await b.call("POST", "/api/v1/account/password", {
-      body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new passphrase" },
-    })
-    expect(changed.json.data).toEqual({ endedSessions: 2 })
-    // This session goes on without signing in again, with its proof and clocks unchanged.
-    expect((await api(b)).status).toBe(200)
-    const after = (await sessions()).find((s) => s.id === before?.id)
-    expect(after?.twoFactorAt?.getTime()).toBe(before?.twoFactorAt?.getTime())
-    expect(after?.authenticatedAt.getTime()).toBe(before?.authenticatedAt.getTime())
-    expect((await api(other)).status).toBe(401)
-    expect((await browser("old").passwordSignIn()).status).toBe(401)
-    expect((await browser("new").passwordSignIn("owner.name", "a brand new passphrase")).json.twoFactorRedirect).toBe(
-      true,
-    )
-    expect(await actions()).toContain("account.password_change")
-  })
-})
-
-describe("recovery CLI", () => {
-  it("sets a new password, removes TOTP and every session and challenge, audited as the CLI", async () => {
-    const secret = await browser().owner()
-    // A pending sign-in challenge (two verification rows) when the reset runs.
-    const pending = browser("pending")
-    await pending.passwordSignIn()
-    expect(
-      (await t.ctx.db.select().from(authVerification))
-        .map((v) => v.identifier.replace(/[A-Za-z0-9_-]{20}$/, "*"))
-        .sort(),
-    ).toEqual(["2fa-*", "2fa-attempts-2fa-*"])
-
-    const result = await resetPassword(t.ctx, await passwordHasher(core.auth))
-    expect(result?.username).toBe("owner.name")
-    expect(await sessions()).toHaveLength(0)
-    expect(await t.ctx.db.select().from(authTwoFactor)).toHaveLength(0)
-    expect(await t.ctx.db.select().from(authVerification)).toHaveLength(0)
-    expect((await pending.verify(totp(secret))).status).toBe(401)
-    const [row] = await t.ctx.db.select().from(audit).where(eq(audit.action, "account.password_reset"))
-    expect(row).toMatchObject({ actorKind: "system", actorLabel: "cli", source: "cli" })
-    expect(JSON.stringify(row)).not.toContain(result?.password ?? "-")
-
-    // The new password signs in to enrolment again.
-    const b = browser("after")
-    const signed = await b.passwordSignIn("owner.name", result?.password)
-    expect(signed.json.twoFactorRedirect).toBeUndefined()
-    expect((await api(b)).json.error.code).toBe("totp_required")
-    expect((await api(b, "/api/setup/status")).json.data).toEqual({ hasUser: true, session: "enrol" })
-    const newSecret = await b.enable(result?.password)
-    expect((await b.verify(totp(newSecret))).status).toBe(200)
-    expect((await api(b)).status).toBe(200)
-  })
-
-  it("answers null when there is no owner", async () => {
-    expect(await resetPassword(t.ctx, await passwordHasher(core.auth))).toBeNull()
-  })
-})
-
-describe("the auth lock", () => {
-  /** A held lock: the change and the reset each wait for the other on AUTH_LOCK_KEY. */
-  function gate() {
+  it("G6, accepted: a password sign-in that read the account before enrolment can keep a session after it", async () => {
+    // A second server process on the same database, whose session creation waits at a gate: the password was
+    // checked while two-factor was off, and the session row is written after enrolment and its sign-out of others.
+    const coreB = testCore(t, { config: { publicUrl: new URL(TEST_ORIGIN), version: "test" } })
+    const appB = createApp({ checkDatabase: async () => true, core: coreB })
+    const context = await coreB.auth.current.$context
+    const original = context.internalAdapter.createSession.bind(context.internalAdapter)
     let open = () => {}
-    const opened = new Promise<void>((resolve) => {
+    const gate = new Promise<void>((resolve) => {
       open = resolve
     })
     let reached = () => {}
-    const at = new Promise<void>((resolve) => {
+    const atGate = new Promise<void>((resolve) => {
       reached = resolve
     })
-    return { open, opened, reached, at }
-  }
-
-  it("refuses a password change when the reset takes the lock first", async () => {
-    const b = browser()
-    await b.owner()
-    const [session] = await liveProved()
-    const hasher = await passwordHasher(core.auth)
-    const g = gate()
-    const reset = resetPassword(t.ctx, hasher, {
-      afterLock: async () => {
-        g.reached()
-        await g.opened
-      },
+    const spy = vi.spyOn(context.internalAdapter, "createSession").mockImplementation(async (...args) => {
+      reached()
+      await gate
+      return original(...args)
     })
-    await g.at
-    const change = changePassword(t.ctx, hasher, session?.id ?? "", {
-      currentPassword: TEST_PASSWORD,
-      newPassword: "a brand new passphrase",
-    })
-    g.open()
-    const done = await reset
-    // The session is gone with the reset, so the change is refused; the reset password stays.
-    await expect(change).rejects.toMatchObject({ code: "unauthorized" })
-    expect((await browser("x").passwordSignIn("owner.name", done?.password)).status).toBe(200)
-  })
 
-  it("lets the reset win when the password change takes the lock first", async () => {
-    const b = browser()
-    await b.owner()
-    const [session] = await liveProved()
-    const hasher = await passwordHasher(core.auth)
-    const g = gate()
-    const change = changePassword(
-      t.ctx,
-      hasher,
-      session?.id ?? "",
-      { currentPassword: TEST_PASSWORD, newPassword: "a brand new passphrase" },
-      {
-        afterRead: async () => {
-          g.reached()
-          await g.opened
-        },
-      },
+    const setupTab = browser()
+    await setupTab.setup()
+    const late = browser(nextIp(), () => appB)
+    const pending = late.passwordSignIn()
+    await atGate
+    const { secret } = await setupTab.enable()
+    expect((await setupTab.verify(totp(secret))).status).toBe(200)
+    expect((await setupTab.call("POST", "/api/auth/revoke-other-sessions", { body: {} })).status).toBe(200)
+    open()
+    const signedIn = await pending
+    spy.mockRestore()
+    // The gap: a session that never passed a second factor, valid because the account now has two-factor on.
+    expect(signedIn.status).toBe(200)
+    expect(signedIn.json.twoFactorRedirect).toBeUndefined()
+    expect((await v1(late)).status).toBe(200)
+    expect(await sessions()).toHaveLength(2)
+    // Its creation is still in the audit, as a password-stage sign-in: the hook does not decide from the flag.
+    const passwordStage = (await auditRows()).filter(
+      (r) => r.action === "session.sign_in" && (r.after as { stage?: string }).stage === "password",
     )
-    await g.at
-    let resetDone = false
-    const reset = resetPassword(t.ctx, hasher).then((r) => {
-      resetDone = true
-      return r
-    })
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    expect(resetDone).toBe(false)
-    g.open()
-    await change
-    const done = await reset
-    expect((await browser("x").passwordSignIn("owner.name", "a brand new passphrase")).status).toBe(401)
-    expect((await browser("y").passwordSignIn("owner.name", done?.password)).status).toBe(200)
+    expect(passwordStage).toHaveLength(2)
   })
 
-  it("makes a sign-in wait while the lock is held, without starving the pool, and releases it after", async () => {
-    const secret = await browser().owner()
-    let release = () => {}
-    const held = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    let locked = () => {}
-    const holding = new Promise<void>((resolve) => {
-      locked = resolve
-    })
-    const holder = t.ctx.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(AUTH_LOCK_KEY))})`)
-      locked()
-      await held
-    })
-    await holding
-    // More waiting sign-ins than the pool has connections.
-    const waiting = Array.from({ length: 12 }, (_, i) => browser(`w${i}`).passwordSignIn())
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    const started = Date.now()
-    const read = await app.request("/api/v1/projects", { headers: { authorization: `Bearer ${OWNER}` } })
-    expect(read.status).toBe(200)
-    expect(Date.now() - started).toBeLessThan(2_000)
-    release()
-    await holder
-    // The attempts limiter allows five per address; each waiting browser has its own.
-    expect((await Promise.all(waiting)).every((a) => a.status === 200)).toBe(true)
-    const left = await t.ctx.db.execute(
-      sql`select 1 from pg_locks where locktype = 'advisory' and granted and database = (select oid from pg_database where datname = current_database())`,
-    )
-    expect([...left]).toHaveLength(0)
-    expect(secret).toBeTruthy()
+  it("G7(b), accepted: when the setup page never signs out the others, the older session stays", async () => {
+    const setupTab = browser()
+    await setupTab.setup()
+    const early = browser()
+    await early.passwordSignIn()
+    const { secret } = await setupTab.enable()
+    await setupTab.verify(totp(secret))
+    expect((await v1(early)).status).toBe(200)
   })
 
-  it("records a sign-in without taking the lock again, so it never waits for its own request", async () => {
-    const secret = await browser().owner()
-    const b = browser("b")
-    await b.passwordSignIn()
-    const started = Date.now()
+  it("asks for the code at sign-in and accepts a backup code once", async () => {
+    const { backupCodes, secret } = await browser().enrolledOwner()
+    const b = browser()
+    const first = await b.passwordSignIn()
+    expect(first.json.twoFactorRedirect).toBe(true)
+    expect(first.json.twoFactorMethods).toEqual(["totp"])
+    expect((await v1(b)).status).toBe(401)
+    const code = backupCodes[0] as string
+    const used = await b.call("POST", "/api/auth/two-factor/verify-backup-code", { body: { code } })
+    expect(used.status).toBe(200)
+    expect((await v1(b)).status).toBe(200)
+    const other = browser()
+    await other.passwordSignIn()
+    const again = await other.call("POST", "/api/auth/two-factor/verify-backup-code", { body: { code } })
+    expect([again.status, again.json.code]).toEqual([401, "INVALID_BACKUP_CODE"])
+    await other.signIn(secret)
+    const signIns = (await auditRows()).filter((r) => r.action === "session.sign_in").map((r) => r.after)
+    expect(signIns).toEqual([
+      { stage: "password" },
+      { stage: "password" },
+      { stage: "second_factor", method: "backup_code" },
+      { stage: "password" },
+      { stage: "password" },
+      { stage: "second_factor", method: "totp" },
+    ])
+  })
+
+  it("replaces a lost authenticator: disable with the password, then enrol a new one", async () => {
+    const b = browser()
+    const old = await b.owner()
+    const disabled = await b.call("POST", "/api/auth/two-factor/disable", { body: { password: TEST_PASSWORD } })
+    expect(disabled.status).toBe(200)
+    expect((await v1(b)).json.error.code).toBe("totp_required")
+    const { secret } = await b.enable()
+    expect(secret).not.toBe(old)
     expect((await b.verify(totp(secret))).status).toBe(200)
-    expect(Date.now() - started).toBeLessThan(3_000)
+    expect((await v1(b)).status).toBe(200)
+    const twoFactorActions = (await actions()).filter((a) => a.startsWith("account.totp"))
+    expect(twoFactorActions).toEqual(["account.totp_enable", "account.totp_disable", "account.totp_enable"])
   })
 
-  it("answers busy when the lock is not free in time", async () => {
-    const quick = createDatabase(t.url, { authLockTimeoutMs: 300 })
-    try {
-      build(quick.lockAuth)
-      await browser().owner()
-      const holder = (await quick.lockAuth()).release
-      try {
-        // A request of this process waits its turn behind the holder and gives up after the timeout.
-        const res = await browser("b").passwordSignIn()
-        expect([res.status, res.json.code]).toEqual([503, "busy"])
-      } finally {
-        await holder()
+  it("new backup codes replace the old ones and are audited", async () => {
+    const b = browser()
+    const { backupCodes } = await b.enrolledOwner()
+    const fresh = await b.call("POST", "/api/auth/two-factor/generate-backup-codes", {
+      body: { password: TEST_PASSWORD },
+    })
+    expect(fresh.status).toBe(200)
+    expect(fresh.json.backupCodes).toHaveLength(10)
+    const other = browser()
+    await other.passwordSignIn()
+    const old = await other.call("POST", "/api/auth/two-factor/verify-backup-code", {
+      body: { code: backupCodes[0] },
+    })
+    expect(old.status).toBe(401)
+    expect(await actions()).toContain("account.backup_codes_new")
+  })
+
+  it("lets a challenge live 180 seconds (twoFactorCookieMaxAge), not Better Auth's default 10 minutes", async () => {
+    expect(TWO_FACTOR_CHALLENGE_S).toBe(180)
+    const secret = await browser().owner()
+    const inTime = browser()
+    await inTime.passwordSignIn()
+    moveDate(170_000)
+    expect((await inTime.verify(totp(secret, Date.now()))).status).toBe(200)
+    vi.useRealTimers()
+
+    const late = browser()
+    await late.passwordSignIn()
+    moveDate(181_000)
+    const expired = await late.verify(totp(secret, Date.now()))
+    expect([expired.status, expired.json.code]).toEqual([401, "INVALID_TWO_FACTOR_COOKIE"])
+  })
+
+  it("locks the account after ten wrong codes (Better Auth's account lockout)", async () => {
+    const secret = await browser().owner()
+    let locked: { status: number; json: { code?: string } } | undefined
+    for (let i = 0; i < 4 && !locked; i++) {
+      const b = browser()
+      await b.passwordSignIn()
+      for (let j = 0; j < 3; j++) {
+        const answer = await b.verify(wrongTotp(secret))
+        if (answer.status === 429) locked = answer
       }
-    } finally {
-      await quick.close()
     }
+    const b = browser()
+    await b.passwordSignIn()
+    const refused = await b.verify(totp(secret))
+    expect([refused.status, refused.json.code]).toEqual([429, "ACCOUNT_TEMPORARILY_LOCKED"])
   })
 })
 
-describe("failing closed", () => {
-  /** Makes the audit insert of one action fail, as a broken audit table would. */
-  async function breakAudit(action: string) {
-    await t.ctx.db.execute(
-      sql.raw(`alter table audit add constraint test_no_audit check (action <> '${action}') not valid`),
-    )
+describe("trustDevice is refused on every route whose body accepts it", () => {
+  /** Signs in with the password and asserts the refusal leaves no trusted device behind. */
+  async function refusedWithTrust(b: TestBrowser, path: string, body: Record<string, unknown>) {
+    const answer = await b.call("POST", `/api/auth${path}`, { body: { ...body, trustDevice: true } })
+    expect([answer.status, answer.json.code]).toEqual([400, "TRUST_DEVICE_UNSUPPORTED"])
+    expect(trustCookie(answer.setCookies)).toBe(false)
+    expect([...b.cookies.keys()].some((name) => name.includes("trust_device"))).toBe(false)
+    const next = await b.passwordSignIn()
+    expect(next.json.twoFactorRedirect).toBe(true)
   }
-  async function mendAudit() {
-    await t.ctx.db.execute(sql`alter table audit drop constraint if exists test_no_audit`)
-  }
-  beforeEach(mendAudit)
 
-  it("leaves no session when a sign-in cannot be audited, and the factor still works", async () => {
+  it("/two-factor/verify-totp", async () => {
     const secret = await browser().owner()
-    await breakAudit("session.sign_in")
-    const b = browser("b")
-    await b.passwordSignIn()
-    const proved = (await liveProved()).length
-    const res = await b.verify(totp(secret))
-    expect([res.status, res.json.code]).toEqual([500, "internal_error"])
-    expect(res.setCookies.filter((c) => c.includes("session_token=") && !/max-age=0/i.test(c))).toEqual([])
-    expect(res.setCookies.some((c) => /session_token=;.*max-age=0/i.test(c))).toBe(true)
-    expect((await liveProved()).length).toBe(proved)
-    expect(await t.ctx.db.select().from(authVerification)).toHaveLength(0)
-    expect((await api(b)).status).toBe(401)
-    await mendAudit()
-    expect((await t.ctx.db.select().from(authUser))[0]?.twoFactorEnabled).toBe(true)
-    await browser("c").signIn(secret)
-  })
-
-  it("leaves no session when enrolment cannot be audited; the factor and twoFactorEnabled agree", async () => {
     const b = browser()
-    await b.setup()
-    const secret = await b.enable()
-    await breakAudit("account.totp_enable")
-    const res = await b.verify(totp(secret))
-    expect(res.status).toBe(500)
-    expect(await liveProved()).toHaveLength(0)
-    const [user] = await t.ctx.db.select().from(authUser)
-    const [factor] = await t.ctx.db.select().from(authTwoFactor)
-    expect([user?.twoFactorEnabled, factor?.verified]).toEqual([true, true])
-    await mendAudit()
-    await browser("again").signIn(secret)
+    await b.passwordSignIn()
+    await refusedWithTrust(b, "/two-factor/verify-totp", { code: totp(secret) })
   })
 
-  it("leaves no session when a password-only sign-in cannot be audited", async () => {
-    await browser().setup()
-    await breakAudit("session.sign_in")
-    const before = (await sessions()).length
-    const res = await browser("b").passwordSignIn()
-    expect(res.status).toBe(500)
-    expect((await sessions()).length).toBe(before)
+  it("/two-factor/verify-backup-code", async () => {
+    const { backupCodes } = await browser().enrolledOwner()
+    const b = browser()
+    await b.passwordSignIn()
+    await refusedWithTrust(b, "/two-factor/verify-backup-code", { code: backupCodes[0] })
   })
 
-  it("still signs out when the sign-out cannot be audited", async () => {
+  describe("with sign-in codes sent to Telegram (the owner's choice)", () => {
+    let botApi: StandInBotApi
+    beforeEach(async () => {
+      botApi = await StandInBotApi.start(`${"123456"}:${"A".repeat(35)}`)
+      build({ telegramApiUrl: botApi.url })
+    })
+    afterEach(async () => {
+      await core.telegramService.stop()
+      await botApi.close()
+    })
+
+    async function withOtpOn() {
+      const b = browser()
+      await b.owner()
+      const token = `${"123456"}:${"A".repeat(35)}`
+      const saved = await b.call("PATCH", "/api/v1/settings", {
+        body: { telegramBotToken: token, telegramChatId: "4242", otpViaTelegram: true },
+      })
+      expect(saved.status).toBe(200)
+      expect(core.auth.settings.otpViaTelegram).toBe(true)
+      return b
+    }
+
+    it("/two-factor/send-otp", async () => {
+      await withOtpOn()
+      const b = browser()
+      const first = await b.passwordSignIn()
+      expect(first.json.twoFactorMethods).toEqual(["totp", "otp"])
+      await refusedWithTrust(b, "/two-factor/send-otp", {})
+      expect(botApi.sent).toHaveLength(0)
+    })
+
+    it("/two-factor/verify-otp, and the code goes to the owner's chat, never to the log", async () => {
+      await withOtpOn()
+      const lines: string[] = []
+      const spies = [
+        vi.spyOn(console, "log").mockImplementation((line: unknown) => void lines.push(String(line))),
+        vi.spyOn(console, "error").mockImplementation((line: unknown) => void lines.push(String(line))),
+      ]
+      const b = browser()
+      await b.passwordSignIn()
+      expect((await b.call("POST", "/api/auth/two-factor/send-otp", { body: {} })).status).toBe(200)
+      await waitFor(() => botApi.sent.length === 1)
+      const code = /\b(\d{6})\b/.exec(botApi.sent[0]?.text ?? "")?.[1] ?? ""
+      expect(botApi.sent[0]?.chatId).toBe("4242")
+      await refusedWithTrust(b, "/two-factor/verify-otp", { code })
+      for (const spy of spies) spy.mockRestore()
+      expect(lines.join("\n")).not.toContain(code)
+      // Without trustDevice the same flow signs in.
+      const c = browser()
+      await c.passwordSignIn()
+      await c.call("POST", "/api/auth/two-factor/send-otp", { body: {} })
+      await waitFor(() => botApi.sent.length === 2)
+      const second = /\b(\d{6})\b/.exec(botApi.sent[1]?.text ?? "")?.[1] ?? ""
+      expect((await c.call("POST", "/api/auth/two-factor/verify-otp", { body: { code: second } })).status).toBe(200)
+      expect((await v1(c)).status).toBe(200)
+    })
+  })
+
+  it("keeps the OTP routes closed while sign-in codes to Telegram are off", async () => {
+    await browser().owner()
+    const b = browser()
+    const first = await b.passwordSignIn()
+    expect(first.json.twoFactorMethods).toEqual(["totp"])
+    expect((await b.call("POST", "/api/auth/two-factor/send-otp", { body: {} })).status).toBe(404)
+  })
+})
+
+describe("the allow-list in hooks.before", () => {
+  it("answers 404 over HTTP to every route outside the list; server calls still work", async () => {
     const b = browser()
     await b.owner()
-    await breakAudit("session.sign_out")
-    expect((await b.call("POST", "/api/auth/sign-out")).status).toBe(200)
-    expect(await sessions()).toHaveLength(0)
-  })
-})
-
-describe("settings", () => {
-  it("starts with a 30-day session and the idle limit off", async () => {
-    const [row] = await t.ctx.db.insert(settings).values({ id: 1 }).returning()
-    expect(row).toMatchObject({ sessionMaxDays: 30, sessionIdle: false, sessionIdleMinutes: 30 })
-  })
-})
-
-describe("result review fixes", () => {
-  it("keeps the auth lock on its reserved connection when the pool recycles connections", async () => {
-    // A lock pool that ends its connections after one second: an unreserved connection would be closed while
-    // idle, and its advisory lock with it.
-    const short = createDatabase(t.url, { authLockMaxLifetimeSec: 1 })
-    try {
-      await browser().owner()
-      const hasher = await passwordHasher(core.auth)
-      const unlock = (await short.lockAuth()).release
-      let resetDone = false
-      const reset = resetPassword(t.ctx, hasher).then((result) => {
-        resetDone = true
-        return result
-      })
-      await new Promise((resolve) => setTimeout(resolve, 2_500))
-      expect(resetDone).toBe(false)
-      await unlock()
-      expect((await reset)?.username).toBe("owner.name")
-    } finally {
-      await short.close()
+    for (const [method, path, body] of [
+      ["POST", "/sign-in/email", { email: ownerEmail("owner.name"), password: TEST_PASSWORD }],
+      ["POST", "/update-user", { name: "x" }],
+      ["GET", "/reset-password/abc123?callbackURL=/", undefined],
+      ["GET", "/callback/x", undefined],
+      ["POST", "/request-password-reset", { email: ownerEmail("owner.name") }],
+      ["POST", "/reset-password", { token: "x", newPassword: TEST_PASSWORD }],
+      ["GET", "/list-accounts", undefined],
+      ["POST", "/revoke-session", { token: "x" }],
+      ["POST", "/api-key/update", { keyId: "x", name: "y" }],
+      ["GET", "/api-key/get?id=x", undefined],
+      ["POST", "/two-factor/get-totp-uri", { password: TEST_PASSWORD }],
+      ["POST", "/two-factor/view-backup-codes", { userId: "x" }],
+    ] as const) {
+      const answer = await b.call(method, `/api/auth${path}`, body === undefined ? {} : { body })
+      expect([method, path, answer.status]).toEqual([method, path, 404])
     }
+    const headers = new Headers({ cookie: b.cookieHeader })
+    const accounts = await core.auth.current.api.listUserAccounts({ headers })
+    expect(accounts).toHaveLength(1)
   })
 
-  it("deletes the challenges opened with the old password when the password changes", async () => {
-    const secret = await browser().owner()
-    const desk = browser("desk")
-    await desk.signIn(secret)
-    // Another browser opens a sign-in challenge with the old password.
-    const other = browser("other")
-    expect((await other.passwordSignIn()).json.twoFactorRedirect).toBe(true)
-    expect(await t.ctx.db.select().from(authVerification)).toHaveLength(2)
+  it("refuses a cookie-carrying change from another origin (403) and a body that is not JSON (415)", async () => {
+    const b = browser()
+    await b.owner()
+    const evil = await b.call("POST", "/api/auth/sign-out", { body: {}, headers: { origin: "https://evil.example" } })
+    expect(evil.status).toBe(403)
+    const plain = await app.fetch(
+      new Request(`${TEST_ORIGIN}/api/auth/sign-in/username`, {
+        method: "POST",
+        headers: { "content-type": "text/plain", origin: TEST_ORIGIN, "x-forwarded-for": nextIp() },
+        body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD }),
+      }),
+    )
+    expect(plain.status).toBe(415)
+    expect((await v1(b)).status).toBe(200)
+  })
+})
 
-    const changed = await desk.call("POST", "/api/v1/account/password", {
-      body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new passphrase" },
+describe("rate limits keyed on X-Forwarded-For", () => {
+  it("allows 5 sign-in attempts per 5 minutes per address", async () => {
+    await browser().owner()
+    const ip = nextIp()
+    for (let i = 0; i < 5; i++)
+      expect((await browser(ip).passwordSignIn(TEST_USERNAME, "wrong password 123")).status).toBe(401)
+    expect((await browser(ip).passwordSignIn()).status).toBe(429)
+    expect((await browser().passwordSignIn()).status).toBe(200)
+  })
+
+  it("behind trusted proxies, a forged leftmost address does not change the key", async () => {
+    build({ auth: { trustedProxies: ["192.0.2.0/24"] } })
+    await browser().owner()
+    const client = "203.0.113.5"
+    for (let i = 0; i < 5; i++) {
+      const forged = browser(`198.51.100.${200 + i}, ${client}, 192.0.2.10`)
+      expect((await forged.passwordSignIn(TEST_USERNAME, "wrong password 123")).status).toBe(401)
+    }
+    expect((await browser(`198.51.100.250, ${client}, 192.0.2.10`).passwordSignIn()).status).toBe(429)
+    expect((await browser(`203.0.113.6, 192.0.2.10`).passwordSignIn()).status).toBe(200)
+  })
+})
+
+describe("password, sessions and sign-out on Better Auth's routes", () => {
+  it("changes the password and signs out the other browsers in one step", async () => {
+    const a = browser()
+    const secret = await a.owner()
+    const b = browser()
+    await b.signIn(secret)
+    const changed = await a.call("POST", "/api/auth/change-password", {
+      body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new password", revokeOtherSessions: true },
     })
     expect(changed.status).toBe(200)
-    expect(await t.ctx.db.select().from(authVerification)).toHaveLength(0)
-    const before = (await sessions()).length
-    expect((await other.verify(totp(secret))).status).toBe(401)
-    expect((await sessions()).length).toBe(before)
-    expect((await api(other)).status).toBe(401)
-    expect((await api(desk)).status).toBe(200)
+    expect((await v1(a)).status).toBe(200)
+    expect((await v1(b)).status).toBe(401)
+    expect((await browser().passwordSignIn(TEST_USERNAME, TEST_PASSWORD)).status).toBe(401)
+    expect((await browser().passwordSignIn(TEST_USERNAME, "a brand new password")).json.twoFactorRedirect).toBe(true)
+    expect(await actions()).toContain("account.password_change")
   })
 
-  it("logs a failure inside Better Auth without its query, parameters or token, and answers a safe 500", async () => {
-    await browser().setup()
+  it("keeps the old password when the change fails after writing it (Drizzle with transaction: true)", async () => {
+    const a = browser()
+    await a.owner()
     await t.ctx.db.execute(
-      sql`alter table auth_session add constraint test_no_session check (token <> token) not valid`,
+      sql.raw("alter table auth_session add constraint test_no_session check (created_at < '2000-01-01') not valid"),
     )
-    // Every argument of every console method, and every raw write to stdout and stderr, serialized in full.
-    const output: string[] = []
-    const keep = (...args: unknown[]) =>
-      void output.push(args.map((arg) => inspect(arg, { depth: 10, showHidden: true })).join(" "))
-    const spies = (["error", "warn", "log", "info", "debug", "trace"] as const).map((method) =>
-      vi.spyOn(console, method).mockImplementation(keep),
-    )
-    const writes = [process.stdout, process.stderr].map((stream) =>
-      vi.spyOn(stream, "write").mockImplementation(((chunk: unknown) => {
-        output.push(String(chunk))
-        return true
-      }) as typeof stream.write),
-    )
-    let res: Awaited<ReturnType<TestBrowser["passwordSignIn"]>>
     try {
-      res = await browser("b").passwordSignIn()
-    } finally {
-      for (const spy of [...spies, ...writes]) spy.mockRestore()
-      vi.spyOn(console, "error").mockImplementation(() => {})
-      await t.ctx.db.execute(sql`alter table auth_session drop constraint if exists test_no_session`)
-    }
-    expect([res.status, res.json]).toEqual([500, { code: "internal_error", message: expect.any(String) }])
-    expect(output.length).toBeGreaterThan(0)
-    const logged = `${output.join("\n")}\n${JSON.stringify(res.json)}`
-    expect(logged).toContain('"sqlstate":"23514"')
-    for (const leak of [
-      /SERVER_ERROR/,
-      /insert into/i,
-      /auth_session/,
-      /params/i,
-      /parameters/i,
-      /failed query/i,
-      /test_no_session/,
-      /\$\d/,
-    ])
-      expect(logged).not.toMatch(leak)
-    // No value of the rows it tried to write: tokens and ids are long random strings.
-    expect(logged).not.toMatch(/[A-Za-z0-9]{32,}/)
-  })
-
-  it("survives the lock connection dying while the lock is held; the next request takes the lock", async () => {
-    const own = createDatabase(t.url)
-    const uncaught: unknown[] = []
-    const onUncaught = (error: unknown) => void uncaught.push(error)
-    process.on("uncaughtException", onUncaught)
-    process.on("unhandledRejection", onUncaught)
-    try {
-      build(own.lockAuth)
-      const secret = await browser().owner()
-      const unlock = (await own.lockAuth()).release
-      const holders = await t.ctx.db.execute<{ pid: number }>(sql`
-        select pid from pg_locks
-        where locktype = 'advisory' and granted and classid = 0 and objsubid = 1
-          and objid = ${sql.raw(String(AUTH_LOCK_KEY))}
-          and database = (select oid from pg_database where datname = current_database())`)
-      const [holder] = [...holders]
-      expect(holder?.pid).toBeGreaterThan(0)
-      // The server ends the backend that holds the lock, as a network drop or an administrator would.
-      await t.ctx.db.execute(sql`select pg_terminate_backend(${holder?.pid ?? 0})`)
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      // A controlled failure: the release says the lock was lost, and sends nothing to the dead connection.
-      await expect(unlock()).rejects.toMatchObject({ name: "AuthLockLost" })
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      expect(uncaught).toEqual([])
-      // The next auth request opens a new connection, takes the lock and succeeds.
-      await browser("next").signIn(secret)
-      expect(uncaught).toEqual([])
-    } finally {
-      process.off("uncaughtException", onUncaught)
-      process.off("unhandledRejection", onUncaught)
-      await own.close()
-    }
-  })
-
-  it("lists only the sessions the clocks allow, and the sweep ends one that expired silently", async () => {
-    const secret = await browser().owner()
-    const owner = browser()
-    await owner.signIn(secret)
-    const quiet = browser("quiet")
-    await quiet.signIn(secret)
-    await owner.call("PATCH", "/api/v1/settings", { body: { sessionIdle: true, sessionIdleMinutes: 5 } })
-    t.clock.travel(4 * 60_000)
-    await owner.call("POST", "/api/v1/session/activity")
-    t.clock.travel(2 * 60_000)
-    // The quiet browser went past its idle limit without another request; the owner kept working.
-    const list = await owner.call("GET", "/api/v1/account/sessions")
-    expect(list.json.data.sessions).toHaveLength(1)
-    expect(list.json.data.sessions[0].current).toBe(true)
-    const beforeSweep = await actions()
-    expect(await sweepSessions(t.ctx)).toEqual({ ended: 2, removed: 0 })
-    const ended = (await sessions()).filter((s) => s.endedReason)
-    expect(ended.map((s) => s.endedReason)).toEqual(["idle", "idle"])
-    expect((await actions()).length - beforeSweep.length).toBe(2)
-    expect((await api(quiet)).json.error).toMatchObject({ code: "session_ended", reason: "idle" })
-    expect((await api(owner)).status).toBe(200)
-  })
-
-  it("fails closed when the lock is lost during a sign-in and a reset runs before it is recorded", async () => {
-    const own = createDatabase(t.url)
-    let pause: (() => Promise<void>) | undefined
-    try {
-      build(own.lockAuth, {
-        beforeRecord: async (route) => {
-          if (route === "verify" && pause) await pause()
-        },
+      const failed = await a.call("POST", "/api/auth/change-password", {
+        body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new password", revokeOtherSessions: true },
       })
-      const secret = await browser().owner()
-      const hasher = await passwordHasher(core.auth)
-      const b = browser("b")
-      expect((await b.passwordSignIn()).json.twoFactorRedirect).toBe(true)
-      let resetPassword_: string | undefined
-      // Better Auth has created the session; before it is recorded, the lock's backend dies and a reset completes.
-      pause = async () => {
-        pause = undefined
-        const holders = await t.ctx.db.execute<{ pid: number }>(sql`
-          select pid from pg_locks
-          where locktype = 'advisory' and granted and classid = 0 and objsubid = 1
-            and objid = ${sql.raw(String(AUTH_LOCK_KEY))}
-            and database = (select oid from pg_database where datname = current_database())`)
-        const [holder] = [...holders]
-        await t.ctx.db.execute(sql`select pg_terminate_backend(${holder?.pid ?? 0})`)
-        resetPassword_ = (await resetPassword(t.ctx, hasher))?.password
-      }
-      const res = await b.verify(totp(secret))
-      expect(resetPassword_).toBeDefined()
-      expect([res.status, res.json.code]).toEqual([503, "busy"])
-      expect(res.setCookies.filter((c) => c.includes("session_token=") && !/max-age=0/i.test(c))).toEqual([])
-      expect(res.setCookies.some((c) => /session_token=;.*max-age=0/i.test(c))).toBe(true)
-      expect(await sessions()).toHaveLength(0)
-      expect((await api(b)).status).toBe(401)
-      // The reset's password works; the old one does not.
-      expect((await browser("old").passwordSignIn()).status).toBe(401)
-      const after = browser("after")
-      expect((await after.passwordSignIn("owner.name", resetPassword_)).status).toBe(200)
-      expect((await api(after)).json.error.code).toBe("totp_required")
+      expect(failed.status).toBe(500)
     } finally {
-      await own.close()
+      await t.ctx.db.execute(sql.raw("alter table auth_session drop constraint test_no_session"))
     }
+    expect((await browser().passwordSignIn(TEST_USERNAME, TEST_PASSWORD)).json.twoFactorRedirect).toBe(true)
+  })
+
+  it("lists, signs out the others and signs out everywhere, also in a session older than a day (freshAge 0)", async () => {
+    const a = browser()
+    const secret = await a.owner()
+    const b = browser()
+    await b.signIn(secret)
+    const c = browser()
+    await c.signIn(secret)
+    moveDate(2 * DAY)
+    const listed = await a.call("GET", "/api/auth/list-sessions")
+    expect(listed.status).toBe(200)
+    expect(listed.json).toHaveLength(3)
+    expect((await a.call("POST", "/api/auth/revoke-other-sessions", { body: {} })).status).toBe(200)
+    expect((await v1(b)).status).toBe(401)
+    expect((await v1(a)).status).toBe(200)
+    expect((await a.call("POST", "/api/auth/revoke-sessions", { body: {} })).status).toBe(200)
+    expect((await v1(a)).status).toBe(401)
+    expect(await sessions()).toHaveLength(0)
+    const ends = (await auditRows()).filter((r) => r.action === "session.end").map((r) => r.after)
+    expect(ends).toEqual([
+      { via: "revoke-other-sessions" },
+      { via: "revoke-other-sessions" },
+      { via: "revoke-sessions" },
+    ])
+  })
+
+  it("signs out and records it after the fact", async () => {
+    const b = browser()
+    await b.owner()
+    expect((await b.call("POST", "/api/auth/sign-out", { body: {} })).status).toBe(200)
+    expect((await v1(b)).status).toBe(401)
+    expect((await actions()).at(-1)).toBe("session.sign_out")
   })
 })
 
-describe("the auth epoch", () => {
-  /** Ends the backend that holds the auth lock, as a network drop or an administrator would. */
-  async function killLockBackend() {
-    const holders = await t.ctx.db.execute<{ pid: number }>(sql`
-      select pid from pg_locks
-      where locktype = 'advisory' and granted and classid = 0 and objsubid = 1
-        and objid = ${sql.raw(String(AUTH_LOCK_KEY))}
-        and database = (select oid from pg_database where datname = current_database())`)
-    const [holder] = [...holders]
-    expect(holder?.pid).toBeGreaterThan(0)
-    await t.ctx.db.execute(sql`select pg_terminate_backend(${holder?.pid ?? 0})`)
-  }
-  const liveSessionCookies = (cookies: string[]) =>
-    cookies.filter((c) => c.includes("session_token=") && !/max-age=0/i.test(c))
+describe("audit rows from the documented hooks, and their refusals", () => {
+  afterEach(acceptAudit)
 
-  it("an enrolment cut across by a reset leaves no usable session, and the next sign-in enrols again", async () => {
-    const own = createDatabase(t.url)
-    let pause: (() => Promise<void>) | undefined
+  it("a failing audit write refuses the password change, the 2FA change, sign-out of others and key creation", async () => {
+    const b = browser()
+    const secret = await b.owner()
+    const other = browser()
+    await other.signIn(secret)
+
+    await refuseAudit("account.password_change")
+    const password = await b.call("POST", "/api/auth/change-password", {
+      body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new password" },
+    })
+    expect(password.status).toBe(500)
+    expect((await browser().passwordSignIn()).json.twoFactorRedirect).toBe(true)
+    await acceptAudit()
+
+    await refuseAudit("account.totp_disable")
+    const disable = await b.call("POST", "/api/auth/two-factor/disable", { body: { password: TEST_PASSWORD } })
+    expect(disable.status).toBe(500)
+    expect((await owner())?.twoFactorEnabled).toBe(true)
+    expect(await t.ctx.db.select().from(authTwoFactor)).toHaveLength(1)
+    await acceptAudit()
+
+    await refuseAudit("session.end")
+    expect((await b.call("POST", "/api/auth/revoke-sessions", { body: {} })).status).toBe(500)
+    expect(await sessions()).toHaveLength(2)
+    await acceptAudit()
+
+    await refuseAudit("api_key.create")
+    expect((await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync" } })).status).toBe(500)
+    expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
+  })
+
+  it("a failing sign-out audit never leaves the session valid (the hook runs after the fact and never throws)", async () => {
+    const b = browser()
+    await b.owner()
+    await refuseAudit("session.sign_out")
+    expect((await b.call("POST", "/api/auth/sign-out", { body: {} })).status).toBe(200)
+    expect((await v1(b)).status).toBe(401)
+    expect(await sessions()).toHaveLength(0)
+  })
+
+  it("G5, accepted: a refused change after its row leaves the row (the audit is on Mikud's own connection)", async () => {
+    const b = browser()
+    await b.owner()
+    await t.ctx.db.execute(
+      sql.raw("alter table auth_session add constraint test_no_session check (created_at < '2000-01-01') not valid"),
+    )
     try {
-      build(own.lockAuth, undefined, async () => {
-        const run = pause
-        pause = undefined
-        await run?.()
+      await b.call("POST", "/api/auth/change-password", {
+        body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new password", revokeOtherSessions: true },
       })
+    } finally {
+      await t.ctx.db.execute(sql.raw("alter table auth_session drop constraint test_no_session"))
+    }
+    expect(await actions()).toContain("account.password_change")
+    expect((await browser().passwordSignIn(TEST_USERNAME, TEST_PASSWORD)).json.twoFactorRedirect).toBe(true)
+  })
+})
+
+describe("signing out after days without Mikud open (sliding expiresIn, deferSessionRefresh)", () => {
+  const expiry = async () => (await sessions())[0]?.expiresAt.getTime() ?? 0
+
+  it("never extends a session on a read; a POST /get-session does", async () => {
+    const b = browser()
+    await b.owner()
+    await b.call("POST", "/api/auth/revoke-other-sessions", { body: {} })
+    const start = await expiry()
+    moveDate(2 * HOUR)
+    const read = await b.call("GET", "/api/auth/get-session")
+    expect(read.json.needsRefresh).toBe(true)
+    await b.call("GET", "/api/auth/list-sessions")
+    await v1(b)
+    await core.auth.current.api.getSession({ headers: new Headers({ cookie: b.cookieHeader }) })
+    expect(await expiry()).toBe(start)
+    const refreshed = await b.call("POST", "/api/auth/get-session", { body: {} })
+    expect(refreshed.status).toBe(200)
+    expect(await expiry()).toBeGreaterThan(start + HOUR)
+  })
+
+  describe("through the real Node adapter (@hono/node-server), as the browser sends it", () => {
+    let server: ServerType
+    let base = ""
+    beforeEach(async () => {
+      server = serve({ fetch: (request) => app.fetch(request), port: 0, hostname: "127.0.0.1" })
+      await new Promise<void>((resolve) => server.once("listening", () => resolve()))
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    })
+    afterEach(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    })
+
+    it("the client's bodiless POST /get-session extends the session (the transport fix in app.ts)", async () => {
       const b = browser()
-      await b.setup()
-      const secret = await b.enable()
-      const hasher = await passwordHasher(core.auth)
-      let newPassword: string | undefined
-      // Inside Better Auth's verify: it has read the factor and is about to set twoFactorEnabled.
-      pause = async () => {
-        await killLockBackend()
-        newPassword = (await resetPassword(t.ctx, hasher))?.password
-      }
-      const res = await b.verify(totp(secret))
-      expect(newPassword).toBeDefined()
-      expect([res.status, res.json.code]).toEqual([503, "busy"])
-      expect(liveSessionCookies(res.setCookies)).toEqual([])
-      expect((await api(b)).status).toBe(401)
-      // The cut-across request set the flag after the reset removed the factor.
-      const [flagged] = await t.ctx.db.select().from(authUser)
-      expect(flagged?.twoFactorEnabled).toBe(true)
-      expect(await t.ctx.db.select().from(authTwoFactor).where(eq(authTwoFactor.verified, true))).toHaveLength(0)
-
-      // The next sign-in repairs the flag and enrols, instead of a challenge no code can answer.
-      const after = browser("after")
-      const signed = await after.passwordSignIn("owner.name", newPassword)
-      expect(signed.status).toBe(200)
-      expect(signed.json.twoFactorRedirect).toBeUndefined()
-      expect((await api(after)).json.error.code).toBe("totp_required")
-      expect(await actions()).toContain("auth.repair")
-      const fresh = await after.enable(newPassword)
-      expect((await after.verify(totp(fresh))).status).toBe(200)
-      expect((await api(after)).status).toBe(200)
-    } finally {
-      await own.close()
-    }
-  })
-
-  it("a reset that finishes between the lock check and the commit leaves no usable session", async () => {
-    const own = createDatabase(t.url)
-    let pause: (() => Promise<void>) | undefined
-    try {
-      build(own.lockAuth, {
-        insideRecord: async (route) => {
-          if (route !== "verify") return
-          const run = pause
-          pause = undefined
-          await run?.()
-        },
+      await b.owner()
+      await b.call("POST", "/api/auth/revoke-other-sessions", { body: {} })
+      await t.ctx.db.execute(
+        sql`update auth_session set expires_at = expires_at - interval '2 hours', updated_at = updated_at - interval '2 hours'`,
+      )
+      const start = await expiry()
+      // No body: fetch sends Content-Length: 0, and node-server still attaches an (empty) body stream.
+      const answer = await fetch(`${base}/api/auth/get-session`, {
+        method: "POST",
+        headers: { cookie: b.cookieHeader, origin: TEST_ORIGIN, "x-forwarded-for": nextIp() },
       })
-      const secret = await browser().owner()
-      const hasher = await passwordHasher(core.auth)
-      const b = browser("b")
-      expect((await b.passwordSignIn()).json.twoFactorRedirect).toBe(true)
-      let newPassword: string | undefined
-      pause = async () => {
-        await killLockBackend()
-        newPassword = (await resetPassword(t.ctx, hasher))?.password
-      }
-      const res = await b.verify(totp(secret))
-      expect(newPassword).toBeDefined()
-      expect([res.status, res.json.code]).toEqual([503, "busy"])
-      expect(liveSessionCookies(res.setCookies)).toEqual([])
-      expect((await api(b)).status).toBe(401)
-      // No success was recorded: the only sign-in in the log is the setup's.
-      expect((await actions()).filter((a) => a === "session.sign_in")).toHaveLength(1)
-      expect((await browser("old").passwordSignIn()).status).toBe(401)
-      const after = browser("after")
-      expect((await after.passwordSignIn("owner.name", newPassword)).status).toBe(200)
-      expect((await api(after)).json.error.code).toBe("totp_required")
-    } finally {
-      await own.close()
-    }
+      expect(answer.status).toBe(200)
+      expect(((await answer.json()) as { session?: unknown }).session).toBeTruthy()
+      expect(await expiry()).toBeGreaterThan(start + HOUR)
+    })
+
+    it("a request with a real body keeps Better Auth's own Content-Type checks", async () => {
+      await browser().owner()
+      const ip = nextIp()
+      const asText = await fetch(`${base}/api/auth/sign-in/username`, {
+        method: "POST",
+        headers: { "content-type": "text/plain", origin: TEST_ORIGIN, "x-forwarded-for": ip },
+        body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD }),
+      })
+      expect(asText.status).toBe(415)
+      const untyped = await fetch(`${base}/api/auth/sign-in/username`, {
+        method: "POST",
+        headers: { origin: TEST_ORIGIN, "x-forwarded-for": ip },
+        body: new Blob([JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD })]),
+      })
+      expect(untyped.status).toBe(415)
+      const asJson = await fetch(`${base}/api/auth/sign-in/username`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: TEST_ORIGIN, "x-forwarded-for": ip },
+        body: JSON.stringify({ username: TEST_USERNAME, password: TEST_PASSWORD }),
+      })
+      expect(asJson.status).toBe(200)
+      expect(((await asJson.json()) as { twoFactorRedirect?: boolean }).twoFactorRedirect).toBe(true)
+    })
   })
 
-  it("refuses a session whose epoch is stale, everywhere a session is accepted", async () => {
+  it("lets Mikud's own polling alone run out: the session ends after the set days", async () => {
+    const b = browser()
+    await b.owner()
+    for (let day = 1; day <= 31; day++) {
+      vi.useFakeTimers({ toFake: ["Date"] })
+      vi.setSystemTime(Date.now() + DAY)
+      await v1(b, "/morning")
+    }
+    expect((await v1(b)).status).toBe(401)
+  })
+
+  it("applies a new length by swapping the instance live; requests in flight finish", async () => {
+    const b = browser()
+    const secret = await b.owner()
+    const inFlight = browser().signIn(secret)
+    const before = core.auth.current
+    await b.call("PATCH", "/api/v1/settings", { body: { sessionIdleDays: 10 } })
+    expect(core.auth.current).not.toBe(before)
+    expect(core.auth.settings.sessionIdleDays).toBe(10)
+    await inFlight
+    // A new sign-in gets the new length.
+    const c = browser()
+    await c.signIn(secret)
+    const newest = (await sessions()).sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime())[0]
+    const left = (newest?.expiresAt.getTime() ?? 0) - Date.now()
+    expect(left).toBeGreaterThan(10 * DAY - HOUR)
+    expect(left).toBeLessThanOrEqual(10 * DAY + 1000)
+  })
+
+  it("G2: a shorter length applies only once the time left falls under it minus updateAge", async () => {
+    const b = browser()
+    await b.owner()
+    await b.call("POST", "/api/auth/revoke-other-sessions", { body: {} })
+    const start = await expiry()
+    expect(start - Date.now()).toBeGreaterThan(29 * DAY)
+    core.auth.apply({ sessionIdleDays: 10, otpViaTelegram: false })
+    const refresh = () => b.call("POST", "/api/auth/get-session", { body: {} })
+    await refresh()
+    expect(await expiry()).toBe(start)
+    // 10 days left: not yet (the refresh needs expiresIn - updateAge, 10 days less one hour, or less left).
+    moveDate(20 * DAY)
+    await refresh()
+    expect(await expiry()).toBe(start)
+    vi.useRealTimers()
+    // A minute past the boundary: the session gets the new length from now.
+    moveDate(20 * DAY + HOUR + 60_000)
+    await refresh()
+    const now = Date.now()
+    expect((await expiry()) - now).toBeGreaterThan(10 * DAY - 60_000)
+    expect((await expiry()) - now).toBeLessThanOrEqual(10 * DAY + 1000)
+  })
+})
+
+describe("agent keys (Better Auth's api-key plugin)", () => {
+  it("creates mkd_ keys from a signed-in browser with two-factor, refuses another prefix, revokes by deleting", async () => {
+    const b = browser()
+    await b.owner()
+    const created = await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync" } })
+    expect(created.status).toBe(200)
+    expect(created.json.key).toMatch(/^mkd_[A-Za-z]{64}$/)
+    const prefixed = await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", prefix: "xyz_" } })
+    expect([prefixed.status, prefixed.json.code]).toEqual([400, "INVALID_KEY_PREFIX"])
+    const [stored] = await t.ctx.db.select().from(authApiKey)
+    expect(stored?.key).not.toBe(created.json.key)
+    expect(stored?.start).toBe(created.json.key.slice(0, 6))
+    expect(stored?.rateLimitEnabled).toBe(false)
+
+    const key = created.json.key as string
+    const agent = await app.request("/api/v1/session", { headers: { authorization: `Bearer ${key}` } })
+    expect(((await agent.json()) as { data: { actor: unknown } }).data.actor).toEqual({ kind: "agent", label: "agent" })
+    // Never a session: Better Auth does not take it as one.
+    const asSession = await app.request("/api/auth/get-session", {
+      headers: { authorization: `Bearer ${key}`, "x-api-key": key },
+    })
+    expect(await asSession.json()).toBeNull()
+    // Many verifications in a row: the plugin's own limit (10 a day by default) is off.
+    for (let i = 0; i < 12; i++)
+      expect((await app.request("/api/v1/projects", { headers: { authorization: `Bearer ${key}` } })).status).toBe(200)
+
+    const listed = await b.call("GET", "/api/auth/api-key/list")
+    expect(listed.json.apiKeys ?? listed.json).toHaveLength(1)
+    expect((await b.call("POST", "/api/auth/api-key/delete", { body: { keyId: stored?.id } })).status).toBe(200)
+    expect((await app.request("/api/v1/projects", { headers: { authorization: `Bearer ${key}` } })).status).toBe(401)
+    expect((await actions()).filter((a) => a.startsWith("api_key."))).toEqual(["api_key.create", "api_key.delete"])
+  })
+
+  it("never lets a session stand in for a key: MCP and sync pushes refuse a cookie", async () => {
+    const b = browser()
+    await b.owner()
+    const mcp = await b.call("POST", "/mcp", {
+      body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      headers: { accept: "application/json, text/event-stream" },
+    })
+    expect(mcp.status).toBe(401)
+    const snapshot = { collectedAt: new Date().toISOString(), projects: [], threads: [] }
+    expect((await b.call("POST", "/api/v1/sync/t3", { body: snapshot })).status).toBe(403)
+  })
+
+  it("G18, accepted: an account without two-factor cannot create keys, but a leftover password-only session can later", async () => {
+    const setupTab = browser()
+    await setupTab.setup()
+    const early = browser()
+    await early.passwordSignIn()
+    const refused = await early.call("POST", "/api/auth/api-key/create", { body: { name: "early" } })
+    expect([refused.status, refused.json.code]).toEqual([403, "TOTP_REQUIRED"])
+    const { secret } = await setupTab.enable()
+    await setupTab.verify(totp(secret))
+    // The setup page's revokeOtherSessions did not run (G7(b)): the old session now passes the account check.
+    const later = await early.call("POST", "/api/auth/api-key/create", { body: { name: "early" } })
+    expect(later.status).toBe(200)
+    // A key outlives "Sign out everywhere".
+    await setupTab.call("POST", "/api/auth/revoke-sessions", { body: {} })
+    const key = later.json.key as string
+    expect((await app.request("/api/v1/projects", { headers: { authorization: `Bearer ${key}` } })).status).toBe(200)
+  })
+})
+
+describe("recovery: the CLI runs Better Auth's documented reset", () => {
+  it("sets a new password, ends every session, keeps two-factor, and the reset routes stay closed over HTTP", async () => {
+    const b = browser()
+    const secret = await b.owner()
+    const other = browser()
+    await other.signIn(secret)
+    const result = await resetOwnerPassword({
+      ...testAuthBase(t, new URL(TEST_ORIGIN)),
+      sessionIdleDays: (await getSettings(t.ctx.db)).sessionIdleDays,
+    })
+    expect(result?.username).toBe("owner.name")
+    expect(await sessions()).toHaveLength(0)
+    expect((await owner())?.twoFactorEnabled).toBe(true)
+    expect((await browser().passwordSignIn()).status).toBe(401)
+    const fresh = browser()
+    await fresh.signIn(secret, TEST_USERNAME, result?.password)
+    expect((await v1(fresh)).status).toBe(200)
+    const rows = (await auditRows()).filter((r) => r.source === "cli")
+    expect(rows.map((r) => [r.action, r.actorLabel])).toEqual([
+      ["session.end", "cli"],
+      ["session.end", "cli"],
+      ["account.password_reset", "cli"],
+    ])
+    expect(
+      (await browser().call("POST", "/api/auth/request-password-reset", { body: { email: ownerEmail("owner.name") } }))
+        .status,
+    ).toBe(404)
+  })
+
+  it("G3, accepted: a challenge opened before the reset can still be finished within its 180 seconds", async () => {
     const secret = await browser().owner()
-    const b = browser("b")
+    const attacker = browser()
+    expect((await attacker.passwordSignIn()).json.twoFactorRedirect).toBe(true)
+    await resetOwnerPassword({ ...testAuthBase(t, new URL(TEST_ORIGIN)), sessionIdleDays: 30 })
+    expect((await attacker.verify(totp(secret))).status).toBe(200)
+  })
+
+  it("answers null without an owner", async () => {
+    expect(await resetOwnerPassword({ ...testAuthBase(t, new URL(TEST_ORIGIN)), sessionIdleDays: 30 })).toBeNull()
+  })
+})
+
+describe("secrets and logging", () => {
+  it("still verifies TOTP after rotating to 2:new,1:old", async () => {
+    const secret = await browser().owner()
+    const rotated = ["new", "auth", "secret", "for", "tests", "only", "0000000"].join("-")
+    build({
+      auth: {
+        secrets: [
+          { version: 2, value: rotated },
+          { version: 1, value: TEST_AUTH_SECRET },
+        ],
+      },
+    })
+    const b = browser()
     await b.signIn(secret)
-    expect((await api(b)).status).toBe(200)
-    await t.ctx.db.update(authUser).set({ authEpoch: sql`${authUser.authEpoch} + 1` })
-    expect((await api(b)).json.error.code).toBe("unauthorized")
-    expect((await b.call("GET", "/api/auth/get-session")).json).toBeNull()
-    expect((await api(b, "/api/setup/status")).json.data).toEqual({ hasUser: true, session: "none" })
-    expect((await b.call("POST", "/api/v1/account/sessions/end-others")).status).toBe(401)
-    // A browser that signs in now gets the current epoch, and lists only itself.
-    const fresh = browser("fresh")
-    await fresh.signIn(secret)
-    const list = await fresh.call("GET", "/api/v1/account/sessions")
-    expect(list.json.data.sessions).toHaveLength(1)
-    expect(list.json.data.sessions[0].current).toBe(true)
+    expect((await v1(b)).status).toBe(200)
+  })
+
+  it("logs a failed sign-in's database error without its query, parameters or token", async () => {
+    await browser().enrolledOwner()
+    await t.ctx.db.execute(sql`delete from auth_two_factor`)
+    await t.ctx.db.execute(sql`update auth_user set two_factor_enabled = false`)
+    await t.ctx.db.execute(
+      sql.raw("alter table auth_session add constraint test_no_session check (created_at < '2000-01-01') not valid"),
+    )
+    const lines: string[] = []
+    const spies = [
+      vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => void lines.push(args.map(String).join(" "))),
+      vi
+        .spyOn(console, "error")
+        .mockImplementation((...args: unknown[]) => void lines.push(args.map(String).join(" "))),
+      vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => void lines.push(args.map(String).join(" "))),
+    ]
+    try {
+      const answer = await browser().passwordSignIn()
+      expect([answer.status, answer.json?.error?.code]).toEqual([500, "internal_error"])
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+      await t.ctx.db.execute(sql.raw("alter table auth_session drop constraint test_no_session"))
+    }
+    const logged = lines.join("\n")
+    expect(logged).toContain('"sqlstate":"23514"')
+    expect(logged).not.toMatch(/insert into|params|owner\.name|correct horse/i)
+    expect(inspect(logged)).not.toContain(TEST_PASSWORD)
   })
 })

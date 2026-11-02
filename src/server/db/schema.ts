@@ -14,14 +14,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
-import {
-  SESSION_IDLE_MINUTES_DEFAULT,
-  SESSION_IDLE_MINUTES_MAX,
-  SESSION_IDLE_MINUTES_MIN,
-  SESSION_MAX_DAYS_DEFAULT,
-  SESSION_MAX_DAYS_MAX,
-  SESSION_MAX_DAYS_MIN,
-} from "../../shared/auth.ts"
+import { SESSION_IDLE_DAYS_DEFAULT, SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 import {
   ACTOR_KINDS,
   AUDIT_SOURCES,
@@ -317,11 +310,16 @@ export const settings = pgTable(
     dateFormat: text("date_format").notNull().default("dd/MM/yyyy"),
     timeFormat: text("time_format").notNull().default("HH:mm"),
     language: text("language", { enum: LANGUAGES }).notNull().default("he"),
-    /** A browser session ends this many days after sign-in. */
-    sessionMaxDays: integer("session_max_days").notNull().default(SESSION_MAX_DAYS_DEFAULT),
-    /** When on, a session also ends after sessionIdleMinutes without real input. */
-    sessionIdle: boolean("session_idle").notNull().default(false),
-    sessionIdleMinutes: integer("session_idle_minutes").notNull().default(SESSION_IDLE_MINUTES_DEFAULT),
+    /** Better Auth's sliding session.expiresIn: a browser is signed out after this many days without a refresh. */
+    sessionIdleDays: integer("session_idle_days").notNull().default(SESSION_IDLE_DAYS_DEFAULT),
+    /** Better Auth's two-factor OTP, sent to the owner's Telegram chat: another way in, off by default. */
+    otpViaTelegram: boolean("otp_via_telegram").notNull().default(false),
+    /** Encrypted with MIKUD_SETTINGS_KEYS (settings/crypto.ts); MIKUD_TELEGRAM_BOT_TOKEN overrides it. */
+    telegramBotTokenEnc: text("telegram_bot_token_enc"),
+    /** MIKUD_TELEGRAM_CHAT_ID overrides it. */
+    telegramChatId: text("telegram_chat_id"),
+    /** MIKUD_PRIVATE_DOMAINS overrides it. */
+    privateDomains: text("private_domains").array().notNull().default(sql`'{}'::text[]`),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
@@ -329,13 +327,10 @@ export const settings = pgTable(
     check("settings_closed_item_days_check", sql`${t.closedItemDays} between 1 and 365`),
     check("settings_language_check", oneOf("language", LANGUAGES)),
     check(
-      "settings_session_max_days_check",
-      sql.raw(`"session_max_days" between ${SESSION_MAX_DAYS_MIN} and ${SESSION_MAX_DAYS_MAX}`),
+      "settings_session_idle_days_check",
+      sql.raw(`"session_idle_days" between ${SESSION_IDLE_DAYS_MIN} and ${SESSION_IDLE_DAYS_MAX}`),
     ),
-    check(
-      "settings_session_idle_minutes_check",
-      sql.raw(`"session_idle_minutes" between ${SESSION_IDLE_MINUTES_MIN} and ${SESSION_IDLE_MINUTES_MAX}`),
-    ),
+    check("settings_telegram_chat_id_check", sql.raw(`"telegram_chat_id" ~ '^-?[0-9]{1,20}$'`)),
   ],
 )
 
@@ -362,26 +357,25 @@ export const audit = pgTable(
 )
 
 // --- Better Auth (property names are Better Auth's field names) ---
-// One user, the owner. Better Auth writes these tables itself on sign-in, enrolment and sign-out; Mikud's
-// services write them for setup, the password change, ending sessions and the recovery CLI.
+// Only Better Auth writes these tables (src/server/auth/auth.ts maps its models onto them). One user, the owner.
 
-export const authUser = pgTable("auth_user", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  emailVerified: boolean("email_verified").notNull().default(false),
-  image: text("image"),
-  username: text("username").unique(),
-  displayUsername: text("display_username"),
-  twoFactorEnabled: boolean("two_factor_enabled").default(false),
-  /**
-   * Incremented by every credentials reset (the recovery CLI). A session is valid only while its auth_epoch equals
-   * this, so a session issued by a request that started before a reset is dead whatever the timing.
-   */
-  authEpoch: integer("auth_epoch").notNull().default(0),
-  createdAt: createdAt(),
-  updatedAt: at("updated_at").notNull().defaultNow(),
-})
+export const authUser = pgTable(
+  "auth_user",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    emailVerified: boolean("email_verified").notNull().default(false),
+    image: text("image"),
+    username: text("username").unique(),
+    displayUsername: text("display_username"),
+    twoFactorEnabled: boolean("two_factor_enabled").default(false),
+    createdAt: createdAt(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  // One owner: the database refuses a second row too, so two racing sign-ups create one owner.
+  () => [uniqueIndex("auth_user_single_owner").on(sql`(true)`)],
+)
 
 export const authSession = pgTable(
   "auth_session",
@@ -396,18 +390,6 @@ export const authSession = pgTable(
       .references(() => authUser.id, { onDelete: "cascade" }),
     createdAt: createdAt(),
     updatedAt: at("updated_at").notNull().defaultNow(),
-    // The session clocks (services/session-policy.ts). Better Auth neither knows nor returns these columns.
-    /** When the owner signed in: the maximum length counts from here. A replacement session keeps it. */
-    authenticatedAt: at("authenticated_at").notNull().defaultNow(),
-    /** The last real input the page reported: the idle limit counts from here. Polling never moves it. */
-    activeAt: at("active_at").notNull().defaultNow(),
-    /** The owner's auth_epoch when Mikud recorded this session. Null until then: such a session is not valid. */
-    authEpoch: integer("auth_epoch"),
-    /** When this session proved the TOTP code. Null until then: the API refuses it with totp_required. */
-    twoFactorAt: at("two_factor_at"),
-    /** Why the clocks ended it (max, idle); every request after that is answered session_ended. */
-    endedReason: text("ended_reason"),
-    endedAt: at("ended_at"),
   },
   (t) => [index("auth_session_user_idx").on(t.userId)],
 )
@@ -457,4 +439,51 @@ export const authTwoFactor = pgTable(
     lockedUntil: at("locked_until"),
   },
   (t) => [index("auth_two_factor_secret_idx").on(t.secret), index("auth_two_factor_user_idx").on(t.userId)],
+)
+
+/** Better Auth's rate limiter (rateLimit.storage "database"): one row per address and route. */
+export const authRateLimit = pgTable("auth_rate_limit", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  count: integer("count").notNull(),
+  lastRequest: bigint("last_request", { mode: "number" }).notNull(),
+})
+
+/**
+ * Agent keys of the @better-auth/api-key plugin (model `apikey`). `key` is the SHA-256 hash of the key, `start` its
+ * first characters for display. Mikud does not use the plugin's limits, refills, permissions or metadata.
+ */
+export const authApiKey = pgTable(
+  "auth_api_key",
+  {
+    id: text("id").primaryKey(),
+    configId: text("config_id").notNull().default("default"),
+    name: text("name"),
+    start: text("start"),
+    referenceId: text("reference_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    prefix: text("prefix"),
+    key: text("key").notNull(),
+    refillInterval: integer("refill_interval"),
+    refillAmount: integer("refill_amount"),
+    lastRefillAt: at("last_refill_at"),
+    enabled: boolean("enabled").default(true),
+    rateLimitEnabled: boolean("rate_limit_enabled").default(true),
+    rateLimitTimeWindow: integer("rate_limit_time_window").default(86_400_000),
+    rateLimitMax: integer("rate_limit_max").default(10),
+    requestCount: integer("request_count").default(0),
+    remaining: integer("remaining"),
+    lastRequest: at("last_request"),
+    expiresAt: at("expires_at"),
+    createdAt: at("created_at").notNull(),
+    updatedAt: at("updated_at").notNull(),
+    permissions: text("permissions"),
+    metadata: text("metadata"),
+  },
+  (t) => [
+    index("auth_api_key_config_id_idx").on(t.configId),
+    index("auth_api_key_reference_id_idx").on(t.referenceId),
+    index("auth_api_key_key_idx").on(t.key),
+  ],
 )

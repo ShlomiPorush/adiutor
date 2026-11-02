@@ -1,9 +1,10 @@
-// Sign-in against the real server: the first-run setup with mandatory TOTP, a wrong password, and sign-in with
-// a self-computed RFC 6238 code that returns to the page asked for. Each project stores its signed-in browser
-// for ui.spec.ts. The first project to run creates the owner; the other finds it and signs in.
+// Sign-in against the real server, on Better Auth's routes: the first-run setup with mandatory TOTP and the backup
+// codes shown once, a wrong password, sign-in with a self-computed RFC 6238 code that returns to the page asked for,
+// and sign-in with a backup code. Each project stores its signed-in browser for the next spec files. The desktop
+// project creates the owner; the phone finds it and signs in.
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
-import { PASSWORD, saveState, signIn, storageFile, totpSecret, USERNAME } from "./helpers.ts"
+import { nextBackupCode, PASSWORD, saveState, signIn, storageFile, totpSecret, USERNAME } from "./helpers.ts"
 import { freshTotp } from "./totp.ts"
 
 test.describe.configure({ mode: "serial" })
@@ -17,7 +18,7 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
   page = await (await browser.newContext({ ...testInfo.project.use })).newPage()
 })
 
-test("the first run creates the owner, requires TOTP, and returns to the page asked for", async () => {
+test("the first run creates the owner, requires TOTP, shows the backup codes once, and returns to the page", async () => {
   await page.goto("/settings")
   const status = await page.evaluate(async () => (await (await fetch("/api/setup/status")).json()).data)
   test.skip(status.hasUser, "the owner exists already (created by the other project)")
@@ -39,6 +40,15 @@ test("the first run creates the owner, requires TOTP, and returns to the page as
   expect(refused).toBe(403)
 
   await page.getByLabel(he.auth.code, { exact: true }).fill(await freshTotp(secret))
+  // The backup codes, once: Continue waits for "I saved them".
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(he.setup.codesTitle)
+  const codes = (await page.getByTestId("backup-codes").locator("li").allInnerTexts()).map((c) => c.trim())
+  expect(codes).toHaveLength(10)
+  saveState({ backupCodes: codes, usedCodes: 0 })
+  const continueButton = page.getByRole("button", { name: he.setup.continue })
+  await expect(continueButton).toBeDisabled()
+  await page.getByLabel(he.backupCodes.saved).check()
+  await continueButton.click()
   await expect(page).toHaveURL(/\/settings$/)
   await expect(page.locator("#account")).toContainText(USERNAME.toLowerCase())
 
@@ -75,4 +85,24 @@ test("signing in with the password and the code returns to the page asked for", 
     })
   })
   await page.context().storageState({ path: storageFile(test.info().project.name) })
+})
+
+test("a backup code signs in once, on a fresh browser", async ({ browser }, testInfo) => {
+  const code = nextBackupCode()
+  test.skip(!code, "no backup code was saved in this run")
+  const fresh = await (await browser.newContext({ ...testInfo.project.use })).newPage()
+  try {
+    await fresh.goto("/login")
+    await fresh.getByLabel(he.auth.username, { exact: true }).fill(USERNAME)
+    await fresh.getByLabel(he.auth.password, { exact: true }).fill(PASSWORD)
+    await fresh.getByRole("button", { name: he.login.submit }).click()
+    await expect(fresh.getByRole("heading", { level: 1 })).toHaveText(he.login.codeTitle)
+    await fresh.getByRole("button", { name: he.login.useBackup }).click()
+    await fresh.getByLabel(he.auth.backupCode, { exact: true }).fill(code ?? "")
+    await fresh.getByRole("button", { name: he.login.verify, exact: true }).click()
+    await expect(fresh).toHaveURL(/\/$/)
+    expect(await fresh.evaluate(async () => (await fetch("/api/v1/session")).status)).toBe(200)
+  } finally {
+    await fresh.context().close()
+  }
 })

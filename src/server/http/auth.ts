@@ -1,13 +1,10 @@
-import { createHash, timingSafeEqual } from "node:crypto"
 import type { Context } from "hono"
 import { getCookie, setCookie } from "hono/cookie"
 import { createMiddleware } from "hono/factory"
-import type { Auth as BetterAuth } from "../auth/auth.ts"
-import type { ServerConfig } from "../config.ts"
+import type { AuthHolder } from "../auth/auth.ts"
 import { AppError, forbidden } from "../errors.ts"
 import { ensureBrowser } from "../services/account.ts"
 import type { Actor, By, Ctx } from "../services/context.ts"
-import { checkSession, type SessionStatus } from "../services/session-policy.ts"
 
 /** Names the browser for "new since your last visit". Not a credential: it never authenticates. */
 export const BROWSER_COOKIE = "mikud_browser"
@@ -17,17 +14,17 @@ export const REQUEST_HEADER = "x-mikud-request"
 export const AGENT_LABEL_HEADER = "x-mikud-agent"
 
 export type Auth =
-  | { actor: Actor; via: "token" }
-  | { actor: Actor; via: "session"; sessionId: string; browserId: string; status: SessionStatus }
+  | { actor: Actor; via: "token"; keyId: string }
+  | { actor: Actor; via: "session"; sessionId: string; browserId: string; expiresAt: Date }
 export type Env = { Variables: { auth: Auth } }
 
 export type AuthDeps = {
   ctx: Ctx
-  config: Pick<ServerConfig, "ownerToken" | "agentToken" | "publicUrl">
-  /** Better Auth: the owner's browser sessions. */
-  auth: BetterAuth
+  config: { publicUrl: URL }
+  /** Better Auth: the owner's browser sessions and the agent keys. */
+  auth: AuthHolder
   limiter: RateLimiter
-  /** The client's address, for the rate limits. */
+  /** The client's address, for the failed-key limit. */
   clientIp: (c: Context) => string
 }
 
@@ -37,17 +34,7 @@ export function byOf(c: Context<Env>, source?: By["source"]): By {
   return { actor: auth.actor, source: source ?? (auth.via === "session" ? "ui" : "api") }
 }
 
-const digest = (text: string) => createHash("sha256").update(text).digest()
-
-/** Which token this is, compared in constant time on SHA-256 digests (both are always compared). */
-export function tokenKind(token: string, config: AuthDeps["config"]): "owner" | "agent" | null {
-  const given = digest(token)
-  const owner = timingSafeEqual(given, digest(config.ownerToken))
-  const agent = timingSafeEqual(given, digest(config.agentToken))
-  return owner ? "owner" : agent ? "agent" : null
-}
-
-/** Failed token attempts per client in a fixed window. In memory: a restart forgets them. */
+/** Failed key attempts per client in a fixed window. In memory: a restart forgets them. */
 export class RateLimiter {
   private readonly hits = new Map<string, { count: number; start: number }>()
 
@@ -79,7 +66,7 @@ export class RateLimiter {
 }
 
 const rateLimited = () => new AppError("rate_limited", "Too many failed attempts. Wait a minute and try again.")
-const unauthorized = (message = "Sign in, or send a valid token.") => new AppError("unauthorized", message)
+const unauthorized = (message = "Sign in, or send a valid key.") => new AppError("unauthorized", message)
 
 /**
  * Browser state-changing requests must name themselves with X-Mikud-Request: 1 and come from the
@@ -99,9 +86,11 @@ function agentLabel(c: Context): string {
 }
 
 /**
- * Authenticates a request: `Authorization: Bearer <owner or agent token>`, or (when allowed) the owner's
- * browser session (Better Auth), which must be live under the clocks and have proved TOTP. A session never
- * stands in for a token where a token is required. Failed token attempts count toward the rate limit.
+ * Authenticates a request: `Authorization: Bearer <agent key>` (Better Auth's api-key plugin, verified with the
+ * server-only verifyApiKey), or (when allowed) the owner's browser session (Better Auth's getSession, which never
+ * extends it: deferSessionRefresh). Better Auth has no option that requires two-factor, so a session counts only when
+ * the account has two-factor on; otherwise the answer is `totp_required` and the UI shows enrolment. A key never
+ * becomes a session and a session never stands in for a key. Failed keys count toward the rate limit.
  */
 export function authenticate(deps: AuthDeps, options: { allowSession: boolean }) {
   return createMiddleware<Env>(async (c, next) => {
@@ -110,27 +99,19 @@ export function authenticate(deps: AuthDeps, options: { allowSession: boolean })
     const header = c.req.header("authorization")
     if (header !== undefined) {
       const match = /^Bearer\s+(\S+)\s*$/i.exec(header)
-      const kind = match?.[1] ? tokenKind(match[1], deps.config) : null
-      if (!kind) {
+      const result = match?.[1] ? await deps.auth.current.api.verifyApiKey({ body: { key: match[1] } }) : null
+      if (!result?.valid || !result.key) {
         deps.limiter.fail(ip)
-        throw unauthorized("The token is not valid.")
+        throw unauthorized("The key is not valid.")
       }
-      c.set("auth", {
-        actor: kind === "owner" ? { kind: "owner", label: "owner" } : { kind: "agent", label: agentLabel(c) },
-        via: "token",
-      })
+      c.set("auth", { actor: { kind: "agent", label: agentLabel(c) }, via: "token", keyId: result.key.id })
       return next()
     }
-    if (!options.allowSession) throw unauthorized("A valid token is required.")
-    const found = await deps.auth.api.getSession({ headers: c.req.raw.headers })
+    if (!options.allowSession) throw unauthorized("A valid key is required.")
+    const found = await deps.auth.current.api.getSession({ headers: c.req.raw.headers })
     if (!found) throw unauthorized()
-    const check = await checkSession(deps.ctx, found.session.id, "check")
-    if (!check.ok) {
-      if (check.reason === "revoked") throw unauthorized()
-      throw new AppError("session_ended", "Your session ended. Sign in again.", { reason: check.reason })
-    }
-    if (!check.session.twoFactorAt)
-      throw new AppError("totp_required", "Enter the code from your authenticator app to finish signing in.")
+    if (found.user.twoFactorEnabled !== true)
+      throw new AppError("totp_required", "Set up two-factor authentication to use Mikud.")
     if (!SAFE_METHODS.has(c.req.method)) checkBrowserRequest(c, deps.config.publicUrl)
     const browser = await ensureBrowser(deps.ctx, getCookie(c, BROWSER_COOKIE))
     if (browser.created)
@@ -141,18 +122,19 @@ export function authenticate(deps: AuthDeps, options: { allowSession: boolean })
         path: "/",
         maxAge: BROWSER_COOKIE_MAX_AGE,
       })
+    const user = found.user as { username?: string | null; name: string }
     c.set("auth", {
-      actor: { kind: "owner", label: check.session.username },
+      actor: { kind: "owner", label: user.username ?? user.name },
       via: "session",
-      sessionId: check.session.id,
+      sessionId: found.session.id,
       browserId: browser.id,
-      status: check.session.status,
+      expiresAt: new Date(found.session.expiresAt),
     })
     return next()
   })
 }
 
-/** Refuses anything but the owner (the owner token or the owner's session). */
+/** Refuses anything but the owner's signed-in browser. */
 export const requireOwnerAuth = createMiddleware<Env>(async (c, next) => {
   if (c.get("auth").actor.kind !== "owner") throw forbidden("Only the owner can do this.")
   return next()

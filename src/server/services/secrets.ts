@@ -75,6 +75,8 @@ const BASE_RULES: Rule[] = [
     group: 1,
     accept: (m) => !isPlaceholder(m[1] ?? ""),
   },
+  // Mikud's own agent keys (Better Auth's api-key plugin: mkd_ and 64 letters).
+  { name: "agent_key", pattern: /\bmkd_[A-Za-z]{64}(?![A-Za-z0-9_])/g },
   { name: "github_token", pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})\b/g },
   { name: "anthropic_key", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
   { name: "openai_key", pattern: /\bsk-(?!ant-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}/g },
@@ -175,4 +177,25 @@ function toMatch(args: unknown[]): RegExpMatchArray {
   const groupsAtEnd = typeof last === "object" && last !== null
   const end = args.length - (groupsAtEnd ? 3 : 2)
   return args.slice(0, end) as unknown as RegExpMatchArray
+}
+
+/** A scanner whose private domains change at run time: Settings replaces them after a save, without a restart. */
+export class ReloadableSecretScanner implements SecretScanner {
+  private inner: SecretScanner
+
+  constructor(privateDomains: readonly string[] = []) {
+    this.inner = createSecretScanner(privateDomains)
+  }
+
+  setPrivateDomains(privateDomains: readonly string[]): void {
+    this.inner = createSecretScanner(privateDomains)
+  }
+
+  find(text: string): string | null {
+    return this.inner.find(text)
+  }
+
+  redact(text: string): string {
+    return this.inner.redact(text)
+  }
 }

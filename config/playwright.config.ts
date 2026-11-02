@@ -7,6 +7,9 @@ import { defineConfig, devices } from "@playwright/test"
 // Playwright image on the verification stack's network, with E2E_TARGET=mikud:8080; e2e/global-setup.ts
 // then forwards 127.0.0.1:8090 (the stack's MIKUD_PUBLIC_URL) to it, so the browser's Origin passes the
 // server's CSRF check. Without E2E_TARGET the tests use the development stack (scripts/local.sh).
+// Better Auth keys its rate limits on X-Forwarded-For (no proxy trusted in these stacks): each project sends its own
+// documentation address, so the two projects never share a sign-in budget. The phone runs after the desktop, which
+// creates the owner.
 export default defineConfig({
   testDir: fileURLToPath(new URL("../e2e", import.meta.url)),
   globalSetup: fileURLToPath(new URL("../e2e/global-setup.ts", import.meta.url)),
@@ -23,7 +26,18 @@ export default defineConfig({
     screenshot: "off",
   },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
-    { name: "phone", use: { ...devices["Pixel 7"] } },
+    {
+      name: "desktop",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 900 },
+        extraHTTPHeaders: { "x-forwarded-for": "198.51.100.11" },
+      },
+    },
+    {
+      name: "phone",
+      dependencies: ["desktop"],
+      use: { ...devices["Pixel 7"], extraHTTPHeaders: { "x-forwarded-for": "198.51.100.12" } },
+    },
   ],
 })

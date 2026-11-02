@@ -1,7 +1,7 @@
 // The mock API: the routes of docs/api.md over the invented data in fixtures.ts, held in memory.
 // Loaded only when VITE_MIKUD_MOCK=1 (development and screenshots); the production build drops it.
-// The mock is always signed in with TOTP; the sign-in pages need the real server. Ending the other sessions
-// is kept in sessionStorage across reloads.
+// The mock is always signed in with two-factor; the sign-in pages need the real server. Better Auth's routes
+// are answered by mock/auth.ts over the same state. Ending the other sessions is kept in sessionStorage.
 
 import type { ItemStatus, Stage } from "../../../shared/enums.ts"
 import type { TransportRequest, TransportResponse } from "../client.ts"
@@ -9,11 +9,13 @@ import type { AuditEntry, Item, ItemSummary, Morning, ProjectListEntry, Security
 import { ago, createState, type MockState, uuid } from "./fixtures.ts"
 
 const state: MockState = createState()
-const ENDED_OTHERS_KEY = "mikud.mock.endedOthers"
+/** The same state for mock/auth.ts. */
+export const mockState = state
+export const ENDED_OTHERS_KEY = "mikud.mock.endedOthers"
 const DELAY_MS = 120
 const STALE_MS = 26 * 3_600_000
 
-function endedOthers(): boolean {
+export function endedOthers(): boolean {
   try {
     return state.endedOthers || sessionStorage.getItem(ENDED_OTHERS_KEY) === "1"
   } catch {
@@ -241,27 +243,8 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
       actor: { kind: "owner", label: "owner" },
       via: "session",
       browserId: state.browserId,
-      clocks: { max: { remainingSec: state.settings.sessionMaxDays * 86_400 - 3_600 }, idle: null },
+      expiresAt: state.sessions[0]?.expiresAt ?? null,
     })
-  if (head === "session" && id === "activity")
-    return ok({ clocks: { max: { remainingSec: state.settings.sessionMaxDays * 86_400 - 3_600 }, idle: null } })
-  if (head === "account" && id === "sessions" && !sub)
-    return ok({ username: "owner", sessions: endedOthers() ? state.sessions.filter((s) => s.current) : state.sessions })
-  if (head === "account" && id === "sessions" && sub === "end-others") {
-    state.endedOthers = true
-    try {
-      sessionStorage.setItem(ENDED_OTHERS_KEY, "1")
-    } catch {
-      // Storage blocked: for this page only.
-    }
-    return ok({ ended: state.sessions.length - 1 })
-  }
-  if (head === "account" && id === "sessions" && sub === "end-all") return ok({ ended: state.sessions.length })
-  if (head === "account" && id === "password") {
-    if (body.currentPassword !== "correct horse battery staple")
-      return fail(400, "wrong_password", "The current password is not right.")
-    return ok({ endedSessions: state.sessions.length - 1 })
-  }
   if (head === "morning") return ok(morning())
   if (head === "visits") return ok({ at: new Date().toISOString(), previous: state.previousVisit }, 201)
 
@@ -478,7 +461,15 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
   if (head === "settings" && method === "GET") return ok(state.settings)
   if (head === "settings" && method === "PATCH") {
     const before = { ...state.settings }
-    Object.assign(state.settings, body, { updatedAt: new Date().toISOString() })
+    const { telegramBotToken, telegramChatId, privateDomains, ...plain } = body
+    Object.assign(state.settings, plain, { updatedAt: new Date().toISOString() })
+    const tg = state.settings.telegram
+    if (telegramBotToken !== undefined) tg.botToken = { ...tg.botToken, set: telegramBotToken !== null, readable: true }
+    if (telegramChatId !== undefined) tg.chatId = { ...tg.chatId, value: (telegramChatId as string | null) ?? null }
+    tg.missing = [...(tg.botToken.set ? [] : ["botToken" as const]), ...(tg.chatId.value ? [] : ["chatId" as const])]
+    tg.state = tg.missing.length === 0 ? "on" : tg.missing.length === 2 ? "off" : "incomplete"
+    if (tg.state === "off") tg.missing = []
+    if (privateDomains !== undefined) state.settings.privateDomains.value = privateDomains as string[]
     record("settings.update", "settings", state.settings.id, before, { ...state.settings })
     return ok(state.settings)
   }

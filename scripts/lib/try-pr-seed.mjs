@@ -1,10 +1,11 @@
 // Seeds a pull request stack (scripts/try-pr.sh) through the HTTP API. First the owner, as the first-run setup
-// does it from the browser: the setup API with a generated password, then TOTP enrolment; the username, password
-// and TOTP secret go to MIKUD_OWNER_FILE (0600) and are never printed. Then invented fixtures with the agent
-// token only, so the board has something to show: projects from a T3 snapshot, items in every status, goals, a
-// stage proposal, security sources, comments and an inbox item.
-// Reads MIKUD_URL, MIKUD_ORIGIN (the stack's public URL, for the CSRF check), MIKUD_OWNER_FILE and
-// MIKUD_AGENT_TOKEN from the environment. Never prints a token, password or secret.
+// does it from the browser, on Better Auth's routes: sign-up with a generated password, TOTP enrolment, then an
+// agent key (api-key plugin). The username, password, TOTP secret, backup codes and agent key go to
+// MIKUD_OWNER_FILE (0600) and are never printed. Then invented fixtures with that agent key only, so the board has
+// something to show: projects from a T3 snapshot, items in every status, goals, a stage proposal, security sources,
+// comments and an inbox item.
+// Reads MIKUD_URL, MIKUD_ORIGIN (the stack's public URL, for the origin check) and MIKUD_OWNER_FILE from the
+// environment. Never prints a key, password or secret.
 
 import { createHmac, randomBytes } from "node:crypto"
 import { writeFileSync } from "node:fs"
@@ -12,9 +13,8 @@ import { writeFileSync } from "node:fs"
 const base = process.env.MIKUD_URL
 const origin = process.env.MIKUD_ORIGIN
 const ownerFile = process.env.MIKUD_OWNER_FILE
-const token = process.env.MIKUD_AGENT_TOKEN
-if (!base || !origin || !ownerFile || !token) {
-  console.error("MIKUD_URL, MIKUD_ORIGIN, MIKUD_OWNER_FILE and MIKUD_AGENT_TOKEN are required")
+if (!base || !origin || !ownerFile) {
+  console.error("MIKUD_URL, MIKUD_ORIGIN and MIKUD_OWNER_FILE are required")
   process.exit(2)
 }
 
@@ -41,7 +41,6 @@ async function page(path, body) {
     headers: {
       "content-type": "application/json",
       origin,
-      "x-mikud-request": "1",
       cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join("; "),
     },
     body: JSON.stringify(body),
@@ -58,11 +57,18 @@ async function page(path, body) {
 
 const username = "owner"
 const password = randomBytes(18).toString("base64url")
-const setup = await page("/api/setup/account", { username, password })
-if (!setup?.data?.signedIn) throw new Error("setup created the owner but did not sign in")
-const { totpURI } = await page("/api/auth/two-factor/enable", { password })
+await page("/api/auth/sign-up/email", {
+  name: username,
+  // The synthetic e-mail of src/shared/auth.ts (ownerEmail): the lowercased username in hex.
+  email: `u-${Buffer.from(username.toLowerCase(), "utf8").toString("hex")}@mikud.local`,
+  username,
+  displayUsername: username,
+  password,
+})
+const { totpURI, backupCodes } = await page("/api/auth/two-factor/enable", { password })
 const totpSecret = new URL(totpURI).searchParams.get("secret")
 await page("/api/auth/two-factor/verify-totp", { code: totp(totpSecret) })
+const { key: token } = await page("/api/auth/api-key/create", { name: "try-pr seed" })
 writeFileSync(
   ownerFile,
   [
@@ -70,13 +76,16 @@ writeFileSync(
     `MIKUD_OWNER_USERNAME=${username}`,
     `MIKUD_OWNER_PASSWORD=${password}`,
     `MIKUD_OWNER_TOTP_SECRET=${totpSecret}`,
+    `MIKUD_OWNER_BACKUP_CODES=${backupCodes.join(",")}`,
+    "# An agent key (Settings, Agent access) for the API and MCP: Authorization: Bearer <key>.",
+    `MIKUD_AGENT_KEY=${token}`,
     "",
   ].join("\n"),
   { mode: 0o600 },
 )
-console.log("    owner created with TOTP; sign-in written to the owner file")
+console.log("    owner created with TOTP and an agent key; both written to the owner file")
 
-// --- Fixtures, with the agent token ---
+// --- Fixtures, with the agent key ---
 
 const now = Date.now()
 const ago = (hours) => new Date(now - hours * 3_600_000).toISOString()

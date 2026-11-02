@@ -1,13 +1,12 @@
 import { getConnInfo } from "@hono/node-server/conninfo"
 import { type Context, Hono } from "hono"
+import { bodyLimit } from "hono/body-limit"
 import { HTTPException } from "hono/http-exception"
-import type { Auth } from "./auth/auth.ts"
+import type { AuthHolder } from "./auth/auth.ts"
 import type { ServerConfig } from "./config.ts"
-import type { AuthLock } from "./db/client.ts"
 import { AppError, errorBody } from "./errors.ts"
-import { apiRoutes } from "./http/api.ts"
+import { apiRoutes, type SettingsHandle } from "./http/api.ts"
 import { RateLimiter } from "./http/auth.ts"
-import { type AuthTestHooks, authGuard } from "./http/auth-guard.ts"
 import { setupRoutes } from "./http/setup.ts"
 import { errorFacts, log } from "./log.ts"
 import { mcpRoutes } from "./mcp/server.ts"
@@ -21,17 +20,13 @@ export type AppDeps = {
   /** The API and MCP; without them only /healthz is served (unit tests of the health check). */
   core?: {
     ctx: Ctx
-    config: Pick<ServerConfig, "ownerToken" | "agentToken" | "publicUrl" | "version">
-    /** Better Auth: the owner's browser sign-in. */
-    auth: Auth
-    /** Takes the auth lock for one state-changing /api/auth request (Database.lockAuth). */
-    lockAuth: () => Promise<AuthLock>
-    /** Tests only: pause points around recording a state-changing /api/auth request. */
-    authTestHooks?: AuthTestHooks
-    /** Failed token attempts: 10 a minute per address. */
+    config: Pick<ServerConfig, "publicUrl" | "version">
+    /** Better Auth: the owner's sign-in, sessions and agent keys. */
+    auth: AuthHolder
+    /** The owner's settings that the environment may set, and how a save takes effect. */
+    settings: SettingsHandle
+    /** Failed agent keys: 10 a minute per address. */
     limiter?: RateLimiter
-    /** Sign-in, TOTP, setup and password attempts: 5 per 5 minutes per route and address. */
-    attempts?: RateLimiter
     clientIp?: (c: Context) => string
     /** The bot, for the status route; off when absent. */
     telegram?: TelegramRuntime
@@ -40,10 +35,7 @@ export type AppDeps = {
   web?: { root: string }
 }
 
-/**
- * The socket's address, never a forwarding header (which a client can forge). Behind the proxy every client
- * shares the proxy's address: the rate limits are then one bucket for everyone, which fails safe for one owner.
- */
+/** The socket's address: the key of Mikud's own limit on failed agent keys (Better Auth limits its own routes). */
 function socketAddress(c: Context): string {
   try {
     return getConnInfo(c).remote.address ?? "unknown"
@@ -51,6 +43,30 @@ function socketAddress(c: Context): string {
     return "unknown"
   }
 }
+
+/**
+ * A transport fix, not a Better Auth change: a request without content reaches Better Auth with a null body.
+ * - Better Auth's client sends its session refresh (`POST /get-session`, after `needsRefresh`) without a body
+ *   (better-auth `client/session-atom.mjs`).
+ * - @hono/node-server attaches a body stream to every request that is not GET or HEAD, even an empty one
+ *   (`@hono/node-server` `dist/index.mjs`, its request builder).
+ * - better-call's `getBody` then requires a Content-Type for any request whose body is not null and answers 415
+ *   (better-call `dist/utils.mjs`, `getBody`).
+ * Only a request that is not GET or HEAD, has `Content-Length: 0` and no `Transfer-Encoding` is rebuilt with the same
+ * URL, method, headers and signal; everything else passes through unchanged, so a real body still gets Better
+ * Auth's own Content-Type checks. Remove when upstream sends no body for empty requests.
+ */
+export function withoutEmptyBody(raw: Request): Request {
+  const empty =
+    raw.method !== "GET" &&
+    raw.method !== "HEAD" &&
+    raw.headers.get("content-length") === "0" &&
+    !raw.headers.has("transfer-encoding")
+  return empty ? new Request(raw.url, { method: raw.method, headers: raw.headers, signal: raw.signal }) : raw
+}
+
+/** Better Auth's routes take small JSON bodies only. */
+const AUTH_BODY_LIMIT = 16 * 1024
 
 export function createApp(deps: AppDeps) {
   const app = new Hono()
@@ -62,31 +78,24 @@ export function createApp(deps: AppDeps) {
   })
 
   if (deps.core) {
-    const { ctx, config } = deps.core
-    const clientIp = deps.core.clientIp ?? socketAddress
-    const attempts = deps.core.attempts ?? new RateLimiter(5, 300_000)
+    const { ctx, config, auth } = deps.core
     const shared = {
       ctx,
       config,
-      auth: deps.core.auth,
+      auth,
       limiter: deps.core.limiter ?? new RateLimiter(),
-      attempts,
-      clientIp,
+      clientIp: deps.core.clientIp ?? socketAddress,
       version: config.version,
       telegram: deps.core.telegram,
+      settings: deps.core.settings,
     }
-    const guard = {
-      ctx,
-      auth: deps.core.auth,
-      publicUrl: config.publicUrl,
-      attempts,
-      clientIp,
-      lockAuth: deps.core.lockAuth,
-      testHooks: deps.core.authTestHooks,
-    }
-    app.on(["GET", "POST"], "/api/auth/*", authGuard(guard))
-    app.all("/api/auth/*", (c) => c.json({ code: "not_found", message: "Nothing is here." }, 404))
-    app.route("/api/setup", setupRoutes(guard))
+    // Better Auth as it is: its own handler, read from the holder on each request (Settings may rebuild it).
+    app.use(
+      "/api/auth/*",
+      bodyLimit({ maxSize: AUTH_BODY_LIMIT, onError: (c) => c.json({ message: "Too large" }, 413) }),
+    )
+    app.on(["GET", "POST"], "/api/auth/*", (c) => auth.current.handler(withoutEmptyBody(c.req.raw)))
+    app.route("/api/setup", setupRoutes({ ctx, auth }))
     app.route("/api/v1", apiRoutes(shared))
     app.route("/mcp", mcpRoutes(shared))
   }

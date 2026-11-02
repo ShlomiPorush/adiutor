@@ -3,24 +3,26 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { betterAuth } from "better-auth"
+import { drizzleAdapter } from "better-auth/adapters/drizzle"
+import { twoFactor, username } from "better-auth/plugins"
 import postgres from "postgres"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
-import { createAuth } from "../auth/auth.ts"
-import { RateLimiter } from "../http/auth.ts"
-import { createSecretScanner } from "../services/secrets.ts"
-import { TEST_AUTH_SECRET } from "../testing/app.ts"
-import { TestBrowser } from "../testing/browser.ts"
+import { ReloadableSecretScanner } from "../services/secrets.ts"
+import { TEST_AUTH_SECRET, testCore } from "../testing/app.ts"
+import { TEST_ORIGIN, TEST_PASSWORD, TestBrowser } from "../testing/browser.ts"
+import type { TestDatabase } from "../testing/db.ts"
+import { totp } from "../testing/totp.ts"
 import { createDatabase, type Database } from "./client.ts"
+import { authAccount, authSession, authTwoFactor, authUser, authVerification } from "./schema.ts"
 
-// The upgrade from the schema on main before sign-in (migrations 0000 to 0002, browsers paired with a device
-// cookie) to Better Auth: invented data survives, the old device cookie is refused, setup runs once, and the
-// agent token and the sync work unchanged.
+// The upgrade from the schema on main before this change (migrations 0000 to 0004: Better Auth behind Mikud's wrapper,
+// with per-session TOTP proof and the auth epoch) to Better Auth as it documents itself: invented data survives, every
+// session ends once (G14), a second sign-up is refused, and the TOTP secret encrypted with MIKUD_AUTH_SECRET still
+// verifies through Better Auth's legacy `secret` fallback.
 
-const OWNER = "owner-token-for-tests-only-000000000000"
-const AGENT = "agent-token-for-tests-only-000000000000"
-const ORIGIN = "http://127.0.0.1:8090"
-const BEFORE_AUTH = 3 // migrations 0000_initial, 0001_job-skipped, 0002_morning-covers-until
+const BEFORE = 5 // migrations 0000 to 0004
 
 const migrations = fileURLToPath(new URL("../../../drizzle", import.meta.url))
 let admin: postgres.Sql
@@ -29,19 +31,20 @@ let url: string
 let database: Database
 let oldFolder: string
 
-/** The migrations folder as it was on main before sign-in. */
-function folderBeforeAuth(): string {
+/** The migrations folder as it was on main before this change. */
+function folderBefore(): string {
   const dir = mkdtempSync(join(tmpdir(), "mikud-upgrade-"))
   cpSync(migrations, dir, { recursive: true })
   const journalPath = join(dir, "meta", "_journal.json")
   const journal = JSON.parse(readFileSync(journalPath, "utf8")) as { entries: { idx: number; tag: string }[] }
-  for (const entry of journal.entries.filter((e) => e.idx >= BEFORE_AUTH)) rmSync(join(dir, `${entry.tag}.sql`))
-  journal.entries = journal.entries.filter((e) => e.idx < BEFORE_AUTH)
+  for (const entry of journal.entries.filter((e) => e.idx >= BEFORE)) rmSync(join(dir, `${entry.tag}.sql`))
+  journal.entries = journal.entries.filter((e) => e.idx < BEFORE)
   writeFileSync(journalPath, JSON.stringify(journal))
   return dir
 }
 
 beforeAll(async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {})
   const adminUrl = process.env.MIKUD_TEST_DATABASE_URL
   if (!adminUrl) throw new Error("MIKUD_TEST_DATABASE_URL is required (scripts/verify.sh sets it)")
   admin = postgres(adminUrl, { max: 1, onnotice: () => {} })
@@ -51,98 +54,97 @@ beforeAll(async () => {
   u.pathname = `/${name}`
   url = u.toString()
   database = createDatabase(url)
-  oldFolder = folderBeforeAuth()
+  oldFolder = folderBefore()
 })
 afterAll(async () => {
   await database?.close()
   await admin?.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`)
   await admin?.end()
   if (oldFolder) rmSync(oldFolder, { recursive: true, force: true })
+  vi.restoreAllMocks()
 })
 
-describe("upgrading a database from before sign-in", () => {
-  it("keeps the data, refuses the old device cookie, runs setup once, and serves agents and the sync", async () => {
+describe("upgrading a database from Better Auth behind the wrapper", () => {
+  it("keeps the data, ends every session once, does not carry session_max_days over (idle days start at 30), refuses a second owner, and still reads the TOTP secret", async () => {
     await database.migrate(oldFolder)
     const sql = postgres(url, { max: 1, onnotice: () => {} })
-    const deviceSecret = "old-device-secret-from-pairing-000000000000"
     try {
-      const [device] = await sql`
-        insert into devices (secret_hash, label, last_seen_at)
-        values (encode(sha256(${deviceSecret}::bytea), 'hex'), 'Phone', now()) returning id`
-      await sql`insert into devices (secret_hash, label, revoked_at) values ('ended-hash', 'Old desktop', now())`
-      await sql`insert into visits (device_id, at) values (${device?.id}, now() - interval '1 hour')`
       const [project] =
         await sql`insert into projects (name, slug) values ('Lantern Garden', 'lantern-garden') returning id`
       await sql`
         insert into items (project_id, type, status, title, status_set_by, created_by)
         values (${project?.id}, 'task', 'todo', 'Sketch the plant card', 'owner', 'owner')`
-      await sql`
-        insert into audit (actor_kind, actor_label, action, entity_type, entity_id, source)
-        values ('owner', 'device:Phone', 'device.pair', 'device', ${device?.id}, 'ui')`
+      await sql`insert into settings (id, session_max_days) values (1, 14)
+        on conflict (id) do update set session_max_days = 14`
     } finally {
       await sql.end()
     }
+
+    // The owner as the old server created it: Better Auth with only the legacy `secret` (MIKUD_AUTH_SECRET).
+    const legacy = betterAuth({
+      secret: TEST_AUTH_SECRET,
+      baseURL: TEST_ORIGIN,
+      basePath: "/api/auth",
+      trustedOrigins: [TEST_ORIGIN],
+      telemetry: { enabled: false },
+      logger: { level: "error" },
+      rateLimit: { enabled: false },
+      database: drizzleAdapter(database.db, {
+        provider: "pg",
+        schema: {
+          user: authUser,
+          session: authSession,
+          account: authAccount,
+          verification: authVerification,
+          twoFactor: authTwoFactor,
+        },
+      }),
+      emailAndPassword: { enabled: true, minPasswordLength: 12 },
+      plugins: [username(), twoFactor({ issuer: "Mikud" })],
+    })
+    const old = new TestBrowser((request) => legacy.handler(request), TEST_ORIGIN, {
+      "x-forwarded-for": "198.51.100.7",
+    })
+    expect((await old.setup()).status).toBe(200)
+    const { secret } = await old.enable()
+    expect((await old.verify(totp(secret))).status).toBe(200)
 
     await database.migrate(migrations)
 
     const after = postgres(url, { max: 1, onnotice: () => {} })
     try {
-      const devices = await after`select id, label, revoked_at from devices order by label`
-      expect(devices.map((d) => d.label)).toEqual(["Old desktop", "Phone"])
-      const columns = await after`select column_name from information_schema.columns where table_name = 'devices'`
-      expect(columns.map((c) => c.column_name)).not.toContain("secret_hash")
-      const [visit] = await after`select device_id from visits`
-      expect(visit?.device_id).toBe(devices.find((d) => d.label === "Phone")?.id)
       expect((await after`select title from items`).map((i) => i.title)).toEqual(["Sketch the plant card"])
-      expect((await after`select action from audit`).map((a) => a.action)).toEqual(["device.pair"])
+      expect(await after`select id from auth_session`).toHaveLength(0)
+      const columns = await after`
+        select table_name, column_name from information_schema.columns
+        where table_name in ('auth_session', 'auth_user', 'settings')`
+      const names = columns.map((c) => `${c.table_name}.${c.column_name}`)
+      for (const gone of ["auth_session.two_factor_at", "auth_session.auth_epoch", "auth_user.auth_epoch"])
+        expect(names).not.toContain(gone)
+      // Not carried over: the old session_max_days (14 here) is dropped, and the idle days start at the default 30.
+      const [settings] = await after`select session_idle_days, private_domains, otp_via_telegram from settings`
+      expect(settings).toEqual({ session_idle_days: 30, private_domains: [], otp_via_telegram: false })
     } finally {
       await after.end()
     }
 
-    const ctx = { db: database.db, secrets: createSecretScanner([]), clock: () => new Date() }
-    const publicUrl = new URL(ORIGIN)
-    const app = createApp({
-      checkDatabase: async () => true,
-      core: {
-        ctx,
-        config: { ownerToken: OWNER, agentToken: AGENT, publicUrl, version: "test" },
-        auth: createAuth({ db: database.db, secret: TEST_AUTH_SECRET, publicUrl }),
-        lockAuth: database.lockAuth,
-        limiter: new RateLimiter(10, 60_000),
-        attempts: new RateLimiter(5, 300_000),
-      },
+    // The new server: MIKUD_AUTH_SECRETS with a new current secret, MIKUD_AUTH_SECRET kept as the legacy fallback.
+    const t = { ctx: { db: database.db, secrets: new ReloadableSecretScanner(), clock: () => new Date() } }
+    const newSecret = ["upgraded", "auth", "secret", "for", "tests", "only", "00"].join("-")
+    const core = testCore(t as unknown as TestDatabase, {
+      config: { publicUrl: new URL(TEST_ORIGIN), version: "test" },
+      auth: { secrets: [{ version: 2, value: newSecret }], legacySecret: TEST_AUTH_SECRET },
     })
-
-    // The paired browser's cookie means nothing now: it has to sign in.
-    const old = await app.request("/api/v1/session", { headers: { cookie: `mikud_device=${deviceSecret}` } })
-    expect(old.status).toBe(401)
-
-    // Setup runs once.
-    const status = await app.request("/api/setup/status")
-    expect(((await status.json()) as { data: unknown }).data).toEqual({ hasUser: false, session: "none" })
-    const owner = new TestBrowser((request) => app.fetch(request))
-    await owner.owner("owner")
-    expect((await owner.call("GET", "/api/v1/session")).status).toBe(200)
-    expect((await new TestBrowser((request) => app.fetch(request)).setup("second")).status).toBe(409)
-
-    // Agents and the sync are unchanged.
-    const bearer = { authorization: `Bearer ${AGENT}`, "content-type": "application/json" }
-    const created = await app.request("/api/v1/items", {
-      method: "POST",
-      headers: bearer,
-      body: JSON.stringify({ type: "idea", title: "Water the seedlings" }),
-    })
-    expect(created.status).toBe(201)
-    const sync = await app.request("/api/v1/sync/t3", {
-      method: "POST",
-      headers: bearer,
-      body: JSON.stringify({
-        collectedAt: new Date().toISOString(),
-        projects: [{ t3ProjectId: "demo-lantern", title: "Lantern Garden" }],
-        threads: [],
-      }),
-    })
-    expect(sync.status).toBe(200)
-    expect(((await sync.json()) as { data: { outcome: string } }).data.outcome).toBe("succeeded")
+    const app = createApp({ checkDatabase: async () => true, core })
+    const b = new TestBrowser((request) => app.fetch(request), TEST_ORIGIN, { "x-forwarded-for": "198.51.100.8" })
+    // The old cookie is gone with its session.
+    b.cookies.clear()
+    for (const [k, v] of old.cookies) b.cookies.set(k, v)
+    expect((await b.call("GET", "/api/v1/session")).status).toBe(401)
+    b.cookies.clear()
+    const second = await b.setup("second")
+    expect([second.status, second.json.code]).toEqual([403, "ALREADY_SET_UP"])
+    await b.signIn(secret, "Owner.Name", TEST_PASSWORD)
+    expect((await b.call("GET", "/api/v1/session")).status).toBe(200)
   })
 })

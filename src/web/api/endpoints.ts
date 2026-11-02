@@ -4,7 +4,6 @@
 import type { Stage } from "../../shared/enums.ts"
 import { query, request } from "./client.ts"
 import type {
-  Account,
   AuditEntry,
   Comment,
   Item,
@@ -18,7 +17,6 @@ import type {
   ProjectListEntry,
   ProjectPatch,
   Session,
-  SessionClocks,
   Settings,
   SettingsPatch,
   SetupStatus,
@@ -44,16 +42,7 @@ const id = (value: string) => encodeURIComponent(value)
 
 export const api = {
   session: () => data<Session>("GET", "/session"),
-  /** Real input on the page: restarts the idle clock. */
-  activity: () => data<{ clocks: SessionClocks }>("POST", "/session/activity", {}),
   setupStatus: () => data<SetupStatus>("GET", "/api/setup/status"),
-  setupAccount: (username: string, password: string) =>
-    data<{ username: string; signedIn: boolean }>("POST", "/api/setup/account", { username, password }),
-  account: () => data<Account>("GET", "/account/sessions"),
-  changePassword: (currentPassword: string, newPassword: string) =>
-    data<{ endedSessions: number }>("POST", "/account/password", { currentPassword, newPassword }),
-  endOtherSessions: () => data<{ ended: number }>("POST", "/account/sessions/end-others", {}),
-  endAllSessions: () => data<{ ended: number }>("POST", "/account/sessions/end-all", {}),
 
   morning: () => data<Morning>("GET", "/morning"),
   /** The morning view with a fixed "new since" boundary: the morning page keeps its first read's. */
@@ -115,6 +104,8 @@ export const qk = {
   syncRuns: ["sync-runs"] as const,
   telegram: ["telegram"] as const,
   setupStatus: ["setup-status"] as const,
+  /** Better Auth's list of this owner's browsers. */
   account: ["account"] as const,
+  agentKeys: ["agent-keys"] as const,
   suppressions: ["suppressions"] as const,
 }

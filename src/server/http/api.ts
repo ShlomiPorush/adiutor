@@ -18,19 +18,18 @@ import {
   updateProjectBody,
   visitBody,
 } from "../../shared/api.ts"
-import { changePasswordBody } from "../../shared/auth.ts"
 import { itemStatusSchema, itemTypeSchema } from "../../shared/enums.ts"
-import { passwordHasher } from "../auth/auth.ts"
-import { cookieNames } from "../auth/cookies.ts"
-import { AppError, forbidden, invalid, notFound } from "../errors.ts"
+import { forbidden, invalid, notFound } from "../errors.ts"
 import { sendTestMorningMessage } from "../jobs/morning.ts"
-import { changePassword, endAllSessions, endOtherSessions, listSessions } from "../services/account.ts"
 import {
   getSettings,
   listSuppressions,
   previousVisit,
   recordVisit,
   removeSuppression,
+  type SettingsEnv,
+  type SettingsRow,
+  settingsView,
   updateSettings,
 } from "../services/admin.ts"
 import { addComment, captureItem, createItem, deleteItem, linkThread, updateItem } from "../services/items.ts"
@@ -45,11 +44,13 @@ import {
   morning,
   projectDetail,
 } from "../services/reads.ts"
-import { checkSession } from "../services/session-policy.ts"
 import { applySecuritySnapshot, applyT3Snapshot, recentSyncRuns } from "../services/sync.ts"
 import { startThread } from "../services/threads.ts"
 import { TELEGRAM_OFF, type TelegramRuntime, telegramStatus } from "../telegram/status.ts"
-import { type Auth, type AuthDeps, authenticate, byOf, type Env, type RateLimiter, requireOwnerAuth } from "./auth.ts"
+import { type AuthDeps, authenticate, byOf, type Env, requireOwnerAuth } from "./auth.ts"
+
+/** The settings that hold secrets or may be set by the environment, and how a save takes effect without a restart. */
+export type SettingsHandle = { env: SettingsEnv; apply(row: SettingsRow): Promise<void> }
 
 /** Parses and validates a JSON body; anything else is `validation_failed` with the issues. */
 async function body<T>(c: Context, schema: z.ZodType<T>): Promise<T> {
@@ -115,19 +116,12 @@ const auditQuery = z.object({
 })
 const versionQuery = z.object({ version: z.coerce.number().int().min(1).optional() })
 
-/** The owner's signed-in browser session; tokens are refused. */
-function requireSession(c: Context<Env>): Extract<Auth, { via: "session" }> {
-  const auth = c.get("auth")
-  if (auth.via !== "session") throw forbidden("Only a signed-in browser can do this.")
-  return auth
-}
-
 /** Sync pushes come from the sync tool with a token, never from a browser. */
 function requireToken(c: Context<Env>) {
-  if (c.get("auth").via !== "token") throw forbidden("Sync data is pushed with a token.")
+  if (c.get("auth").via !== "token") throw forbidden("Sync data is pushed with an agent key.")
 }
 
-export function apiRoutes(deps: AuthDeps & { version: string; telegram?: TelegramRuntime; attempts: RateLimiter }) {
+export function apiRoutes(deps: AuthDeps & { version: string; telegram?: TelegramRuntime; settings: SettingsHandle }) {
   const { ctx } = deps
   const api = new Hono<Env>()
 
@@ -138,9 +132,8 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
 
   api.use("*", authenticate(deps, { allowSession: true }))
 
-  // --- Session, account and visits ---
-  api.use("/session/*", noStore)
-  api.use("/account/*", noStore)
+  // --- Session and visits ---
+  api.use("/session", noStore)
   api.get("/session", (c) => {
     const auth = c.get("auth")
     return c.json({
@@ -148,40 +141,9 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
         actor: auth.actor,
         via: auth.via,
         browserId: auth.via === "session" ? auth.browserId : null,
-        clocks: auth.via === "session" ? auth.status : null,
+        expiresAt: auth.via === "session" ? auth.expiresAt : null,
       },
     })
-  })
-  // Real input on the page (keys, pointer, wheel, touch), sent at most every 30 seconds: restarts the idle clock.
-  api.post("/session/activity", async (c) => {
-    const auth = requireSession(c)
-    const check = await checkSession(ctx, auth.sessionId, "activity")
-    if (!check.ok) throw new AppError("session_ended", "Your session ended. Sign in again.", { reason: check.reason })
-    return c.json({ data: { clocks: check.session.status } })
-  })
-  api.get("/account/sessions", async (c) => {
-    const auth = requireSession(c)
-    return c.json({ data: { username: auth.actor.label, sessions: await listSessions(ctx, auth.sessionId) } })
-  })
-  api.post("/account/password", async (c) => {
-    const auth = requireSession(c)
-    const key = `password:${deps.clientIp(c)}`
-    if (deps.attempts.blocked(key))
-      throw new AppError("rate_limited", "Too many attempts. Wait a few minutes and try again.")
-    deps.attempts.fail(key)
-    const input = await body(c, changePasswordBody)
-    return c.json({ data: await changePassword(ctx, await passwordHasher(deps.auth), auth.sessionId, input) })
-  })
-  api.post("/account/sessions/end-others", async (c) => {
-    const auth = requireSession(c)
-    return c.json({ data: { ended: await endOtherSessions(ctx, auth.sessionId) } })
-  })
-  api.post("/account/sessions/end-all", async (c) => {
-    const auth = requireSession(c)
-    const ended = await endAllSessions(ctx, auth.sessionId)
-    const response = c.json({ data: { ended } })
-    for (const cookie of (await cookieNames(deps.auth)).clearing) response.headers.append("set-cookie", cookie)
-    return response
   })
   api.get("/morning", async (c) => {
     const { since } = query(c, morningQuery)
@@ -260,8 +222,16 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   )
 
   // --- Owner only: settings, suppressions ---
-  api.get("/settings", requireOwnerAuth, async (c) => c.json({ data: await getSettings(ctx.db) }))
-  api.patch("/settings", async (c) => c.json({ data: await updateSettings(ctx, byOf(c), await body(c, settingsBody)) }))
+  api.use("/settings", noStore)
+  api.get("/settings", requireOwnerAuth, async (c) =>
+    c.json({ data: settingsView(await getSettings(ctx.db), deps.settings.env) }),
+  )
+  api.patch("/settings", async (c) => {
+    const row = await updateSettings(ctx, byOf(c), await body(c, settingsBody), deps.settings.env)
+    // After the commit: the Better Auth instance, the bot and the secret check pick up what changed.
+    await deps.settings.apply(row)
+    return c.json({ data: settingsView(row, deps.settings.env) })
+  })
   api.get("/suppressions", async (c) => c.json({ data: await listSuppressions(ctx, byOf(c)) }))
   api.delete("/suppressions/:id", async (c) => {
     await removeSuppression(ctx, byOf(c), idParam(c))

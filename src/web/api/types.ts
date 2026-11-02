@@ -23,7 +23,6 @@ import type {
 /** Error codes the server sends as {error: {code, message, ...details}}. */
 export const API_ERROR_CODES = [
   "unauthorized",
-  "session_ended",
   "forbidden",
   "totp_required",
   "not_found",
@@ -33,41 +32,45 @@ export const API_ERROR_CODES = [
   "not_top_level",
   "suppressed",
   "conflict",
-  "already_set_up",
-  "wrong_password",
   "rate_limited",
-  "busy",
+  "setting_locked",
   "telegram_failed",
   "telegram_uncertain",
   "internal_error",
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
 
-/** Seconds left on the session's clocks (Settings): its maximum length, and the idle limit when it is on. */
-export type SessionClocks = {
-  max: { remainingSec: number }
-  idle: { timeoutSec: number; remainingSec: number } | null
-}
-
 export type Session = {
   actor: { kind: ActorKind; label: string }
   via: "token" | "session"
   browserId: string | null
-  clocks: SessionClocks | null
+  /** When this browser's session ends unless the Better Auth client refreshes it first. */
+  expiresAt: string | null
 }
 
 /** GET /api/setup/status: whether the owner exists, and what this browser's session may do. */
 export type SetupStatus = { hasUser: boolean; session: "none" | "enrol" | "active" }
 
-export type AccountSession = {
+/** GET /api/auth/list-sessions (Better Auth): the owner's signed-in browsers. Dates arrive as Date or string. */
+export type BrowserSession = {
   id: string
-  current: boolean
-  signedInAt: string
-  activeAt: string
-  userAgent: string | null
+  createdAt: Date | string
+  updatedAt: Date | string
+  expiresAt: Date | string
+  userAgent?: string | null
 }
 
-export type Account = { username: string; sessions: AccountSession[] }
+/** GET /api/auth/api-key/list (Better Auth's api-key plugin): an agent key, never the key itself. */
+export type AgentKey = {
+  id: string
+  name: string | null
+  start: string | null
+  createdAt: Date | string
+  lastRequest: Date | string | null
+}
+
+/** A setting the environment may set: then it is locked and names its variable. */
+export type EnvLock = { locked: boolean; variable: string | null }
 
 export type GoalProgress = { id: string; text: string; createdAt: string; done: number; total: number }
 export type Goal = { id: string; projectId: string; text: string; createdAt: string; closedAt: string | null }
@@ -302,10 +305,19 @@ export type Settings = {
   dateFormat: string
   timeFormat: string
   language: Language
-  sessionMaxDays: number
-  sessionIdle: boolean
-  sessionIdleMinutes: number
+  /** Sign out after this many days without Mikud open. */
+  sessionIdleDays: number
+  /** Sign-in codes to Telegram as a second factor (off by default). */
+  otpViaTelegram: boolean
   updatedAt: string
+  telegram: {
+    /** The bot token is never returned: only whether it is set and readable. */
+    botToken: { set: boolean; readable: boolean } & EnvLock
+    chatId: { value: string | null } & EnvLock
+    state: "off" | "incomplete" | "on"
+    missing: ("botToken" | "chatId")[]
+  }
+  privateDomains: { value: string[] } & EnvLock
 }
 
 export type SettingsPatch = Partial<{
@@ -313,9 +325,12 @@ export type SettingsPatch = Partial<{
   dateFormat: DateFormat
   timeFormat: TimeFormat
   language: Language
-  sessionMaxDays: number
-  sessionIdle: boolean
-  sessionIdleMinutes: number
+  sessionIdleDays: number
+  otpViaTelegram: boolean
+  /** A new token, or null to remove the stored one. */
+  telegramBotToken: string | null
+  telegramChatId: string | null
+  privateDomains: string[]
 }>
 
 export type SyncRun = {

@@ -1,12 +1,12 @@
 // Operator commands, run inside the Mikud container on the server:
 //   docker compose exec mikud node dist/server/cli.js reset-password
-// Sets a new random password and prints it once, removes TOTP (it is set up again after signing in), ends
-// every session and writes an audit row (actor system, label cli). Uses the same configuration as the server.
+// Sets a new random password through Better Auth's documented reset and prints it once. Every session ends; two-factor
+// stays as it is (sign in with the authenticator or a backup code). Uses the same configuration as the server.
 import { writeSync } from "node:fs"
-import { createAuth, passwordHasher } from "./auth/auth.ts"
+import { resetOwnerPassword } from "./auth/recovery.ts"
 import { ConfigError, loadConfig } from "./config.ts"
 import { createDatabase } from "./db/client.ts"
-import { resetPassword } from "./services/account.ts"
+import { getSettings } from "./services/admin.ts"
 import { createSecretScanner } from "./services/secrets.ts"
 
 const out = (line: string) => writeSync(1, `${line}\n`)
@@ -28,17 +28,24 @@ try {
 const database = createDatabase(config.databaseUrl)
 let code = 0
 try {
-  const ctx = { db: database.db, secrets: createSecretScanner(config.privateDomains), clock: () => new Date() }
-  const auth = createAuth({ db: database.db, secret: config.authSecret, publicUrl: config.publicUrl })
-  const result = await resetPassword(ctx, await passwordHasher(auth))
+  const ctx = { db: database.db, secrets: createSecretScanner(), clock: () => new Date() }
+  const result = await resetOwnerPassword({
+    ctx,
+    secrets: config.authSecrets,
+    legacySecret: config.legacyAuthSecret,
+    publicUrl: config.publicUrl,
+    trustedProxies: config.trustedProxies,
+    sessionIdleDays: (await getSettings(ctx.db)).sessionIdleDays,
+  })
   if (!result) {
     err("No owner exists yet. Open Mikud in a browser to create it.")
     code = 1
   } else {
     out(`Username: ${result.username}`)
     out(`New password: ${result.password}`)
-    out("Every session was ended and two-factor authentication was removed.")
-    out("Sign in with this password, set up two-factor again, then change the password in Settings, Account.")
+    out("Every session was ended. Two-factor authentication is unchanged.")
+    out("Sign in with this password and your authenticator (or a saved backup code), then change the password in")
+    out("Settings, Account.")
   }
 } catch (error) {
   err(`The reset failed: ${error instanceof Error ? error.name : "unknown error"}. Nothing was changed.`)

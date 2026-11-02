@@ -60,7 +60,7 @@ describe("migrations", () => {
     const rows = await sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public' order by table_name`
     expect(rows.map((r) => r.table_name)).toEqual(expected)
-    expect(expected).toHaveLength(20)
+    expect(expected).toHaveLength(22)
   })
 
   it("enforce the unique keys the services rely on", async () => {

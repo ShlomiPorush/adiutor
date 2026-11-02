@@ -1,12 +1,15 @@
-// First run and TOTP enrolment. With no owner: create the account (signed in by the server), then set up the
-// authenticator app. With a session that has not proved TOTP (a new account, or after a reset on the server):
-// enrolment only. Signed in with TOTP already: on to `next`. TOTP is required; there is no skipping it.
+// First run and two-factor enrolment, on Better Auth's routes. With no owner: create the account (Better Auth's
+// sign-up signs it in), then set up the authenticator app, then save the backup codes. With a session of an account
+// without two-factor: enrolment only. Signed in with two-factor already: on to `next`. Two-factor is required;
+// there is no skipping it. Right after enrolment the page signs out every other browser (Better Auth's
+// revokeOtherSessions), so a browser that signed in with the password alone does not keep a session.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import QRCode from "qrcode"
 import { type FormEvent, useEffect, useId, useState } from "react"
 import { Navigate, useNavigate, useSearchParams } from "react-router"
 import {
+  ownerEmail,
   PASSWORD_MAX,
   PASSWORD_MIN,
   passwordSchema,
@@ -15,25 +18,48 @@ import {
   usernameSchema,
 } from "../../../shared/auth.ts"
 import { type AuthError, authClient, authFailure, FAILURE_TEXT } from "../../api/auth.ts"
-import { ApiError } from "../../api/client.ts"
 import { api, qk } from "../../api/endpoints.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { safeNext } from "../../shell/Root.tsx"
 import { Copyable } from "../../ui/Copyable.tsx"
-import { ErrorState, errorReason, Loading } from "../../ui/states.tsx"
+import { ErrorState, Loading } from "../../ui/states.tsx"
 import { usePageTitle } from "../usePageTitle.ts"
-import { AuthFrame, type CodeAnswer, CodeField, FormError, PasswordField } from "./parts.tsx"
+import { AuthFrame, BackupCodes, type CodeAnswer, CodeField, FormError, PasswordField } from "./parts.tsx"
 
 export function SetupPage() {
   const { t } = useI18n()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [params] = useSearchParams()
   const next = safeNext(params.get("next"))
   const status = useQuery({ queryKey: qk.setupStatus, queryFn: api.setupStatus, retry: false })
   // The password typed in the account step starts enrolment without asking for it again.
   const [password, setPassword] = useState<string | null>(null)
-  const step = !status.data ? null : !status.data.hasUser ? "account" : status.data.session === "enrol" ? "totp" : null
-  usePageTitle(step === "totp" ? t("setup.totpTitle") : t("setup.title"))
+  // The backup codes, once enrolment succeeded: shown before the page moves on, whatever the status says now.
+  const [codes, setCodes] = useState<string[] | null>(null)
+  const step = codes
+    ? "codes"
+    : !status.data
+      ? null
+      : !status.data.hasUser
+        ? "account"
+        : status.data.session === "enrol"
+          ? "totp"
+          : null
+  usePageTitle(step === "totp" ? t("setup.totpTitle") : step === "codes" ? t("setup.codesTitle") : t("setup.title"))
 
+  if (codes)
+    return (
+      <AuthFrame title={t("setup.codesTitle")} description={t("setup.codesDescription")} above={<Steps current={2} />}>
+        <BackupCodes
+          codes={codes}
+          doneLabel={t("setup.continue")}
+          onDone={() => {
+            void queryClient.resetQueries().then(() => navigate(next, { replace: true }))
+          }}
+        />
+      </AuthFrame>
+    )
   if (status.isPending) return <Loading label={t("app.loading")} />
   if (status.isError)
     return (
@@ -58,14 +84,14 @@ export function SetupPage() {
     )
   return (
     <AuthFrame title={t("setup.totpTitle")} description={t("setup.totpDescription")} above={steps}>
-      <TotpStep known={password} next={next} />
+      <TotpStep known={password} onEnrolled={setCodes} />
     </AuthFrame>
   )
 }
 
 function Steps({ current }: { current: number }) {
   const { t } = useI18n()
-  const names = [t("setup.stepAccount"), t("setup.stepTotp")]
+  const names = [t("setup.stepAccount"), t("setup.stepTotp"), t("setup.stepCodes")]
   return (
     <ol className="ui-steps" aria-label={t("setup.steps")}>
       {names.map((name, index) => (
@@ -82,7 +108,7 @@ function Steps({ current }: { current: number }) {
 }
 
 function AccountStep({ onCreated }: { onCreated: (password: string) => Promise<void> }) {
-  const { t, language } = useI18n()
+  const { t } = useI18n()
   const navigate = useNavigate()
   const usernameId = useId()
   const usernameHintId = useId()
@@ -94,7 +120,7 @@ function AccountStep({ onCreated }: { onCreated: (password: string) => Promise<v
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    // The same rules as the server (src/shared/auth.ts); what was typed is sent as it is.
+    // The same rules Better Auth applies (src/shared/auth.ts); what was typed is sent as it is.
     if (!usernameSchema.safeParse(username).success)
       return setError({
         field: "username",
@@ -112,24 +138,31 @@ function AccountStep({ onCreated }: { onCreated: (password: string) => Promise<v
     setBusy(true)
     setError(null)
     try {
-      const created = await api.setupAccount(username, password)
-      if (!created.signedIn) {
-        navigate("/login", { replace: true })
+      const { error: answer } = await authClient.signUp.email({
+        name: username,
+        email: ownerEmail(username),
+        username,
+        displayUsername: username,
+        password,
+      })
+      if (answer) {
+        if (answer.code === "ALREADY_SET_UP") {
+          navigate("/login", { replace: true })
+          return
+        }
+        const failure = authFailure(answer, "password")
+        setError({
+          field: null,
+          text:
+            failure === "rate_limited" || failure === "network" || failure === "server"
+              ? t(FAILURE_TEXT[failure])
+              : t("auth.error.failed", { reason: answer.message || String(answer.status ?? "") }),
+        })
         return
       }
       await onCreated(password)
-    } catch (failure) {
-      if (failure instanceof ApiError && failure.code === "already_set_up") {
-        navigate("/login", { replace: true })
-        return
-      }
-      const text =
-        failure instanceof ApiError && failure.code === "rate_limited"
-          ? t("auth.error.rateLimited")
-          : failure instanceof ApiError && failure.code === "network"
-            ? t("auth.error.network")
-            : t("auth.error.failed", { reason: errorReason(language, failure) })
-      setError({ field: null, text })
+    } catch {
+      setError({ field: null, text: t("auth.error.network") })
     } finally {
       setBusy(false)
     }
@@ -186,22 +219,31 @@ function AccountStep({ onCreated }: { onCreated: (password: string) => Promise<v
   )
 }
 
-function TotpStep({ known, next }: { known: string | null; next: string }) {
+/**
+ * Enrolment: the password starts it (Better Auth returns the authenticator link and the backup codes), the first
+ * code finishes it. Then every other browser is signed out, with retries, before the codes are handed on. Settings
+ * uses it too, to set up a new authenticator.
+ */
+export function TotpStep({
+  known,
+  onEnrolled,
+  finishLabel,
+}: {
+  known: string | null
+  onEnrolled: (backupCodes: string[]) => void
+  finishLabel?: string
+}) {
   const { t } = useI18n()
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const [password, setPassword] = useState("")
   const [uri, setUri] = useState<string | null>(null)
+  const [backupCodes, setBackupCodes] = useState<string[]>([])
   const [qr, setQr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [signOutOthersFailed, setSignOutOthersFailed] = useState(false)
 
   const failureText = (answer: AuthError, step: "password" | "code") => {
     const failure = authFailure(answer, step)
-    if (failure === "session_ended") {
-      navigate(answer?.reason ? `/login?ended=${encodeURIComponent(answer.reason)}` : "/login", { replace: true })
-      return null
-    }
     return failure === "other"
       ? t("auth.error.failed", { reason: answer?.message || String(answer?.status ?? "") })
       : t(FAILURE_TEXT[failure])
@@ -218,6 +260,7 @@ function TotpStep({ known, next }: { known: string | null; next: string }) {
       }
       setPassword("")
       setUri(data.totpURI)
+      setBackupCodes(data.backupCodes)
     } catch {
       setError(t("auth.error.network"))
     } finally {
@@ -241,6 +284,25 @@ function TotpStep({ known, next }: { known: string | null; next: string }) {
     }
   }, [uri])
 
+  /** Better Auth's documented revokeOtherSessions, tried three times; the owner can try again when all fail. */
+  const signOutOthers = async (codes: string[]) => {
+    setBusy(true)
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const answer = await authClient.revokeOtherSessions().catch(() => ({ error: { status: 0 } }))
+        if (!answer.error) {
+          setSignOutOthersFailed(false)
+          onEnrolled(codes)
+          return
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))
+      }
+      setSignOutOthersFailed(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const verify = async (code: string): Promise<CodeAnswer> => {
     setBusy(true)
     setError(null)
@@ -250,16 +312,30 @@ function TotpStep({ known, next }: { known: string | null; next: string }) {
         setError(failureText(answer, "code"))
         return authFailure(answer, "code") === "network" ? "kept" : "refused"
       }
-      await queryClient.resetQueries()
-      navigate(next, { replace: true })
-      return "done"
     } catch {
       setError(t("auth.error.network"))
       return "kept"
     } finally {
       setBusy(false)
     }
+    await signOutOthers(backupCodes)
+    return "done"
   }
+
+  if (signOutOthersFailed)
+    return (
+      <div className="ui-form-stack">
+        <FormError>{t("setup.signOutOthersFailed")}</FormError>
+        <button
+          type="button"
+          className="ui-btn ui-btn-primary"
+          disabled={busy}
+          onClick={() => void signOutOthers(backupCodes)}
+        >
+          {t("setup.signOutOthersRetry")}
+        </button>
+      </div>
+    )
 
   if (!uri)
     return known && !error ? (
@@ -305,7 +381,7 @@ function TotpStep({ known, next }: { known: string | null; next: string }) {
       <CodeField
         onSubmit={verify}
         busy={busy}
-        submitLabel={t("setup.finish")}
+        submitLabel={finishLabel ?? t("setup.finish")}
         busyLabel={t("setup.finishing")}
         error={error}
       />

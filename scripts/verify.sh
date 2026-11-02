@@ -98,7 +98,7 @@ fail_stack() {
   die "$1"
 }
 
-# Runs e2e/ in the Playwright image on the stack's network. e2e/global-setup.ts forwards 127.0.0.1:8090,
+# Runs e2e/ in the Playwright image on the stack's network, with the stack's database for e2e/session.spec.ts. e2e/global-setup.ts forwards 127.0.0.1:8090,
 # the stack's MIKUD_PUBLIC_URL, to the container, so the server's Origin check sees its own address.
 run_e2e() {
   local pinned
@@ -107,6 +107,7 @@ run_e2e() {
     die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
   docker run --rm --ipc=host --network "${PROJECT}_default" \
     --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=mikud:8080 \
+    -e E2E_DATABASE_URL=postgres://mikud:dev-only-password@postgres:5432/mikud \
     -v "$REPO_ROOT:/repo" -w /repo "$PLAYWRIGHT_IMAGE" \
     npx --no-install playwright test --config config/playwright.config.ts
 }

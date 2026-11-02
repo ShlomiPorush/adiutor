@@ -1,7 +1,9 @@
+import { ownerEmail } from "../../shared/auth.ts"
 import { secretOf, totp } from "./totp.ts"
 
 // A browser for HTTP integration tests: a cookie jar, the Origin and X-Mikud-Request headers of the Mikud page,
-// and the owner's flows (setup, enrolment, sign-in) against an app's fetch.
+// and the owner's flows (setup, enrolment, sign-in) on Better Auth's routes against an app's fetch. Better Auth keys
+// its rate limits on X-Forwarded-For: give each browser its own address (extra headers).
 
 export const TEST_ORIGIN = "http://127.0.0.1:8090"
 export const TEST_USERNAME = "Owner.Name"
@@ -71,30 +73,40 @@ export class TestBrowser {
     return { status: response.status, headers: response.headers, json, setCookies }
   }
 
-  /** First run: creates the owner (signed in, TOTP not set up yet). */
+  /** First run: Better Auth's sign-up creates the owner (signed in, two-factor not set up yet). */
   async setup(username = TEST_USERNAME, password = TEST_PASSWORD): Promise<Answer> {
-    return this.call("POST", "/api/setup/account", { body: { username, password } })
+    return this.call("POST", "/api/auth/sign-up/email", {
+      body: { name: username, email: ownerEmail(username), username, displayUsername: username, password },
+    })
   }
 
-  /** Starts enrolment and returns the TOTP secret. */
-  async enable(password = TEST_PASSWORD): Promise<string> {
+  /** Starts enrolment: the TOTP secret and the backup codes. */
+  async enable(password = TEST_PASSWORD): Promise<{ secret: string; backupCodes: string[] }> {
     const res = await this.call("POST", "/api/auth/two-factor/enable", { body: { password } })
     if (res.status !== 200) throw new Error(`enable answered ${res.status}: ${JSON.stringify(res.json)}`)
-    return secretOf(res.json.totpURI)
+    return { secret: secretOf(res.json.totpURI), backupCodes: res.json.backupCodes }
   }
 
   verify(code: string): Promise<Answer> {
     return this.call("POST", "/api/auth/two-factor/verify-totp", { body: { code } })
   }
 
-  /** Setup and enrolment: a signed-in owner whose session proved TOTP. Returns the TOTP secret. */
-  async owner(username = TEST_USERNAME, password = TEST_PASSWORD): Promise<string> {
+  /** Setup and enrolment: a signed-in owner with two-factor on. Returns the TOTP secret and the backup codes. */
+  async enrolledOwner(
+    username = TEST_USERNAME,
+    password = TEST_PASSWORD,
+  ): Promise<{ secret: string; backupCodes: string[] }> {
     const created = await this.setup(username, password)
-    if (created.status !== 201) throw new Error(`setup answered ${created.status}: ${JSON.stringify(created.json)}`)
-    const secret = await this.enable(password)
-    const verified = await this.verify(totp(secret))
+    if (created.status !== 200) throw new Error(`setup answered ${created.status}: ${JSON.stringify(created.json)}`)
+    const enrolment = await this.enable(password)
+    const verified = await this.verify(totp(enrolment.secret))
     if (verified.status !== 200) throw new Error(`verify answered ${verified.status}: ${JSON.stringify(verified.json)}`)
-    return secret
+    return enrolment
+  }
+
+  /** enrolledOwner, returning the TOTP secret only. */
+  async owner(username = TEST_USERNAME, password = TEST_PASSWORD): Promise<string> {
+    return (await this.enrolledOwner(username, password)).secret
   }
 
   passwordSignIn(username = TEST_USERNAME, password = TEST_PASSWORD): Promise<Answer> {

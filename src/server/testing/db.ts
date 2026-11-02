@@ -6,7 +6,7 @@ import postgres from "postgres"
 import { createDatabase, type Database } from "../db/client.ts"
 import * as schema from "../db/schema.ts"
 import type { By, Ctx } from "../services/context.ts"
-import { createSecretScanner } from "../services/secrets.ts"
+import { ReloadableSecretScanner } from "../services/secrets.ts"
 
 // Support for *.integration.test.ts: a database of its own per test file, migrated, dropped at the end.
 // MIKUD_TEST_DATABASE_URL is a role that may create databases (scripts/verify.sh sets it).
@@ -45,7 +45,7 @@ export async function createTestDatabase(prefix: string, privateDomains: string[
   const database = createDatabase(url.toString())
   await database.migrate(fileURLToPath(new URL("../../../drizzle", import.meta.url)))
   const clock = new TestClock()
-  const ctx: Ctx = { db: database.db, secrets: createSecretScanner(privateDomains), clock: clock.now }
+  const ctx: Ctx = { db: database.db, secrets: new ReloadableSecretScanner(privateDomains), clock: clock.now }
   const tables = Object.values(schema)
     .filter((value) => is(value, PgTable))
     .map((table) => `"${getTableName(table as PgTable)}"`)

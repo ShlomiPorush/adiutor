@@ -7,13 +7,11 @@ import { updateSettings } from "../services/admin.ts"
 import type { Ctx } from "../services/context.ts"
 import { BotApi } from "../telegram/api.ts"
 import type { TelegramRuntime } from "../telegram/status.ts"
-import { testCore } from "../testing/app.ts"
+import { createAgentKey, ownerBrowser, type TestCore, testCore } from "../testing/app.ts"
 import { StandInBotApi } from "../testing/bot-api.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { RateLimiter } from "./auth.ts"
 
-const OWNER = "owner-token-for-tests-only-000000000000"
-const AGENT = "agent-token-for-tests-only-000000000000"
 const ORIGIN = "http://127.0.0.1:8090"
 // Assembled at run time: the guards and push protection scan literal text.
 const BOT_TOKEN = `${"7654321"}:${"AAG"}${"t".repeat(33)}`
@@ -22,16 +20,16 @@ const CHAT = "4242"
 let t: TestDatabase
 let standIn: StandInBotApi
 
+let core: TestCore
+
 function build(telegram?: TelegramRuntime) {
-  return createApp({
-    checkDatabase: async () => true,
-    core: testCore(t, {
-      config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: new URL(ORIGIN), version: "test" },
-      limiter: new RateLimiter(10, 60_000),
-      clientIp: () => "client",
-      telegram,
-    }),
+  core = testCore(t, {
+    config: { publicUrl: new URL(ORIGIN), version: "test" },
+    limiter: new RateLimiter(10, 60_000),
+    clientIp: () => "client",
+    telegram,
   })
+  return createApp({ checkDatabase: async () => true, core })
 }
 
 function configured(): TelegramRuntime {
@@ -45,10 +43,18 @@ function configured(): TelegramRuntime {
   }
 }
 
-async function post(app: ReturnType<typeof createApp>, token: string) {
+/** As the owner's signed-in browser, or as an agent with a key. */
+async function post(app: ReturnType<typeof createApp>, as: "owner" | "agent") {
+  if (as === "owner") {
+    const b = await ownerBrowser(t, app)
+    const res = await b.call("POST", "/api/v1/telegram/test-message")
+    return { status: res.status, json: res.json as { error: { code: string; message: string } } }
+  }
+  await ownerBrowser(t, app)
+  const key = await createAgentKey(core)
   const res = await app.request("/api/v1/telegram/test-message", {
     method: "POST",
-    headers: { authorization: `Bearer ${token}` },
+    headers: { authorization: `Bearer ${key}` },
   })
   return { status: res.status, json: (await res.json()) as { error: { code: string; message: string } } }
 }
@@ -76,23 +82,23 @@ const testAudits = () =>
 describe("POST /telegram/test-message", () => {
   it("sends the morning message once to the owner's chat, never touches job_runs and writes an audit row", async () => {
     const app = build(configured())
-    expect((await post(app, AGENT)).status).toBe(403)
+    expect((await post(app, "agent")).status).toBe(403)
     expect(standIn.sent).toEqual([])
 
-    const res = await post(app, OWNER)
+    const res = await post(app, "owner")
     expect(res).toEqual({ status: 200, json: { data: { sent: true } } })
     expect(standIn.sent).toHaveLength(1)
     expect(standIn.sent[0]).toMatchObject({ chatId: CHAT, parseMode: "HTML" })
     expect(standIn.sent[0]?.text).toContain(`<a href="${ORIGIN}/">Open the board</a>`)
     expect(await t.ctx.db.select().from(jobRuns)).toEqual([])
     expect(await testAudits()).toMatchObject([
-      { actorKind: "owner", source: "api", entityType: "settings", after: { state: "sending" } },
-      { actorKind: "owner", source: "api", entityType: "settings", after: { state: "sent" } },
+      { actorKind: "owner", source: "ui", entityType: "settings", after: { state: "sending" } },
+      { actorKind: "owner", source: "ui", entityType: "settings", after: { state: "sent" } },
     ])
   })
 
   it("answers conflict when Telegram is not configured", async () => {
-    const res = await post(build(), OWNER)
+    const res = await post(build(), "owner")
     expect(res.status).toBe(409)
     expect(res.json.error.code).toBe("conflict")
     expect(res.json.error.message).toContain("MIKUD_TELEGRAM_BOT_TOKEN")
@@ -101,7 +107,7 @@ describe("POST /telegram/test-message", () => {
 
   it("reports a send Telegram refused, with the failure in the audit row", async () => {
     standIn.sendFailures.push(400)
-    const res = await post(build(configured()), OWNER)
+    const res = await post(build(configured()), "owner")
     expect(res.status).toBe(502)
     expect(res.json.error.code).toBe("telegram_failed")
     expect(JSON.stringify(res.json)).not.toContain(BOT_TOKEN)
@@ -116,7 +122,7 @@ describe("POST /telegram/test-message", () => {
     for (const failure of [500, "drop"] as const) {
       await t.reset()
       standIn.sendFailures.push(failure)
-      const res = await post(build(configured()), OWNER)
+      const res = await post(build(configured()), "owner")
       expect(res.status).toBe(502)
       expect(res.json.error.code).toBe("telegram_uncertain")
       expect(res.json.error.message).toContain("may have been sent")

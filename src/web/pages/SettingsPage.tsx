@@ -1,21 +1,13 @@
-// Settings: language, date and time format, closed-item days and the session clocks (saved with the save
-// bar), the account (signed-in browsers, password, sign out), the theme of this browser (applies at once),
-// suppressions, and the sync and Telegram status.
+// Settings, in this order: General (language, formats, closed-item days, how long a browser stays signed in),
+// Account (Better Auth's routes, acting at once), Telegram (the bot token, the chat, sign-in codes), Agent access
+// (agent keys, acting at once), Secret check (private domains), Appearance, Suppressions and Status. General,
+// Telegram and Secret check share one save bar. A setting the environment sets is locked and names its variable.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { type FormEvent, type ReactNode, useId, useState } from "react"
-import { useNavigate } from "react-router"
-import {
-  PASSWORD_MAX,
-  PASSWORD_MIN,
-  passwordSchema,
-  SESSION_IDLE_MINUTES_MAX,
-  SESSION_IDLE_MINUTES_MIN,
-  SESSION_MAX_DAYS_MAX,
-  SESSION_MAX_DAYS_MIN,
-} from "../../shared/auth.ts"
+import { X } from "lucide-react"
+import { type FormEvent, useId, useState } from "react"
+import { SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 import { LANGUAGES } from "../../shared/enums.ts"
-import { authClient } from "../api/auth.ts"
 import { ApiError } from "../api/client.ts"
 import { api, qk } from "../api/endpoints.ts"
 import type { DateFormat, Settings, SettingsPatch, TimeFormat } from "../api/types.ts"
@@ -36,42 +28,57 @@ import { Copyable } from "../ui/Copyable.tsx"
 import { confirmDialog } from "../ui/confirm.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { SaveBar } from "../ui/SaveBar.tsx"
-import { Empty, ErrorState, errorReason, Loading, Locked } from "../ui/states.tsx"
+import { Empty, ErrorState, errorReason, Loading } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
-import { useClearUnsaved, useUnsaved } from "../ui/unsaved.tsx"
-import { describeAgent } from "./agent.ts"
-import { RECOVERY_COMMAND } from "./auth/LoginPage.tsx"
-import { FormError, PasswordField } from "./auth/parts.tsx"
+import { useUnsaved } from "../ui/unsaved.tsx"
 import { Panel } from "./parts.tsx"
+import { AccountPanel, useSignOutEverywhere } from "./settings/AccountPanel.tsx"
+import { AgentKeysPanel } from "./settings/AgentKeysPanel.tsx"
+import { EnvLock, Row, SwitchRow } from "./settings/parts.tsx"
 
 export const CLOSED_DAYS_MIN = 1
 export const CLOSED_DAYS_MAX = 365
+const BOT_TOKEN = /^\d{5,}:[A-Za-z0-9_-]{30,}$/
+const CHAT_ID = /^-?\d{1,20}$/
+const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
+
+/** The bot token in the form: kept as stored, replaced by a typed one, or removed on save (v3 FS-3). */
+type TokenDraft = { mode: "replace"; value: string } | { mode: "remove" }
 
 type Draft = {
   language?: Language
   dateFormat?: DateFormat
   timeFormat?: TimeFormat
   closedItemDays?: string
-  sessionMaxDays?: string
-  sessionIdle?: boolean
-  sessionIdleMinutes?: string
+  sessionIdleDays?: string
+  otpViaTelegram?: boolean
+  botToken?: TokenDraft
+  chatId?: string
+  privateDomains?: string[]
 }
+
+const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
 
 export function changedFields(saved: Settings, draft: Draft): SettingsPatch {
   const patch: SettingsPatch = {}
   if (draft.language !== undefined && draft.language !== saved.language) patch.language = draft.language
   if (draft.dateFormat !== undefined && draft.dateFormat !== saved.dateFormat) patch.dateFormat = draft.dateFormat
   if (draft.timeFormat !== undefined && draft.timeFormat !== saved.timeFormat) patch.timeFormat = draft.timeFormat
-  if (draft.closedItemDays !== undefined && draft.closedItemDays.trim() !== String(saved.closedItemDays)) {
+  if (draft.closedItemDays !== undefined && draft.closedItemDays.trim() !== String(saved.closedItemDays))
     patch.closedItemDays = Number(draft.closedItemDays.trim())
-  }
-  if (draft.sessionMaxDays !== undefined && draft.sessionMaxDays.trim() !== String(saved.sessionMaxDays))
-    patch.sessionMaxDays = Number(draft.sessionMaxDays.trim())
-  if (draft.sessionIdle !== undefined && draft.sessionIdle !== saved.sessionIdle) patch.sessionIdle = draft.sessionIdle
-  if (draft.sessionIdleMinutes !== undefined && draft.sessionIdleMinutes.trim() !== String(saved.sessionIdleMinutes))
-    patch.sessionIdleMinutes = Number(draft.sessionIdleMinutes.trim())
+  if (draft.sessionIdleDays !== undefined && draft.sessionIdleDays.trim() !== String(saved.sessionIdleDays))
+    patch.sessionIdleDays = Number(draft.sessionIdleDays.trim())
+  if (draft.otpViaTelegram !== undefined && draft.otpViaTelegram !== saved.otpViaTelegram)
+    patch.otpViaTelegram = draft.otpViaTelegram
+  if (draft.botToken?.mode === "replace" && draft.botToken.value.trim())
+    patch.telegramBotToken = draft.botToken.value.trim()
+  if (draft.botToken?.mode === "remove" && saved.telegram.botToken.set) patch.telegramBotToken = null
+  if (draft.chatId !== undefined && draft.chatId.trim() !== (saved.telegram.chatId.value ?? ""))
+    patch.telegramChatId = draft.chatId.trim() || null
+  if (draft.privateDomains !== undefined && !sameList(draft.privateDomains, saved.privateDomains.value))
+    patch.privateDomains = draft.privateDomains
   return patch
 }
 
@@ -92,8 +99,7 @@ export function SettingsPage() {
         {query.isError && !query.data ? (
           <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
         ) : null}
-        {query.data ? <GeneralSettings saved={query.data} /> : null}
-        <AccountPanel />
+        {query.data ? <SettingsForm saved={query.data} /> : <AccountPanel />}
         <AppearancePanel />
         <SuppressionsPanel />
         <StatusPanel />
@@ -102,47 +108,17 @@ export function SettingsPage() {
   )
 }
 
-function Row({
-  label,
-  hint,
-  htmlFor,
-  children,
-}: {
-  label: string
-  hint: string
-  htmlFor?: string
-  children: ReactNode
-}) {
-  return (
-    <div className="ui-set-row">
-      <div>
-        {htmlFor ? (
-          <label htmlFor={htmlFor}>
-            <b>{label}</b>
-          </label>
-        ) : (
-          <b>{label}</b>
-        )}
-        <span>{hint}</span>
-      </div>
-      <div className="ui-set-control">{children}</div>
-    </div>
-  )
-}
+type FieldError = { field: "days" | "idle" | "token" | "chat" | "domain"; text: string }
 
-function GeneralSettings({ saved }: { saved: Settings }) {
+/** General, Telegram and Secret check, with one draft and one save bar; Account and Agent access sit between. */
+function SettingsForm({ saved }: { saved: Settings }) {
   const { t, language, setLanguage } = useI18n()
   const queryClient = useQueryClient()
-  const daysId = useId()
-  const dateId = useId()
-  const errorId = useId()
-  const maxDaysId = useId()
-  const idleMinutesId = useId()
-  const sessionErrorId = useId()
+  const signOutEverywhere = useSignOutEverywhere()
+  const ids = { days: useId(), idle: useId(), token: useId(), chat: useId(), domain: useId(), error: useId() }
   const [draft, setDraft] = useState<Draft>({})
   const [busy, setBusy] = useState(false)
-  const [daysError, setDaysError] = useState<string | null>(null)
-  const [sessionError, setSessionError] = useState<{ field: "max" | "idle"; text: string } | null>(null)
+  const [error, setError] = useState<FieldError | null>(null)
   const patch = changedFields(saved, draft)
   const count = Object.keys(patch).length
   useUnsaved("settings", { count, kind: "leave" })
@@ -152,53 +128,45 @@ function GeneralSettings({ saved }: { saved: Settings }) {
     dateFormat: draft.dateFormat ?? saved.dateFormat,
     timeFormat: draft.timeFormat ?? saved.timeFormat,
     closedItemDays: draft.closedItemDays ?? String(saved.closedItemDays),
-    sessionMaxDays: draft.sessionMaxDays ?? String(saved.sessionMaxDays),
-    sessionIdle: draft.sessionIdle ?? saved.sessionIdle,
-    sessionIdleMinutes: draft.sessionIdleMinutes ?? String(saved.sessionIdleMinutes),
+    sessionIdleDays: draft.sessionIdleDays ?? String(saved.sessionIdleDays),
+    otpViaTelegram: draft.otpViaTelegram ?? saved.otpViaTelegram,
+    chatId: draft.chatId ?? saved.telegram.chatId.value ?? "",
+    privateDomains: draft.privateDomains ?? saved.privateDomains.value,
+  }
+  const set = (change: Partial<Draft>) => {
+    setDraft((d) => ({ ...d, ...change }))
+    setError(null)
   }
   const example = withFormatPrefs({ dateFormat: current.dateFormat, timeFormat: current.timeFormat }, () =>
     formatTime(new Date(), { seconds: false }),
   )
 
+  const refuse = (field: FieldError["field"], label: string, text: string) => {
+    setError({ field, text })
+    showToast(`${label}: ${text}`, "error")
+    document.getElementById(ids[field])?.focus()
+  }
+
   const save = async () => {
-    if (patch.closedItemDays !== undefined) {
-      const days = patch.closedItemDays
-      if (!Number.isInteger(days) || days < CLOSED_DAYS_MIN || days > CLOSED_DAYS_MAX) {
-        const message = t("settings.daysInvalid", { min: CLOSED_DAYS_MIN, max: CLOSED_DAYS_MAX })
-        setDaysError(message)
-        showToast(`${t("settings.closedDays")}: ${message}`, "error")
-        document.getElementById(daysId)?.focus()
-        return
-      }
-    }
-    setDaysError(null)
     const outside = (value: number | undefined, min: number, max: number) =>
       value !== undefined && (!Number.isInteger(value) || value < min || value > max)
-    const invalidSession = outside(patch.sessionMaxDays, SESSION_MAX_DAYS_MIN, SESSION_MAX_DAYS_MAX)
-      ? ({
-          field: "max",
-          min: SESSION_MAX_DAYS_MIN,
-          max: SESSION_MAX_DAYS_MAX,
-          id: maxDaysId,
-          label: "maxDays",
-        } as const)
-      : outside(patch.sessionIdleMinutes, SESSION_IDLE_MINUTES_MIN, SESSION_IDLE_MINUTES_MAX)
-        ? ({
-            field: "idle",
-            min: SESSION_IDLE_MINUTES_MIN,
-            max: SESSION_IDLE_MINUTES_MAX,
-            id: idleMinutesId,
-            label: "idleMinutes",
-          } as const)
-        : null
-    if (invalidSession) {
-      const message = t("settings.session.daysInvalid", { min: invalidSession.min, max: invalidSession.max })
-      setSessionError({ field: invalidSession.field, text: message })
-      showToast(`${t(`settings.session.${invalidSession.label}`)}: ${message}`, "error")
-      document.getElementById(invalidSession.id)?.focus()
-      return
-    }
-    setSessionError(null)
+    if (outside(patch.closedItemDays, CLOSED_DAYS_MIN, CLOSED_DAYS_MAX))
+      return refuse(
+        "days",
+        t("settings.closedDays"),
+        t("settings.daysInvalid", { min: CLOSED_DAYS_MIN, max: CLOSED_DAYS_MAX }),
+      )
+    if (outside(patch.sessionIdleDays, SESSION_IDLE_DAYS_MIN, SESSION_IDLE_DAYS_MAX))
+      return refuse(
+        "idle",
+        t("settings.session.idleDays"),
+        t("settings.daysInvalid", { min: SESSION_IDLE_DAYS_MIN, max: SESSION_IDLE_DAYS_MAX }),
+      )
+    if (typeof patch.telegramBotToken === "string" && !BOT_TOKEN.test(patch.telegramBotToken))
+      return refuse("token", t("telegramSettings.botToken"), t("telegramSettings.tokenInvalid"))
+    if (typeof patch.telegramChatId === "string" && !CHAT_ID.test(patch.telegramChatId))
+      return refuse("chat", t("telegramSettings.chatId"), t("telegramSettings.chatInvalid"))
+    setError(null)
     setBusy(true)
     try {
       const next = await api.updateSettings(patch)
@@ -207,158 +175,464 @@ function GeneralSettings({ saved }: { saved: Settings }) {
       if (next.language !== language) setLanguage(next.language)
       setDraft({})
       await queryClient.invalidateQueries({ queryKey: qk.morning })
-      showToast(t("settings.saved"), "success")
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "validation_failed")
-        showToast(t("settings.saveInvalid", { reason: errorReason(language, error) }), "error")
-      else showToast(t("settings.saveFailed", { reason: errorReason(language, error) }), "error")
+      await queryClient.invalidateQueries({ queryKey: qk.telegram })
+      // A shorter length leaves browsers already signed in with the time they had (G2): offer to sign out everywhere.
+      if (patch.sessionIdleDays !== undefined && patch.sessionIdleDays < saved.sessionIdleDays)
+        showToast(t("settings.session.shortened"), "success", {
+          action: { label: t("account.endAll"), onAction: () => void signOutEverywhere() },
+          duration: 10_000,
+        })
+      else showToast(t("settings.saved"), "success")
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.code === "setting_locked")
+        showToast(t("settings.env.refused"), "error")
+      else if (failure instanceof ApiError && failure.code === "validation_failed")
+        showToast(t("settings.saveInvalid", { reason: errorReason(language, failure) }), "error")
+      else showToast(t("settings.saveFailed", { reason: errorReason(language, failure) }), "error")
     } finally {
       setBusy(false)
     }
   }
 
+  const fieldError = (field: FieldError["field"]) =>
+    error?.field === field ? (
+      <p id={ids.error} className="ui-field-error">
+        {error.text}
+      </p>
+    ) : null
+  const invalid = (field: FieldError["field"]) =>
+    error?.field === field ? { "aria-invalid": true as const, "aria-describedby": ids.error } : {}
+
   return (
-    <Panel id="general" title={t("settings.general")}>
-      <Row label={t("settings.language")} hint={t("settings.languageHint")}>
-        <fieldset className="ui-seg ui-plain-fieldset">
-          <legend className="ui-sr-only">{t("settings.language")}</legend>
-          {LANGUAGES.map((code) => (
-            <button
-              key={code}
-              type="button"
-              lang={code}
-              aria-pressed={current.language === code}
-              onClick={() => setDraft((d) => ({ ...d, language: code as Language }))}
-            >
-              {new Intl.DisplayNames([code], { type: "language" }).of(code)}
-            </button>
-          ))}
-        </fieldset>
-      </Row>
-      <Row label={t("settings.dateFormat")} hint={t("settings.dateFormatHint")} htmlFor={dateId}>
-        <select
-          id={dateId}
-          className="ui-select"
-          value={current.dateFormat}
-          onChange={(event) => setDraft((d) => ({ ...d, dateFormat: event.target.value as DateFormat }))}
-        >
-          {isDateFormat(current.dateFormat) ? null : <option value={current.dateFormat}>{current.dateFormat}</option>}
-          {DATE_FORMATS.map((format) => (
-            <option key={format} value={format}>
-              {format === "browser" ? t("settings.dateBrowser") : format.toUpperCase()}
-            </option>
-          ))}
-        </select>
-      </Row>
-      <Row label={t("settings.timeFormat")} hint={t("settings.timeFormatHint")}>
-        <fieldset className="ui-seg ui-plain-fieldset">
-          <legend className="ui-sr-only">{t("settings.timeFormat")}</legend>
-          {TIME_FORMATS.map((format) => (
-            <button
-              key={format}
-              type="button"
-              aria-pressed={current.timeFormat === format || (format === "HH:mm" && !isTimeFormat(current.timeFormat))}
-              onClick={() => setDraft((d) => ({ ...d, timeFormat: format }))}
-            >
-              {t(`settings.timeFormats.${format === "HH:mm" ? "h24" : format === "h:mm a" ? "h12" : "browser"}`)}
-            </button>
-          ))}
-        </fieldset>
-        <span className="ui-hint ui-num" aria-live="polite">
-          {t("settings.example", { example })}
-        </span>
-      </Row>
-      <Row label={t("settings.timeZone")} hint={t("settings.timeZoneHint")}>
-        <span className="ui-mono">{APP_TIME_ZONE}</span>
-      </Row>
-      <Row label={t("settings.closedDays")} hint={t("settings.closedDaysHint")} htmlFor={daysId}>
-        <input
-          id={daysId}
-          className="ui-input ui-input-num"
-          type="number"
-          inputMode="numeric"
-          min={CLOSED_DAYS_MIN}
-          max={CLOSED_DAYS_MAX}
-          value={current.closedItemDays}
-          aria-invalid={daysError ? true : undefined}
-          aria-describedby={daysError ? errorId : undefined}
-          onChange={(event) => setDraft((d) => ({ ...d, closedItemDays: event.target.value }))}
-        />
-        {daysError ? (
-          <p id={errorId} className="ui-field-error">
-            {daysError}
-          </p>
-        ) : null}
-      </Row>
-      <Row label={t("settings.session.maxDays")} hint={t("settings.session.maxDaysHint")} htmlFor={maxDaysId}>
-        <input
-          id={maxDaysId}
-          className="ui-input ui-input-num"
-          type="number"
-          inputMode="numeric"
-          min={SESSION_MAX_DAYS_MIN}
-          max={SESSION_MAX_DAYS_MAX}
-          value={current.sessionMaxDays}
-          aria-invalid={sessionError?.field === "max" ? true : undefined}
-          aria-describedby={sessionError?.field === "max" ? sessionErrorId : undefined}
-          onChange={(event) => setDraft((d) => ({ ...d, sessionMaxDays: event.target.value }))}
-        />
-        {sessionError?.field === "max" ? (
-          <p id={sessionErrorId} className="ui-field-error">
-            {sessionError.text}
-          </p>
-        ) : null}
-      </Row>
-      <Row label={t("settings.session.idle")} hint={t("settings.session.idleHint")}>
-        <fieldset className="ui-seg ui-plain-fieldset">
-          <legend className="ui-sr-only">{t("settings.session.idle")}</legend>
-          {([false, true] as const).map((on) => (
-            <button
-              key={String(on)}
-              type="button"
-              aria-pressed={current.sessionIdle === on}
-              onClick={() => setDraft((d) => ({ ...d, sessionIdle: on }))}
-            >
-              {on ? t("settings.session.idleOn") : t("settings.session.idleOff")}
-            </button>
-          ))}
-        </fieldset>
-        {current.sessionIdle ? (
-          <span className="ui-field">
-            <label className="ui-label" htmlFor={idleMinutesId}>
-              {t("settings.session.idleMinutes")}
-            </label>
-            <input
-              id={idleMinutesId}
-              className="ui-input ui-input-num"
-              type="number"
-              inputMode="numeric"
-              min={SESSION_IDLE_MINUTES_MIN}
-              max={SESSION_IDLE_MINUTES_MAX}
-              value={current.sessionIdleMinutes}
-              aria-invalid={sessionError?.field === "idle" ? true : undefined}
-              aria-describedby={sessionError?.field === "idle" ? sessionErrorId : undefined}
-              onChange={(event) => setDraft((d) => ({ ...d, sessionIdleMinutes: event.target.value }))}
-            />
-            {sessionError?.field === "idle" ? (
-              <span id={sessionErrorId} className="ui-field-error">
-                {sessionError.text}
-              </span>
-            ) : null}
+    <>
+      <Panel id="general" title={t("settings.general")}>
+        <Row label={t("settings.language")} hint={t("settings.languageHint")}>
+          <fieldset className="ui-seg ui-plain-fieldset">
+            <legend className="ui-sr-only">{t("settings.language")}</legend>
+            {LANGUAGES.map((code) => (
+              <button
+                key={code}
+                type="button"
+                lang={code}
+                aria-pressed={current.language === code}
+                onClick={() => set({ language: code as Language })}
+              >
+                {new Intl.DisplayNames([code], { type: "language" }).of(code)}
+              </button>
+            ))}
+          </fieldset>
+        </Row>
+        <Row label={t("settings.dateFormat")} hint={t("settings.dateFormatHint")} htmlFor={`${ids.days}-date`}>
+          <select
+            id={`${ids.days}-date`}
+            className="ui-select"
+            value={current.dateFormat}
+            onChange={(event) => set({ dateFormat: event.target.value as DateFormat })}
+          >
+            {isDateFormat(current.dateFormat) ? null : <option value={current.dateFormat}>{current.dateFormat}</option>}
+            {DATE_FORMATS.map((format) => (
+              <option key={format} value={format}>
+                {format === "browser" ? t("settings.dateBrowser") : format.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </Row>
+        <Row label={t("settings.timeFormat")} hint={t("settings.timeFormatHint")}>
+          <fieldset className="ui-seg ui-plain-fieldset">
+            <legend className="ui-sr-only">{t("settings.timeFormat")}</legend>
+            {TIME_FORMATS.map((format) => (
+              <button
+                key={format}
+                type="button"
+                aria-pressed={
+                  current.timeFormat === format || (format === "HH:mm" && !isTimeFormat(current.timeFormat))
+                }
+                onClick={() => set({ timeFormat: format })}
+              >
+                {t(`settings.timeFormats.${format === "HH:mm" ? "h24" : format === "h:mm a" ? "h12" : "browser"}`)}
+              </button>
+            ))}
+          </fieldset>
+          <span className="ui-hint ui-num" aria-live="polite">
+            {t("settings.example", { example })}
           </span>
-        ) : null}
-      </Row>
+        </Row>
+        <Row label={t("settings.timeZone")} hint={t("settings.timeZoneHint")}>
+          <span className="ui-mono">{APP_TIME_ZONE}</span>
+        </Row>
+        <Row label={t("settings.closedDays")} hint={t("settings.closedDaysHint")} htmlFor={ids.days}>
+          <input
+            id={ids.days}
+            className="ui-input ui-input-num"
+            type="number"
+            inputMode="numeric"
+            min={CLOSED_DAYS_MIN}
+            max={CLOSED_DAYS_MAX}
+            value={current.closedItemDays}
+            {...invalid("days")}
+            onChange={(event) => set({ closedItemDays: event.target.value })}
+          />
+          {fieldError("days")}
+        </Row>
+        <Row label={t("settings.session.idleDays")} hint={t("settings.session.idleDaysHint")} htmlFor={ids.idle}>
+          <input
+            id={ids.idle}
+            className="ui-input ui-input-num"
+            type="number"
+            inputMode="numeric"
+            min={SESSION_IDLE_DAYS_MIN}
+            max={SESSION_IDLE_DAYS_MAX}
+            value={current.sessionIdleDays}
+            {...invalid("idle")}
+            onChange={(event) => set({ sessionIdleDays: event.target.value })}
+          />
+          {fieldError("idle")}
+        </Row>
+      </Panel>
+
+      <AccountPanel />
+
+      <Panel id="telegram" title={t("telegramSettings.title")}>
+        <p className="ui-panel-body ui-hint">{t("telegramSettings.hint")}</p>
+        <TelegramState saved={saved} />
+        <Row label={t("telegramSettings.botToken")} hint={t("telegramSettings.botTokenHint")} htmlFor={ids.token}>
+          <BotTokenField
+            id={ids.token}
+            saved={saved.telegram.botToken}
+            draft={draft.botToken}
+            onChange={(botToken) => set({ botToken })}
+            invalidProps={invalid("token")}
+          />
+          {fieldError("token")}
+        </Row>
+        <Row label={t("telegramSettings.chatId")} hint={t("telegramSettings.chatIdHint")} htmlFor={ids.chat}>
+          {saved.telegram.chatId.locked ? (
+            <>
+              <input id={ids.chat} className="ui-input" value={current.chatId} disabled dir="ltr" />
+              <EnvLock variable={saved.telegram.chatId.variable} />
+            </>
+          ) : (
+            <input
+              id={ids.chat}
+              className="ui-input"
+              inputMode="numeric"
+              dir="ltr"
+              maxLength={21}
+              placeholder={t("telegramSettings.notSet")}
+              value={current.chatId}
+              {...invalid("chat")}
+              onChange={(event) => set({ chatId: event.target.value })}
+            />
+          )}
+          {fieldError("chat")}
+        </Row>
+        <SwitchRow
+          label={t("telegramSettings.otp")}
+          hint={t("telegramSettings.otpHint")}
+          checked={current.otpViaTelegram}
+          disabled={saved.telegram.state !== "on" && !saved.otpViaTelegram}
+          note={
+            saved.telegram.state !== "on" && !saved.otpViaTelegram
+              ? t("telegramSettings.otpNeedsTelegram")
+              : current.otpViaTelegram
+                ? t("telegramSettings.otpWarning")
+                : undefined
+          }
+          onChange={(otpViaTelegram) => set({ otpViaTelegram })}
+        />
+        <TelegramRuntimeRows on={saved.telegram.state === "on"} />
+      </Panel>
+
+      <AgentKeysPanel />
+
+      <Panel id="secret-check" title={t("secretCheck.title")}>
+        <p className="ui-panel-body ui-hint">{t("secretCheck.hint")}</p>
+        <Row label={t("secretCheck.domains")} hint={t("secretCheck.domainsHint")} htmlFor={ids.domain}>
+          <DomainsField
+            id={ids.domain}
+            value={current.privateDomains}
+            locked={saved.privateDomains.locked}
+            variable={saved.privateDomains.variable}
+            onChange={(privateDomains) => set({ privateDomains })}
+            onInvalid={(text) => refuse("domain", t("secretCheck.domains"), text)}
+          />
+          {fieldError("domain")}
+        </Row>
+      </Panel>
+
       <SaveBar
         count={count}
         busy={busy}
         onSave={() => void save()}
         onDiscard={() => {
           setDraft({})
-          setDaysError(null)
-          setSessionError(null)
+          setError(null)
         }}
       />
-    </Panel>
+    </>
+  )
+}
+
+/** Off, incomplete (naming what is missing) or on. */
+function TelegramState({ saved }: { saved: Settings }) {
+  const { t } = useI18n()
+  const { state, missing } = saved.telegram
+  const tone = state === "on" ? "ok" : state === "incomplete" ? "warn" : "neutral"
+  return (
+    <div className="ui-kv">
+      <span>{t("telegramSettings.state")}</span>
+      <span>
+        <Tag tone={tone}>{t(`telegramSettings.states.${state}`)}</Tag>{" "}
+        {state === "incomplete" ? (
+          <span className="ui-hint">
+            {t("telegramSettings.missing", {
+              fields: missing.map((field) => t(`telegramSettings.${field}`)).join(", "),
+            })}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+/** The stored bot token: never shown; Set with Replace and Remove, or an input when there is none (v3 FS-3). */
+function BotTokenField({
+  id,
+  saved,
+  draft,
+  onChange,
+  invalidProps,
+}: {
+  id: string
+  saved: Settings["telegram"]["botToken"]
+  draft: TokenDraft | undefined
+  onChange: (next: TokenDraft | undefined) => void
+  invalidProps: Record<string, unknown>
+}) {
+  const { t } = useI18n()
+  if (saved.locked)
+    return (
+      <>
+        <span className="ui-set-secret">{t("telegramSettings.setByEnv")}</span>
+        <EnvLock variable={saved.variable} />
+      </>
+    )
+  const input = (
+    <input
+      id={id}
+      className="ui-input"
+      type="password"
+      autoComplete="new-password"
+      dir="ltr"
+      maxLength={200}
+      placeholder={saved.set ? t("telegramSettings.newValue") : t("telegramSettings.notSet")}
+      value={draft?.mode === "replace" ? draft.value : ""}
+      {...invalidProps}
+      onChange={(event) => onChange({ mode: "replace", value: event.target.value })}
+      // biome-ignore lint/a11y/noAutofocus: Replace puts the cursor where the new token goes (v3 FS-3)
+      autoFocus={draft?.mode === "replace"}
+    />
+  )
+  if (!saved.set) return input
+  if (!saved.readable && draft?.mode !== "remove")
+    return (
+      <>
+        <span className="ui-set-secret is-removing">{t("telegramSettings.unreadable")}</span>
+        {input}
+        <button type="button" className="ui-link-btn" onClick={() => onChange({ mode: "remove" })}>
+          {t("telegramSettings.remove")}
+        </button>
+      </>
+    )
+  if (draft?.mode === "replace")
+    return (
+      <>
+        {input}
+        <button type="button" className="ui-link-btn" onClick={() => onChange(undefined)}>
+          {t("telegramSettings.keep")}
+        </button>
+      </>
+    )
+  return (
+    <span className="ui-set-secret-row">
+      <span className={`ui-set-secret${draft?.mode === "remove" ? " is-removing" : ""}`}>
+        {draft?.mode === "remove" ? t("telegramSettings.removedOnSave") : t("telegramSettings.stored")}
+      </span>
+      {draft?.mode === "remove" ? (
+        <button type="button" className="ui-btn ui-btn-sm" onClick={() => onChange(undefined)}>
+          {t("telegramSettings.keep")}
+        </button>
+      ) : (
+        <>
+          <button type="button" className="ui-btn ui-btn-sm" onClick={() => onChange({ mode: "replace", value: "" })}>
+            {t("telegramSettings.replace")}
+          </button>
+          <button type="button" className="ui-btn ui-btn-sm" onClick={() => onChange({ mode: "remove" })}>
+            {t("telegramSettings.remove")}
+          </button>
+        </>
+      )}
+    </span>
+  )
+}
+
+/** Private domains as chips with an Add field (v3 FS-15); read-only when the environment sets them. */
+function DomainsField({
+  id,
+  value,
+  locked,
+  variable,
+  onChange,
+  onInvalid,
+}: {
+  id: string
+  value: string[]
+  locked: boolean
+  variable: string | null
+  onChange: (next: string[]) => void
+  onInvalid: (text: string) => void
+}) {
+  const { t } = useI18n()
+  const [typed, setTyped] = useState("")
+  const add = (event: FormEvent) => {
+    event.preventDefault()
+    const domain = typed
+      .trim()
+      .toLowerCase()
+      .replace(/^\.+|\.+$/g, "")
+    if (!domain) return
+    if (!DOMAIN.test(domain)) return onInvalid(t("secretCheck.domainInvalid"))
+    if (!value.includes(domain)) onChange([...value, domain])
+    setTyped("")
+  }
+  return (
+    <>
+      {value.length > 0 ? (
+        <ul className="ui-domain-chips" dir="ltr">
+          {value.map((domain) => (
+            <li key={domain} className="ui-chip">
+              <span className="ui-mono">{domain}</span>
+              {locked ? null : (
+                <button
+                  type="button"
+                  className="ui-chip-x"
+                  title={t("secretCheck.remove")}
+                  aria-label={t("secretCheck.removeDomain", { domain })}
+                  onClick={() => onChange(value.filter((d) => d !== domain))}
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <span className="ui-hint">{t("secretCheck.none")}</span>
+      )}
+      {locked ? (
+        <EnvLock variable={variable} />
+      ) : (
+        <span className="ui-domain-add">
+          <input
+            id={id}
+            className="ui-input"
+            dir="ltr"
+            maxLength={253}
+            autoCapitalize="off"
+            spellCheck={false}
+            placeholder={t("secretCheck.placeholder")}
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") add(event)
+            }}
+          />
+          <button type="button" className="ui-btn" onClick={add}>
+            {t("secretCheck.add")}
+          </button>
+        </span>
+      )}
+    </>
+  )
+}
+
+const JOB_TONE = { sent: "ok", sending: "info", failed: "fail", unknown: "warn", skipped: "warn" } as const
+
+/** What the running bot reports, and the test message, while Telegram is on. */
+function TelegramRuntimeRows({ on }: { on: boolean }) {
+  const { t, language } = useI18n()
+  const [sendingTest, setSendingTest] = useState(false)
+  const telegram = usePageQuery({ queryKey: qk.telegram, queryFn: api.telegramStatus, every: EVERY.slow })
+  const sendTest = async () => {
+    setSendingTest(true)
+    try {
+      const result = await api.telegramTestMessage()
+      if (result.warning) showToast(t("settings.telegramTestSentUnrecorded"), "warning")
+      else showToast(t("settings.telegramTestSent"), "success")
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "telegram_uncertain")
+        showToast(t("settings.telegramTestUncertain"), "warning")
+      else if (error instanceof ApiError && error.code === "telegram_failed")
+        showToast(t("settings.telegramTestRefused"), "error")
+      else showToast(t("settings.telegramTestFailed", { reason: errorReason(language, error) }), "error")
+    } finally {
+      setSendingTest(false)
+    }
+  }
+  if (!on) return null
+  if (telegram.isError && !telegram.data)
+    return (
+      <div className="ui-panel-body">
+        <ErrorState
+          title={t("settings.telegramFailed")}
+          error={telegram.error}
+          onRetry={() => void telegram.refetch()}
+        />
+      </div>
+    )
+  if (!telegram.data) return null
+  return (
+    <>
+      <div className="ui-kv">
+        <span>{t("settings.bot")}</span>
+        <span>
+          <Tag tone={telegram.data.polling ? "ok" : "warn"}>
+            {telegram.data.polling ? t("settings.botPolling") : t("settings.botNotPolling")}
+          </Tag>
+        </span>
+      </div>
+      <div className="ui-kv">
+        <span>{t("settings.lastUpdate")}</span>
+        <span>
+          {telegram.data.lastUpdateAt ? (
+            <Time value={telegram.data.lastUpdateAt} mode="full" />
+          ) : (
+            t("settings.noUpdateYet")
+          )}
+        </span>
+      </div>
+      <div className="ui-kv">
+        <span>{t("settings.lastMorning")}</span>
+        <span>
+          {telegram.data.lastMorning ? (
+            <>
+              <Time value={telegram.data.lastMorning.at ?? telegram.data.lastMorning.localDate} mode="day" />{" "}
+              <Tag tone={JOB_TONE[telegram.data.lastMorning.state]}>
+                {t(`settings.job.${telegram.data.lastMorning.state}`)}
+              </Tag>
+            </>
+          ) : (
+            t("settings.noMorningYet")
+          )}
+        </span>
+      </div>
+      <div className="ui-panel-body">
+        <p className="ui-hint">{t("settings.telegramTestHint")}</p>
+        <button type="button" className="ui-btn" disabled={sendingTest} onClick={() => void sendTest()}>
+          {sendingTest ? t("settings.telegramTestSending") : t("settings.telegramTest")}
+        </button>
+      </div>
+    </>
   )
 }
 
@@ -378,213 +652,6 @@ function AppearancePanel() {
         </fieldset>
       </Row>
     </Panel>
-  )
-}
-
-/** Leaves for sign-in after this browser's session ended on purpose; nothing asks about unsaved changes. */
-function useSignedOut() {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  const clearUnsaved = useClearUnsaved()
-  return () => {
-    clearUnsaved()
-    queryClient.clear()
-    navigate("/login", { replace: true })
-  }
-}
-
-function AccountPanel() {
-  const { t, language } = useI18n()
-  const queryClient = useQueryClient()
-  const signedOut = useSignedOut()
-  const query = usePageQuery({ queryKey: qk.account, queryFn: api.account, every: EVERY.slow })
-  const [signingOut, setSigningOut] = useState(false)
-  const sessions = query.data?.sessions ?? []
-
-  const signOut = async () => {
-    setSigningOut(true)
-    try {
-      const { error } = await authClient.signOut()
-      if (error?.status) throw new ApiError(error.status, "unknown", error.message ?? null)
-      signedOut()
-    } catch (error) {
-      setSigningOut(false)
-      showToast(t("account.signOutFailed", { reason: errorReason(language, error) }), "error")
-    }
-  }
-  const endOthers = async () => {
-    const ok = await confirmDialog({
-      title: t("account.endOthersTitle"),
-      message: t("account.endOthersMessage"),
-      confirmText: t("account.endOthers"),
-      danger: true,
-    })
-    if (!ok) return
-    try {
-      await api.endOtherSessions()
-      showToast(t("account.endOthersDone"), "success")
-      await queryClient.invalidateQueries({ queryKey: qk.account })
-    } catch (error) {
-      showToast(t("account.endFailed", { reason: errorReason(language, error) }), "error")
-    }
-  }
-  const endAll = async () => {
-    const ok = await confirmDialog({
-      title: t("account.endAllTitle"),
-      message: t("account.endAllMessage"),
-      confirmText: t("account.endAll"),
-      danger: true,
-    })
-    if (!ok) return
-    try {
-      await api.endAllSessions()
-      signedOut()
-    } catch (error) {
-      showToast(t("account.endFailed", { reason: errorReason(language, error) }), "error")
-    }
-  }
-
-  return (
-    <Panel
-      id="account"
-      title={t("account.title")}
-      extra={
-        <button type="button" className="ui-more" disabled={signingOut} onClick={() => void signOut()}>
-          {t("account.signOut")}
-        </button>
-      }
-    >
-      {query.isPending ? <Loading label={t("account.loading")} /> : null}
-      {query.isError && !query.data ? (
-        <ErrorState title={t("account.failed")} error={query.error} onRetry={() => void query.refetch()} />
-      ) : null}
-      {query.data ? (
-        <>
-          <div className="ui-kv">
-            <span>{t("account.signedInAs")}</span>
-            <bdi className="ui-mono" dir="ltr">
-              {query.data.username}
-            </bdi>
-          </div>
-          <div className="ui-panel-body">
-            <h3 className="ui-h3">{t("account.sessions")}</h3>
-            <p className="ui-hint">{t("account.sessionsHint")}</p>
-          </div>
-          {sessions.map((session) => {
-            const agent = describeAgent(session.userAgent)
-            return (
-              <div key={session.id} className="ui-item">
-                <div className="ui-item-main">
-                  <span className="ui-item-title">
-                    <bdi dir="auto">{agent ? t("account.browserOn", agent) : t("account.unknownBrowser")}</bdi>{" "}
-                    {session.current ? <Tag tone="info">{t("account.thisBrowser")}</Tag> : null}
-                  </span>
-                  <span className="ui-item-meta">
-                    {t("account.signedIn")} <Time value={session.signedInAt} mode="full" /> · {t("account.lastActive")}{" "}
-                    <Time value={session.activeAt} mode="ago" />
-                  </span>
-                </div>
-              </div>
-            )
-          })}
-          <div className="ui-panel-body ui-account-actions">
-            {sessions.length > 1 ? (
-              <button type="button" className="ui-btn ui-btn-danger" onClick={() => void endOthers()}>
-                {t("account.endOthers")}
-              </button>
-            ) : null}
-            <button type="button" className="ui-btn ui-btn-danger" onClick={() => void endAll()}>
-              {t("account.endAll")}
-            </button>
-          </div>
-          <PasswordForm />
-          <div className="ui-panel-body ui-auth-note">
-            <h3 className="ui-h3">{t("account.recovery")}</h3>
-            <p className="ui-hint">{t("account.recoveryHint")}</p>
-            <Copyable value={RECOVERY_COMMAND} />
-          </div>
-        </>
-      ) : null}
-    </Panel>
-  )
-}
-
-/** Change password: the current one, the new one twice. Other browsers are signed out; this one stays. */
-function PasswordForm() {
-  const { t, language } = useI18n()
-  const queryClient = useQueryClient()
-  const [current, setCurrent] = useState("")
-  const [next, setNext] = useState("")
-  const [repeat, setRepeat] = useState("")
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<{ field: "current" | "next" | "repeat" | null; text: string } | null>(null)
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
-    if (!current) return setError({ field: "current", text: t("account.wrongCurrent") })
-    if (!passwordSchema.safeParse(next).success)
-      return setError({
-        field: "next",
-        text:
-          next.length > PASSWORD_MAX
-            ? t("auth.error.passwordLong", { max: PASSWORD_MAX })
-            : t("auth.error.passwordShort", { min: PASSWORD_MIN }),
-      })
-    if (next !== repeat) return setError({ field: "repeat", text: t("auth.error.mismatch") })
-    setBusy(true)
-    setError(null)
-    try {
-      await api.changePassword(current, next)
-      setCurrent("")
-      setNext("")
-      setRepeat("")
-      showToast(t("account.changed"), "success")
-      await queryClient.invalidateQueries({ queryKey: qk.account })
-    } catch (failure) {
-      if (failure instanceof ApiError && failure.code === "wrong_password") {
-        setCurrent("")
-        setError({ field: "current", text: t("account.wrongCurrent") })
-      } else if (failure instanceof ApiError && failure.code === "rate_limited")
-        setError({ field: null, text: t("auth.error.rateLimited") })
-      else setError({ field: null, text: t("account.changeFailed", { reason: errorReason(language, failure) }) })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <form className="ui-panel-body ui-account-form" onSubmit={submit} noValidate>
-      <div>
-        <h3 className="ui-h3">{t("account.password")}</h3>
-        <p className="ui-hint">{t("account.passwordHint")}</p>
-      </div>
-      <PasswordField
-        label={t("account.currentPassword")}
-        value={current}
-        onChange={setCurrent}
-        autoComplete="current-password"
-        invalid={error?.field === "current"}
-      />
-      <PasswordField
-        label={t("account.newPassword")}
-        hint={t("auth.passwordHint", { min: PASSWORD_MIN })}
-        value={next}
-        onChange={setNext}
-        autoComplete="new-password"
-        invalid={error?.field === "next"}
-      />
-      <PasswordField
-        label={t("account.repeatNewPassword")}
-        value={repeat}
-        onChange={setRepeat}
-        autoComplete="new-password"
-        invalid={error?.field === "repeat"}
-      />
-      {error ? <FormError>{error.text}</FormError> : null}
-      <button type="submit" className="ui-btn" disabled={busy}>
-        {busy ? t("account.changing") : t("account.change")}
-      </button>
-    </form>
   )
 }
 
@@ -654,30 +721,11 @@ function SuppressionsPanel() {
 }
 
 const OUTCOME_TONE = { succeeded: "ok", partial: "warn", failed: "fail" } as const
-const JOB_TONE = { sent: "ok", sending: "info", failed: "fail", unknown: "warn", skipped: "warn" } as const
 
 function StatusPanel() {
-  const { t, language } = useI18n()
-  const [sendingTest, setSendingTest] = useState(false)
-  const sendTest = async () => {
-    setSendingTest(true)
-    try {
-      const result = await api.telegramTestMessage()
-      if (result.warning) showToast(t("settings.telegramTestSentUnrecorded"), "warning")
-      else showToast(t("settings.telegramTestSent"), "success")
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "telegram_uncertain")
-        showToast(t("settings.telegramTestUncertain"), "warning")
-      else if (error instanceof ApiError && error.code === "telegram_failed")
-        showToast(t("settings.telegramTestRefused"), "error")
-      else showToast(t("settings.telegramTestFailed", { reason: errorReason(language, error) }), "error")
-    } finally {
-      setSendingTest(false)
-    }
-  }
+  const { t } = useI18n()
   const morning = useQuery({ queryKey: qk.morning, queryFn: api.morning, staleTime: EVERY.live })
   const runs = usePageQuery({ queryKey: qk.syncRuns, queryFn: api.syncRuns, every: EVERY.slow })
-  const telegram = usePageQuery({ queryKey: qk.telegram, queryFn: api.telegramStatus, every: EVERY.slow })
   const sync = morning.data?.sync
   const lastT3 = runs.data?.find((run) => run.kind === "t3" && run.outcome)
   return (
@@ -713,61 +761,6 @@ function StatusPanel() {
           )}
         </span>
       </div>
-      {telegram.isError && !telegram.data ? (
-        <div className="ui-panel-body">
-          <ErrorState
-            title={t("settings.telegramFailed")}
-            error={telegram.error}
-            onRetry={() => void telegram.refetch()}
-          />
-        </div>
-      ) : telegram.data?.configured ? (
-        <>
-          <div className="ui-kv">
-            <span>{t("settings.bot")}</span>
-            <span>
-              <Tag tone={telegram.data.polling ? "ok" : "warn"}>
-                {telegram.data.polling ? t("settings.botPolling") : t("settings.botNotPolling")}
-              </Tag>
-            </span>
-          </div>
-          <div className="ui-kv">
-            <span>{t("settings.lastUpdate")}</span>
-            <span>
-              {telegram.data.lastUpdateAt ? (
-                <Time value={telegram.data.lastUpdateAt} mode="full" />
-              ) : (
-                t("settings.noUpdateYet")
-              )}
-            </span>
-          </div>
-          <div className="ui-kv">
-            <span>{t("settings.lastMorning")}</span>
-            <span>
-              {telegram.data.lastMorning ? (
-                <>
-                  <Time value={telegram.data.lastMorning.at ?? telegram.data.lastMorning.localDate} mode="day" />{" "}
-                  <Tag tone={JOB_TONE[telegram.data.lastMorning.state]}>
-                    {t(`settings.job.${telegram.data.lastMorning.state}`)}
-                  </Tag>
-                </>
-              ) : (
-                t("settings.noMorningYet")
-              )}
-            </span>
-          </div>
-          <div className="ui-panel-body">
-            <p className="ui-hint">{t("settings.telegramTestHint")}</p>
-            <button type="button" className="ui-btn" disabled={sendingTest} onClick={() => void sendTest()}>
-              {sendingTest ? t("settings.telegramTestSending") : t("settings.telegramTest")}
-            </button>
-          </div>
-        </>
-      ) : telegram.data ? (
-        <div className="ui-panel-body">
-          <Locked title={t("settings.telegramLocked")}>{t("settings.telegramLockedBody")}</Locked>
-        </div>
-      ) : null}
     </Panel>
   )
 }
