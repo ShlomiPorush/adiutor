@@ -100,7 +100,7 @@ export function AgentKeysPanel() {
             </span>
           </div>
         ))}
-        <p className="ui-hint">{t("agentKeys.howOptions")}</p>
+        <p className="ui-hint">{t("agentKeys.howOptions", { name: "--name", days: "--days" })}</p>
       </div>
       {query.isPending ? <Loading label={t("agentKeys.loading")} /> : null}
       {query.isError && !query.data ? (

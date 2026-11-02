@@ -839,7 +839,7 @@
       "claude": "Claude Code",
       "codex": "Codex"
     },
-    "howOptions": "--name sets the name shown below and --days how long the key works (1 to 365 days, 90 if left out). For Claude Code and Codex the command prints the setup once; it can stay in your shell history.",
+    "howOptions": "{name} sets the name shown below and {days} how long the key works (1 to 365 days, 90 if left out). For Claude Code and Codex the command prints the setup once; it can stay in your shell history.",
     "loading": "Loading the agents...",
     "failed": "Could not load the agents",
     "empty": "No agents connected yet",
