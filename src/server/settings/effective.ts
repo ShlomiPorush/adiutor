@@ -31,7 +31,11 @@ export type TelegramView = {
 
 export type PrivateDomainsView = { value: string[]; locked: boolean; variable: string | null }
 
-export function effectiveTelegram(row: SettingsRow, overrides: EnvOverrides, cipher: SettingsCipher): EffectiveTelegram {
+export function effectiveTelegram(
+  row: SettingsRow,
+  overrides: EnvOverrides,
+  cipher: SettingsCipher,
+): EffectiveTelegram {
   const tokenLocked = overrides.telegramBotToken !== undefined
   const stored = row.telegramBotTokenEnc
   const decrypted = !tokenLocked && stored ? cipher.decrypt(BOT_TOKEN_COLUMN, stored) : null

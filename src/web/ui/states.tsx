@@ -4,6 +4,7 @@
 
 import { Lock } from "lucide-react"
 import type { ReactNode } from "react"
+import { AuthCallError } from "../api/auth.ts"
 import { ApiError } from "../api/client.ts"
 import { translate, useI18n } from "../i18n/i18n.tsx"
 
@@ -32,6 +33,10 @@ export function errorReason(language: "he" | "en", error: unknown): string {
     if (error.serverMessage) return error.serverMessage
     if (error.code !== "unknown") return translate(language, `errors.code.${error.code}`)
     return translate(language, "errors.http", { status: error.status })
+  }
+  if (error instanceof AuthCallError) {
+    if (!error.answer.status) return translate(language, "errors.network")
+    return error.answer.message || translate(language, "errors.http", { status: error.answer.status })
   }
   return translate(language, "errors.unexpected")
 }

@@ -20,16 +20,13 @@ export class ApiError extends Error {
   readonly code: ApiErrorCode | "network" | "unknown"
   /** The server's own sentence, shown as the reason after the UI's own text. */
   readonly serverMessage: string | null
-  /** Why a session ended (session_ended): max or idle. */
-  readonly reason: string | null
 
-  constructor(status: number, code: ApiError["code"], serverMessage: string | null, reason: string | null = null) {
+  constructor(status: number, code: ApiError["code"], serverMessage: string | null) {
     super(serverMessage ?? code)
     this.name = "ApiError"
     this.status = status
     this.code = code
     this.serverMessage = serverMessage
-    this.reason = reason
   }
 }
 
@@ -78,14 +75,13 @@ export function onUnauthorized(handler: ((error: ApiError) => void) | null): voi
 }
 
 function errorFrom(status: number, body: unknown): ApiError {
-  const error = (body as { error?: { code?: unknown; message?: unknown; reason?: unknown } } | null)?.error
+  const error = (body as { error?: { code?: unknown; message?: unknown } } | null)?.error
   const code =
     typeof error?.code === "string" && (API_ERROR_CODES as readonly string[]).includes(error.code)
       ? (error.code as ApiErrorCode)
       : null
   const message = typeof error?.message === "string" && error.message.trim() ? error.message.trim() : null
-  const reason = typeof error?.reason === "string" ? error.reason : null
-  if (code) return new ApiError(status, code, message, reason)
+  if (code) return new ApiError(status, code, message)
   if (status === 401) return new ApiError(status, "unauthorized", message)
   if (status === 403) return new ApiError(status, "forbidden", message)
   if (status === 404) return new ApiError(status, "not_found", message)

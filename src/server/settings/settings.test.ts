@@ -76,7 +76,11 @@ describe("effective settings: the environment first, per field", () => {
       variable: "MIKUD_TELEGRAM_BOT_TOKEN",
     })
     expect(merged.view.chatId).toEqual({ value: "42", locked: false, variable: null })
-    const env = effectiveTelegram(row({ telegramBotTokenEnc: enc, telegramChatId: "42" }), { telegramChatId: "7" }, cipher)
+    const env = effectiveTelegram(
+      row({ telegramBotTokenEnc: enc, telegramChatId: "42" }),
+      { telegramChatId: "7" },
+      cipher,
+    )
     expect([env.chatId, env.view.chatId.locked]).toEqual(["7", true])
   })
 
@@ -93,8 +97,8 @@ describe("effective settings: the environment first, per field", () => {
       locked: false,
       variable: null,
     })
-    expect(effectivePrivateDomains(row({ privateDomains: ["corp.example"] }), { privateDomains: ["lab.test"] })).toEqual(
-      { value: ["lab.test"], locked: true, variable: "MIKUD_PRIVATE_DOMAINS" },
-    )
+    expect(
+      effectivePrivateDomains(row({ privateDomains: ["corp.example"] }), { privateDomains: ["lab.test"] }),
+    ).toEqual({ value: ["lab.test"], locked: true, variable: "MIKUD_PRIVATE_DOMAINS" })
   })
 })

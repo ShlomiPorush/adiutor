@@ -54,8 +54,7 @@ const auth = new AuthHolder(
   },
   {
     sessionIdleDays: settings.sessionIdleDays,
-    otpViaTelegram:
-      settings.otpViaTelegram && effectiveTelegram(settings, env.overrides, env.cipher).state === "on",
+    otpViaTelegram: settings.otpViaTelegram && effectiveTelegram(settings, env.overrides, env.cipher).state === "on",
   },
 )
 const runtime = new SettingsRuntime({ ctx, env, auth, telegram, scanner })

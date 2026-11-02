@@ -1,6 +1,6 @@
 import type { Context } from "hono"
 import type { AppDeps } from "../app.ts"
-import { type AuthOptions, AuthHolder, type AuthSettings } from "../auth/auth.ts"
+import { AuthHolder, type AuthOptions, type AuthSettings } from "../auth/auth.ts"
 import type { EnvOverrides } from "../config.ts"
 import { authUser } from "../db/schema.ts"
 import type { RateLimiter } from "../http/auth.ts"
@@ -51,7 +51,10 @@ export function testAuthBase(t: TestDatabase, publicUrl: URL, extra: TestCoreOpt
 
 export function testCore(t: TestDatabase, options: TestCoreOptions): TestCore {
   const scanner = t.ctx.secrets instanceof ReloadableSecretScanner ? t.ctx.secrets : new ReloadableSecretScanner()
-  const env = { overrides: options.overrides ?? {}, cipher: createSettingsCipher([{ version: 1, value: TEST_SETTINGS_KEY }]) }
+  const env = {
+    overrides: options.overrides ?? {},
+    cipher: createSettingsCipher([{ version: 1, value: TEST_SETTINGS_KEY }]),
+  }
   const telegramService = new TelegramService({
     ctx: t.ctx,
     publicUrl: options.config.publicUrl,
@@ -60,7 +63,10 @@ export function testCore(t: TestDatabase, options: TestCoreOptions): TestCore {
     withoutMorningJob: true,
   })
   const auth = new AuthHolder(
-    { ...testAuthBase(t, options.config.publicUrl, options.auth), sendOtp: (code) => telegramService.sendSignInCode(code) },
+    {
+      ...testAuthBase(t, options.config.publicUrl, options.auth),
+      sendOtp: (code) => telegramService.sendSignInCode(code),
+    },
     { sessionIdleDays: 30, otpViaTelegram: false, ...options.authSettings },
   )
   const runtime = new SettingsRuntime({ ctx: t.ctx, env, auth, telegram: telegramService, scanner })

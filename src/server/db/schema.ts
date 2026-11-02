@@ -14,6 +14,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
+import { SESSION_IDLE_DAYS_DEFAULT, SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 import {
   ACTOR_KINDS,
   AUDIT_SOURCES,
@@ -31,7 +32,6 @@ import {
   SYNC_OUTCOMES,
   TELEGRAM_OUTCOMES,
 } from "../../shared/enums.ts"
-import { SESSION_IDLE_DAYS_DEFAULT, SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 
 // Codes are stored as text and checked by the database against the lists in src/shared/enums.ts.
 // Adding a code means a new migration: drizzle-kit generate picks up the changed check.

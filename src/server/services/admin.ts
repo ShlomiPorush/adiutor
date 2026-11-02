@@ -1,8 +1,8 @@
 import { and, desc, eq, lt } from "drizzle-orm"
 import type { Language } from "../../shared/enums.ts"
+import type { EnvOverrides } from "../config.ts"
 import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { settings, suppressions, visits } from "../db/schema.ts"
-import type { EnvOverrides } from "../config.ts"
 import { AppError, invalid, notFound } from "../errors.ts"
 import type { SettingsCipher } from "../settings/crypto.ts"
 import { BOT_TOKEN_COLUMN, effectivePrivateDomains, effectiveTelegram } from "../settings/effective.ts"
@@ -57,12 +57,7 @@ const locked = (variable: string) =>
     variable,
   })
 
-export async function updateSettings(
-  ctx: Ctx,
-  by: By,
-  patch: SettingsPatch,
-  env?: SettingsEnv,
-): Promise<SettingsRow> {
+export async function updateSettings(ctx: Ctx, by: By, patch: SettingsPatch, env?: SettingsEnv): Promise<SettingsRow> {
   requireOwner(by, "change settings")
   if (patch.closedItemDays !== undefined && !(patch.closedItemDays >= 1 && patch.closedItemDays <= 365))
     throw invalid("closedItemDays must be between 1 and 365.")
@@ -71,7 +66,8 @@ export async function updateSettings(
     throw locked("MIKUD_TELEGRAM_BOT_TOKEN")
   if (patch.telegramChatId !== undefined && overrides.telegramChatId !== undefined)
     throw locked("MIKUD_TELEGRAM_CHAT_ID")
-  if (patch.privateDomains !== undefined && overrides.privateDomains !== undefined) throw locked("MIKUD_PRIVATE_DOMAINS")
+  if (patch.privateDomains !== undefined && overrides.privateDomains !== undefined)
+    throw locked("MIKUD_PRIVATE_DOMAINS")
   const { telegramBotToken, ...columns } = patch
   const set: Partial<SettingsRow> = { ...columns, updatedAt: ctx.clock() }
   if (telegramBotToken !== undefined) {
@@ -89,8 +85,7 @@ export async function updateSettings(
       if (telegram.state !== "on")
         throw invalid("Set up Telegram before sending sign-in codes there.", { field: "otpViaTelegram" })
     }
-    const token =
-      telegramBotToken === undefined ? undefined : telegramBotToken === null ? "removed" : "replaced"
+    const token = telegramBotToken === undefined ? undefined : telegramBotToken === null ? "removed" : "replaced"
     await writeAudit(ctx, tx, by, {
       action: "settings.update",
       entityType: "settings",

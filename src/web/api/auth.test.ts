@@ -6,14 +6,15 @@ describe("authFailure", () => {
   it("sorts failed sign-in answers by what the owner can do next", () => {
     expect(authFailure(null, "password")).toBe("network")
     expect(authFailure({ status: 401, code: "INVALID_USERNAME_OR_PASSWORD" }, "password")).toBe("wrong_password")
+    expect(authFailure({ status: 400, code: "INVALID_PASSWORD" }, "password")).toBe("wrong_password")
     expect(authFailure({ status: 401, code: "INVALID_CODE" }, "code")).toBe("wrong_code")
+    expect(authFailure({ status: 401, code: "INVALID_BACKUP_CODE" }, "code")).toBe("wrong_code")
     expect(authFailure({ status: 401, code: "INVALID_TWO_FACTOR_COOKIE" }, "code")).toBe("code_expired")
-    expect(authFailure({ status: 429, code: "rate_limited" }, "password")).toBe("rate_limited")
-    expect(authFailure({ status: 503, code: "busy" }, "password")).toBe("busy")
-    expect(authFailure({ status: 401, code: "session_ended", reason: "idle" }, "code")).toBe("session_ended")
+    expect(authFailure({ status: 429, code: "ACCOUNT_TEMPORARILY_LOCKED" }, "code")).toBe("account_locked")
+    expect(authFailure({ status: 429 }, "password")).toBe("rate_limited")
   })
 
-  it("shows a server failure (the wrapper's safe 500) as the UI's own sentence, not a number", () => {
+  it("shows a server failure as the UI's own sentence, not a number", () => {
     const failure = authFailure({ status: 500, code: "internal_error" }, "password")
     expect(failure).toBe("server")
     expect(FAILURE_TEXT.server).toBe("auth.error.server")

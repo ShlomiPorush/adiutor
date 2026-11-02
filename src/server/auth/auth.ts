@@ -123,7 +123,9 @@ async function readOwner(ctx: Ctx): Promise<OwnerRow | null> {
     })
     .from(authUser)
     .limit(1)
-  return row ? { id: row.id, username: row.username ?? row.name, twoFactorEnabled: row.twoFactorEnabled === true } : null
+  return row
+    ? { id: row.id, username: row.username ?? row.name, twoFactorEnabled: row.twoFactorEnabled === true }
+    : null
 }
 
 type HookContext = { path?: string; request?: Request; context?: { session?: unknown } } | null | undefined
@@ -325,7 +327,11 @@ export function createAuth(options: AuthOptions) {
             if (!(data as { password?: string }).password) return
             const path = pathOf(context)
             if (path === "/reset-password")
-              await audit({ actor: { kind: "system", label: "cli" }, source: "cli" }, "account.password_reset", "account")
+              await audit(
+                { actor: { kind: "system", label: "cli" }, source: "cli" },
+                "account.password_reset",
+                "account",
+              )
             else await audit(ownerBy(await readOwner(ctx)), "account.password_change", "account")
           },
         },

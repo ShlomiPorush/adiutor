@@ -102,7 +102,9 @@ describe("upgrading a database from Better Auth behind the wrapper", () => {
       emailAndPassword: { enabled: true, minPasswordLength: 12 },
       plugins: [username(), twoFactor({ issuer: "Mikud" })],
     })
-    const old = new TestBrowser((request) => legacy.handler(request), TEST_ORIGIN, { "x-forwarded-for": "198.51.100.7" })
+    const old = new TestBrowser((request) => legacy.handler(request), TEST_ORIGIN, {
+      "x-forwarded-for": "198.51.100.7",
+    })
     expect((await old.setup()).status).toBe(200)
     const { secret } = await old.enable()
     expect((await old.verify(totp(secret))).status).toBe(200)

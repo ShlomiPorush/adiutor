@@ -81,18 +81,16 @@ describe("request and endpoints", () => {
     await expect(api.morning()).rejects.toMatchObject({ code: "not_found" })
   })
 
-  it("reports a 401 and totp_required to the app, with the reason a session ended", async () => {
+  it("reports a 401 and totp_required to the app", async () => {
     const handler = vi.fn()
     onUnauthorized(handler)
     setTransport(answer(401, { error: { code: "unauthorized", message: "Sign in." } }))
     await expect(api.morning()).rejects.toMatchObject({ code: "unauthorized" })
-    setTransport(answer(401, { error: { code: "session_ended", message: "Ended.", reason: "idle" } }))
-    await expect(api.morning()).rejects.toMatchObject({ code: "session_ended", reason: "idle" })
     setTransport(answer(403, { error: { code: "totp_required", message: "Code." } }))
     await expect(api.morning()).rejects.toMatchObject({ code: "totp_required" })
     setTransport(answer(403, { error: { code: "forbidden", message: "No." } }))
     await expect(api.morning()).rejects.toMatchObject({ code: "forbidden" })
-    expect(handler.mock.calls.map(([e]) => e.code)).toEqual(["unauthorized", "session_ended", "totp_required"])
+    expect(handler.mock.calls.map(([e]) => e.code)).toEqual(["unauthorized", "totp_required"])
   })
 
   it("sends setup to /api/setup, not under /api/v1", async () => {

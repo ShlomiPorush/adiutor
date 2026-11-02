@@ -797,7 +797,14 @@ describe("secrets and logging", () => {
   it("still verifies TOTP after rotating to 2:new,1:old", async () => {
     const secret = await browser().owner()
     const rotated = ["new", "auth", "secret", "for", "tests", "only", "0000000"].join("-")
-    build({ auth: { secrets: [{ version: 2, value: rotated }, { version: 1, value: TEST_AUTH_SECRET }] } })
+    build({
+      auth: {
+        secrets: [
+          { version: 2, value: rotated },
+          { version: 1, value: TEST_AUTH_SECRET },
+        ],
+      },
+    })
     const b = browser()
     await b.signIn(secret)
     expect((await v1(b)).status).toBe(200)
@@ -813,7 +820,9 @@ describe("secrets and logging", () => {
     const lines: string[] = []
     const spies = [
       vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => void lines.push(args.map(String).join(" "))),
-      vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => void lines.push(args.map(String).join(" "))),
+      vi
+        .spyOn(console, "error")
+        .mockImplementation((...args: unknown[]) => void lines.push(args.map(String).join(" "))),
       vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => void lines.push(args.map(String).join(" "))),
     ]
     try {

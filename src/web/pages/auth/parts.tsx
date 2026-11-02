@@ -1,7 +1,8 @@
 // The parts the sign-in and setup pages share: the frame (a column on the page, no card, v3 FS-23), a password
-// field with show and Caps Lock note, and the six-digit code field that sends itself on the sixth digit.
+// field with show and Caps Lock note, the six-digit code field that sends itself on the sixth digit, the backup
+// code field, and the backup codes shown once with Copy, Download and "I saved them".
 
-import { Eye, EyeOff } from "lucide-react"
+import { Copy, Download, Eye, EyeOff } from "lucide-react"
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -15,6 +16,7 @@ import {
 } from "react"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { BrandIcon } from "../../shell/Shell.tsx"
+import { showToast } from "../../ui/Toast.tsx"
 
 export function AuthFrame({
   title,
@@ -153,12 +155,15 @@ export function CodeField({
   submitLabel,
   busyLabel,
   error,
+  hint,
 }: {
   onSubmit: (code: string) => Promise<CodeAnswer>
   busy: boolean
   submitLabel: string
   busyLabel: string
   error?: string | null
+  /** The sentence under the field; the authenticator app's by default. */
+  hint?: string
 }) {
   const { t } = useI18n()
   const id = useId()
@@ -224,7 +229,7 @@ export function CodeField({
           autoFocus
         />
         <p id={hintId} className="ui-hint">
-          {t("auth.codeHint")}
+          {hint ?? t("auth.codeHint")}
         </p>
       </div>
       {shownError ? <FormError id={errorId}>{shownError}</FormError> : null}
@@ -232,5 +237,136 @@ export function CodeField({
         {busy ? busyLabel : submitLabel}
       </button>
     </form>
+  )
+}
+
+/** A backup code from enrolment: typed as shown (the dash may be left out). Each code works once. */
+export function BackupCodeField({
+  onSubmit,
+  busy,
+  error,
+}: {
+  onSubmit: (code: string) => Promise<CodeAnswer>
+  busy: boolean
+  error?: string | null
+}) {
+  const { t } = useI18n()
+  const id = useId()
+  const hintId = useId()
+  const errorId = useId()
+  const [value, setValue] = useState("")
+  const [formatError, setFormatError] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!busy) input.current?.focus()
+  }, [busy])
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    const code = value.trim()
+    if (!/^[A-Za-z0-9-]{6,32}$/.test(code)) {
+      setFormatError(true)
+      input.current?.focus()
+      return
+    }
+    if ((await onSubmit(code)) === "refused") setValue("")
+  }
+
+  const shownError = formatError ? t("auth.error.backupFormat") : error
+  return (
+    <form className="ui-form-stack" onSubmit={(event) => void submit(event)} noValidate>
+      <div className="ui-field">
+        <label className="ui-label" htmlFor={id}>
+          {t("auth.backupCode")}
+        </label>
+        <input
+          id={id}
+          ref={input}
+          className="ui-input ui-code-input"
+          autoComplete="one-time-code"
+          autoCapitalize="off"
+          spellCheck={false}
+          maxLength={32}
+          dir="ltr"
+          value={value}
+          disabled={busy}
+          aria-invalid={shownError ? true : undefined}
+          aria-describedby={shownError ? `${errorId} ${hintId}` : hintId}
+          onChange={(event) => {
+            setValue(event.target.value)
+            setFormatError(false)
+          }}
+          // biome-ignore lint/a11y/noAutofocus: the backup code step has one job; the field is where it starts
+          autoFocus
+        />
+        <p id={hintId} className="ui-hint">
+          {t("auth.backupCodeHint")}
+        </p>
+      </div>
+      {shownError ? <FormError id={errorId}>{shownError}</FormError> : null}
+      <button type="submit" className="ui-btn ui-btn-primary" disabled={busy}>
+        {busy ? t("login.verifying") : t("login.verify")}
+      </button>
+    </form>
+  )
+}
+
+/**
+ * The backup codes, shown once: the only way in without the authenticator. Copy and Download keep them; Continue
+ * waits for "I saved them".
+ */
+export function BackupCodes({ codes, onDone, doneLabel }: { codes: string[]; onDone: () => void; doneLabel: string }) {
+  const { t } = useI18n()
+  const savedId = useId()
+  const [saved, setSaved] = useState(false)
+  const text = codes.join("\n")
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast(t("backupCodes.copied"), "success")
+    } catch {
+      showToast(t("backupCodes.copyFailed"), "error")
+    }
+  }
+  const download = () => {
+    const link = document.createElement("a")
+    link.href = URL.createObjectURL(new Blob([`${t("backupCodes.fileHeading")}\n\n${text}\n`], { type: "text/plain" }))
+    link.download = "mikud-backup-codes.txt"
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+  }
+  return (
+    <div className="ui-form-stack">
+      <p className="ui-hint">{t("backupCodes.hint", { count: codes.length })}</p>
+      <ol className="ui-backup-codes" dir="ltr" data-testid="backup-codes">
+        {codes.map((code) => (
+          <li key={code} className="ui-mono">
+            {code}
+          </li>
+        ))}
+      </ol>
+      <div className="ui-account-actions">
+        <button type="button" className="ui-btn" onClick={() => void copy()}>
+          <Copy size={14} aria-hidden="true" /> {t("backupCodes.copy")}
+        </button>
+        <button type="button" className="ui-btn" onClick={download}>
+          <Download size={14} aria-hidden="true" /> {t("backupCodes.download")}
+        </button>
+      </div>
+      <label className="ui-check-label" htmlFor={savedId}>
+        <input
+          id={savedId}
+          type="checkbox"
+          className="ui-check"
+          checked={saved}
+          onChange={(event) => setSaved(event.target.checked)}
+        />
+        <span>{t("backupCodes.saved")}</span>
+      </label>
+      <button type="button" className="ui-btn ui-btn-primary" disabled={!saved} onClick={onDone}>
+        {doneLabel}
+      </button>
+    </div>
   )
 }

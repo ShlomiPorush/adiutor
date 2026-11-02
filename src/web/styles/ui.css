@@ -2389,3 +2389,177 @@ html.ui-layer-on .ui-page {
 button.ui-item-title {
   width: 100%;
 }
+
+/* ---------- Settings: switches, environment locks, stored secrets (v3 FS-1, FS-2, FS-3, FS-6) ---------- */
+
+.ui-set-bool-main {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  cursor: pointer;
+}
+.ui-set-bool.is-locked .ui-set-bool-main {
+  cursor: not-allowed;
+}
+.ui-set-bool-text {
+  display: grid;
+  gap: 2px;
+}
+.ui-set-bool-hint {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+}
+.ui-set-note {
+  font-size: var(--ui-fs-sm);
+  color: var(--ui-warn);
+  font-weight: 600;
+}
+.ui-switch {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  border-radius: 11px;
+  background: var(--ui-line);
+  cursor: inherit;
+  transition: background 0.15s;
+}
+.ui-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  inset-inline-start: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+  transition: transform 0.15s;
+}
+.ui-switch:checked {
+  background: var(--ui-ok);
+}
+.ui-switch:checked::after {
+  transform: translateX(16px);
+}
+[dir="rtl"] .ui-switch:checked::after {
+  transform: translateX(-16px);
+}
+.ui-switch:disabled {
+  opacity: 0.6;
+}
+.ui-switch:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+.ui-set-lock {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  text-align: end;
+}
+.ui-set-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ui-info) 14%, transparent);
+  color: var(--ui-info);
+  font-size: 11px;
+  font-weight: 700;
+}
+.ui-set-control input:disabled {
+  opacity: 0.7;
+}
+.ui-set-secret-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: end;
+  gap: 8px;
+}
+.ui-set-secret {
+  font-weight: 600;
+}
+.ui-set-secret.is-removing {
+  color: var(--ui-fail);
+}
+.ui-link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-info);
+  font: inherit;
+  font-size: var(--ui-fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .ui-link-btn:hover {
+    text-decoration: underline;
+  }
+}
+.ui-domain-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ui-domain-chips .ui-chip {
+  cursor: default;
+  padding-inline-end: 6px;
+}
+.ui-chip-x {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--ui-muted);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .ui-chip-x:hover {
+    color: var(--ui-fail);
+  }
+}
+.ui-domain-add {
+  display: flex;
+  gap: 6px;
+}
+.ui-key-start {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+
+/* ---------- Sign-in: other second factors, backup codes ---------- */
+
+.ui-auth-alt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.ui-backup-codes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 18px;
+  margin: 0;
+  padding: 14px 18px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-raise);
+  font-size: var(--ui-fs-ctl);
+  list-style: none;
+}

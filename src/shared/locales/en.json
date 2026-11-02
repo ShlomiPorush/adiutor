@@ -116,11 +116,9 @@
       "telegram_failed": "Telegram did not take the message",
       "telegram_uncertain": "Telegram gave no clear answer; the message may have been sent",
       "internal_error": "The server failed",
-      "session_ended": "Your session ended",
       "totp_required": "Two-factor authentication is not finished",
-      "already_set_up": "Mikud already has its owner",
-      "wrong_password": "The password is not right",
-      "busy": "Mikud is busy. Try again in a moment"
+      "setting_locked": "An environment variable sets this",
+      "secret_unreadable": "A stored secret cannot be read"
     }
   },
   "copy": {
@@ -562,7 +560,7 @@
   },
   "settings": {
     "title": "Settings",
-    "description": "Language, dates, the morning view, your account and sessions, this browser's theme and what the sync may not recreate.",
+    "description": "Language, dates, the morning view, your account, Telegram, agent keys, this browser's theme and what the sync may not recreate.",
     "loading": "Loading settings...",
     "failed": "Could not load settings",
     "general": "General",
@@ -590,8 +588,8 @@
     "appearance": "This browser",
     "theme": "Theme",
     "themeHint": "Saved in this browser only, and applied at once.",
-    "status": "Sync and Telegram",
-    "statusHint": "Read only. The sync runs on your PC; the Telegram bot runs on the server.",
+    "status": "Sync",
+    "statusHint": "Read only. The sync runs on your PC.",
     "lastSync": "Last successful T3 sync",
     "lastOutcome": "Last T3 sync run",
     "securityAsOf": "Security data synced",
@@ -617,8 +615,6 @@
       "unknown": "Unknown",
       "skipped": "Skipped"
     },
-    "telegramLocked": "The Telegram bot is not configured",
-    "telegramLockedBody": "Without it there is no morning message and no quick add from Telegram. The bot token and the owner chat are set in the server's environment.",
     "telegramFailed": "Could not read the Telegram status",
     "bot": "Telegram bot",
     "botPolling": "Connected",
@@ -626,14 +622,15 @@
     "lastUpdate": "Last message to the bot",
     "noUpdateYet": "None yet",
     "session": {
-      "maxDays": "Session length",
-      "maxDaysHint": "Days after signing in until a browser must sign in again. Default: 30.",
-      "idle": "Sign out when idle",
-      "idleHint": "Ends a session after a time without typing, clicking or scrolling on the page. Default: off.",
-      "idleOff": "Off",
-      "idleOn": "On",
-      "idleMinutes": "Minutes without activity",
-      "daysInvalid": "a whole number from {min} to {max}"
+      "idleDays": "Sign out after this long without Mikud open",
+      "idleDaysHint": "Days. Opening Mikud, or coming back to its tab, keeps a browser signed in. A shorter value does not shorten browsers already signed in; use Sign out everywhere for that. Default: 30.",
+      "shortened": "Settings saved. Browsers already signed in keep their time; sign out everywhere to apply the shorter length now."
+    },
+    "env": {
+      "pill": "Set by the environment",
+      "tooltip": "An environment variable sets this; change it there",
+      "note": "Set by the environment variable {variable}. Change it there and restart Mikud.",
+      "refused": "Not saved: an environment variable sets this setting. Change it there and restart Mikud."
     }
   },
   "suppressions": {
@@ -694,27 +691,25 @@
     "capsLock": "Caps Lock is on",
     "code": "Code",
     "codeHint": "The 6 digits your authenticator app shows for Mikud. They change every 30 seconds.",
-    "recovery": "Locked out? On the server, run:",
+    "recovery": "Forgot the password? On the server, run this. Then sign in with your authenticator or a backup code:",
     "error": {
       "network": "Mikud did not answer. Check the connection and try again.",
       "wrongPassword": "The username or password is not right.",
       "wrongCode": "That code is not right. Enter the code your app shows now.",
       "codeExpired": "The sign-in took too long. Enter your password again.",
       "rateLimited": "Too many attempts. Wait 5 minutes and try again.",
-      "busy": "Mikud is busy with another sign-in change. Try again in a moment.",
       "server": "The server failed. Try again in a moment.",
       "failed": "Could not sign in: {reason}",
       "usernameInvalid": "Use {min} to {max} letters, digits, dots or underscores, without spaces.",
       "passwordShort": "The password needs at least {min} characters.",
       "passwordLong": "The password can have at most {max} characters.",
       "mismatch": "The passwords do not match.",
-      "codeFormat": "Enter the 6 digits of the code."
+      "codeFormat": "Enter the 6 digits of the code.",
+      "backupFormat": "Enter a backup code as you saved it.",
+      "accountLocked": "Too many wrong codes. Sign-in is locked for 15 minutes."
     },
-    "ended": {
-      "max": "Your session reached its maximum length. Sign in again.",
-      "idle": "You were signed out after a time without activity. Sign in again.",
-      "revoked": "You were signed out. Sign in again."
-    }
+    "backupCode": "Backup code",
+    "backupCodeHint": "One of the codes you saved when you set up two-factor. Each code works once."
   },
   "login": {
     "title": "Sign in",
@@ -725,7 +720,15 @@
     "codeDescription": "Open your authenticator app and enter the 6-digit code for Mikud.",
     "verify": "Sign in",
     "verifying": "Checking...",
-    "back": "Back"
+    "back": "Back",
+    "backupDescription": "Enter one of the backup codes you saved.",
+    "otpDescription": "Mikud sends a sign-in code to your Telegram chat.",
+    "otpHint": "The 6 digits Mikud sent to your Telegram chat.",
+    "otpSend": "Send a code to Telegram",
+    "otpSending": "Sending...",
+    "useApp": "Use the authenticator app",
+    "useBackup": "Use a backup code",
+    "useOtp": "Send a code to Telegram instead"
   },
   "setup": {
     "title": "Welcome to Mikud",
@@ -737,7 +740,6 @@
     "create": "Create account",
     "creating": "Creating...",
     "alreadySetUp": "Mikud already has its owner. Sign in instead.",
-    "signInFailed": "The account was created, but signing in failed. Sign in to continue.",
     "totpTitle": "Set up two-factor authentication",
     "totpDescription": "Required. Scan the QR code with an authenticator app such as 1Password, Aegis or Google Authenticator.",
     "confirmPassword": "Your password",
@@ -749,16 +751,21 @@
     "enterCode": "Then enter the code the app shows:",
     "finish": "Finish setup",
     "finishing": "Checking...",
-    "loadFailed": "Could not load the setup"
+    "loadFailed": "Could not load the setup",
+    "stepCodes": "Backup codes",
+    "codesTitle": "Save your backup codes",
+    "codesDescription": "Two-factor is on, and every other browser was signed out. Without these codes, losing the authenticator app locks you out.",
+    "continue": "Continue to Mikud",
+    "signOutOthersFailed": "Two-factor is on, but signing out the other browsers failed. Try again, so no browser stays signed in with the password alone.",
+    "signOutOthersRetry": "Sign out the other browsers"
   },
   "account": {
     "title": "Account",
     "signedInAs": "Signed in as",
     "sessions": "Signed-in browsers",
-    "sessionsHint": "Each browser where you are signed in. It signs in again after the session length set above.",
+    "sessionsHint": "Each browser where you are signed in, and when it is signed out unless you open Mikud there again.",
     "thisBrowser": "This browser",
     "signedIn": "Signed in",
-    "lastActive": "last active",
     "unknownBrowser": "Unknown browser",
     "browserOn": "{browser} on {system}",
     "loading": "Loading your account...",
@@ -784,6 +791,100 @@
     "wrongCurrent": "The current password is not right.",
     "changeFailed": "Could not change the password: {reason}",
     "recovery": "Recovery",
-    "recoveryHint": "Locked out of every browser? On the server, this prints a new password once and removes two-factor authentication, which you set up again after signing in:"
+    "recoveryHint": "Forgot the password? On the server, this prints a new one once and signs out every browser; two-factor stays. Without the authenticator, the backup codes you saved are the only way in.",
+    "until": "signed in until",
+    "twoFactor": "Two-factor authentication",
+    "twoFactorHint": "New backup codes replace the ones you saved. A new authenticator replaces the app you use now; set it up right away.",
+    "newCodes": "New backup codes",
+    "newCodesTitle": "New backup codes",
+    "newCodesHint": "Enter your password. The backup codes you saved before stop working.",
+    "newCodesSubmit": "Create new codes",
+    "newCodesBusy": "Creating...",
+    "done": "Done",
+    "newAuthenticator": "Set up a new authenticator",
+    "newAuthenticatorTitle": "Set up a new authenticator?",
+    "newAuthenticatorHint": "Enter your password. Two-factor is turned off, and Mikud takes you straight to setting up the new app. Until you finish, Mikud stays closed.",
+    "newAuthenticatorSubmit": "Turn off and set up again",
+    "newAuthenticatorBusy": "Turning off..."
+  },
+  "backupCodes": {
+    "hint": "These {count} backup codes let you in without the authenticator app, once each. Mikud shows them only now. Keep them somewhere safe, apart from this device.",
+    "copy": "Copy all",
+    "copied": "The backup codes were copied",
+    "copyFailed": "Could not copy. Download them or write them down.",
+    "download": "Download",
+    "saved": "I saved the backup codes",
+    "fileHeading": "Mikud backup codes. Each code signs in once without the authenticator app."
+  },
+  "agentKeys": {
+    "title": "Agent access",
+    "create": "Create key",
+    "hint": "The sync on your PC and the AI agents (MCP) use these keys. A key keeps working after you sign out; revoke it here when a machine is lost or a key leaks.",
+    "loading": "Loading the keys...",
+    "failed": "Could not load the keys",
+    "empty": "No agent keys yet",
+    "emptyHint": "Create one for the sync and one for the agents, and put each into its configuration.",
+    "unnamed": "Unnamed key",
+    "created": "Created",
+    "lastUsed": "last used",
+    "never": "never",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke {name}?",
+    "revokeMessage": "Whatever uses this key stops working at once. This cannot be undone; create a new key if you need one.",
+    "revoked": "{name} was revoked",
+    "revokeFailed": "Could not revoke {name}: {reason}",
+    "createTitle": "Create an agent key",
+    "createdTitle": "Your new agent key",
+    "name": "Name",
+    "nameHint": "Where you use it, for example: sync on the desktop. Up to 32 characters.",
+    "nameRequired": "Give the key a name.",
+    "createSubmit": "Create",
+    "creating": "Creating...",
+    "createFailed": "Could not create the key: {reason}",
+    "showOnce": "Copy it now: Mikud shows the key only this once and keeps just its first characters.",
+    "useIt": "Put it into the sync's or the agent's configuration as MIKUD_AGENT_TOKEN.",
+    "done": "Done"
+  },
+  "telegramSettings": {
+    "title": "Telegram",
+    "hint": "The bot saves what you send it under the inbox, and sends the morning message at 08:00. It serves only your chat. Changes apply when you save, without a restart.",
+    "state": "State",
+    "states": {
+      "off": "Off",
+      "incomplete": "Incomplete",
+      "on": "On"
+    },
+    "missing": "Missing: {fields}",
+    "botToken": "Bot token",
+    "botTokenHint": "From BotFather. Stored encrypted and never shown again.",
+    "chatId": "Your chat ID",
+    "chatIdHint": "The number of your own chat with the bot. The bot answers no other chat.",
+    "notSet": "Not set",
+    "newValue": "New token",
+    "stored": "Set",
+    "setByEnv": "Set by the environment",
+    "unreadable": "Cannot be read (its key was removed): enter it again",
+    "replace": "Replace",
+    "remove": "Remove",
+    "keep": "Keep",
+    "removedOnSave": "Removed when you save",
+    "tokenInvalid": "it does not look like a token from BotFather",
+    "chatInvalid": "use the chat's number",
+    "otp": "Send sign-in codes to Telegram",
+    "otpHint": "At sign-in, after the password, you may ask for a code in your Telegram chat instead of the authenticator app. Default: off.",
+    "otpWarning": "Your Telegram chat becomes a way in: whoever reads it and knows your password can sign in.",
+    "otpNeedsTelegram": "Set up the bot token and the chat ID first."
+  },
+  "secretCheck": {
+    "title": "Secret check",
+    "hint": "Text from agents and the Telegram bot is refused when it looks like a secret: tokens, keys, passwords, addresses, and host names under the domains below.",
+    "domains": "Private domains",
+    "domainsHint": "Your private network's domains. A host name under them in agent text is refused.",
+    "none": "None",
+    "placeholder": "corp.example",
+    "add": "Add",
+    "remove": "Remove",
+    "removeDomain": "Remove {domain}",
+    "domainInvalid": "a domain name, like corp.example"
   }
 }

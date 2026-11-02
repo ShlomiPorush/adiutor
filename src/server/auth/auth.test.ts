@@ -36,7 +36,13 @@ describe("the routes Mikud opens", () => {
   })
 
   it("leaves the reset, e-mail sign-in and account routes closed", () => {
-    for (const path of ["/request-password-reset", "/reset-password", "/sign-in/email", "/update-user", "/list-accounts"])
+    for (const path of [
+      "/request-password-reset",
+      "/reset-password",
+      "/sign-in/email",
+      "/update-user",
+      "/list-accounts",
+    ])
       expect([path, (ALLOWED_PATHS as readonly string[]).includes(path)]).toEqual([path, false])
   })
 })

@@ -69,7 +69,10 @@ export function createApp(deps: AppDeps) {
       settings: deps.core.settings,
     }
     // Better Auth as it is: its own handler, read from the holder on each request (Settings may rebuild it).
-    app.use("/api/auth/*", bodyLimit({ maxSize: AUTH_BODY_LIMIT, onError: (c) => c.json({ message: "Too large" }, 413) }))
+    app.use(
+      "/api/auth/*",
+      bodyLimit({ maxSize: AUTH_BODY_LIMIT, onError: (c) => c.json({ message: "Too large" }, 413) }),
+    )
     app.on(["GET", "POST"], "/api/auth/*", (c) => auth.current.handler(c.req.raw))
     app.route("/api/setup", setupRoutes({ ctx, auth }))
     app.route("/api/v1", apiRoutes(shared))

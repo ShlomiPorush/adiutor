@@ -28,7 +28,11 @@ let app: ReturnType<typeof createApp>
 let owner: TestBrowser
 
 async function build(options: Partial<TestCoreOptions> = {}) {
-  core = testCore(t, { config: { publicUrl: new URL(ORIGIN), version: "test" }, telegramApiUrl: standIn.url, ...options })
+  core = testCore(t, {
+    config: { publicUrl: new URL(ORIGIN), version: "test" },
+    telegramApiUrl: standIn.url,
+    ...options,
+  })
   app = createApp({ checkDatabase: async () => true, core })
   owner = await ownerBrowser(t, app)
 }
@@ -195,13 +199,23 @@ describe("the secret check's private domains", () => {
 
     await build({ overrides: { privateDomains: ["lab.test"] } })
     await core.runtime.apply()
-    expect((await read()).privateDomains).toEqual({ value: ["lab.test"], locked: true, variable: "MIKUD_PRIVATE_DOMAINS" })
+    expect((await read()).privateDomains).toEqual({
+      value: ["lab.test"],
+      locked: true,
+      variable: "MIKUD_PRIVATE_DOMAINS",
+    })
     const locked = await patch({ privateDomains: [] })
     expect([locked.status, locked.json.error.variable]).toEqual([409, "MIKUD_PRIVATE_DOMAINS"])
-    await expect(createItem(t.ctx, { actor: { kind: "agent", label: "agent" }, source: "api" }, {
-      type: "task",
-      title: "At ci.lab.test",
-    })).rejects.toMatchObject({ code: "secret_suspected" })
+    await expect(
+      createItem(
+        t.ctx,
+        { actor: { kind: "agent", label: "agent" }, source: "api" },
+        {
+          type: "task",
+          title: "At ci.lab.test",
+        },
+      ),
+    ).rejects.toMatchObject({ code: "secret_suspected" })
   })
 })
 
