@@ -115,6 +115,13 @@ const CREDENTIAL_PATHS = [
 /** New agent approval codes: 10 per 10 minutes per address. */
 const DEVICE_CODE_RULE = { window: 600, max: 10 }
 
+/**
+ * Polling for an approval. Better Auth counts a route's requests until the route has been quiet for a whole window, so
+ * the global 100 per minute ends a 5-second poll after about 8 minutes, while a code lives 10. This allows the whole
+ * code lifetime at 5 seconds, twice over, for one address.
+ */
+const DEVICE_TOKEN_RULE = { window: 900, max: 300 }
+
 /** Paths whose session deletions are ended sessions (one audit row each). Sign-out is audited after the fact. */
 const SESSION_END_PATHS = new Set(["/revoke-other-sessions", "/revoke-sessions", "/reset-password"])
 
@@ -333,6 +340,7 @@ export function createAuth(options: AuthOptions) {
       customRules: {
         ...Object.fromEntries(CREDENTIAL_PATHS.map((p) => [p, { window: 300, max: 5 }])),
         "/device/code": DEVICE_CODE_RULE,
+        "/device/token": DEVICE_TOKEN_RULE,
       },
     },
     advanced: {

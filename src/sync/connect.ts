@@ -308,8 +308,8 @@ export async function connect(options: ConnectOptions, deps: ConnectDeps): Promi
     }
     const error = str(answer.body?.error)
     if (error === "authorization_pending") continue
-    if (error === "slow_down") {
-      // RFC 8628: wait 5 seconds longer from now on.
+    if (error === "slow_down" || answer.status === 429) {
+      // RFC 8628: wait 5 seconds longer from now on. A rate-limited poll (429) is the same request to slow down.
       interval += 5000
       continue
     }
