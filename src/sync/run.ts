@@ -54,7 +54,7 @@ function compact(value: unknown, max = 2000): string {
   return text.length > max ? `${text.slice(0, max)}...` : text
 }
 
-function describe(name: string, result: PostResult): string {
+function describeResult(name: string, result: PostResult): string {
   if (result.error) return `${name}: not sent: ${result.error}`
   const body = result.body === undefined ? "" : ` ${compact(result.body)}`
   return result.ok ? `${name}: sent (HTTP ${result.status})${body}` : `${name}: refused (HTTP ${result.status})${body}`
@@ -213,12 +213,12 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
   let pushed = 0
   if (canSendT3) {
     const result = await postJson(deps.fetch, url, "/api/v1/sync/t3", token, t3Payload, timeout)
-    say(describe("t3 sync", result))
+    say(describeResult("t3 sync", result))
     if (result.ok) pushed += 1
   } else say("t3 sync: not sent (no threads could be read)")
   if (securityPayload) {
     const result = await postJson(deps.fetch, url, "/api/v1/sync/security", token, securityPayload, timeout)
-    say(describe("security sync", result))
+    say(describeResult("security sync", result))
     if (result.ok) pushed += 1
   } else say("security sync: not sent (no snapshot data)")
 

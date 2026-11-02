@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- **Repository foundation.** A TypeScript server on Node.js 24 that refuses to start without a database URL, a public URL, two different tokens of at least 32 characters each and an auth secret of at least 32 bytes, applies its database migrations on start, and answers `/healthz` when the database answers.
+- **Repository foundation.** A TypeScript server on Node.js 26 that refuses to start without a database URL, a public URL, two different tokens of at least 32 characters each and an auth secret of at least 32 bytes, applies its database migrations on start, and answers `/healthz` when the database answers.
 - **Database schema** for projects, goals, items, linked T3 threads, suppressions, comments, stage proposals, security sources, sync and job runs, Telegram updates, visits, settings, devices and the audit log, with the codes and unique keys the product rules rely on.
 - **Hebrew and English labels** for every stage, item status, item type and severity.
 - **Container image and Compose files**: the image runs as `node` on a read-only root file system with no capabilities; a development stack with its own PostgreSQL; a production Compose file behind Traefik.
@@ -33,6 +33,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Deployment notes** (`docs/deployment.md`): the database and `.env`, fitting the network behind a NetBird-only reverse proxy, first start, the first-run setup and sign-in, recovery, agents and the reconciler, the one-time move from the dry run, what to do after a restore, and upgrades.
 - **Test morning message**: Settings, Telegram, "Send a test morning message" (`POST /api/v1/telegram/test-message`, owner only) sends today's morning message to the owner's chat at once, audited, without touching the 08:00 run.
 - **Local settings for a dry run**: the development stack also reads an optional, ignored `.env.dev` at the repository root after `docker/dev.env`, for real tokens and the Telegram settings; `scripts/verify.sh` and `scripts/try-pr.sh` never read it.
+
+### Changed
+
+- **Node.js 26 LTS**: the image and the toolchain run on `node:26.13.0-bookworm-slim`, with Corepack installed from npm because Node.js 26 no longer ships it. pnpm 12.16.1, and the dependencies at their latest stable versions. The sync tool still targets Node.js 24, the Node of the owner's PC.
 
 ### Fixed
 

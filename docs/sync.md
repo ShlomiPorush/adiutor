@@ -18,12 +18,12 @@ Security values follow the snapshot honestly: an enabled family sends its alert 
 
 Read from the environment, or from a `--env` file of `KEY=VALUE` lines, which wins over the environment:
 
-| Name | Purpose |
-|---|---|
-| `MIKUD_URL` | Base URL of the Mikud server, for example `https://mikud.example.com` |
-| `MIKUD_AGENT_TOKEN` | The agent token. Never accepted on the command line, never printed (any echo is replaced with `[redacted]`), never passed to a child process |
-| `T3CODE_CLI_PATH` | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file |
-| `MIKUD_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it |
+| Name                 | Purpose                                                                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MIKUD_URL`          | Base URL of the Mikud server, for example `https://mikud.example.com`                                                                        |
+| `MIKUD_AGENT_TOKEN`  | The agent token. Never accepted on the command line, never printed (any echo is replaced with `[redacted]`), never passed to a child process |
+| `T3CODE_CLI_PATH`    | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                                                        |
+| `MIKUD_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it                                                                                           |
 
 Keep the env file outside every repository, for example `%LOCALAPPDATA%\mikud\sync.env`, readable only by the owner.
 
@@ -45,7 +45,7 @@ node dist/sync/mikud-sync.js run --projects <file> [--env <file>] [--overview <d
 source scripts/lib/common.sh && build_toolchain && install_deps && in_toolchain "pnpm build:sync"
 ```
 
-The bundle needs only Node.js 24 on Windows; it has no runtime dependencies.
+The bundle needs only Node.js 24 or later on Windows; it has no runtime dependencies. The server runs on Node.js 26, but `build:sync` stays at `--target=node24` on purpose, because the PC runs Node.js 24. After the PC moves to Node.js 26, the target can move to `node26` too.
 
 ## Safety
 
