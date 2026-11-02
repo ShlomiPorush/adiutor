@@ -166,6 +166,44 @@ test("Account settings from the menu takes the menu's Back step: one Back return
   await expect(page).toHaveURL(/127\.0\.0\.1:8090\/$/)
 })
 
+/** A request from the page itself: the browser sends the session cookie and the Origin. */
+async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return page.evaluate(
+    async ({ method, path, body }) => {
+      const response = await fetch(`/api/v1${path}`, {
+        method,
+        headers: { "Content-Type": "application/json", "X-Mikud-Request": "1" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`)
+      return (await response.json()).data
+    },
+    { method, path, body },
+  )
+}
+
+test("a critical security row in the bell opens its project in place of the bell's Back step", async () => {
+  // Invented data: a project with one open critical security item, which the bell lists as a critical line.
+  const name = `Beacon ${test.info().project.name}-${Date.now().toString(36)}`
+  await page.goto("/")
+  const project = await api<{ id: string }>("POST", "/projects", { name, stage: "production" })
+  await api("POST", "/items", {
+    type: "security",
+    severity: "critical",
+    title: `Rotate the key of ${name}`,
+    projectId: project.id,
+  })
+  await page.goto("/projects")
+  await page.locator(isPhone() ? ".ui-mtop .ui-bell" : ".ui-topbar .ui-bell").click()
+  await page.locator(".ui-alert[data-tone=fail]", { hasText: name }).click()
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}$`))
+  await expect(page.locator("[data-layer]")).toHaveCount(0)
+  await page.goBack()
+  await expect(page).toHaveURL(/\/projects$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/127\.0\.0\.1:8090\/$/)
+})
+
 test("More closes when the window grows past 760px: no layer, nothing inert, its Back step given back", async () => {
   test.skip(isPhone(), "the desktop project resizes its own window")
   await page.setViewportSize({ width: 390, height: 844 })

@@ -3,13 +3,15 @@
 // something is critical, amber otherwise, hidden at zero. It opens the same list with the same
 // actions: a window under the bell on a wide screen (a layer of its own, listed in
 // popups.guard.test.ts), a sheet from the dialog builder on a phone. A failed read keeps the last
-// count and says some checks could not run.
+// count and says some checks could not run. A row that opens a page from the window or the sheet opens it in
+// place of the layer's history entry, and the layer closes once the page shows (as the More sheet does), so
+// Back from that page returns to the page under the bell in one step.
 
 import { useQueryClient } from "@tanstack/react-query"
 import { Bell as BellIcon, X } from "lucide-react"
 import { type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { Link, useNavigate } from "react-router"
+import { Link, useLocation, useNavigate } from "react-router"
 import { api, qk } from "../api/endpoints.ts"
 import type { Morning, WaitingProposal } from "../api/types.ts"
 import { useI18n } from "../i18n/i18n.tsx"
@@ -41,6 +43,10 @@ export function Bell({
 }) {
   const { t, tc } = useI18n()
   const [open, setOpen] = useState(false)
+  const { pathname } = useLocation()
+  // A page opened from the window or the sheet took its history entry: the layer closes once it shows.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: closes on every new page
+  useEffect(() => setOpen(false), [pathname])
   const button = useRef<HTMLButtonElement>(null)
   const panelId = useId()
   const { count, tone } = attentionOf(morning)
@@ -196,7 +202,15 @@ export function AttentionList({
   const { t, tc } = useI18n()
   const openItem = useOpenItem()
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const { critical } = attentionOf(morning)
+  /** A project's page: from the bell's layer in place of its entry (the layer closes once it shows). */
+  const openProject = (projectId: string) => {
+    const to = `/projects/${projectId}`
+    if (!onDone) navigate(to)
+    else if (to === pathname) onDone()
+    else navigate(to, { replace: true })
+  }
   if (!morning) return <Empty title={failed ? t("bell.failed") : t("bell.loading")} />
   const empty = morning.waiting.length + critical.length === 0
   return (
@@ -212,15 +226,11 @@ export function AttentionList({
           data-row-open=""
           role="button"
           tabIndex={0}
-          onClick={() => {
-            onDone?.()
-            navigate(`/projects/${line.projectId}`)
-          }}
+          onClick={() => openProject(line.projectId)}
           onKeyDown={(event) => {
             if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
               event.preventDefault()
-              onDone?.()
-              navigate(`/projects/${line.projectId}`)
+              openProject(line.projectId)
             }
           }}
         >
