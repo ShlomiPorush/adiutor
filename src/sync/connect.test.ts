@@ -11,10 +11,15 @@ import {
 import { connectUrl, DEFAULT_DAYS, main } from "./cli.ts"
 import {
   aclEntries,
+  CLAUDE_REMOVE_ARGS,
   CONNECT_CLIENT_ID,
   type ConnectDeps,
   type ConnectOptions,
+  claudeAddArgs,
   claudeCommand,
+  codexAddArgs,
+  codexEnvFile,
+  codexVariableLine,
   connect,
   DAYS_MAX,
   DAYS_MIN,
@@ -110,6 +115,8 @@ function deps(
     fetch,
     out: (line) => lines.push(line),
     runner,
+    // No client installed unless a test says so.
+    findCommand: async () => undefined,
     platform: "linux",
     env: {},
     sleep: async (ms) => {
@@ -235,27 +242,238 @@ describe("connect: the device flow", () => {
   })
 })
 
-describe("connect: what each client gets", () => {
-  it("prints the claude mcp add command once, with the key in its header", async () => {
-    const d = deps(standIn().fetch)
+describe("connect: Claude Code", () => {
+  const CLAUDE = "/opt/bin/claude"
+  const addArgs = claudeAddArgs(URL_BASE, KEY)
+  const keyLines = (lines: string[]) => lines.filter((line) => line.includes(KEY))
+  const scripted = (answers: RunResult[]) => {
+    const ran: { command: string; args: string[] }[] = []
+    const runner: Runner = async (command, args) => {
+      ran.push({ command, args })
+      return answers.shift() ?? { code: 0, stdout: "", stderr: "" }
+    }
+    return { ran, runner }
+  }
+  const ok: RunResult = { code: 0, stdout: "Added HTTP MCP server mikud", stderr: "" }
+  const exists: RunResult = {
+    code: 1,
+    stdout: "",
+    stderr: "MCP server mikud already exists in user config",
+    error: "exit code 1",
+  }
+
+  it("adds Mikud at user scope with claude mcp add, the key only in its header, and prints no key", async () => {
+    const { ran, runner } = scripted([ok])
+    const d = deps(standIn().fetch, { runner, findCommand: async (name) => (name === "claude" ? CLAUDE : undefined) })
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
+    expect(addArgs).toEqual([
+      "mcp",
+      "add",
+      "--transport",
+      "http",
+      "--scope",
+      "user",
+      "mikud",
+      `${URL_BASE}/mcp`,
+      "--header",
+      `Authorization: Bearer ${KEY}`,
+    ])
+    expect(ran).toEqual([{ command: CLAUDE, args: addArgs }])
+    expect(d.lines.join("\n")).toContain("Added the mikud server to Claude Code (user scope)")
+    expect(keyLines(d.lines)).toEqual([])
+    expect(d.lines.join("\n")).not.toContain("shell history")
+  })
+
+  it("replaces an existing mikud server: claude mcp remove at user scope, then add again", async () => {
+    const { ran, runner } = scripted([exists, { code: 0, stdout: "Removed", stderr: "" }, ok])
+    const d = deps(standIn().fetch, { runner, findCommand: async () => CLAUDE })
+    expect(await connect(options({ target: "claude" }), d)).toBe(0)
+    expect(ran).toEqual([
+      { command: CLAUDE, args: addArgs },
+      { command: CLAUDE, args: ["mcp", "remove", "mikud", "--scope", "user"] },
+      { command: CLAUDE, args: addArgs },
+    ])
+    expect(CLAUDE_REMOVE_ARGS).toEqual(["mcp", "remove", "mikud", "--scope", "user"])
+    expect(d.lines.join("\n")).toContain("Replaced the mikud server in Claude Code (user scope)")
+    expect(keyLines(d.lines)).toEqual([])
+  })
+
+  it("prints the command once when claude is not installed", async () => {
+    const { ran, runner } = scripted([])
+    const d = deps(standIn().fetch, { runner, findCommand: async () => undefined })
+    expect(await connect(options({ target: "claude" }), d)).toBe(0)
+    expect(ran).toEqual([])
     const command = `claude mcp add --transport http --scope user mikud ${URL_BASE}/mcp --header "Authorization: Bearer ${KEY}"`
     expect(claudeCommand(URL_BASE, KEY)).toBe(command)
-    expect(d.lines.filter((line) => line.includes(KEY))).toEqual([command])
+    expect(d.lines.join("\n")).toContain("Could not add Mikud to Claude Code: the claude command was not found.")
+    expect(keyLines(d.lines)).toEqual([command])
     expect(d.lines.join("\n")).toContain("shell history")
   })
 
-  it("prints Codex's config.toml lines with bearer_token_env_var, and setx on Windows", async () => {
-    const windows = deps(standIn().fetch, { platform: "win32" })
-    expect(await connect(options({ target: "codex" }), windows)).toBe(0)
-    const text = windows.lines.join("\n")
-    expect(text).toContain(`[mcp_servers.mikud]\nurl = "${URL_BASE}/mcp"\nbearer_token_env_var = "MIKUD_AGENT_KEY"`)
-    expect(windows.lines.filter((line) => line.includes(KEY))).toEqual([`setx MIKUD_AGENT_KEY "${KEY}"`])
-    expect(text).toContain("shell history")
+  it("prints the command once when claude fails, with the reason and never the key in it", async () => {
+    // add refused for a reason other than an existing name: remove finds nothing to remove.
+    const echoed = { code: 1, stdout: "", stderr: `bad header Authorization: Bearer ${KEY}`, error: "exit code 1" }
+    const nothing = { code: 1, stdout: "", stderr: 'No MCP server named "mikud" in user scope', error: "exit code 1" }
+    const failed = scripted([echoed, nothing])
+    const d = deps(standIn().fetch, { runner: failed.runner, findCommand: async () => CLAUDE })
+    expect(await connect(options({ target: "claude" }), d)).toBe(0)
+    expect(failed.ran.map((r) => r.args[1])).toEqual(["add", "remove"])
+    const text = d.lines.join("\n")
+    expect(text).toContain("Could not add Mikud to Claude Code: claude mcp add exit code 1: bad header Authorization:")
+    expect(text).toContain("[redacted]")
+    expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
 
-    const linux = deps(standIn().fetch, { platform: "linux" })
-    await connect(options({ target: "codex" }), linux)
-    expect(linux.lines.filter((line) => line.includes(KEY))).toEqual([`export MIKUD_AGENT_KEY="${KEY}"`])
+    // A command that did not start is not retried, and nothing is removed.
+    const unstarted = scripted([{ code: null, stdout: "", stderr: "", error: "could not start (ENOENT)" }])
+    const e = deps(standIn().fetch, { runner: unstarted.runner, findCommand: async () => CLAUDE })
+    expect(await connect(options({ target: "claude" }), e)).toBe(0)
+    expect(unstarted.ran).toHaveLength(1)
+    expect(e.lines.join("\n")).toContain("claude mcp add could not start (ENOENT)")
+    expect(keyLines(e.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
+
+    // The existing entry was removed, but the new add still fails: the command to run by hand.
+    const twice = scripted([exists, { code: 0, stdout: "", stderr: "" }, { ...exists, stderr: "write failed" }])
+    const f = deps(standIn().fetch, { runner: twice.runner, findCommand: async () => CLAUDE })
+    expect(await connect(options({ target: "claude" }), f)).toBe(0)
+    expect(twice.ran.map((r) => r.args[1])).toEqual(["add", "remove", "add"])
+    expect(f.lines.join("\n")).toContain("claude mcp add exit code 1: write failed")
+    expect(keyLines(f.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
+  })
+})
+
+describe("connect: Codex", () => {
+  const CODEX = "C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd"
+  const SETX = "C:\\Windows\\System32\\setx.exe"
+  const windowsCommands = async (name: string) => ({ setx: SETX, codex: CODEX })[name]
+  const keyLines = (lines: string[]) => lines.filter((line) => line.includes(KEY))
+  const recording = (answer: (command: string) => RunResult) => {
+    const ran: { command: string; args: string[] }[] = []
+    const runner: Runner = async (command, args) => {
+      ran.push({ command, args })
+      return answer(command)
+    }
+    return { ran, runner }
+  }
+  const fine = () => ({ code: 0, stdout: "", stderr: "" })
+  const configLines = [`[mcp_servers.mikud]`, `url = "${URL_BASE}/mcp"`, `bearer_token_env_var = "MIKUD_AGENT_KEY"`]
+
+  it("on Windows, sets MIKUD_AGENT_KEY with setx, then runs codex mcp add, and prints no key", async () => {
+    const { ran, runner } = recording(fine)
+    const d = deps(standIn().fetch, { platform: "win32", runner, findCommand: windowsCommands })
+    expect(await connect(options({ target: "codex" }), d)).toBe(0)
+    expect(codexAddArgs(URL_BASE)).toEqual([
+      "mcp",
+      "add",
+      "mikud",
+      "--url",
+      `${URL_BASE}/mcp`,
+      "--bearer-token-env-var",
+      "MIKUD_AGENT_KEY",
+    ])
+    // codex mcp add replaces an entry of the same name itself: a second connect runs the same, without a remove.
+    expect(ran).toEqual([
+      { command: SETX, args: ["MIKUD_AGENT_KEY", KEY] },
+      { command: CODEX, args: codexAddArgs(URL_BASE) },
+    ])
+    const text = d.lines.join("\n")
+    expect(text).toContain("Set MIKUD_AGENT_KEY for your Windows user.")
+    expect(text).toContain("Added the mikud server to Codex; it reads the key from MIKUD_AGENT_KEY.")
+    expect(text).toContain("Restart Codex from a new terminal")
+    expect(keyLines(d.lines)).toEqual([])
+
+    const again = recording(fine)
+    await connect(
+      options({ target: "codex" }),
+      deps(standIn().fetch, { platform: "win32", runner: again.runner, findCommand: windowsCommands }),
+    )
+    expect(again.ran.map((r) => r.args.slice(0, 2))).toEqual([
+      ["MIKUD_AGENT_KEY", KEY],
+      ["mcp", "add"],
+    ])
+  })
+
+  it("elsewhere, writes the key to an owner-only codex.env and prints the line for the shell profile", async () => {
+    const config = tempDir()
+    const { ran, runner } = recording(fine)
+    const d = deps(standIn().fetch, {
+      env: { XDG_CONFIG_HOME: config },
+      runner,
+      findCommand: async () => "/opt/bin/codex",
+    })
+    expect(await connect(options({ target: "codex" }), d)).toBe(0)
+    const file = join(config, "mikud", "codex.env")
+    expect(codexEnvFile({ XDG_CONFIG_HOME: config })).toBe(file)
+    expect(readFileSync(file, "utf8")).toBe(`export MIKUD_AGENT_KEY=${KEY}\n`)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(ran).toEqual([{ command: "/opt/bin/codex", args: codexAddArgs(URL_BASE) }])
+    expect(d.lines).toContain(`. "${file}"`)
+    expect(keyLines(d.lines)).toEqual([])
+
+    // A second connect replaces the old key in the file.
+    writeFileSync(file, "export MIKUD_AGENT_KEY=old\n")
+    await connect(
+      options({ target: "codex" }),
+      deps(standIn().fetch, { env: { XDG_CONFIG_HOME: config }, runner, findCommand: async () => "/opt/bin/codex" }),
+    )
+    expect(readFileSync(file, "utf8")).toBe(`export MIKUD_AGENT_KEY=${KEY}\n`)
+  })
+
+  it("prints the config.toml lines, without the key, when codex is not installed or fails", async () => {
+    for (const findCommand of [async (name: string) => (name === "setx" ? SETX : undefined), windowsCommands]) {
+      const { ran, runner } = recording((command) =>
+        command === CODEX
+          ? { code: 2, stdout: "", stderr: "error: unexpected argument", error: "exit code 2" }
+          : fine(),
+      )
+      const d = deps(standIn().fetch, { platform: "win32", runner, findCommand })
+      expect(await connect(options({ target: "codex" }), d)).toBe(0)
+      expect(ran[0]).toEqual({ command: SETX, args: ["MIKUD_AGENT_KEY", KEY] })
+      const text = d.lines.join("\n")
+      expect(text).toContain(
+        (await findCommand("codex"))
+          ? "Could not add Mikud to Codex: codex mcp add exit code 2: error: unexpected argument."
+          : "Could not add Mikud to Codex: the codex command was not found.",
+      )
+      expect(text).toContain(`Add this to ~/.codex/config.toml yourself:\n\n${configLines.join("\n")}`)
+      expect(text).toContain("Restart Codex from a new terminal")
+      expect(keyLines(d.lines)).toEqual([])
+    }
+  })
+
+  it("prints the variable's line once, with the key, when setx or the env file fails, and still adds Codex", async () => {
+    const { ran, runner } = recording((command) =>
+      command === SETX ? { code: 1, stdout: "", stderr: "ERROR: Access is denied.", error: "exit code 1" } : fine(),
+    )
+    const windows = deps(standIn().fetch, { platform: "win32", runner, findCommand: windowsCommands })
+    expect(await connect(options({ target: "codex" }), windows)).toBe(0)
+    expect(ran.map((r) => r.command)).toEqual([SETX, CODEX])
+    expect(windows.lines.join("\n")).toContain(
+      "Could not set MIKUD_AGENT_KEY: setx exit code 1: ERROR: Access is denied.",
+    )
+    expect(keyLines(windows.lines)).toEqual([`setx MIKUD_AGENT_KEY "${KEY}"`])
+    expect(codexVariableLine(KEY, "win32")).toBe(`setx MIKUD_AGENT_KEY "${KEY}"`)
+
+    const noSetx = deps(standIn().fetch, {
+      platform: "win32",
+      runner: recording(fine).runner,
+      findCommand: async (name) => (name === "codex" ? CODEX : undefined),
+    })
+    expect(await connect(options({ target: "codex" }), noSetx)).toBe(0)
+    expect(noSetx.lines.join("\n")).toContain("Could not set MIKUD_AGENT_KEY: the setx command was not found.")
+    expect(keyLines(noSetx.lines)).toEqual([`setx MIKUD_AGENT_KEY "${KEY}"`])
+
+    // A file where the folder should be: the env file cannot be written.
+    const blocked = join(tempDir(), "not-a-folder")
+    writeFileSync(blocked, "")
+    const linux = deps(standIn().fetch, {
+      env: { XDG_CONFIG_HOME: blocked },
+      runner: recording(fine).runner,
+      findCommand: async () => "/opt/bin/codex",
+    })
+    expect(await connect(options({ target: "codex" }), linux)).toBe(0)
+    expect(linux.lines.join("\n")).toContain("Could not set MIKUD_AGENT_KEY: cannot write")
+    expect(keyLines(linux.lines)).toEqual([`export MIKUD_AGENT_KEY="${KEY}"`])
+    expect(linux.lines.join("\n")).toContain("Added the mikud server to Codex")
   })
 })
 

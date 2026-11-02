@@ -45,13 +45,13 @@ It sets the item to `in_progress`. Remember the item id it returns.
 
 Both clients use the MCP Streamable HTTP transport with an agent key of their own. Get it with `mikud connect` (the sync bundle, [sync.md](sync.md)); the owner approves it in the browser. Replace the example URL with the owner's Mikud address.
 
-Claude Code: run `node dist/sync/mikud-sync.js connect --url https://mikud.example.com --name claude --for claude` in the Mikud checkout, then the command it prints once:
+Claude Code: run `node dist/sync/mikud-sync.js connect --url https://mikud.example.com --name claude --for claude` in the Mikud checkout. After the approval it runs this itself, replacing an older `mikud` entry at user scope:
 
 ```
 claude mcp add --transport http --scope user mikud https://mikud.example.com/mcp --header "Authorization: Bearer <key>"
 ```
 
-Codex: run `... connect --url https://mikud.example.com --name codex --for codex`. It prints these lines for `~/.codex/config.toml` and the `setx MIKUD_AGENT_KEY` command that sets the key for the Windows user:
+Codex: run `... connect --url https://mikud.example.com --name codex --for codex`. It sets `MIKUD_AGENT_KEY` for the Windows user with `setx` (elsewhere in `~/.config/mikud/codex.env`, with the line to add to the shell profile), then runs `codex mcp add mikud --url https://mikud.example.com/mcp --bearer-token-env-var MIKUD_AGENT_KEY`, which writes these lines to `~/.codex/config.toml`. Restart Codex from a new terminal afterwards.
 
 ```toml
 [mcp_servers.mikud]
@@ -59,4 +59,4 @@ url = "https://mikud.example.com/mcp"
 bearer_token_env_var = "MIKUD_AGENT_KEY"
 ```
 
-Each agent gets its own key, which ends after `--days` (default 90) or when the owner disconnects it in Settings, Agent access. A printed command can stay in the shell history.
+When `claude` or `codex` is missing or fails, the command prints the same setup once instead. Each agent gets its own key, which ends after `--days` (default 90) or when the owner disconnects it in Settings, Agent access. A printed command can stay in the shell history.

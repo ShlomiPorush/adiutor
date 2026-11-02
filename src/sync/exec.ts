@@ -1,4 +1,7 @@
 import { type ExecFileException, execFile } from "node:child_process"
+import { constants } from "node:fs"
+import { access, stat } from "node:fs/promises"
+import { isAbsolute, join } from "node:path"
 
 // Child processes run through execFile with an argument array and no shell. The one exception is a
 // Windows batch file (the T3 CLI is installed as t3.cmd): Node refuses to start one without a shell,
@@ -34,6 +37,58 @@ export function buildInvocation(
     }
   }
   return { file: command, args, windowsVerbatimArguments: false }
+}
+
+/** The extensions a Windows command can have here: what CreateProcess starts and the batch files above. */
+const WINDOWS_RUNNABLE = [".com", ".exe", ".bat", ".cmd"]
+
+const isFile = (path: string) =>
+  stat(path).then(
+    (s) => s.isFile(),
+    () => false,
+  )
+const isExecutable = (path: string) =>
+  access(path, constants.X_OK).then(
+    () => true,
+    () => false,
+  )
+
+/**
+ * The full path of a command found on PATH, or undefined. Node starts only .com and .exe files by bare name on
+ * Windows, so a command installed as a batch file (npm's codex.cmd) is looked up here, in PATHEXT's order, and the
+ * path then goes to buildInvocation. The current folder is never searched.
+ */
+export async function findCommand(
+  name: string,
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): Promise<string | undefined> {
+  // Windows names the variable Path; a copied environment keeps that spelling.
+  const lookup = (wanted: string) =>
+    Object.entries(env).find(([key]) => (platform === "win32" ? key.toUpperCase() === wanted : key === wanted))?.[1]
+  // A relative entry ("." or empty) would search the current folder: skipped.
+  const dirs = (lookup("PATH") ?? "")
+    .split(platform === "win32" ? ";" : ":")
+    .map((dir) => dir.trim().replace(/^"(.*)"$/, "$1"))
+    .filter((dir) => isAbsolute(dir))
+  if (platform === "win32") {
+    const order = (lookup("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+      .split(";")
+      .map((ext) => ext.trim().toLowerCase())
+      .filter((ext) => WINDOWS_RUNNABLE.includes(ext))
+    for (const dir of dirs) {
+      for (const ext of order) {
+        const candidate = join(dir, `${name}${ext}`)
+        if (await isFile(candidate)) return candidate
+      }
+    }
+    return undefined
+  }
+  for (const dir of dirs) {
+    const candidate = join(dir, name)
+    if ((await isFile(candidate)) && (await isExecutable(candidate))) return candidate
+  }
+  return undefined
 }
 
 /** The environment for a child process: the agent token never leaves this process. */
