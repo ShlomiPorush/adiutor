@@ -867,6 +867,10 @@
       "one": "1 agent is still connected. Wait a minute and try again.",
       "other": "{count} agents are still connected. Wait a minute and try again."
     },
+    "disconnectAllFailedAtLeast": {
+      "one": "At least 1 agent is still connected. Wait a minute and try again.",
+      "other": "At least {count} agents are still connected. Wait a minute and try again."
+    },
     "disconnectAllError": "Could not disconnect all agents: {reason}"
   },
   "connect": {

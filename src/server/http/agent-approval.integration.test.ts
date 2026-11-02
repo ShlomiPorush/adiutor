@@ -462,7 +462,7 @@ describe("Disconnect all with more keys than one list holds", () => {
         if (answer.status !== 200) throw new Error(`delete answered ${answer.status}`)
       },
     )
-    expect(result).toEqual({ removed: 101, remaining: 0 })
+    expect(result).toEqual({ removed: 101, remaining: 0, atLeast: false })
     expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
   })
 })

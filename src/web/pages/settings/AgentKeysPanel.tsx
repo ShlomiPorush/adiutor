@@ -73,14 +73,18 @@ export function AgentKeysPanel() {
     setBusy(true)
     try {
       // Lists again until the list is empty: one list answers at most 100 keys.
-      const { remaining } = await disconnectEvery(
+      const { remaining, atLeast } = await disconnectEvery(
         async () => (await authData(authClient.apiKey.list())).apiKeys as AgentKey[],
         async (keyId) => {
           await authData(authClient.apiKey.delete({ keyId }))
         },
       )
       if (remaining === 0) showToast(t("agentKeys.disconnectedAll"), "success")
-      else showToast(tc("agentKeys.disconnectAllFailed", remaining), "error")
+      else
+        showToast(
+          tc(atLeast ? "agentKeys.disconnectAllFailedAtLeast" : "agentKeys.disconnectAllFailed", remaining),
+          "error",
+        )
     } catch (error) {
       showToast(t("agentKeys.disconnectAllError", { reason: errorReason(language, error) }), "error")
     } finally {
