@@ -13,26 +13,26 @@ Status: implemented in `src/server/http/`, `src/server/auth/` and `src/server/mc
 
 ### Error codes
 
-| Code | HTTP | Meaning | Details |
-|---|---|---|---|
-| `unauthorized` | 401 | No token or session, a wrong token, or a session that was signed out | |
-| `session_ended` | 401 | The session clocks ended this browser's session | `reason`: `max` or `idle` |
-| `forbidden` | 403 | Authenticated, but not allowed: an agent on an owner action, a token on a browser-only route, a browser request without the CSRF header or with the wrong `Origin` | |
-| `totp_required` | 403 | A browser session that has not proved its TOTP code yet: it may only finish enrolment | |
-| `not_found` | 404 | The item, project or other resource does not exist | |
-| `validation_failed` | 400 (413 when the body is too large) | Bad JSON, a body or query that fails its schema, a rule such as "severity only on security items" | `issues: [{path, message}]` for schema failures |
-| `version_conflict` | 409 | The item's `version` is not the one sent | `currentVersion` |
-| `secret_suspected` | 422 | Agent text looks like a secret | `rule`, `field`. The matched text is never returned |
-| `not_top_level` | 422 | A thread with a parent thread (subagent, review) | |
-| `suppressed` | 409 | The owner deleted the item of this thread | |
-| `conflict` | 409 | Another state conflict: a thread linked to another item, a project that still has items, a proposal decided already, a duplicate T3 project id | `itemId` or `projectId` when useful |
-| `already_set_up` | 409 | `POST /api/setup/account` when the owner exists | |
-| `wrong_password` | 400 | `POST /account/password`: the current password is not right | |
-| `rate_limited` | 429 | 10 failed token attempts from this client within a minute; or 5 sign-ins, codes, setups or password changes within 5 minutes | |
-| `busy` | 503 | A sign-in change waited more than 10 seconds for another one to finish | |
-| `telegram_failed` | 502 | `POST /telegram/test-message`: Telegram did not take the message (it refused it, or the server could not reach Telegram at all) | |
-| `telegram_uncertain` | 502 | `POST /telegram/test-message`: Telegram gave no clear answer (a timeout, a lost connection, a 5xx): the message may have been sent. Check the chat before sending again | |
-| `internal_error` | 500 | Unexpected server error | |
+| Code                 | HTTP                                 | Meaning                                                                                                                                                                 | Details                                             |
+| -------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `unauthorized`       | 401                                  | No token or session, a wrong token, or a session that was signed out                                                                                                    |                                                     |
+| `session_ended`      | 401                                  | The session clocks ended this browser's session                                                                                                                         | `reason`: `max` or `idle`                           |
+| `forbidden`          | 403                                  | Authenticated, but not allowed: an agent on an owner action, a token on a browser-only route, a browser request without the CSRF header or with the wrong `Origin`      |                                                     |
+| `totp_required`      | 403                                  | A browser session that has not proved its TOTP code yet: it may only finish enrolment                                                                                   |                                                     |
+| `not_found`          | 404                                  | The item, project or other resource does not exist                                                                                                                      |                                                     |
+| `validation_failed`  | 400 (413 when the body is too large) | Bad JSON, a body or query that fails its schema, a rule such as "severity only on security items"                                                                       | `issues: [{path, message}]` for schema failures     |
+| `version_conflict`   | 409                                  | The item's `version` is not the one sent                                                                                                                                | `currentVersion`                                    |
+| `secret_suspected`   | 422                                  | Agent text looks like a secret                                                                                                                                          | `rule`, `field`. The matched text is never returned |
+| `not_top_level`      | 422                                  | A thread with a parent thread (subagent, review)                                                                                                                        |                                                     |
+| `suppressed`         | 409                                  | The owner deleted the item of this thread                                                                                                                               |                                                     |
+| `conflict`           | 409                                  | Another state conflict: a thread linked to another item, a project that still has items, a proposal decided already, a duplicate T3 project id                          | `itemId` or `projectId` when useful                 |
+| `already_set_up`     | 409                                  | `POST /api/setup/account` when the owner exists                                                                                                                         |                                                     |
+| `wrong_password`     | 400                                  | `POST /account/password`: the current password is not right                                                                                                             |                                                     |
+| `rate_limited`       | 429                                  | 10 failed token attempts from this client within a minute; or 5 sign-ins, codes, setups or password changes within 5 minutes                                            |                                                     |
+| `busy`               | 503                                  | A sign-in change waited more than 10 seconds for another one to finish                                                                                                  |                                                     |
+| `telegram_failed`    | 502                                  | `POST /telegram/test-message`: Telegram did not take the message (it refused it, or the server could not reach Telegram at all)                                         |                                                     |
+| `telegram_uncertain` | 502                                  | `POST /telegram/test-message`: Telegram gave no clear answer (a timeout, a lost connection, a 5xx): the message may have been sent. Check the chat before sending again |                                                     |
+| `internal_error`     | 500                                  | Unexpected server error                                                                                                                                                 |                                                     |
 
 ## Authentication
 
@@ -53,13 +53,13 @@ One account, the owner's: a username, a password and a TOTP code from an authent
 
 Mikud's guard in front of Better Auth admits only these routes; every other path or method under `/api/auth` answers `404 not_found` (sign-up, `/sign-in/email`, `/change-password`, `/list-sessions`, `/revoke-*`, `/two-factor/disable`, backup codes, `/is-username-available` and the rest):
 
-| Method and path | Body | Notes |
-|---|---|---|
-| `POST /api/auth/sign-in/username` | `{username, password}` | `rememberMe: false` is refused (`400 remember_me_unsupported`). An owner with TOTP gets `{twoFactorRedirect: true}` and a short-lived challenge cookie, no session. An owner without TOTP (new, or after the recovery command) gets a session that may only enrol |
-| `POST /api/auth/two-factor/verify-totp` | `{code}` | With the challenge cookie (sign-in) or a session that has not proved TOTP (enrolment). A session that has proved it gets `400 totp_already_proved`; `trustDevice: true` is `400 trust_device_unsupported`. A wrong code is `401` and changes nothing |
-| `POST /api/auth/two-factor/enable` | `{password}` | Enrolment only (a session that has not proved TOTP; else `403 forbidden`). Answers `{totpURI}`; backup codes are never returned |
-| `POST /api/auth/sign-out` | | Ends this session and clears its cookie |
-| `GET /api/auth/get-session` | | A plain read. A session the clocks ended answers `null` |
+| Method and path                         | Body                   | Notes                                                                                                                                                                                                                                                             |
+| --------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/sign-in/username`       | `{username, password}` | `rememberMe: false` is refused (`400 remember_me_unsupported`). An owner with TOTP gets `{twoFactorRedirect: true}` and a short-lived challenge cookie, no session. An owner without TOTP (new, or after the recovery command) gets a session that may only enrol |
+| `POST /api/auth/two-factor/verify-totp` | `{code}`               | With the challenge cookie (sign-in) or a session that has not proved TOTP (enrolment). A session that has proved it gets `400 totp_already_proved`; `trustDevice: true` is `400 trust_device_unsupported`. A wrong code is `401` and changes nothing              |
+| `POST /api/auth/two-factor/enable`      | `{password}`           | Enrolment only (a session that has not proved TOTP; else `403 forbidden`). Answers `{totpURI}`; backup codes are never returned                                                                                                                                   |
+| `POST /api/auth/sign-out`               |                        | Ends this session and clears its cookie                                                                                                                                                                                                                           |
+| `GET /api/auth/get-session`             |                        | A plain read. A session the clocks ended answers `null`                                                                                                                                                                                                           |
 
 - **CSRF:** every `POST` above, and `POST /api/setup/account`, must send `X-Mikud-Request: 1` and the public `Origin`, checked before the body is read (`403 forbidden`). `GET` routes are plain same-origin reads.
 - **Server errors:** an unexpected failure inside Better Auth answers `500 {"code": "internal_error", "message"}`; the log holds only its class, SQLSTATE and code, never its message, query or values. Better Auth's own answers (`APIError`) come back unchanged.
@@ -72,9 +72,9 @@ Mikud's guard in front of Better Auth admits only these routes; every other path
 
 ### First run
 
-| Method and path | Body | Answer |
-|---|---|---|
-| `GET /api/setup/status` | | `{hasUser, session: "none" \| "enrol" \| "active"}`: whether the owner exists, and whether this browser's session may only enrol or has proved TOTP |
+| Method and path           | Body                   | Answer                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/setup/status`   |                        | `{hasUser, session: "none" \| "enrol" \| "active"}`: whether the owner exists, and whether this browser's session may only enrol or has proved TOTP                                                                                                                                                                                                                                                                  |
 | `POST /api/setup/account` | `{username, password}` | `201 {username, signedIn}`. Only while there is no owner (`409 already_set_up` after; two setups racing create one owner). `username`: 3 to 30 of `a-z A-Z 0-9 _ .`, stored lowercased; `password`: 12 to 128 characters. The owner is created and audited (`account.setup`), then signed in after the commit (the session cookie is set); `signedIn: false` means the account exists and the browser should sign in |
 
 ### Recovery
@@ -107,16 +107,16 @@ Fields are always present; `null` when unset.
 
 ### Session and the morning view
 
-| Method and path | Who | Body or query | Answer |
-|---|---|---|---|
-| `GET /session` | any | | `{actor: {kind, label}, via: "token"\|"session", browserId, clocks}`. `clocks` (a session only): `{max: {remainingSec}, idle: {timeoutSec, remainingSec} \| null}` |
-| `POST /session/activity` | browser | | `{clocks}`. Real input on the page (keys, pointer, wheel, touch), sent at most every 30 seconds: restarts the idle clock. Polling never calls it |
-| `GET /account/sessions` | browser | | `{username, sessions: AccountSession[]}`, this browser first |
-| `POST /account/password` | browser | `{currentPassword, newPassword}` (12 to 128 characters) | `{endedSessions}`. Every other session ends; this one keeps its TOTP proof and clocks. `wrong_password`; rate limited |
-| `POST /account/sessions/end-others` | browser | | `{ended}`: every other session of the owner ends |
-| `POST /account/sessions/end-all` | browser | | `{ended}`: every session ends, this one too, and its cookie is cleared ("Sign out everywhere") |
-| `GET /morning` | any | `since?` (time) | Morning (below). `since` is this browser's previous visit unless the query gives one |
-| `POST /visits` | browser | `{at?}` (time) | `201 {at, previous}`. Call after the morning view was shown, with that read's `now`; recorded one minute before `at`, or before now when `at` is missing or later than the server's clock (see below). `forbidden` with a token |
+| Method and path                     | Who     | Body or query                                           | Answer                                                                                                                                                                                                                          |
+| ----------------------------------- | ------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /session`                      | any     |                                                         | `{actor: {kind, label}, via: "token"\|"session", browserId, clocks}`. `clocks` (a session only): `{max: {remainingSec}, idle: {timeoutSec, remainingSec} \| null}`                                                              |
+| `POST /session/activity`            | browser |                                                         | `{clocks}`. Real input on the page (keys, pointer, wheel, touch), sent at most every 30 seconds: restarts the idle clock. Polling never calls it                                                                                |
+| `GET /account/sessions`             | browser |                                                         | `{username, sessions: AccountSession[]}`, this browser first                                                                                                                                                                    |
+| `POST /account/password`            | browser | `{currentPassword, newPassword}` (12 to 128 characters) | `{endedSessions}`. Every other session ends; this one keeps its TOTP proof and clocks. `wrong_password`; rate limited                                                                                                           |
+| `POST /account/sessions/end-others` | browser |                                                         | `{ended}`: every other session of the owner ends                                                                                                                                                                                |
+| `POST /account/sessions/end-all`    | browser |                                                         | `{ended}`: every session ends, this one too, and its cookie is cleared ("Sign out everywhere")                                                                                                                                  |
+| `GET /morning`                      | any     | `since?` (time)                                         | Morning (below). `since` is this browser's previous visit unless the query gives one                                                                                                                                            |
+| `POST /visits`                      | browser | `{at?}` (time)                                          | `201 {at, previous}`. Call after the morning view was shown, with that read's `now`; recorded one minute before `at`, or before now when `at` is missing or later than the server's clock (see below). `forbidden` with a token |
 
 "browser" routes need the owner's browser session (`forbidden` with a token). The account and session routes each run in one transaction under the auth lock with their audit row (`account.password_change`, `session.end_others`, `session.end_all`).
 
@@ -155,44 +155,44 @@ Fields are always present; `null` when unset.
 
 ### Projects
 
-| Method and path | Who | Body or query | Answer |
-|---|---|---|---|
-| `GET /projects` | any | | `[Project & {goal: GoalProgress\|null, openItems, openProposals}]` by name |
-| `POST /projects` | owner | `{name, slug?, t3ProjectId?, githubRepo?, stage?}` | `201 Project`. `conflict` on a taken `t3ProjectId` |
-| `GET /projects/:id` | any | | `{project, goal, pastGoals: Goal[], items: ItemSummary[], proposals: StageProposal[], securitySources, security}` |
-| `PATCH /projects/:id` | any | `{name?, slug?, githubRepo?, stage?, whereWeAre?, goal?}` | `Project`. Agents may send only `whereWeAre` and `goal`; `stage` or another field is `forbidden` |
-| `DELETE /projects/:id` | owner | | `204`. `conflict` while it has items. Suppresses its T3 project id |
-| `POST /projects/:id/stage-proposals` | any | `{stage, reason?}` | `201 StageProposal`. An open proposal of the same stage is updated and returned instead |
-| `POST /stage-proposals/:id/decision` | owner | `{decision: "accept"\|"reject"}` | `{proposal, project}`. Accepting sets the stage. `conflict` when decided already |
+| Method and path                      | Who   | Body or query                                             | Answer                                                                                                            |
+| ------------------------------------ | ----- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `GET /projects`                      | any   |                                                           | `[Project & {goal: GoalProgress\|null, openItems, openProposals}]` by name                                        |
+| `POST /projects`                     | owner | `{name, slug?, t3ProjectId?, githubRepo?, stage?}`        | `201 Project`. `conflict` on a taken `t3ProjectId`                                                                |
+| `GET /projects/:id`                  | any   |                                                           | `{project, goal, pastGoals: Goal[], items: ItemSummary[], proposals: StageProposal[], securitySources, security}` |
+| `PATCH /projects/:id`                | any   | `{name?, slug?, githubRepo?, stage?, whereWeAre?, goal?}` | `Project`. Agents may send only `whereWeAre` and `goal`; `stage` or another field is `forbidden`                  |
+| `DELETE /projects/:id`               | owner |                                                           | `204`. `conflict` while it has items. Suppresses its T3 project id                                                |
+| `POST /projects/:id/stage-proposals` | any   | `{stage, reason?}`                                        | `201 StageProposal`. An open proposal of the same stage is updated and returned instead                           |
+| `POST /stage-proposals/:id/decision` | owner | `{decision: "accept"\|"reject"}`                          | `{proposal, project}`. Accepting sets the stage. `conflict` when decided already                                  |
 
 `goal`: a text sets a new current goal and closes the previous one; `null` closes it; the same text changes nothing. Items keep the goal they were linked to.
 
 ### Items
 
-| Method and path | Who | Body or query | Answer |
-|---|---|---|---|
-| `GET /items` | any | `q`, `projectId`, `inbox=true`, `status` (repeat or comma-separated), `type`, `threadId`, `includeClosed=true`, `limit` (1 to 200, default 50) | `ItemSummary[]`, newest change first. Open items only unless `status` or `includeClosed` is given |
-| `POST /items` | any | `{type, title, projectId?, status? (default todo), body?, severity?, goalId?}` | `201 Item` |
-| `GET /items/:id` | any | | `{item, project: {id, name, slug, stage}\|null, goal, threads: ThreadLink[], comments: Comment[] (oldest first), audit: AuditEntry[] (newest first, up to 100)}` |
-| `PATCH /items/:id` | any | `{version, title?, body?, type?, status?, severity?, projectId?, goalId?}` | `Item` with `version + 1`; the same item when nothing changed. `version_conflict` when stale |
-| `DELETE /items/:id` | owner | `version` (optional query) | `204`. Deletes links and comments; suppresses the linked T3 threads |
-| `POST /items/:id/comments` | any | `{text, threadId?}` | `201 Comment` |
-| `POST /items/:id/threads` | any | `{threadId, parentThreadId?, t3ProjectId?, title?}` | `{link, created}`: `201` when linked now, `200` when it was linked to this item already. `not_top_level`, `conflict` (linked to another item, `itemId`), `suppressed` (agents; the owner linking it removes the suppression) |
-| `POST /capture` | any | `{text, projectId?}` | `201 Item`: type `idea`, status `future`, in the inbox unless `projectId`. The first line is the title; the whole text is the body when longer |
-| `GET /inbox` | any | | Open items without a project, newest first |
-| `GET /archive` | any | `projectId?`, `cursor?`, `limit?` | Page of closed items (`ItemSummary`), most recently closed first |
-| `GET /audit` | any | `entityType?`, `entityId?`, `cursor?`, `limit?` | Page of `AuditEntry`, newest first |
+| Method and path            | Who   | Body or query                                                                                                                                  | Answer                                                                                                                                                                                                                       |
+| -------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /items`               | any   | `q`, `projectId`, `inbox=true`, `status` (repeat or comma-separated), `type`, `threadId`, `includeClosed=true`, `limit` (1 to 200, default 50) | `ItemSummary[]`, newest change first. Open items only unless `status` or `includeClosed` is given                                                                                                                            |
+| `POST /items`              | any   | `{type, title, projectId?, status? (default todo), body?, severity?, goalId?}`                                                                 | `201 Item`                                                                                                                                                                                                                   |
+| `GET /items/:id`           | any   |                                                                                                                                                | `{item, project: {id, name, slug, stage}\|null, goal, threads: ThreadLink[], comments: Comment[] (oldest first), audit: AuditEntry[] (newest first, up to 100)}`                                                             |
+| `PATCH /items/:id`         | any   | `{version, title?, body?, type?, status?, severity?, projectId?, goalId?}`                                                                     | `Item` with `version + 1`; the same item when nothing changed. `version_conflict` when stale                                                                                                                                 |
+| `DELETE /items/:id`        | owner | `version` (optional query)                                                                                                                     | `204`. Deletes links and comments; suppresses the linked T3 threads                                                                                                                                                          |
+| `POST /items/:id/comments` | any   | `{text, threadId?}`                                                                                                                            | `201 Comment`                                                                                                                                                                                                                |
+| `POST /items/:id/threads`  | any   | `{threadId, parentThreadId?, t3ProjectId?, title?}`                                                                                            | `{link, created}`: `201` when linked now, `200` when it was linked to this item already. `not_top_level`, `conflict` (linked to another item, `itemId`), `suppressed` (agents; the owner linking it removes the suppression) |
+| `POST /capture`            | any   | `{text, projectId?}`                                                                                                                           | `201 Item`: type `idea`, status `future`, in the inbox unless `projectId`. The first line is the title; the whole text is the body when longer                                                                               |
+| `GET /inbox`               | any   |                                                                                                                                                | Open items without a project, newest first                                                                                                                                                                                   |
+| `GET /archive`             | any   | `projectId?`, `cursor?`, `limit?`                                                                                                              | Page of closed items (`ItemSummary`), most recently closed first                                                                                                                                                             |
+| `GET /audit`               | any   | `entityType?`, `entityId?`, `cursor?`, `limit?`                                                                                                | Page of `AuditEntry`, newest first                                                                                                                                                                                           |
 
 Item rules: entering `done` or `not_relevant` sets `closedAt`; any other status clears it. A status change records `statusSetBy` (the actor kind) and `statusSetAt`. Changing the type away from `security` clears the severity. Moving an item to another project clears its goal unless a goal of the new project is given. Titles are trimmed to one line of at most 300 characters.
 
 ### T3 threads and sync
 
-| Method and path | Who | Body | Answer |
-|---|---|---|---|
-| `POST /threads/start` | any | `{threadId, parentThreadId (required, null for a top-level thread), title, projectId?, t3ProjectId?, itemId?}` | `{item: Item, created, linked}`: `201` when an item was created, else `200` |
-| `POST /sync/t3` | token | T3 snapshot (below) | `SyncResult` |
-| `POST /sync/security` | token | Security snapshot (below) | `SyncResult` |
-| `GET /sync/runs` | any | `limit?` (default 20) | `SyncRun[]`, newest first |
+| Method and path       | Who   | Body                                                                                                           | Answer                                                                      |
+| --------------------- | ----- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `POST /threads/start` | any   | `{threadId, parentThreadId (required, null for a top-level thread), title, projectId?, t3ProjectId?, itemId?}` | `{item: Item, created, linked}`: `201` when an item was created, else `200` |
+| `POST /sync/t3`       | token | T3 snapshot (below)                                                                                            | `SyncResult`                                                                |
+| `POST /sync/security` | token | Security snapshot (below)                                                                                      | `SyncResult`                                                                |
+| `GET /sync/runs`      | any   | `limit?` (default 20)                                                                                          | `SyncRun[]`, newest first                                                   |
 
 **Start of thread**, in one transaction: refuses `not_top_level` when `parentThreadId` is set; returns the item already linked to `threadId` (also on a retry or a race); otherwise links `itemId`, or creates a `task` in `projectId`, or in the project whose `t3ProjectId` matches, or in the inbox. The item is set `in_progress` (a closed item reopens). `suppressed` when the owner deleted this thread's item; `conflict` when `itemId` differs from the item the thread is linked to.
 
@@ -232,14 +232,14 @@ Each repository is matched to every project whose `githubRepo` equals it, ignori
 
 ### Owner settings
 
-| Method and path | Who | Body | Answer |
-|---|---|---|---|
-| `GET /settings` | owner | | `Settings` |
-| `PATCH /settings` | owner | `{closedItemDays?, dateFormat?, timeFormat?, language?, sessionMaxDays?, sessionIdle?, sessionIdleMinutes?}` | `Settings` |
-| `GET /suppressions` | owner | | `Suppression[]`, newest first |
-| `DELETE /suppressions/:id` | owner | | `204`. The sync may then recreate the item or project |
-| `GET /telegram/status` | owner | | `TelegramStatus` (below) |
-| `POST /telegram/test-message` | owner | | `{sent: true, warning?}`. Sends today's morning message (below) to the owner's chat now. `warning: "outcome_not_recorded"` when it was sent but the outcome's audit row could not be written. `conflict` when Telegram is not configured, `telegram_failed` when Telegram did not take it, `telegram_uncertain` when it may have been sent |
+| Method and path               | Who   | Body                                                                                                         | Answer                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------- | ----- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /settings`               | owner |                                                                                                              | `Settings`                                                                                                                                                                                                                                                                                                                                 |
+| `PATCH /settings`             | owner | `{closedItemDays?, dateFormat?, timeFormat?, language?, sessionMaxDays?, sessionIdle?, sessionIdleMinutes?}` | `Settings`                                                                                                                                                                                                                                                                                                                                 |
+| `GET /suppressions`           | owner |                                                                                                              | `Suppression[]`, newest first                                                                                                                                                                                                                                                                                                              |
+| `DELETE /suppressions/:id`    | owner |                                                                                                              | `204`. The sync may then recreate the item or project                                                                                                                                                                                                                                                                                      |
+| `GET /telegram/status`        | owner |                                                                                                              | `TelegramStatus` (below)                                                                                                                                                                                                                                                                                                                   |
+| `POST /telegram/test-message` | owner |                                                                                                              | `{sent: true, warning?}`. Sends today's morning message (below) to the owner's chat now. `warning: "outcome_not_recorded"` when it was sent but the outcome's audit row could not be written. `conflict` when Telegram is not configured, `telegram_failed` when Telegram did not take it, `telegram_uncertain` when it may have been sent |
 
 ### Telegram
 
@@ -265,18 +265,18 @@ The bot and the morning message run inside the server, never through this API. T
 
 Streamable HTTP at `/mcp`, stateless (no session id), JSON responses. Requires `Authorization: Bearer <owner or agent token>`; a browser session is not accepted. The server's `instructions` summarize the rules. Every tool answers one text content holding JSON: `{"data": ...}` on success, or `{"error": {code, message, ...details}}` with `isError: true`, using the codes above. Changes are audited with source `mcp`.
 
-| Tool | Arguments | Same as |
-|---|---|---|
-| `mikud_start_thread` | `threadId, parentThreadId (null or id), title, projectId?, t3ProjectId?, itemId?` | `POST /threads/start` |
-| `mikud_find_items` | `query?, projectId?, inbox?, status?[], type?, threadId?, includeClosed?, limit?` | `GET /items` |
-| `mikud_get_item` | `itemId` | `GET /items/:id` |
-| `mikud_create_item` | `type, title, body?, status?, severity?, projectId?, goalId?` | `POST /items` |
-| `mikud_update_item` | `itemId, version, title?, body?, status?, type?, severity?, projectId?, goalId?` | `PATCH /items/:id` |
-| `mikud_comment` | `itemId, text, threadId?` | `POST /items/:id/comments` |
-| `mikud_capture` | `text, projectId?` | `POST /capture` |
-| `mikud_link_thread` | `itemId, threadId, parentThreadId, t3ProjectId?, title?` | `POST /items/:id/threads` |
-| `mikud_list_projects` | | `GET /projects` |
-| `mikud_update_project` | `projectId, whereWeAre?, goal?` | `PATCH /projects/:id` (those two fields only) |
-| `mikud_propose_stage` | `projectId, stage, reason` | `POST /projects/:id/stage-proposals` |
+| Tool                   | Arguments                                                                         | Same as                                       |
+| ---------------------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
+| `mikud_start_thread`   | `threadId, parentThreadId (null or id), title, projectId?, t3ProjectId?, itemId?` | `POST /threads/start`                         |
+| `mikud_find_items`     | `query?, projectId?, inbox?, status?[], type?, threadId?, includeClosed?, limit?` | `GET /items`                                  |
+| `mikud_get_item`       | `itemId`                                                                          | `GET /items/:id`                              |
+| `mikud_create_item`    | `type, title, body?, status?, severity?, projectId?, goalId?`                     | `POST /items`                                 |
+| `mikud_update_item`    | `itemId, version, title?, body?, status?, type?, severity?, projectId?, goalId?`  | `PATCH /items/:id`                            |
+| `mikud_comment`        | `itemId, text, threadId?`                                                         | `POST /items/:id/comments`                    |
+| `mikud_capture`        | `text, projectId?`                                                                | `POST /capture`                               |
+| `mikud_link_thread`    | `itemId, threadId, parentThreadId, t3ProjectId?, title?`                          | `POST /items/:id/threads`                     |
+| `mikud_list_projects`  |                                                                                   | `GET /projects`                               |
+| `mikud_update_project` | `projectId, whereWeAre?, goal?`                                                   | `PATCH /projects/:id` (those two fields only) |
+| `mikud_propose_stage`  | `projectId, stage, reason`                                                        | `POST /projects/:id/stage-proposals`          |
 
 There is no tool to delete, to set a stage, or to touch settings, the account, sessions or suppressions.

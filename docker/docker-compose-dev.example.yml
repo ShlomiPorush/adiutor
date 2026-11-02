@@ -34,7 +34,7 @@ services:
       # PostgreSQL 18 keeps its data in a versioned directory under /var/lib/postgresql.
       - ${MIKUD_DATA_DIR:?MIKUD_DATA_DIR is set by the scripts}/postgres:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 5s
       retries: 10

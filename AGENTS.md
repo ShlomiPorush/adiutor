@@ -56,6 +56,8 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 
 ## Traps
 
+- Node 25 and later no longer ship Corepack. Both Dockerfiles install it from npm at a pinned version (`corepack@0.36.0`) before `corepack enable`; the toolchain's `corepack prepare pnpm@...` must name the version of `packageManager`.
+- The sync bundle (`build:sync`) targets `node24`, the Node of the owner's PC, while the server targets `node26`. Move the sync target only after the PC runs a newer Node (see `docs/sync.md`).
 - pnpm 12 reads its settings only from `pnpm-workspace.yaml` (not from `package.json`), and refuses to install when a dependency's build script is not allowed there. The file holds settings only; it lists no packages.
 - `grep -P` with `\x{...}` code points needs a UTF-8 locale; `scripts/lib/guards.sh` sets `LC_ALL=C.UTF-8` and stops on any grep error, so a broken pattern cannot pass silently.
 - Tests named `*.integration.test.ts` run only from `verify.sh`, which passes `MIKUD_TEST_DATABASE_URL`. `pnpm test` skips them.
@@ -86,7 +88,7 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 
 ## Docker
 
-- One image, `docker/mikud.Dockerfile`: esbuild bundle and migrations on `node:24.21.0-bookworm-slim`, `USER node`, no `node_modules`, health check `node dist/server/healthcheck.js` (calls `/healthz`, which runs `select 1`). State lives only in PostgreSQL; the container has no volume and runs with a read-only root file system, no capabilities and `no-new-privileges`.
+- One image, `docker/mikud.Dockerfile`: esbuild bundle and migrations on `node:26.13.0-bookworm-slim`, `USER node`, no `node_modules`, health check `node dist/server/healthcheck.js` (calls `/healthz`, which runs `select 1`). State lives only in PostgreSQL; the container has no volume and runs with a read-only root file system, no capabilities and `no-new-privileges`.
 - `docker-compose.yml` (production) runs only `mikud` from `ghcr.io/shlomiporush/mikud:${VERSION}` behind Traefik on the external `traefik` network, with no published port and no database; `DATABASE_URL` in `.env` points at the owner's PostgreSQL. Interpolation is limited to `VERSION` and `DOMAIN`.
 - `docker/docker-compose-dev.example.yml` adds a `postgres` service with data in `${MIKUD_DATA_DIR}/postgres` (default `~/.local/share/mikud-dev`, on the WSL file system; the scripts refuse a path under `/mnt`). `mikud` binds to `127.0.0.1` only. `mikud` reads `docker/dev.env`, then the optional, ignored `.env.dev` at the repository root (Compose `env_file` with `required: false`), where a developer puts real tokens and the Telegram settings for a dry run. `scripts/verify.sh` sets `MIKUD_LOCAL_ENV_FILE=/dev/null` so it never reads `.env.dev`, and try-pr writes its own Compose file. Never read, copy or commit `.env.dev`. An existing `docker-compose-dev.yml` is a copy: copy the template again to get the change.
 - Images are built only by the scripts; a guard fails on `build:` in a Compose file. Never stop or remove containers, networks or volumes of other projects.

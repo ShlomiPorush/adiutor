@@ -65,12 +65,12 @@ These notes are for the owner, who deploys production himself. Agents never depl
 
 Mikud must be reachable only over your NetBird network. The shipped `docker-compose.yml` puts it behind Traefik on the external Docker network `traefik`, publishes no port, and asks Traefik for one router:
 
-| Label | Shipped value | Change it to |
-|---|---|---|
-| `traefik.docker.network` and the `networks:` entry | `traefik` | The Docker network your reverse proxy uses |
-| `traefik.http.routers.mikud.entrypoints` | `https` | Your proxy's entry point that only NetBird can reach |
-| `traefik.http.routers.mikud.middlewares` | `default@file` | Your middleware chain (headers, and an allow list of NetBird addresses if you use one) |
-| `traefik.http.routers.mikud.tls` | `true` | Add `traefik.http.routers.mikud.tls.certresolver=<resolver>` if your proxy needs it |
+| Label                                              | Shipped value  | Change it to                                                                           |
+| -------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------- |
+| `traefik.docker.network` and the `networks:` entry | `traefik`      | The Docker network your reverse proxy uses                                             |
+| `traefik.http.routers.mikud.entrypoints`           | `https`        | Your proxy's entry point that only NetBird can reach                                   |
+| `traefik.http.routers.mikud.middlewares`           | `default@file` | Your middleware chain (headers, and an allow list of NetBird addresses if you use one) |
+| `traefik.http.routers.mikud.tls`                   | `true`         | Add `traefik.http.routers.mikud.tls.certresolver=<resolver>` if your proxy needs it    |
 
 1. Put a NetBird private service in front of the proxy: a NetBird network resource (or route) for the proxy host, with an access policy that allows only your own peers.
 2. Make `DOMAIN` resolve only inside NetBird, for example with a NetBird DNS zone or a private DNS record that points at the proxy's NetBird address.
