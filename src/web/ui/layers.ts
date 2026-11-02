@@ -83,9 +83,13 @@ let releaseQueued = false
 
 /**
  * Closed by hand: takes back the extra entry, so the next Back leaves the page. When a navigation
- * already left that entry (a link inside the layer), there is nothing to take back. Decided after
- * the current task's own work: a layer that opens again at once keeps the entry, as StrictMode does
- * in development (an effect, its cleanup, the effect again) and a layer that replaces another.
+ * already left that entry (a link inside the layer), there is nothing to take back.
+ *
+ * Decided in a microtask, so a layer that opens in the same synchronous run as the close keeps the
+ * entry: StrictMode's second effect run in development (an effect, its cleanup and the effect again)
+ * and a synchronous swap of one layer for another. Two cases are not covered, and failed before
+ * this deferral too: a layer opened from a later microtask or task, after the release already went
+ * back, is left without an entry of its own; and a Back that races a close can go one step too far.
  */
 function releaseEntry(): void {
   if (releaseQueued) return

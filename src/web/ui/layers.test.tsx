@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-// Every layer renders under React's StrictMode, which `main.tsx` turns on for development: the
-// effects run, are cleaned up and run again, and the layer must keep its content in the page and
-// hold exactly one history entry, so Back closes it instead of leaving the page.
+// Every layer and the toast render under React's StrictMode, which `main.tsx` turns on for
+// development: the effects run, are cleaned up and run again. Each must keep its content in the
+// page, and a dialog must hold exactly one history entry, so Back closes it instead of leaving.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, type ReactNode, StrictMode } from "react"
@@ -13,6 +13,7 @@ import { Bell } from "../shell/Bell.tsx"
 import { MoreSheet } from "../shell/MoreSheet.tsx"
 import { Dialog } from "./Dialog.tsx"
 import { layerCount } from "./layers.ts"
+import { ToastHost, showToast } from "./Toast.tsx"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -113,6 +114,19 @@ describe("layers under StrictMode", () => {
     openLayerRoot(panel)
     expect(panel?.querySelector(".ui-attn-list")?.textContent).not.toBe("")
     await expectGoneAfterUnmount()
+  })
+
+  it("a toast shows in the page, in a wrapper that layers leave usable", async () => {
+    await render(<ToastHost />)
+    await act(async () => showToast("Saved the garden project", "success"))
+    const toast = document.body.querySelector(".ui-toast")
+    expect(toast?.isConnected).toBe(true)
+    expect(toast?.textContent).toContain("Saved the garden project")
+    const wrapper = toast?.parentElement
+    expect(wrapper?.parentElement).toBe(document.body)
+    expect(wrapper?.dataset.layerKeep).toBe("true")
+    await unmount()
+    expect(document.body.querySelector("[data-layer-keep]")).toBeNull()
   })
 
   it("the More sheet keeps every page link in the page", async () => {
