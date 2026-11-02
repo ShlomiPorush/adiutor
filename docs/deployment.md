@@ -112,7 +112,7 @@ Without `MIKUD_TRUSTED_PROXIES`, every request shares one bucket, which fails sa
 
 The browser signs in with a username, a password and a code from an authenticator app (TOTP). There is one account, yours.
 
-1. Open `https://mikud.example.com` on the desktop. On a new database it shows the setup: choose a username (3 to 30 letters, digits, dots or underscores) and a password of at least 12 characters.
+1. Open `https://mikud.example.com` on the desktop. On a new database it shows the setup: choose a username (3 to 30 letters, digits, underscores or dots; a dot cannot be first, last or next to another dot) and a password of at least 12 characters.
 2. Set up two-factor authentication right away; it is required. Scan the QR code with an authenticator app such as 1Password, Aegis or Google Authenticator, or type the key shown under it, then enter the code the app shows.
 3. Save the 10 backup codes the setup shows next (Copy or Download), somewhere apart from this device. They are shown only once. Each signs in once without the authenticator; Settings, Account makes new ones.
 4. On the phone, with NetBird connected, open the same URL and sign in with the username, the password and a code.

@@ -57,6 +57,13 @@
       "when": 1793614987645,
       "tag": "0007_owner-settings",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793629986828,
+      "tag": "0008_readable-email",
+      "breakpoints": true
     }
   ]
 }

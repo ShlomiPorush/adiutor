@@ -681,7 +681,7 @@
   },
   "auth": {
     "username": "Username",
-    "usernameHint": "{min} to {max} letters, digits, dots or underscores.",
+    "usernameHint": "{min} to {max} letters, digits, underscores or dots. A dot cannot be first, last or next to another dot.",
     "password": "Password",
     "passwordHint": "At least {min} characters.",
     "repeatPassword": "Repeat the password",
@@ -699,7 +699,7 @@
       "rateLimited": "Too many attempts. Wait 5 minutes and try again.",
       "server": "The server failed. Try again in a moment.",
       "failed": "Could not sign in: {reason}",
-      "usernameInvalid": "Use {min} to {max} letters, digits, dots or underscores, without spaces.",
+      "usernameInvalid": "Use {min} to {max} letters, digits, underscores or dots, without spaces. A dot cannot be first, last or next to another dot.",
       "passwordShort": "The password needs at least {min} characters.",
       "passwordLong": "The password can have at most {max} characters.",
       "mismatch": "The passwords do not match.",
