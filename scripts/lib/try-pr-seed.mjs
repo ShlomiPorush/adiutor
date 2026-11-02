@@ -59,7 +59,8 @@ const username = "owner"
 const password = randomBytes(18).toString("base64url")
 await page("/api/auth/sign-up/email", {
   name: username,
-  email: `${username}@mikud.local`,
+  // The synthetic e-mail of src/shared/auth.ts (ownerEmail): the lowercased username in hex.
+  email: `u-${Buffer.from(username.toLowerCase(), "utf8").toString("hex")}@mikud.local`,
   username,
   displayUsername: username,
   password,

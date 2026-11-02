@@ -295,13 +295,12 @@ export function createAuth(options: AuthOptions) {
           before: async (session, context) => {
             const path = pathOf(context)
             const prior = Boolean((context as HookContext)?.context?.session)
-            let after: { totp: boolean; method?: string } | null = null
-            if (path === "/sign-up/email") after = { totp: false }
-            else if (path === "/sign-in/username") {
-              const owner = await readOwner(ctx)
-              // With two-factor on, Better Auth turns this session into a challenge; the code's route records it.
-              if (owner && !owner.twoFactorEnabled) after = { totp: false }
-            } else if (SECOND_FACTOR[path] && !prior) after = { totp: true, method: SECOND_FACTOR[path] }
+            // Every session Better Auth creates after a password is recorded as the password stage, whatever the
+            // account's two-factor flag says now: with two-factor on, the plugin turns it into a challenge, and a
+            // sign-in racing enrolment (G6) keeps it. The second-factor routes record the second stage.
+            let after: { stage: "password" | "second_factor"; method?: string } | null = null
+            if (path === "/sign-up/email" || path === "/sign-in/username") after = { stage: "password" }
+            else if (SECOND_FACTOR[path] && !prior) after = { stage: "second_factor", method: SECOND_FACTOR[path] }
             if (!after) return
             const owner = await readOwner(ctx)
             const label = owner?.username ?? String((session as { userId?: string }).userId ?? "owner")

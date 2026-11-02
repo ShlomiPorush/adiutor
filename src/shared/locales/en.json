@@ -117,8 +117,7 @@
       "telegram_uncertain": "Telegram gave no clear answer; the message may have been sent",
       "internal_error": "The server failed",
       "totp_required": "Two-factor authentication is not finished",
-      "setting_locked": "An environment variable sets this",
-      "secret_unreadable": "A stored secret cannot be read"
+      "setting_locked": "An environment variable sets this"
     }
   },
   "copy": {

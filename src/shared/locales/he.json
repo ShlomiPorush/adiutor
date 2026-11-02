@@ -117,8 +117,7 @@
       "telegram_uncertain": "לא התקבלה תשובה ברורה מ-Telegram, ייתכן שההודעה נשלחה",
       "internal_error": "השרת נכשל",
       "totp_required": "האימות הדו-שלבי לא הושלם",
-      "setting_locked": "משתנה סביבה מגדיר את זה",
-      "secret_unreadable": "לא ניתן לקרוא סוד שמור"
+      "setting_locked": "משתנה סביבה מגדיר את זה"
     }
   },
   "copy": {

@@ -116,7 +116,7 @@ The browser signs in with a username, a password and a code from an authenticato
 2. Set up two-factor authentication right away; it is required. Scan the QR code with an authenticator app such as 1Password, Aegis or Google Authenticator, or type the key shown under it, then enter the code the app shows.
 3. Save the 10 backup codes the setup shows next (Copy or Download), somewhere apart from this device. They are shown only once. Each signs in once without the authenticator; Settings, Account makes new ones.
 4. On the phone, with NetBird connected, open the same URL and sign in with the username, the password and a code.
-5. A browser stays signed in while you open Mikud there at least once every 30 days. Settings, General changes that length (1 to 90 days); a shorter value does not shorten browsers signed in already, so choose "Sign out everywhere" after shortening it. Settings, Account lists the signed-in browsers, changes the password, signs this browser out, signs the others out, signs out everywhere, makes new backup codes, and sets up a new authenticator.
+5. A browser is meant to stay signed in while you open Mikud there at least once every 30 days. Today it is signed out 30 days after it signed in, whatever you do (open defect G19 in the foundation plan). Settings, General changes that length (1 to 90 days); a shorter value does not shorten browsers signed in already, so choose "Sign out everywhere" after shortening it. Settings, Account lists the signed-in browsers, changes the password, signs this browser out, signs the others out, signs out everywhere, makes new backup codes, and sets up a new authenticator.
 6. Telegram links open the item after you sign in, when the browser is not signed in.
 7. Settings, Telegram: enter the bot token from BotFather and your chat id (the number of your own chat with the bot), then save. The bot and the morning message start at once, without a restart. "Send sign-in codes to Telegram" is off by default; turned on, it makes your Telegram chat another way in.
 
@@ -170,7 +170,7 @@ Restrict it (`chmod 600 .env.dev`). A `docker-compose-dev.yml` copied before thi
    The dump carries everything, including the applied migrations, `job_runs` (so today's morning message is not sent twice) and `telegram_updates` (so no Telegram update is handled twice).
 
 6. Start production and check it (step 4).
-7. Sign in with your dry-run account and sign out everywhere (step 8, "After any restore"). Sign-in cookies belong to a host, so the browsers signed in on the PC are not signed in on the production host anyway. Use the dry run's `MIKUD_AUTH_SECRETS` and `MIKUD_SETTINGS_KEYS` in production's `.env` (or list them after new versions): otherwise the stored TOTP secret and the bot token cannot be read. A TOTP secret that cannot be read means the recovery command and a backup code, or editing the database (G4 in the foundation plan).
+7. Sign in with your dry-run account and sign out everywhere (step 8, "After any restore"). Sign-in cookies belong to a host, so the browsers signed in on the PC are not signed in on the production host anyway. Use the dry run's `MIKUD_AUTH_SECRETS` and `MIKUD_SETTINGS_KEYS` in production's `.env` (or list them after new versions): otherwise the stored TOTP secret, the backup codes and the bot token cannot be read. The backup codes are encrypted with the same key, so they do not help then; see "Lost an auth secret" in step 8.
 8. Point the reconciler's env file at production: `MIKUD_URL=https://mikud.example.com`, with its agent key (the keys moved with the database). Resume its scheduled task and check its first run.
 9. Point the agents' MCP configuration at production (step 6).
 10. Keep the local stack off: `scripts/local.sh down`. Before you ever start it again, remove the bot token in its Settings (or reset its database), so it never polls the real bot.
@@ -189,6 +189,8 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 **Lost the authenticator:** sign in with the password and a saved backup code ("Use a backup code"), then Settings, Account, "Set up a new authenticator". With the password lost too, run the command above first.
 
 **Lost the authenticator and every backup code,** with no browser still signed in and sign-in codes to Telegram off: there is no supported way back; only editing the database by hand (G4 in the foundation plan). Keep the backup codes safe, and make new ones when they run low.
+
+**Lost an auth secret.** Better Auth encrypts the TOTP secret and the backup codes with `MIKUD_AUTH_SECRETS` (and, for data from before it, `MIKUD_AUTH_SECRET`). A backup code is therefore no way back when the key that encrypted it is gone: both it and the TOTP secret can be read only with that key. The only way back is to put the old key back: list it again in `MIKUD_AUTH_SECRETS` under its old version (after a newer one, if you rotated, for example `2:<new>,1:<old>`), or set it again as `MIKUD_AUTH_SECRET` when it was the single secret of an earlier version, and run `docker compose up -d`. So keep every auth secret you ever used with the backup of `.env`, and remove an old version only after you set up the authenticator and made new backup codes under the new one. Without the old key the stored factor cannot be read; Mikud has no recovery for that beyond editing the database by hand (G4). The same holds for `MIKUD_SETTINGS_KEYS` and the stored bot token, which you can simply enter again in Settings.
 
 **After any restore**, whether a dry-run move or a backup: a restored database can hold sign-ins that you ended after the backup was taken, and agent keys you revoked since. So:
 
@@ -215,7 +217,10 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 
 1. Add `MIKUD_AUTH_SECRETS=1:<your current MIKUD_AUTH_SECRET>` and keep `MIKUD_AUTH_SECRET` as it is: the TOTP secret was encrypted with it.
 2. Add `MIKUD_SETTINGS_KEYS=1:<openssl rand -hex 32>` and `MIKUD_TRUSTED_PROXIES` (step 2).
-3. Move `MIKUD_TELEGRAM_BOT_TOKEN`, `MIKUD_TELEGRAM_CHAT_ID` and `MIKUD_PRIVATE_DOMAINS` into Settings after the start, then remove them from `.env` (while set, they lock their fields).
+3. Move `MIKUD_TELEGRAM_BOT_TOKEN`, `MIKUD_TELEGRAM_CHAT_ID` and `MIKUD_PRIVATE_DOMAINS` into Settings. While a variable is set, its field is locked, so the order matters:
+   1. Keep the three values somewhere safe (your password manager); you type them in again below.
+   2. Remove them from `.env` and run `docker compose up -d`. From now until step 3, Telegram is off (no bot, no morning message) and the secret check has no private domains.
+   3. Sign in and enter the values in Settings, Telegram and Settings, Secret check, then save. The bot and the morning message start at once, without a restart.
 4. Remove `MIKUD_OWNER_TOKEN` and `MIKUD_AGENT_TOKEN`; the server only warns about them. Agent tokens are not imported: create keys in Settings, Agent access and put them into the reconciler's and the agents' configuration.
 
 Every browser signs in once more (G14). Then save the backup codes: Settings, Account, "New backup codes".

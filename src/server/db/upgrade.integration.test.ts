@@ -65,7 +65,7 @@ afterAll(async () => {
 })
 
 describe("upgrading a database from Better Auth behind the wrapper", () => {
-  it("keeps the data, ends every session once, refuses a second owner, and still reads the TOTP secret", async () => {
+  it("keeps the data, ends every session once, does not carry session_max_days over (idle days start at 30), refuses a second owner, and still reads the TOTP secret", async () => {
     await database.migrate(oldFolder)
     const sql = postgres(url, { max: 1, onnotice: () => {} })
     try {
@@ -121,6 +121,7 @@ describe("upgrading a database from Better Auth behind the wrapper", () => {
       const names = columns.map((c) => `${c.table_name}.${c.column_name}`)
       for (const gone of ["auth_session.two_factor_at", "auth_session.auth_epoch", "auth_user.auth_epoch"])
         expect(names).not.toContain(gone)
+      // Not carried over: the old session_max_days (14 here) is dropped, and the idle days start at the default 30.
       const [settings] = await after`select session_idle_days, private_domains, otp_via_telegram from settings`
       expect(settings).toEqual({ session_idle_days: 30, private_domains: [], otp_via_telegram: false })
     } finally {

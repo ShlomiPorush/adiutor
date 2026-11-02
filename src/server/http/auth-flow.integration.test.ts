@@ -87,7 +87,7 @@ describe("first run: Better Auth's sign-up", () => {
     expect(user).toMatchObject({
       username: "owner.name",
       displayUsername: "Owner.Name",
-      email: "owner.name@mikud.local",
+      email: ownerEmail("owner.name"),
       twoFactorEnabled: false,
     })
     expect((await b.call("GET", "/api/setup/status")).json.data).toEqual({ hasUser: true, session: "enrol" })
@@ -102,8 +102,26 @@ describe("first run: Better Auth's sign-up", () => {
     expect(hash).not.toHaveBeenCalled()
     hash.mockRestore()
     expect(await actions()).toEqual(["account.setup", "session.sign_in"])
-    expect((await auditRows())[1]?.after).toEqual({ totp: false })
+    expect((await auditRows())[1]?.after).toEqual({ stage: "password" })
   })
+
+  it.each([".alice", "alice.", "a..b", "A_b.C"])(
+    "makes a valid synthetic e-mail for %s: sign-up, sign-in and the CLI reset work",
+    async (name) => {
+      const b = browser()
+      const { secret } = await b.enrolledOwner(name)
+      expect((await owner())?.email).toBe(ownerEmail(name))
+      expect(ownerEmail(name)).toMatch(/^u-[0-9a-f]+@mikud\.local$/)
+      const again = browser()
+      await again.signIn(secret, name)
+      expect((await v1(again)).status).toBe(200)
+      const reset = await resetOwnerPassword({ ...testAuthBase(t, new URL(TEST_ORIGIN)), sessionIdleDays: 30 })
+      expect(reset?.username).toBe(name.toLowerCase())
+      const fresh = browser()
+      await fresh.signIn(secret, name, reset?.password)
+      expect((await v1(fresh)).status).toBe(200)
+    },
+  )
 
   it("creates one owner when sign-ups race", async () => {
     const answers = await Promise.all(["one", "two", "three", "four", "five"].map((n) => browser().setup(`owner_${n}`)))
@@ -228,6 +246,11 @@ describe("two-factor, required by Mikud through the account flag", () => {
     expect(signedIn.json.twoFactorRedirect).toBeUndefined()
     expect((await v1(late)).status).toBe(200)
     expect(await sessions()).toHaveLength(2)
+    // Its creation is still in the audit, as a password-stage sign-in: the hook does not decide from the flag.
+    const passwordStage = (await auditRows()).filter(
+      (r) => r.action === "session.sign_in" && (r.after as { stage?: string }).stage === "password",
+    )
+    expect(passwordStage).toHaveLength(2)
   })
 
   it("G7(b), accepted: when the setup page never signs out the others, the older session stays", async () => {
@@ -257,7 +280,14 @@ describe("two-factor, required by Mikud through the account flag", () => {
     expect([again.status, again.json.code]).toEqual([401, "INVALID_BACKUP_CODE"])
     await other.signIn(secret)
     const signIns = (await auditRows()).filter((r) => r.action === "session.sign_in").map((r) => r.after)
-    expect(signIns).toEqual([{ totp: false }, { totp: true, method: "backup_code" }, { totp: true, method: "totp" }])
+    expect(signIns).toEqual([
+      { stage: "password" },
+      { stage: "password" },
+      { stage: "second_factor", method: "backup_code" },
+      { stage: "password" },
+      { stage: "password" },
+      { stage: "second_factor", method: "totp" },
+    ])
   })
 
   it("replaces a lost authenticator: disable with the password, then enrol a new one", async () => {
@@ -423,11 +453,11 @@ describe("the allow-list in hooks.before", () => {
     const b = browser()
     await b.owner()
     for (const [method, path, body] of [
-      ["POST", "/sign-in/email", { email: "owner.name@mikud.local", password: TEST_PASSWORD }],
+      ["POST", "/sign-in/email", { email: ownerEmail("owner.name"), password: TEST_PASSWORD }],
       ["POST", "/update-user", { name: "x" }],
       ["GET", "/reset-password/abc123?callbackURL=/", undefined],
       ["GET", "/callback/x", undefined],
-      ["POST", "/request-password-reset", { email: "owner.name@mikud.local" }],
+      ["POST", "/request-password-reset", { email: ownerEmail("owner.name") }],
       ["POST", "/reset-password", { token: "x", newPassword: TEST_PASSWORD }],
       ["GET", "/list-accounts", undefined],
       ["POST", "/revoke-session", { token: "x" }],
@@ -616,7 +646,7 @@ describe("audit rows from the documented hooks, and their refusals", () => {
 describe("signing out after days without Mikud open (sliding expiresIn, deferSessionRefresh)", () => {
   const expiry = async () => (await sessions())[0]?.expiresAt.getTime() ?? 0
 
-  it("never extends a session on a read; the client's POST /get-session does", async () => {
+  it("never extends a session on a read; a POST /get-session with a JSON body does (the client's own POST is refused, G19)", async () => {
     const b = browser()
     await b.owner()
     await b.call("POST", "/api/auth/revoke-other-sessions", { body: {} })
@@ -628,7 +658,17 @@ describe("signing out after days without Mikud open (sliding expiresIn, deferSes
     await v1(b)
     await core.auth.current.api.getSession({ headers: new Headers({ cookie: b.cookieHeader }) })
     expect(await expiry()).toBe(start)
-    // What the Better Auth client sends when an answer says needsRefresh.
+    // The Better Auth client sends this POST without a body; through the Node adapter that is a 415 (G19).
+    const bodiless = await app.fetch(
+      new Request(`${TEST_ORIGIN}/api/auth/get-session`, {
+        method: "POST",
+        headers: { cookie: b.cookieHeader, origin: TEST_ORIGIN, "x-forwarded-for": nextIp() },
+        body: new ReadableStream({ start: (controller) => controller.close() }),
+        duplex: "half",
+      } as RequestInit),
+    )
+    expect(bodiless.status).toBe(415)
+    expect(await expiry()).toBe(start)
     const refreshed = await b.call("POST", "/api/auth/get-session", { body: {} })
     expect(refreshed.status).toBe(200)
     expect(await expiry()).toBeGreaterThan(start + HOUR)
@@ -775,7 +815,7 @@ describe("recovery: the CLI runs Better Auth's documented reset", () => {
       ["account.password_reset", "cli"],
     ])
     expect(
-      (await browser().call("POST", "/api/auth/request-password-reset", { body: { email: "owner.name@mikud.local" } }))
+      (await browser().call("POST", "/api/auth/request-password-reset", { body: { email: ownerEmail("owner.name") } }))
         .status,
     ).toBe(404)
   })

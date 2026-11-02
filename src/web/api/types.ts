@@ -34,7 +34,6 @@ export const API_ERROR_CODES = [
   "conflict",
   "rate_limited",
   "setting_locked",
-  "secret_unreadable",
   "telegram_failed",
   "telegram_uncertain",
   "internal_error",

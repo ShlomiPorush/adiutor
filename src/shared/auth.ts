@@ -24,8 +24,13 @@ export const normalizeUsername = (username: string) => username.toLowerCase()
 
 export const passwordSchema = z.string().min(PASSWORD_MIN).max(PASSWORD_MAX)
 
-/** The synthetic e-mail Better Auth requires; Mikud never sends mail. The sign-up refuses any other. */
-export const ownerEmail = (username: string) => `${username.toLowerCase()}@mikud.local`
+/**
+ * The synthetic e-mail Better Auth requires; Mikud never sends mail. The sign-up refuses any other. Its local part is
+ * the lowercased username in hex (`u-` and 2 hex digits per character, at most 62 characters), so every username the
+ * plugin accepts (`.alice`, `alice.`, `a..b`) still makes an address that Better Auth's e-mail check accepts.
+ */
+export const ownerEmail = (username: string) =>
+  `u-${[...username.toLowerCase()].map((char) => (char.codePointAt(0) ?? 0).toString(16).padStart(2, "0")).join("")}@mikud.local`
 
 // --- Sign out after this long without Mikud open (Settings): Better Auth's sliding session.expiresIn ---
 
