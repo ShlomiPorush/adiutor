@@ -1,10 +1,5 @@
 import { z } from "zod"
-import {
-  SESSION_IDLE_MINUTES_MAX,
-  SESSION_IDLE_MINUTES_MIN,
-  SESSION_MAX_DAYS_MAX,
-  SESSION_MAX_DAYS_MIN,
-} from "./auth.ts"
+import { SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "./auth.ts"
 import {
   itemStatusSchema,
   itemTypeSchema,
@@ -106,9 +101,38 @@ export const settingsBody = z.object({
   dateFormat: text(40).optional(),
   timeFormat: text(40).optional(),
   language: languageSchema.optional(),
-  sessionMaxDays: z.number().int().min(SESSION_MAX_DAYS_MIN).max(SESSION_MAX_DAYS_MAX).optional(),
-  sessionIdle: z.boolean().optional(),
-  sessionIdleMinutes: z.number().int().min(SESSION_IDLE_MINUTES_MIN).max(SESSION_IDLE_MINUTES_MAX).optional(),
+  sessionIdleDays: z.number().int().min(SESSION_IDLE_DAYS_MIN).max(SESSION_IDLE_DAYS_MAX).optional(),
+  otpViaTelegram: z.boolean().optional(),
+  /** A new bot token, or null to remove the stored one. */
+  telegramBotToken: z
+    .string()
+    .regex(/^\d{5,}:[A-Za-z0-9_-]{30,}$/)
+    .max(200)
+    .nullable()
+    .optional(),
+  telegramChatId: z
+    .string()
+    .regex(/^-?\d{1,20}$/)
+    .nullable()
+    .optional(),
+  /** Domains whose host names agents must not write; replaces the list. */
+  privateDomains: z
+    .array(
+      z
+        .string()
+        .trim()
+        .toLowerCase()
+        .transform((d) => d.replace(/^\.+|\.+$/g, ""))
+        .pipe(
+          z
+            .string()
+            .min(1)
+            .max(253)
+            .regex(/^[a-z0-9-]+(\.[a-z0-9-]+)*$/),
+        ),
+    )
+    .max(50)
+    .optional(),
 })
 
 /** A page keeps the boundary of its first read: later refreshes pass it back. */

@@ -1,27 +1,28 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
 import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
-import { testCore } from "../testing/app.ts"
+import { createAgentKey, type TestCore, testCore } from "../testing/app.ts"
 import { TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { RateLimiter } from "./auth.ts"
 
-const OWNER = "owner-token-for-tests-only-000000000000"
-const AGENT = "agent-token-for-tests-only-000000000000"
 const ORIGIN = "http://127.0.0.1:8090"
 
 let t: TestDatabase
 let app: ReturnType<typeof createApp>
+let core: TestCore
+/** The owner's signed-in browser (two-factor on), set up before each test. */
+let ownerBrowser: TestBrowser
+/** An agent key of the owner (Better Auth's api-key plugin). */
+let AGENT: string
 
 function build(publicUrl = ORIGIN) {
-  return createApp({
-    checkDatabase: async () => true,
-    core: testCore(t, {
-      config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: new URL(publicUrl), version: "test" },
-      limiter: new RateLimiter(10, 60_000),
-      clientIp: (c) => c.req.header("x-test-ip") ?? "client",
-    }),
+  core = testCore(t, {
+    config: { publicUrl: new URL(publicUrl), version: "test" },
+    limiter: new RateLimiter(10, 60_000),
+    clientIp: (c) => c.req.header("x-test-ip") ?? "client",
   })
+  return createApp({ checkDatabase: async () => true, core })
 }
 
 beforeAll(async () => {
@@ -33,12 +34,26 @@ afterAll(async () => {
 beforeEach(async () => {
   await t.reset()
   app = build()
+  ownerBrowser = new TestBrowser((request) => app.fetch(request), ORIGIN, { "x-forwarded-for": "198.51.100.1" })
+  await ownerBrowser.owner()
+  AGENT = await createAgentKey(core)
 })
 
-type Init = { method?: string; token?: string; cookie?: string; body?: unknown; headers?: Record<string, string> }
+type Init = {
+  method?: string
+  token?: string
+  /** As the owner's signed-in browser, with the page's headers. */
+  owner?: boolean
+  cookie?: string
+  body?: unknown
+  headers?: Record<string, string>
+}
 
 async function call(path: string, init: Init = {}) {
-  const headers: Record<string, string> = { ...init.headers }
+  const headers: Record<string, string> = {
+    ...(init.owner ? { cookie: ownerBrowser.cookieHeader, "x-mikud-request": "1", origin: ORIGIN } : {}),
+    ...init.headers,
+  }
   if (init.token) headers.authorization = `Bearer ${init.token}`
   if (init.cookie) headers.cookie = init.cookie
   if (init.body !== undefined) headers["content-type"] = "application/json"
@@ -53,11 +68,9 @@ async function call(path: string, init: Init = {}) {
 
 const browser = { "x-mikud-request": "1", origin: ORIGIN }
 
-/** The owner, set up and signed in with TOTP; returns the browser and its cookie header. */
+/** The owner's signed-in browser and its cookie header. */
 async function signedIn() {
-  const owner = new TestBrowser((request) => app.fetch(request))
-  await owner.owner()
-  return { cookie: owner.cookieHeader, owner }
+  return { cookie: ownerBrowser.cookieHeader, owner: ownerBrowser }
 }
 
 describe("authentication", () => {
@@ -69,7 +82,7 @@ describe("authentication", () => {
       const marker = "owner-private-note-4711"
       const res = await call("/items", {
         method: "POST",
-        token: OWNER,
+        owner: true,
         body: { type: "task", title: "Logged", body: `${marker}${String.fromCharCode(0)}` },
       })
       expect(res.status).toBe(500)
@@ -90,21 +103,21 @@ describe("authentication", () => {
     expect(res.json).toEqual({ error: { code: "unauthorized", message: expect.any(String) } })
   })
 
-  it("refuses a wrong or malformed token", async () => {
-    expect((await call("/projects", { token: `${OWNER}x` })).json.error.code).toBe("unauthorized")
-    expect((await call("/projects", { headers: { authorization: OWNER } })).status).toBe(401)
+  it("refuses a wrong or malformed key", async () => {
+    expect((await call("/projects", { token: `${AGENT}x` })).json.error.code).toBe("unauthorized")
+    expect((await call("/projects", { headers: { authorization: AGENT } })).status).toBe(401)
     expect((await call("/projects", { headers: { authorization: "Bearer" } })).status).toBe(401)
   })
 
-  it("accepts the owner and the agent token", async () => {
-    expect((await call("/session", { token: OWNER })).json.data.actor).toEqual({ kind: "owner", label: "owner" })
+  it("accepts the owner's session and an agent key", async () => {
+    expect((await call("/session", { owner: true })).json.data.actor).toEqual({ kind: "owner", label: "owner.name" })
     const agentSession = await call("/session", { token: AGENT, headers: { "x-mikud-agent": "codex <thread>" } })
     expect(agentSession.json.data.actor).toEqual({ kind: "agent", label: "agent:codex thread" })
   })
 
   it("answers 403 to the agent on owner routes", async () => {
     const item = await call("/items", { method: "POST", token: AGENT, body: { type: "task", title: "Keep" } })
-    const project = await call("/projects", { method: "POST", token: OWNER, body: { name: "Example" } })
+    const project = await call("/projects", { method: "POST", owner: true, body: { name: "Example" } })
     const projectId = project.json.data.id
     for (const [method, path, body] of [
       ["DELETE", `/items/${item.json.data.id}`, undefined],
@@ -113,10 +126,6 @@ describe("authentication", () => {
       ["POST", "/projects", { name: "By agent" }],
       ["GET", "/settings", undefined],
       ["PATCH", "/settings", { closedItemDays: 3 }],
-      ["GET", "/account/sessions", undefined],
-      ["POST", "/account/sessions/end-all", undefined],
-      ["POST", "/account/password", { currentPassword: "x", newPassword: "y".repeat(12) }],
-      ["POST", "/session/activity", undefined],
       ["GET", "/suppressions", undefined],
     ] as const) {
       const res = await call(path, { method, token: AGENT, body })
@@ -128,16 +137,16 @@ describe("authentication", () => {
   it("rate-limits failed token attempts per client", async () => {
     for (let i = 0; i < 10; i++)
       expect((await call("/projects", { token: "wrong", headers: { "x-test-ip": "attacker" } })).status).toBe(401)
-    const blocked = await call("/projects", { token: OWNER, headers: { "x-test-ip": "attacker" } })
+    const blocked = await call("/projects", { owner: true, headers: { "x-test-ip": "attacker" } })
     expect(blocked.status).toBe(429)
     expect(blocked.json.error.code).toBe("rate_limited")
     // A forged forwarding header is not the address: the count stays.
     const forged = await call("/projects", {
-      token: OWNER,
+      owner: true,
       headers: { "x-test-ip": "attacker", "x-forwarded-for": "198.51.100.7" },
     })
     expect(forged.status).toBe(429)
-    expect((await call("/projects", { token: OWNER, headers: { "x-test-ip": "someone-else" } })).status).toBe(200)
+    expect((await call("/projects", { owner: true, headers: { "x-test-ip": "someone-else" } })).status).toBe(200)
   })
 })
 
@@ -146,8 +155,7 @@ describe("browser sessions", () => {
     const { cookie } = await signedIn()
     const session = await call("/session", { cookie })
     expect(session.json.data).toMatchObject({ actor: { kind: "owner", label: "owner.name" }, via: "session" })
-    expect(session.json.data.clocks.max.remainingSec).toBeGreaterThan(29 * 86_400)
-    expect(session.json.data.clocks.idle).toBeNull()
+    expect(new Date(session.json.data.expiresAt).getTime() - Date.now()).toBeGreaterThan(29 * 86_400_000)
 
     const body = { type: "task", title: "From the browser" }
     const noHeader = await call("/items", { method: "POST", cookie, body, headers: { origin: ORIGIN } })
@@ -162,7 +170,7 @@ describe("browser sessions", () => {
     const noOrigin = await call("/items", { method: "POST", cookie, body, headers: { "x-mikud-request": "1" } })
     expect(noOrigin.status).toBe(403)
     // Reads are plain same-origin reads.
-    expect((await call("/account/sessions", { cookie })).status).toBe(200)
+    expect((await call("/projects", { cookie })).status).toBe(200)
     const ok = await call("/items", { method: "POST", cookie, body, headers: browser })
     expect(ok.status).toBe(201)
     expect(ok.json.data.createdBy).toBe("owner")
@@ -205,7 +213,7 @@ describe("browser sessions", () => {
     expect(visit.status).toBe(201)
     const view = await owner.call("GET", "/api/v1/morning")
     expect(view.json.data.since).toBe(visit.json.data.at)
-    expect((await call("/visits", { method: "POST", token: OWNER })).status).toBe(403)
+    expect((await call("/visits", { method: "POST", token: AGENT })).status).toBe(403)
   })
 
   it("keeps a page's boundary on refresh and records a visit no later than the read that was shown", async () => {
@@ -322,9 +330,9 @@ describe("routes and error codes", () => {
       body: { threadId: "thread-del", parentThreadId: null, title: "Delete" },
     })
     const id = started.json.data.item.id
-    expect((await call(`/items/${id}?version=99`, { method: "DELETE", token: OWNER })).status).toBe(409)
-    expect((await call(`/items/${id}`, { method: "DELETE", token: OWNER })).status).toBe(204)
-    const suppressions = await call("/suppressions", { token: OWNER })
+    expect((await call(`/items/${id}?version=99`, { method: "DELETE", owner: true })).status).toBe(409)
+    expect((await call(`/items/${id}`, { method: "DELETE", owner: true })).status).toBe(204)
+    const suppressions = await call("/suppressions", { owner: true })
     expect(suppressions.json.data).toEqual([expect.objectContaining({ kind: "thread", externalId: "thread-del" })])
     const again = await call("/threads/start", {
       method: "POST",

@@ -665,6 +665,7 @@
     "open": "Open",
     "refusedSecret": "Nothing was saved: the text looks like it holds a secret (a password, token, key or server address). Remove it and send it again.",
     "onlyText": "I save text messages only. Nothing was saved.",
+    "signInCode": "Your Mikud sign-in code: {code}\nIt works once, for a few minutes. If you are not signing in right now, change your password in Mikud.",
     "morning": {
       "allClear": "Nothing is waiting on you today.",
       "waiting": "Waiting on you: {count}",

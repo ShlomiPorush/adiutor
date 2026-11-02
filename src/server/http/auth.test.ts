@@ -1,20 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { RateLimiter, tokenKind } from "./auth.ts"
-
-const config = {
-  ownerToken: "o".repeat(40),
-  agentToken: "a".repeat(40),
-  publicUrl: new URL("https://mikud.example.com"),
-}
-
-describe("tokenKind", () => {
-  it("tells the owner token from the agent token and refuses anything else", () => {
-    expect(tokenKind("o".repeat(40), config)).toBe("owner")
-    expect(tokenKind("a".repeat(40), config)).toBe("agent")
-    expect(tokenKind("o".repeat(39), config)).toBeNull()
-    expect(tokenKind("", config)).toBeNull()
-  })
-})
+import { RateLimiter } from "./auth.ts"
 
 describe("RateLimiter", () => {
   it("blocks after the maximum failures in the window and forgets them after it", () => {

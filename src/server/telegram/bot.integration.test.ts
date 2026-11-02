@@ -5,7 +5,7 @@ import { createApp } from "../app.ts"
 import { audit, items, jobRuns, telegramUpdates } from "../db/schema.ts"
 import { updateSettings } from "../services/admin.ts"
 import type { Ctx } from "../services/context.ts"
-import { testCore } from "../testing/app.ts"
+import { createAgentKey, ownerBrowser, testCore } from "../testing/app.ts"
 import { StandInBotApi, waitFor } from "../testing/bot-api.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { BotApi, type TelegramUpdate } from "./api.ts"
@@ -15,8 +15,6 @@ import { handleUpdate, TelegramBot } from "./bot.ts"
 const TOKEN = `${"7654321"}:${"AAF"}${"q".repeat(33)}`
 const OWNER_CHAT = "4242"
 const PUBLIC_URL = new URL("http://127.0.0.1:8090")
-const OWNER = "owner-token-for-tests-only-000000000000"
-const AGENT = "agent-token-for-tests-only-000000000000"
 
 let t: TestDatabase
 let standIn: StandInBotApi
@@ -216,31 +214,29 @@ describe("Telegram bot", () => {
     await waitFor(() => standIn.sent.length === 1)
     await t.ctx.db.insert(jobRuns).values({ job: "morning", localDate: "2026-11-01", state: "sent" })
     const running = bot
-    const app = (telegram?: { configured: boolean; polling: () => boolean }) =>
-      createApp({
-        checkDatabase: async () => true,
-        core: testCore(t, {
-          config: { ownerToken: OWNER, agentToken: AGENT, publicUrl: PUBLIC_URL, version: "test" },
-          telegram,
-        }),
-      })
-    const get = (a: ReturnType<typeof app>, token: string) =>
-      a.request("/api/v1/telegram/status", { headers: { authorization: `Bearer ${token}` } })
+    const app = (telegram?: { configured: boolean; polling: () => boolean }) => {
+      const core = testCore(t, { config: { publicUrl: PUBLIC_URL, version: "test" }, telegram })
+      return { core, app: createApp({ checkDatabase: async () => true, core }) }
+    }
+    const asOwner = async (a: ReturnType<typeof app>) =>
+      (await ownerBrowser(t, a.app)).call("GET", "/api/v1/telegram/status")
 
     const on = app({ configured: true, polling: () => running?.polling ?? false })
-    const res = await get(on, OWNER)
+    const res = await asOwner(on)
     expect(res.status).toBe(200)
-    const { data } = (await res.json()) as { data: Record<string, unknown> }
+    const data = res.json.data as Record<string, unknown>
     expect(data).toMatchObject({
       configured: true,
       polling: true,
       lastMorning: { localDate: "2026-11-01", state: "sent" },
     })
     expect(typeof data.lastUpdateAt).toBe("string")
-    expect((await get(on, AGENT)).status).toBe(403)
+    const key = await createAgentKey(on.core)
+    const agent = await on.app.request("/api/v1/telegram/status", { headers: { authorization: `Bearer ${key}` } })
+    expect(agent.status).toBe(403)
 
-    const off = (await (await get(app(undefined), OWNER)).json()) as { data: Record<string, unknown> }
-    expect(off.data).toMatchObject({ configured: false, polling: false })
+    const off = await asOwner(app(undefined))
+    expect(off.json.data).toMatchObject({ configured: false, polling: false })
   })
 
   it("never logs the bot token or message text", () => {

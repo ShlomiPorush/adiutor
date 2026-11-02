@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { createSecretScanner, isPlaceholder, REDACTED } from "./secrets.ts"
+import { createSecretScanner, isPlaceholder, REDACTED, ReloadableSecretScanner } from "./secrets.ts"
 
 // Every fake secret is assembled at run time, so no file in the repository holds a string that looks
 // like a real credential (and GitHub push protection has nothing to flag).
@@ -134,4 +134,23 @@ describe("secret scanner", () => {
       expect(isPlaceholder(value)).toBe(true)
     },
   )
+})
+
+describe("Mikud's own agent keys", () => {
+  it("refuses an mkd_ key, also inside a sentence, and lets the prefix alone pass", () => {
+    const scanner = createSecretScanner()
+    const key = `${"mkd"}_${"AbCdEfGh".repeat(8)}`
+    expect(scanner.find(`use ${key} for the sync`)).toBe("agent_key")
+    expect(scanner.redact(`key=${key}`)).not.toContain(key)
+    expect(scanner.find("keys start with mkd_ and 64 letters")).toBeNull()
+  })
+
+  it("reloads the private domains without a new scanner", () => {
+    const scanner = new ReloadableSecretScanner()
+    expect(scanner.find("see build.corp.example")).toBeNull()
+    scanner.setPrivateDomains(["corp.example"])
+    expect(scanner.find("see build.corp.example")).toBe("private_host")
+    scanner.setPrivateDomains([])
+    expect(scanner.find("see build.corp.example")).toBeNull()
+  })
 })
