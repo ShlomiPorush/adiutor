@@ -42,32 +42,42 @@ async function loseConnection(tx: Tx) {
 }
 
 describe("a lost connection", () => {
-  it("fails a savepoint whose connection was lost inside it, and commits nothing", async () => {
+  // The driver races the transaction against the connection's close, so the transaction can reject while its
+  // callback is still running. Each test keeps the callback's own promise and waits for it to settle before it
+  // asserts on what the callback reached.
+  it("rejects the transaction and the savepoint when the connection is lost inside the savepoint", async () => {
     let savepointResolved = false
-    let reachedCommit = false
-    const run = t.ctx.db.transaction(async (tx) => {
-      await record(tx, 1)
-      await tx.transaction(async (sp) => {
-        await record(sp, 2)
-        await loseConnection(sp)
-      })
-      savepointResolved = true
-      await record(tx, 3)
-      reachedCommit = true
+    let body: Promise<void> | undefined
+    const run = t.ctx.db.transaction((tx) => {
+      body = (async () => {
+        await record(tx, 1)
+        await tx.transaction(async (sp) => {
+          await record(sp, 2)
+          await loseConnection(sp)
+        })
+        savepointResolved = true
+        await record(tx, 3)
+      })()
+      return body
     })
     await expect(run).rejects.toThrow()
+    await expect(body).rejects.toThrow()
     expect(savepointResolved).toBe(false)
-    expect(reachedCommit).toBe(false)
     expect(await stored()).toEqual([])
   })
 
-  it("fails the commit when the connection was lost after a savepoint, and commits nothing", async () => {
-    const run = t.ctx.db.transaction(async (tx) => {
-      await record(tx, 1)
-      await tx.transaction((sp) => record(sp, 2))
-      await loseConnection(tx)
+  it("rejects the transaction when the connection is lost after a savepoint, and stores nothing", async () => {
+    let body: Promise<void> | undefined
+    const run = t.ctx.db.transaction((tx) => {
+      body = (async () => {
+        await record(tx, 1)
+        await tx.transaction((sp) => record(sp, 2))
+        await loseConnection(tx)
+      })()
+      return body
     })
     await expect(run).rejects.toThrow()
+    await Promise.allSettled([body])
     expect(await stored()).toEqual([])
   })
 
