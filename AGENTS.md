@@ -29,7 +29,7 @@ One pnpm package (no workspace apps).
 - `drizzle/`: generated SQL migrations and their snapshots. Never edit by hand. The one exception is a data-only change: `pnpm db:generate --custom --name <change>` (documented by drizzle-kit) makes an empty migration whose SQL is written by hand (`0005_end-sessions`). No other hand-written SQL is allowed.
 - `config/`: TypeScript base config, Vitest configs, Drizzle Kit config, `vite.config.ts` (the UI build) and `playwright.config.ts` (end-to-end tests).
 - `docker/`: toolchain and application Dockerfiles, the development Compose template and `dev.env` (fake development values).
-- `scripts/`: `local.sh`, `verify.sh`, `try-pr.sh`, `release.sh` and its tests `test-release.sh`; `lib/common.sh` (shared helpers), `lib/guards.sh` (repository guards) and `lib/try-pr-seed.mjs` (the owner, an agent key and invented fixtures for `try-pr.sh`).
+- `scripts/`: `local.sh`, `verify.sh`, `try-pr.sh`, `release.sh` and its tests `test-release.sh`, `ci-result.sh` (the CI run a release reuses) and its tests `test-ci-result.sh`, `test-release-workflow.sh` (the Release workflow's wiring); `lib/common.sh` (shared helpers), `lib/guards.sh` (repository guards) and `lib/try-pr-seed.mjs` (the owner, an agent key and invented fixtures for `try-pr.sh`).
 - `src/sync/`: the sync tool that runs on the owner's PC, bundled to `dist/sync/mikud-sync.js` (Node stdlib only at runtime; no imports from `src/server/`). `main.ts` is the entry, `run.ts` one run, `fixtures/` invented T3 and `overview` data for its tests. See `docs/sync.md`.
 - `prompts/`: `reconcile.md`, the instructions of the T3 scheduled task that runs the sync tool.
 - `docs/api.md`: the HTTP API and MCP contract. Change it together with the routes.
@@ -49,11 +49,18 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 - `scripts/local.sh build|up|start|down|status|logs|nuke`: the development stack (`mikud-dev`) from the ignored `docker-compose-dev.yml`. Create it once with `cp docker/docker-compose-dev.example.yml docker-compose-dev.yml`. Serves `http://127.0.0.1:8090`; `MIKUD_PORT` changes the port.
 - `scripts/try-pr.sh <number>|status|restore`: runs a pull request's head as the separate Compose project `mikud-pr` (own PostgreSQL, generated keys in a 0600 file under `~/.cache/mikud/try-pr`, an owner created through Better Auth's sign-up with a generated password, TOTP secret, backup codes and an agent key in `owner.env` there, also 0600, Telegram off, invented fixtures) on `http://127.0.0.1:8091`; `MIKUD_PR_PORT` changes the port. Never touches `mikud-dev`. `restore` removes the stack, its data, image and worktree.
 - Recovery on a running stack: `docker compose exec mikud node dist/server/cli.js reset-password` (production) or `source scripts/lib/common.sh && dev_compose exec mikud node dist/server/cli.js reset-password` (development). It runs Better Auth's documented reset: prints a new password once and ends every session; two-factor stays.
-- `scripts/release.sh --target ghcr --bump <patch|minor|major> [--dry-run]`: run by the manual Release workflow on `main`; never by agents except `--dry-run`. `scripts/test-release.sh` tests it offline and runs with the guards.
+- Releases: the **Release** workflow (Actions → Release → Run workflow on `main`, choose patch, minor or major; `dry_run` checks everything and publishes nothing) reuses the newest CI run of the commit on `main` when its latest attempt succeeded (waiting up to 30 minutes for one that still runs; it never falls back to an older green run) and runs the whole CI on the commit otherwise (`scripts/ci-result.sh` decides, and the workflow checks a reused run again with it right before `release.sh`), then `scripts/release.sh --target ghcr --bump <patch|minor|major> [--dry-run]`: release commit and tag, the image on GHCR (the version, then `:latest`) and the GitHub Release from the CHANGELOG section. A run that stopped halfway is finished by the next run (a new Run workflow, not "Re-run failed jobs"). Agents never release: they run the workflow only with `dry_run`, and `release.sh` only with `--dry-run`. `scripts/test-release.sh` (run by the guards) covers each way a run can stop, `scripts/test-ci-result.sh` which CI run counts, and `scripts/test-release-workflow.sh` which jobs and steps run on both CI paths with and without `dry_run` (both also run by the guards). Never deploys.
 - A single tool in the toolchain: `source scripts/lib/common.sh && build_toolchain && in_toolchain "pnpm test"`.
 - UI development: `in_toolchain "VITE_MIKUD_MOCK=1 pnpm dev:web"` serves the UI on the mock API (port 5173 in the container); without the flag `pnpm dev:web` proxies `/api` to the development stack.
 - End-to-end tests against the development stack: `docker run --rm --ipc=host --network host --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo" -w /repo mcr.microsoft.com/playwright:v1.64.1-noble npx playwright test --config config/playwright.config.ts` (from a WSL clone; the tests create invented records and set the language to Hebrew). On a stack whose owner exists, pass `-e E2E_USERNAME -e E2E_PASSWORD -e E2E_TOTP_SECRET` of that owner; on an empty database the first test creates one.
 - New migration after a schema change: `in_toolchain "pnpm db:generate --name <change>"`. `verify.sh` fails when the schema and the migrations disagree. A data-only change uses `pnpm db:generate --custom --name <change>` and is the only hand-written SQL.
+
+Verify in proportion to the risk of the change, and report what ran and its result:
+
+- **Documentation only** (`docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`, `LICENSE`; nothing under `prompts/`, whose `reconcile.md` instructs the T3 scheduled task): `scripts/verify.sh --changed`, which then runs only the guards.
+- **Anything else**: the full `scripts/verify.sh` before opening the pull request.
+
+On a pull request, CI runs the guards, and `scripts/verify.sh --changed origin/main` unless only Markdown files, `docs/` or `LICENSE` changed; then it runs only the guards.
 
 ## Traps
 
@@ -109,6 +116,7 @@ Run every script inside WSL from the repository. Node, pnpm, shellcheck and shfm
 - Never commit environment-specific details: hostnames, IP addresses, bucket names, network details, tokens, real project names or real project data. They belong in the ignored `docs/private/` or in the server's `.env`. Fixtures and screenshots use invented projects.
 - Store statuses, stages, types and severities as English codes; user-visible labels come from the locale files only.
 - Keep the repository root minimal. Every root file is listed and justified in the foundation plan.
+- Add user-visible or operational changes under `Unreleased` in `CHANGELOG.md`, written for the next release (no Changed or Fixed entries about things that were never released). Do not bump versions in pull requests; the Release workflow does that.
 - Never commit `docs/private/`, `.env` or `docker-compose-dev.yml`. `docker/dev.env` holds only fake development values.
 - Kanzo (AGPL) inspired the idea. Never copy its code.
 - Commit email is the GitHub noreply address.
