@@ -115,6 +115,12 @@ describe("systemCommand", () => {
     expect(await systemCommand("icacls", { PATH: join(root, "System32") })).toBeUndefined()
     expect(await systemCommand("icacls", { SystemRoot: "." })).toBeUndefined()
   })
+
+  it("on Windows refuses a SystemRoot without a drive letter, which would resolve on the current drive", async () => {
+    expect(await systemCommand("icacls", { SystemRoot: "\\Windows" }, "win32")).toBeUndefined()
+    expect(await systemCommand("icacls", { SystemRoot: "/Windows" }, "win32")).toBeUndefined()
+    expect(await systemCommand("icacls", { SystemRoot: "Windows" }, "win32")).toBeUndefined()
+  })
 })
 
 describe("childEnv", () => {
