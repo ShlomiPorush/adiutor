@@ -67,12 +67,24 @@
     "archive": "Archive",
     "settings": "Settings"
   },
+  "shell": {
+    "tagline": "Project focus",
+    "collapseMenu": "Collapse menu",
+    "expandMenu": "Expand menu",
+    "themeButton": "Theme: {theme}. Switch to {next}",
+    "theme": "Theme",
+    "accountMenu": "Account menu",
+    "account": "Account",
+    "accountSettings": "Account settings",
+    "twoFactorOn": "Two-factor on",
+    "syncCard": "T3 sync",
+    "syncStale": "Out of date",
+    "syncUnknown": "Could not be read"
+  },
   "theme": {
     "light": "Light",
     "dark": "Dark",
-    "system": "System",
-    "toLight": "Switch to the light theme",
-    "toDark": "Switch to the dark theme"
+    "system": "System"
   },
   "time": {
     "justNow": "just now",
@@ -567,7 +579,7 @@
   },
   "settings": {
     "title": "Settings",
-    "description": "Language, dates, the morning view, your account, Telegram, agent keys, this browser's theme and what the sync may not recreate.",
+    "description": "Language, dates, the morning view, your account, Telegram, agent keys and what the sync may not recreate.",
     "loading": "Loading settings...",
     "failed": "Could not load settings",
     "general": "General",
@@ -592,9 +604,6 @@
     "saved": "Settings saved",
     "saveFailed": "Could not save settings: {reason}",
     "saveInvalid": "Settings were not saved: {reason}",
-    "appearance": "This browser",
-    "theme": "Theme",
-    "themeHint": "Saved in this browser only, and applied at once.",
     "status": "Sync",
     "statusHint": "Read only. The sync runs on your PC.",
     "lastSync": "Last successful T3 sync",

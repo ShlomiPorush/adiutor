@@ -52,8 +52,9 @@ test("the first run creates the owner, requires TOTP, shows the backup codes onc
   await expect(page).toHaveURL(/\/settings$/)
   await expect(page.locator("#account")).toContainText(USERNAME.toLowerCase())
 
-  // Sign out from Settings: the browser goes to sign-in and the app refuses it.
-  await page.locator("#account").getByRole("button", { name: he.account.signOut }).click()
+  // Sign out from the shell's account menu: the browser goes to sign-in and the app refuses it.
+  await page.getByRole("button", { name: new RegExp(`${he.shell.accountMenu}$`) }).click()
+  await page.getByRole("menuitem", { name: he.account.signOut }).click()
   await expect(page).toHaveURL(/\/login$/)
   expect(await page.evaluate(async () => (await fetch("/api/v1/session")).status)).toBe(401)
 })

@@ -11,6 +11,7 @@ import type { AgentUpdateGroup, Morning, MorningProject, SecurityLine } from "..
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { ProposalRow } from "../shell/Bell.tsx"
+import { PageHead } from "../shell/chrome.tsx"
 import { useOpenItem } from "../shell/items.ts"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
@@ -56,12 +57,7 @@ export function MorningPage() {
   return (
     <div className="ui-page" ref={page}>
       <div className="ui-page-narrow ui-section">
-        <div className="ui-page-head">
-          <div>
-            <h1 className="ui-h1">{t("morning.title")}</h1>
-            <p>{t("morning.description")}</p>
-          </div>
-        </div>
+        <PageHead title={t("morning.title")} description={t("morning.description")} />
         {morning.isPending ? <Loading label={t("morning.loading")} /> : null}
         {morning.isError && !morning.data ? (
           <ErrorState title={t("morning.failed")} error={morning.error} onRetry={() => void morning.refetch()} />

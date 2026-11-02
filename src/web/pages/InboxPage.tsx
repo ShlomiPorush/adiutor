@@ -7,6 +7,7 @@ import { ITEM_TYPES, type ItemType } from "../../shared/enums.ts"
 import { api, qk } from "../api/endpoints.ts"
 import type { ItemSummary, ProjectListEntry } from "../api/types.ts"
 import { useI18n } from "../i18n/i18n.tsx"
+import { PageHead } from "../shell/chrome.tsx"
 import { useItemActions, useOpenItem } from "../shell/items.ts"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
@@ -23,12 +24,7 @@ export function InboxPage() {
   return (
     <div className="ui-page">
       <div className="ui-page-narrow ui-section">
-        <div className="ui-page-head">
-          <div>
-            <h1 className="ui-h1">{t("inbox")}</h1>
-            <p>{t("inboxPage.description")}</p>
-          </div>
-        </div>
+        <PageHead title={t("inbox")} description={t("inboxPage.description")} />
         <StaleNote failed={query.isError && !!query.data} />
         {query.isPending ? <Loading label={t("inboxPage.loading")} /> : null}
         {query.isError && !query.data ? (

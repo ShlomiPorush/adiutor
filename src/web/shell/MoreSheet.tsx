@@ -1,20 +1,24 @@
 // The phone More sheet (v3 NL-9): every page, with the same counters as the sidebar, sliding up
 // from just above the tab bar. A layer of its own on purpose (listed in popups.guard.test.ts): the
 // page behind is inert while the tab bar stays usable. Escape, Back and a tap outside close it, and
-// a page picked in it replaces the sheet's history entry instead of stacking one more.
+// a page picked in it replaces the sheet's history entry instead of stacking one more. The sheet closes once
+// the move is made (the shell closes it on a new path), so the Leave question's Stay keeps it open; the page
+// already open only closes it. Its foot holds the theme button, as n8n-ops' sheet does.
 
 import { useEffect, useRef } from "react"
 import { createPortal } from "react-dom"
-import { NavLink } from "react-router"
+import { NavLink, useLocation } from "react-router"
 import { useI18n } from "../i18n/i18n.tsx"
 import { openLayer } from "../ui/layers.ts"
 import { NAV } from "./navigation.ts"
+import { ThemeButton } from "./ShellTools.tsx"
 
 export function MoreSheet({ inbox, onClose }: { inbox: number; onClose: () => void }) {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  const { pathname } = useLocation()
 
   // The veil is the layer's root, portalled into <body> as the dialog builder does.
   useEffect(() => {
@@ -54,13 +58,20 @@ export function MoreSheet({ inbox, onClose }: { inbox: number; onClose: () => vo
             end={page.to === "/"}
             replace
             className="ui-nav-item"
-            onClick={() => closeRef.current()}
+            onClick={(event) => {
+              if (page.to !== pathname) return
+              event.preventDefault()
+              closeRef.current()
+            }}
           >
             <page.icon aria-hidden="true" />
             <span className="ui-nav-label">{t(`nav.${page.id}`)}</span>
             {page.id === "inbox" && inbox > 0 ? <span className="ui-nav-count">{inbox}</span> : null}
           </NavLink>
         ))}
+        <div className="ui-moresheet-foot">
+          <ThemeButton />
+        </div>
       </div>
     </div>,
     document.body,

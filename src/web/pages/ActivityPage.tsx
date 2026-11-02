@@ -5,6 +5,7 @@ import { Link } from "react-router"
 import { api, qk } from "../api/endpoints.ts"
 import type { AuditEntry } from "../api/types.ts"
 import { useI18n } from "../i18n/i18n.tsx"
+import { PageHead } from "../shell/chrome.tsx"
 import { useOpenItem } from "../shell/items.ts"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { EVERY, usePageInfiniteQuery } from "../ui/refresh.ts"
@@ -24,12 +25,7 @@ export function ActivityPage() {
   return (
     <div className="ui-page">
       <div className="ui-page-narrow ui-section">
-        <div className="ui-page-head">
-          <div>
-            <h1 className="ui-h1">{t("activity.title")}</h1>
-            <p>{t("activity.description")}</p>
-          </div>
-        </div>
+        <PageHead title={t("activity.title")} description={t("activity.description")} />
         <StaleNote failed={query.isRefetchError} />
         {query.isPending ? <Loading label={t("activity.loading")} /> : null}
         {query.isError && !query.data ? (

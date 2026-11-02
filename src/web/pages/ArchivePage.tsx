@@ -3,6 +3,7 @@
 
 import { api, qk } from "../api/endpoints.ts"
 import { useI18n } from "../i18n/i18n.tsx"
+import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { EVERY, usePageInfiniteQuery } from "../ui/refresh.ts"
 import { Empty, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
@@ -19,12 +20,7 @@ export function ArchivePage() {
   return (
     <div className="ui-page">
       <div className="ui-page-narrow ui-section">
-        <div className="ui-page-head">
-          <div>
-            <h1 className="ui-h1">{t("archive.title")}</h1>
-            <p>{t("archive.description")}</p>
-          </div>
-        </div>
+        <PageHead title={t("archive.title")} description={t("archive.description")} />
         <StaleNote failed={query.isRefetchError} />
         {query.isPending ? <Loading label={t("archive.loading")} /> : null}
         {query.isError && !query.data ? (

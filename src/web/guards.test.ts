@@ -44,6 +44,15 @@ const BUILDERS: Record<string, string> = {
   "shell/MoreSheet.tsx": "the phone More sheet above the tab bar, which stays usable beside it (NL-9)",
   "shell/Bell.tsx":
     "the Needs attention window anchored under the bell on wide screens; a dialog-builder sheet on phones (NL-19)",
+  "ui/Menu.tsx": "the one menu (the account menu), anchored to its button; a layer of ui/layers.ts (MP-7, R4)",
+}
+
+/**
+ * Files that may portal, and nothing else: they move a page's own elements into the frame, not a layer over the
+ * page. Every other layer pattern still fails in them.
+ */
+const PORTAL_ONLY: Record<string, string> = {
+  "shell/chrome.tsx": "PageActions moves the page's own action buttons into the top bar from 761px (NL-6)",
 }
 
 /** CSS selectors that may float above the page, each with its reason. */
@@ -55,6 +64,8 @@ const FLOATING_CSS: Record<string, string> = {
   ".ui-moresheet": "the phone More sheet",
   ".ui-tabbar": "the phone tab bar, part of the frame",
   ".ui-savebar": "the save bar, part of the page",
+  ".ui-menu-backdrop": "the click-outside area of a menu",
+  ".ui-menu": "a menu, placed beside its button",
 }
 
 const LAYER_PATTERNS: [string, RegExp][] = [
@@ -63,7 +74,8 @@ const LAYER_PATTERNS: [string, RegExp][] = [
   ["a <dialog> element", /<dialog\b/],
   ["showModal()", /\.showModal\s*\(/],
   ["a popover attribute", /\bpopover\s*[=:]/],
-  ["a layer frame class", /["'`\s]ui-(?:dialog|toast|attn-win|attn-backdrop|moresheet)(?:[-\s"'`]|$)/m],
+  ["a menu role", /role\s*[=:]\s*\{?\s*["']menu(?:item(?:radio|checkbox)?)?["']/],
+  ["a layer frame class", /["'`\s]ui-(?:dialog|toast|attn-win|attn-backdrop|moresheet|menu)(?:[-\s"'`]|$)/m],
   ["fixed positioning", /position\s*:\s*["']fixed["']|\.position\s*=\s*["']fixed["']/],
   ["the browser's alert, confirm or prompt", /(?<![\w.$])(?:window\.)?(?:alert|confirm|prompt)\s*\(/],
 ]
@@ -78,6 +90,7 @@ function popupViolations(files: Record<string, string>): string[] {
       plain = plain.slice(0, start) + plain.slice(start + openingTag(plain, start).length)
     }
     for (const [name, pattern] of LAYER_PATTERNS) {
+      if (name === "a portal" && file in PORTAL_ONLY) continue
       if (pattern.test(plain)) found.push(`${file}: ${name} outside the shared builders`)
     }
   }
@@ -225,7 +238,7 @@ describe("popups come from their shared builders (DS-24)", () => {
   })
 
   it("every listed builder and floating selector still exists", () => {
-    for (const file of Object.keys(BUILDERS)) expect(files[file], file).toBeDefined()
+    for (const file of [...Object.keys(BUILDERS), ...Object.keys(PORTAL_ONLY)]) expect(files[file], file).toBeDefined()
     for (const selector of Object.keys(FLOATING_CSS)) expect(css.includes(`${selector} {`), selector).toBe(true)
   })
 
@@ -237,6 +250,14 @@ describe("popups come from their shared builders (DS-24)", () => {
     expect(popupViolations(page(`return <div className="ui-dialog-backdrop" />`))).toHaveLength(1)
     expect(popupViolations(page(`const style = { position: "fixed", inset: 0 }`))).toHaveLength(1)
     expect(popupViolations(page(`return <dialog open>x</dialog>`))).toHaveLength(1)
+    expect(popupViolations(page(`return <div role="menu"><b role="menuitem">x</b></div>`))).toHaveLength(1)
+    expect(popupViolations(page(`return <div className="ui-menu-backdrop" />`))).toHaveLength(1)
+    expect(
+      popupViolations(page(`<Menu anchor={b} label="Account" entries={[]} side="top" align="end" onClose={f} />`)),
+    ).toEqual([])
+    // A portal-only file may portal, and nothing more.
+    expect(popupViolations({ "shell/chrome.tsx": "return createPortal(children, actionsSlot)" })).toEqual([])
+    expect(popupViolations({ "shell/chrome.tsx": `return <div role="dialog">x</div>` })).toHaveLength(1)
     expect(popupViolations(page(`await confirmDialog({ title: "x" })`))).toEqual([])
     expect(popupViolations(page(`<Dialog role="alertdialog" size="sm" onCancel={f}>x</Dialog>`))).toEqual([])
     expect(dialogCallViolations(page(`<Dialog title="x" onClose={() => close()}>body</Dialog>`))).toEqual([
