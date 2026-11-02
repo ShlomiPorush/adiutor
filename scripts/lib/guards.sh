@@ -130,4 +130,10 @@ done < <(git ls-files -s 'scripts/*.sh')
 echo "--- Release script: refusals and resume paths against a local remote"
 bash scripts/test-release.sh || fail=1
 
+echo "--- CI result script: which CI run a release reuses, against a stand-in gh"
+bash scripts/test-ci-result.sh || fail=1
+
+echo "--- Release workflow: jobs and steps on both CI paths, with and without dry_run"
+bash scripts/test-release-workflow.sh || fail=1
+
 exit "$fail"
