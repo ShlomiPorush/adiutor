@@ -7,7 +7,7 @@ export default defineConfig({
   // The web client reads this flag; the mock API is never part of a unit test.
   define: { __MIKUD_MOCK__: "false" },
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
     exclude: ["**/node_modules/**", "**/*.integration.test.ts"],
   },
 })

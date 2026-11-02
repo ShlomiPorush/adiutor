@@ -5,7 +5,10 @@
 // focus moves into the layer and returns to the control that opened it.
 
 export type LayerOptions = {
-  /** The layer's root element, a direct child of <body>. */
+  /**
+   * The layer's root element: its builder portals it straight into <body>, outside any stacking
+   * context (DS-15), and React owns it, so StrictMode's second effect run finds it still there.
+   */
   root: HTMLElement
   /** Closes the layer the way its X or Cancel does (it may ask first). */
   close: () => void
@@ -115,14 +118,6 @@ export function topLayerIs(root: HTMLElement | null): boolean {
 
 export function layerCount(): number {
   return stack.length
-}
-
-/** A layer root: a fresh element directly under <body>, outside any stacking context (DS-15). */
-export function createLayerRoot(kind: string): HTMLElement {
-  const root = document.createElement("div")
-  root.dataset.layer = kind
-  document.body.append(root)
-  return root
 }
 
 if (typeof window !== "undefined") {
