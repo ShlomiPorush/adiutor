@@ -94,17 +94,24 @@ export async function findCommand(
   return undefined
 }
 
+/** A Windows path that names its drive, such as C:\Windows. */
+export const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/
+
 /**
  * A Windows component (icacls, rundll32, setx) by its full path in %SystemRoot%\System32, or undefined. Started by bare
  * name, Node (libuv) looks in the current folder before PATH, so a planted icacls.exe next to the command would run.
  * System32 is where Windows installs these tools and only administrators can write to it; PATH is not consulted.
  */
+
 export async function systemCommand(
   name: string,
   env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<string | undefined> {
   const root = envValue(env, "SYSTEMROOT", true)?.trim()
   if (!root || !isAbsolute(root)) return undefined
+  // On Windows a root without a drive (\Windows) is absolute to Node but lands on the current drive: refuse it.
+  if (platform === "win32" && !WINDOWS_DRIVE_ROOT.test(root)) return undefined
   const candidate = join(root, "System32", `${name}.exe`)
   return (await isFile(candidate)) ? candidate : undefined
 }
