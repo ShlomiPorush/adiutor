@@ -225,6 +225,19 @@ describe("agent approval: the device flow", () => {
     expect([answer.status, answer.json.error]).toEqual([400, "expired_token"])
   })
 
+  it("lets one CLI poll for the whole code lifetime without being rate limited", async () => {
+    // A code lives 10 minutes and the CLI polls every 5 seconds: 120 polls. Better Auth counts a route's requests
+    // until it is quiet for a whole window, so the global 100 a minute would refuse the 101st.
+    await owner()
+    const c = cli()
+    const code = await c.code()
+    const deviceCode = code.json.device_code as string
+    for (let i = 0; i < 130; i++) {
+      const answer = await c.poll(deviceCode)
+      expect(answer.status, `poll ${i + 1}`).not.toBe(429)
+    }
+  })
+
   it("refuses an unknown client id", async () => {
     const answer = await cli().code("another-client")
     expect([answer.status, answer.json.error]).toEqual([400, "invalid_client"])

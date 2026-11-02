@@ -165,6 +165,15 @@ describe("connect: the device flow", () => {
     expect(d.lines.join("\n")).not.toContain(SESSION)
   })
 
+  it("treats a rate-limited poll (429) as slow_down and keeps waiting for the approval", async () => {
+    const limited = { status: 429, body: { message: "Too many requests" } }
+    const mikud = standIn({ polls: [pending, limited, limited, { status: 200, body: { access_token: SESSION } }] })
+    const d = deps(mikud.fetch)
+    expect(await connect(options(), d)).toBe(0)
+    expect(d.waits).toEqual([5000, 5000, 10_000, 15_000])
+    expect(mikud.sent.map((s) => s.path)).toContain("/api-key/create")
+  })
+
   it("stops at access_denied without a key or a session", async () => {
     const mikud = standIn({ polls: [pending, { status: 400, body: { error: "access_denied" } }] })
     const d = deps(mikud.fetch)
