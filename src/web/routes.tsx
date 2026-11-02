@@ -5,6 +5,7 @@ import type { ComponentType } from "react"
 import { createBrowserRouter, Navigate, useParams } from "react-router"
 import { ActivityPage } from "./pages/ActivityPage.tsx"
 import { ArchivePage } from "./pages/ArchivePage.tsx"
+import { ConnectDevicePage } from "./pages/auth/ConnectDevicePage.tsx"
 import { LoginPage } from "./pages/auth/LoginPage.tsx"
 import { SetupPage } from "./pages/auth/SetupPage.tsx"
 import { InboxPage } from "./pages/InboxPage.tsx"
@@ -42,6 +43,8 @@ export function createRouter() {
       children: [
         { path: "/login", element: <LoginPage /> },
         { path: "/setup", element: <SetupPage /> },
+        // Inside the session gate, outside the frame: a signed-out browser signs in and comes back with its code.
+        { path: "/connect/device", element: <ConnectDevicePage /> },
         {
           element: <Shell />,
           children: [

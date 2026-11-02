@@ -60,7 +60,7 @@ These notes are for the owner, who deploys production himself. Agents never depl
    - `MIKUD_TRUSTED_PROXIES`: the address (or CIDR range) Traefik uses to reach `mikud` on the `traefik` network, for example the network's subnet from `docker network inspect traefik`. Better Auth then reads the client address from `X-Forwarded-For` (step 3).
    - Keep backups of `.env` with the database backup: with other keys every browser is signed out, the TOTP secret cannot be read, and the stored bot token must be entered again.
 
-   Everything else you manage in Mikud itself, in Settings: the Telegram bot token and chat id, sending sign-in codes to Telegram, the private domains of the secret check, the agent keys and how long a browser stays signed in. `MIKUD_TELEGRAM_BOT_TOKEN`, `MIKUD_TELEGRAM_CHAT_ID` and `MIKUD_PRIVATE_DOMAINS` may still be set here: each then overrides its field, and Settings shows that field locked. Leave `TELEGRAM_API_URL` empty. Never set a `BETTER_AUTH_*` variable: the server refuses to start with one, because Better Auth would read it on its own.
+   Everything else you manage in Mikud itself, in Settings: the Telegram bot token and chat id, sending sign-in codes to Telegram, the private domains of the secret check, the connected agents and how long a browser stays signed in. `MIKUD_TELEGRAM_BOT_TOKEN`, `MIKUD_TELEGRAM_CHAT_ID` and `MIKUD_PRIVATE_DOMAINS` may still be set here: each then overrides its field, and Settings shows that field locked. Leave `TELEGRAM_API_URL` empty. Never set a `BETTER_AUTH_*` variable: the server refuses to start with one, because Better Auth would read it on its own.
 
 ## 3. Fit the network
 
@@ -122,9 +122,14 @@ The browser signs in with a username, a password and a code from an authenticato
 
 ## 6. Connect the agents and the reconciler
 
-- **Agent keys:** in Settings, Agent access, create one key for the reconciler and one for the agents. Each is shown once: copy it into the configuration it belongs to. A key keeps working after you sign out; revoke it there when a machine is lost or a key leaks.
-- **Agents:** [agent-instruction.md](agent-instruction.md) has the MCP configuration for Claude Code and Codex and the instruction text. Use `https://mikud.example.com/mcp` and the agents' key, read from the `MIKUD_AGENT_TOKEN` environment variable.
-- **Reconciler:** on your PC, the T3 scheduled task in [prompts/reconcile.md](../prompts/reconcile.md) runs the sync tool described in [sync.md](sync.md). Its env file sets `MIKUD_URL=https://mikud.example.com` and `MIKUD_AGENT_TOKEN` to the reconciler's key. After its first run, `GET /api/v1/sync/runs` shows the run's outcome.
+Every agent and the reconciler get their own key through `mikud connect`, a command of the sync bundle (build it as [sync.md](sync.md) says). You approve each one in the browser on `/connect/device`, signed in with two-factor; Settings, Agent access shows the commands with your address, lists every connected agent with its end date and last request, and disconnects one or all at once. A key keeps working after you sign out.
+
+- **Reconciler:** in the Mikud checkout on your PC, `node dist/sync/mikud-sync.js connect --url https://mikud.example.com --name sync --for sync`. It writes `MIKUD_URL` and `MIKUD_AGENT_TOKEN` into `%LOCALAPPDATA%\mikud\sync.env`, restricted to your Windows user. The T3 scheduled task in [prompts/reconcile.md](../prompts/reconcile.md) runs the sync with that file. After its first run, `GET /api/v1/sync/runs` shows the run's outcome.
+- **Claude Code:** `... connect --url https://mikud.example.com --name claude --for claude` prints a `claude mcp add` command with the key once. Run it, then clear that line from your shell history if others can read it; Claude Code keeps the key in its own configuration.
+- **Codex:** `... connect --url https://mikud.example.com --name codex --for codex` prints the `~/.codex/config.toml` lines (`bearer_token_env_var = "MIKUD_AGENT_KEY"`) and the `setx` command that sets the key for your Windows user, once.
+- `--days` sets how long a key works (1 to 365, default 90). When it ends, run the command again. [agent-instruction.md](agent-instruction.md) has the instruction text for the agents.
+- Mikud never logs a key. A key printed for Claude Code or Codex can stay in your shell history and stays in that client's configuration.
+- If `connect` reports that it could not end its temporary session, end the session "mikud connect (agent approval)" in Settings, Account.
 
 ## 7. Move from the dry run to production (once)
 
@@ -137,7 +142,7 @@ MIKUD_AUTH_SECRETS=1:<openssl rand -hex 32>
 MIKUD_SETTINGS_KEYS=1:<openssl rand -hex 32>
 ```
 
-Then enter the Telegram bot token and chat id in Settings, Telegram, and create the agent keys in Settings, Agent access.
+Then enter the Telegram bot token and chat id in Settings, Telegram, and connect the agents with `mikud connect` (section 6).
 
 Restrict it (`chmod 600 .env.dev`). A `docker-compose-dev.yml` copied before this change does not read `.env.dev`: copy `docker/docker-compose-dev.example.yml` again, then `scripts/local.sh up`. `scripts/verify.sh` and `scripts/try-pr.sh` never read `.env.dev`. To check the bot without waiting for 08:00, use Settings, "Send a test morning message": it sends today's message now and does not change the 08:00 send.
 
@@ -195,7 +200,7 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 **After any restore**, whether a dry-run move or a backup: a restored database can hold sign-ins that you ended after the backup was taken, and agent keys you revoked since. So:
 
 1. Sign in and choose Settings, Account, "Sign out everywhere", then sign in again. When you cannot sign in, the recovery command above also signs out every browser.
-2. Open Settings, Agent access and revoke every key you do not recognise or had revoked.
+2. Open Settings, Agent access and disconnect every agent you do not recognise or had disconnected.
 3. If `.env` or the backup may have leaked, put a new version first in `MIKUD_AUTH_SECRETS` (keep the old one listed so the TOTP secret stays readable) and run `docker compose up -d`: every browser is signed out. Replace the agent keys, and the Telegram bot token with BotFather.
 
 ## 9. Upgrade
@@ -223,7 +228,7 @@ It runs Better Auth's own password reset: it prints the username and a new rando
    1. Keep the three values somewhere safe (your password manager); you type them in again below.
    2. Remove them from `.env` and run `docker compose up -d`. From now until step 3, Telegram is off (no bot, no morning message) and the secret check has no private domains.
    3. Sign in and enter the values in Settings, Telegram and Settings, Secret check, then save. The bot and the morning message start at once, without a restart.
-4. Remove `MIKUD_OWNER_TOKEN` and `MIKUD_AGENT_TOKEN`; the server only warns about them. Agent tokens are not imported: create keys in Settings, Agent access and put them into the reconciler's and the agents' configuration.
+4. Remove `MIKUD_OWNER_TOKEN` and `MIKUD_AGENT_TOKEN`; the server only warns about them. Agent tokens are not imported: connect the reconciler and the agents with `mikud connect` (section 6).
 
 Every browser signs in once more (G14). Then save the backup codes: Settings, Account, "New backup codes".
 

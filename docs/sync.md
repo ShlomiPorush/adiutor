@@ -18,14 +18,14 @@ Security values follow the snapshot honestly: an enabled family sends its alert 
 
 Read from the environment, or from a `--env` file of `KEY=VALUE` lines, which wins over the environment:
 
-| Name                 | Purpose                                                                                                                                                                                   |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MIKUD_URL`          | Base URL of the Mikud server, for example `https://mikud.example.com`                                                                                                                     |
-| `MIKUD_AGENT_TOKEN`  | An agent key from Mikud's Settings, Agent access (`mkd_...`). Never accepted on the command line, never printed (any echo is replaced with `[redacted]`), never passed to a child process |
-| `T3CODE_CLI_PATH`    | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                                                                                                     |
-| `MIKUD_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it                                                                                                                                        |
+| Name                 | Purpose                                                                                                                                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MIKUD_URL`          | Base URL of the Mikud server, for example `https://mikud.example.com`                                                                                                                          |
+| `MIKUD_AGENT_TOKEN`  | The sync's agent key (`mkd_...`), written by `connect --for sync`. Never accepted on the command line, never printed (any echo is replaced with `[redacted]`), never passed to a child process |
+| `T3CODE_CLI_PATH`    | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                                                                                                          |
+| `MIKUD_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it                                                                                                                                             |
 
-Keep the env file outside every repository, for example `%LOCALAPPDATA%\mikud\sync.env`, readable only by the owner.
+Keep the env file outside every repository: `connect` writes `%LOCALAPPDATA%\mikud\sync.env` on Windows and `~/.config/mikud/sync.env` elsewhere, readable only by the owner.
 
 ## Commands
 
@@ -36,6 +36,25 @@ node dist/sync/mikud-sync.js run --projects <file> [--env <file>] [--overview <d
 - `--no-collect` uses the newest existing snapshot without running the collector.
 - `--dry-run` prints the payload sizes and a sample and sends nothing; it needs no URL or token.
 - Exit code 0 when at least one payload was accepted (or a dry run had something to send), 1 when nothing could be sent, 2 for bad arguments or settings.
+
+## Connecting an agent or the sync
+
+```
+node dist/sync/mikud-sync.js connect --name <name> --for <sync|claude|codex> [--days <1-365>] [--url <url>] [--env <file>] [--no-open]
+```
+
+The owner approves the agent in the browser, then the command gets one agent key for it (Better Auth's device authorization; [api.md](api.md), "Agent approval").
+
+1. It asks Mikud for a code (client id `mikud-connect`), prints the approval link and the code (`ABCD-EFGH`) and opens the browser (`rundll32 url.dll,FileProtocolHandler` on Windows, `open` on macOS, `xdg-open` elsewhere, never a shell; `--no-open` skips it). The link must be on the address given.
+2. It polls every 5 seconds (5 more after each `slow_down`) until the owner allows or denies, or the code ends after 10 minutes.
+3. Once allowed, it holds a session token for a few seconds: it creates one key named `--name` that works `--days` days (default 90), then ends that session with `/revoke-session` in a `finally`, also when the key could not be created or saved. When the end is not confirmed, it says so: end the session "mikud connect (agent approval)" in Settings, Account. The session token is never printed or stored.
+4. What it gives:
+   - `--for sync`: before asking Mikud for anything, it creates the env file (`--env`, or the default above) and restricts it to the current user: on Windows `icacls <file> /inheritance:r /grant:r <DOMAIN\user>:F`, read back and refused unless that user is the only entry; elsewhere mode 0600 in a 0700 folder. It then sets `MIKUD_URL` and `MIKUD_AGENT_TOKEN` in the file and keeps every other line. The key is not printed.
+   - `--for claude`: prints `claude mcp add --transport http --scope user mikud <url>/mcp --header "Authorization: Bearer <key>"` once.
+   - `--for codex`: prints the `[mcp_servers.mikud]` lines for `~/.codex/config.toml` with `bearer_token_env_var = "MIKUD_AGENT_KEY"`, and `setx MIKUD_AGENT_KEY "<key>"` on Windows (an `export` line elsewhere), once.
+5. `--url` falls back to `MIKUD_URL` in the environment, then in the env file. It must be https, or http on `localhost` or `127.0.0.1` only.
+
+Mikud never logs a key. A printed command can stay in the shell history, and Claude Code and Codex keep the key in their own configuration; clear the history entry where others can read it. Exit code 0 when connected, 1 when not, 2 for bad arguments.
 
 ## Building it on the PC
 
@@ -51,4 +70,4 @@ The bundle needs only Node.js 24 or later on Windows; it has no runtime dependen
 
 - Child processes run through `execFile` with an argument array and no shell. Node refuses to start a `.cmd` file without a shell, so the T3 CLI runs as `cmd.exe /d /v:off /s /c ""<cli>" "thread" "list" "--project" "<id>" "--json""`. Every part is quoted; a part holding a quote, a percent sign or a line break is refused, because `cmd.exe` would still expand or split it inside quotes.
 - Titles, paths and other text from T3 and the snapshot travel only as JSON to the API, never into a command line or a prompt.
-- Redirects are refused, so the token is sent only to `MIKUD_URL`.
+- Redirects are refused, so the token is sent only to `MIKUD_URL`, and `connect`'s session token only to `--url`.

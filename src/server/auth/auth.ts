@@ -2,12 +2,22 @@ import { apiKey } from "@better-auth/api-key"
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { APIError, createAuthMiddleware } from "better-auth/api"
-import { twoFactor, username } from "better-auth/plugins"
-import { AGENT_KEY_NAME_MAX, AGENT_KEY_PREFIX, isValidUsername, ownerEmail } from "../../shared/auth.ts"
+import { bearer, deviceAuthorization, twoFactor, username } from "better-auth/plugins"
+import {
+  AGENT_KEY_DAYS_MAX,
+  AGENT_KEY_DAYS_MIN,
+  AGENT_KEY_NAME_MAX,
+  AGENT_KEY_PREFIX,
+  CONNECT_CLIENT_ID,
+  CONNECT_DEVICE_PATH,
+  isValidUsername,
+  ownerEmail,
+} from "../../shared/auth.ts"
 import type { VersionedKey } from "../config.ts"
 import {
   authAccount,
   authApiKey,
+  authDeviceCode,
   authRateLimit,
   authSession,
   authTwoFactor,
@@ -18,10 +28,11 @@ import { errorFacts, log } from "../log.ts"
 import type { By, Ctx } from "../services/context.ts"
 import { writeAudit } from "../services/context.ts"
 
-// Better Auth as it documents itself: its routes, its plugins (username, twoFactor, api-key), its options and its
-// documented hooks. Mikud does not wrap its handler. The hooks below only refuse (a closed route, a second owner, a
-// trusted device, an agent key without two-factor) and write audit rows; Better Auth makes every decision about
-// passwords, sessions and codes. See "Security design" in docs/project-foundation.md for what this leaves open.
+// Better Auth as it documents itself: its routes, its plugins (username, twoFactor, api-key, deviceAuthorization,
+// bearer), its options and its documented hooks. Mikud does not wrap its handler. The hooks below only refuse (a
+// closed route, a second owner, a trusted device, an agent key or an agent approval without two-factor, an
+// Authorization header outside what `mikud connect` needs) and write audit rows; Better Auth makes every decision
+// about passwords, sessions and codes. See "Security design" in docs/project-foundation.md for what this leaves open.
 
 const DAY_S = 86_400
 const HOUR_S = 3_600
@@ -44,6 +55,7 @@ export const ALLOWED_PATHS = [
   "/list-sessions",
   "/revoke-other-sessions",
   "/revoke-sessions",
+  "/revoke-session",
   "/two-factor/enable",
   "/two-factor/disable",
   "/two-factor/verify-totp",
@@ -52,7 +64,29 @@ export const ALLOWED_PATHS = [
   "/api-key/create",
   "/api-key/list",
   "/api-key/delete",
+  // Agent approval (deviceAuthorization): the CLI asks for a code and polls for its answer without a session; the
+  // owner's signed-in browser claims the code (GET /device), then approves or denies it.
+  "/device/code",
+  "/device/token",
+  "/device",
+  "/device/approve",
+  "/device/deny",
 ] as const
+
+/**
+ * The only routes an HTTP request with an `Authorization` header reaches. bearer() turns `Authorization: Bearer
+ * <session token>` into a session on every route; Mikud lets the header through only where `mikud connect` uses its
+ * device session: create its one key, then end that same session (/revoke-session, its own token only). Everything
+ * else, listing the sessions included, refuses the header, with or without a cookie.
+ */
+export const BEARER_PATHS = ["/api-key/create", "/revoke-session"] as const
+
+/** Where the owner's browser decides about an agent approval: open only once the account has two-factor on. */
+export const DEVICE_DECISION_PATHS = ["/device", "/device/approve", "/device/deny"] as const
+
+/** The device code lives 10 minutes; the CLI polls every 5 seconds (the plugin answers slow_down when faster). */
+export const DEVICE_CODE_LIFETIME = "10m"
+export const DEVICE_POLL_INTERVAL = "5s"
 
 /** Routes of Better Auth's two-factor OTP: open only while the owner sends sign-in codes to Telegram. */
 export const OTP_PATHS = ["/two-factor/send-otp", "/two-factor/verify-otp"] as const
@@ -77,6 +111,9 @@ const CREDENTIAL_PATHS = [
   "/change-password",
   ...OTP_PATHS,
 ]
+
+/** New agent approval codes: 10 per 10 minutes per address. */
+const DEVICE_CODE_RULE = { window: 600, max: 10 }
 
 /** Paths whose session deletions are ended sessions (one audit row each). Sign-out is audited after the fact. */
 const SESSION_END_PATHS = new Set(["/revoke-other-sessions", "/revoke-sessions", "/reset-password"])
@@ -133,6 +170,12 @@ type HookContext = { path?: string; request?: Request; context?: { session?: unk
 const refuse = (status: "NOT_FOUND" | "FORBIDDEN" | "BAD_REQUEST", code: string, message: string) =>
   new APIError(status, { code, message })
 
+/** The value of `Authorization: Bearer <value>`, or null for another scheme or none. */
+function bearerValue(header: string | null): string | null {
+  const match = /^bearer\s+(\S+)\s*$/i.exec(header ?? "")
+  return match?.[1] ?? null
+}
+
 /**
  * Better Auth for the one owner: username and password, then TOTP (or a backup code), and agent keys. The instance
  * is rebuilt when a setting it reads changes (AuthHolder).
@@ -141,6 +184,8 @@ export function createAuth(options: AuthOptions) {
   const { ctx, publicUrl } = options
   const otp = options.otpViaTelegram && options.sendOtp ? options.sendOtp : undefined
   const allowed = new Set<string>([...ALLOWED_PATHS, ...(otp ? OTP_PATHS : [])])
+  const bearerPaths = new Set<string>(BEARER_PATHS)
+  const deviceDecision = new Set<string>(DEVICE_DECISION_PATHS)
 
   const ownerBy = (owner: OwnerRow | null): By => ({
     actor: { kind: "owner", label: owner?.username ?? "owner" },
@@ -155,6 +200,15 @@ export function createAuth(options: AuthOptions) {
     const http = Boolean(c.request)
     if (http && !allowed.has(path)) throw refuse("NOT_FOUND", "NOT_FOUND", "Nothing is here.")
     const body = (c.body ?? {}) as Record<string, unknown>
+    // This hook runs before bearer()'s own, so it sees the header as the client sent it.
+    const authorization = c.request?.headers.get("authorization") ?? null
+    const viaBearer = http && authorization !== null
+    if (viaBearer) {
+      if (!bearerPaths.has(path))
+        throw refuse("FORBIDDEN", "AUTHORIZATION_NOT_ALLOWED", "This route takes the browser's session only.")
+      if (path === "/revoke-session" && (typeof body.token !== "string" || body.token !== bearerValue(authorization)))
+        throw refuse("FORBIDDEN", "OWN_SESSION_ONLY", "A session sent as a bearer can end only itself.")
+    }
 
     if (path === "/sign-up/email") {
       if (await readOwner(ctx)) throw refuse("FORBIDDEN", "ALREADY_SET_UP", "Mikud already has its owner.")
@@ -168,17 +222,29 @@ export function createAuth(options: AuthOptions) {
       await audit(ownerBy(await readOwner(ctx)), "account.backup_codes_new", "account")
       return
     }
+    if (http && deviceDecision.has(path)) {
+      // The owner's account must have two-factor on before any browser may see, approve or deny a request.
+      const owner = await readOwner(ctx)
+      if (!owner?.twoFactorEnabled)
+        throw refuse("FORBIDDEN", "TOTP_REQUIRED", "Set up two-factor authentication first.")
+      if (path === "/device/approve") await audit(ownerBy(owner), "device.approve", "device_code")
+      else if (path === "/device/deny") await audit(ownerBy(owner), "device.deny", "device_code")
+      return
+    }
     if (path.startsWith("/api-key/")) {
       const owner = await readOwner(ctx)
       // Browsers only: server calls (verifying a key) keep working while the owner sets up a new authenticator.
       if (http && !owner?.twoFactorEnabled)
         throw refuse("FORBIDDEN", "TOTP_REQUIRED", "Set up two-factor authentication first.")
-      const by: By = http ? ownerBy(owner) : { actor: { kind: "system", label: "system" }, source: "api" }
+      const by: By = http
+        ? { ...ownerBy(owner), source: viaBearer ? "api" : "ui" }
+        : { actor: { kind: "system", label: "system" }, source: "api" }
       if (path === "/api-key/create") {
         if (body.prefix !== undefined && body.prefix !== AGENT_KEY_PREFIX)
           throw refuse("BAD_REQUEST", "INVALID_KEY_PREFIX", `Agent keys start with ${AGENT_KEY_PREFIX}.`)
         await audit(by, "api_key.create", "api_key", {
           name: typeof body.name === "string" ? body.name.slice(0, AGENT_KEY_NAME_MAX) : null,
+          ...(typeof body.expiresIn === "number" ? { expiresIn: body.expiresIn } : {}),
         })
       } else if (path === "/api-key/delete") {
         const keyId = typeof body.keyId === "string" ? body.keyId.slice(0, 100) : null
@@ -188,17 +254,23 @@ export function createAuth(options: AuthOptions) {
   })
 
   /**
-   * One documented `hooks.after`: the sign-out row. A throwing hook on sign-out would be swallowed by Better Auth and
-   * leave the session valid, so the sign-out is recorded after the fact and this hook never throws.
+   * One documented `hooks.after`: the rows of a sign-out and of one ended session. A throwing hook on sign-out would be
+   * swallowed by Better Auth and leave the session valid, and a refused /revoke-session would leave the device session
+   * of `mikud connect` alive: both are recorded after the fact, and this hook never throws.
    */
   const auditAfterTheFact = createAuthMiddleware(async (c) => {
-    if (c.path !== "/sign-out") return
+    if (c.path !== "/sign-out" && c.path !== "/revoke-session") return
     const returned = (c.context as { returned?: unknown }).returned
     if (returned instanceof APIError || returned instanceof Error) return
     try {
-      await audit(ownerBy(await readOwner(ctx)), "session.sign_out", "session")
+      const by = ownerBy(await readOwner(ctx))
+      if (c.path === "/sign-out") await audit(by, "session.sign_out", "session")
+      else {
+        const viaBearer = Boolean(c.request?.headers.get("authorization"))
+        await audit({ ...by, source: viaBearer ? "api" : "ui" }, "session.revoke", "session")
+      }
     } catch (error) {
-      log.error("the sign-out audit row was not written", errorFacts(error))
+      log.error("the session audit row was not written", errorFacts(error))
     }
   })
 
@@ -229,6 +301,7 @@ export function createAuth(options: AuthOptions) {
         twoFactor: authTwoFactor,
         rateLimit: authRateLimit,
         apikey: authApiKey,
+        deviceCode: authDeviceCode,
       },
     }),
     emailAndPassword: {
@@ -257,7 +330,10 @@ export function createAuth(options: AuthOptions) {
       storage: "database",
       window: 60,
       max: 100,
-      customRules: Object.fromEntries(CREDENTIAL_PATHS.map((p) => [p, { window: 300, max: 5 }])),
+      customRules: {
+        ...Object.fromEntries(CREDENTIAL_PATHS.map((p) => [p, { window: 300, max: 5 }])),
+        "/device/code": DEVICE_CODE_RULE,
+      },
     },
     advanced: {
       // Better Auth skips its origin check under NODE_ENV=test; Mikud keeps it on everywhere.
@@ -294,6 +370,16 @@ export function createAuth(options: AuthOptions) {
         create: {
           before: async (session, context) => {
             const path = pathOf(context)
+            if (path === "/device/token") {
+              // The session `mikud connect` receives once the owner approved: it creates one key, then ends itself.
+              const owner = await readOwner(ctx)
+              await audit(
+                { actor: { kind: "owner", label: owner?.username ?? "owner" }, source: "api" },
+                "session.connect",
+                "session",
+              )
+              return
+            }
             const prior = Boolean((context as HookContext)?.context?.session)
             // Every session Better Auth creates after a password is recorded as the password stage, whatever the
             // account's two-factor flag says now: with two-factor on, the plugin turns it into a challenge, and a
@@ -359,7 +445,20 @@ export function createAuth(options: AuthOptions) {
         rateLimit: { enabled: false },
         requireName: true,
         maximumNameLength: AGENT_KEY_NAME_MAX,
+        keyExpiration: { minExpiresIn: AGENT_KEY_DAYS_MIN, maxExpiresIn: AGENT_KEY_DAYS_MAX },
       }),
+      // Agent approval in the browser: `mikud connect` asks for a code, the owner approves it at /connect/device, and
+      // the CLI receives a session token for that one approval. Its session lasts what every session lasts
+      // (session.expiresIn, the idle days); the plugin has no option of its own for it.
+      deviceAuthorization({
+        expiresIn: DEVICE_CODE_LIFETIME,
+        interval: DEVICE_POLL_INTERVAL,
+        verificationUri: CONNECT_DEVICE_PATH,
+        validateClient: (clientId) => clientId === CONNECT_CLIENT_ID,
+      }),
+      // Documented on the device page: the CLI sends that token as `Authorization: Bearer`. hooks.before keeps the
+      // header to BEARER_PATHS; Mikud's /api/v1, /mcp and /api/setup never hand it to getSession.
+      bearer(),
     ],
   })
 }

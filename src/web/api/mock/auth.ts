@@ -1,8 +1,7 @@
 // Better Auth's routes for the mock API (development and screenshots only; the production build drops it): the
-// session, the browsers, the password, the backup codes and the agent keys, over the mock's state. The sign-in pages
-// need the real server.
+// session, the browsers, the password, the backup codes, the agent keys and agent approvals, over the mock's state.
+// The sign-in pages need the real server.
 
-import { uuid } from "./fixtures.ts"
 import { ENDED_OTHERS_KEY, endedOthers, mockState as state } from "./transport.ts"
 
 const json = (body: unknown, status = 200) =>
@@ -55,18 +54,19 @@ export async function mockAuthFetch(input: RequestInfo | URL, init?: RequestInit
       return json({ status: true })
     case "/api-key/list":
       return json({ apiKeys: state.agentKeys, total: state.agentKeys.length })
-    case "/api-key/create": {
-      const key = `mkd_${letters(64)}`
-      const created = {
-        id: uuid(),
-        name: String(body.name ?? ""),
-        start: key.slice(0, 6),
-        createdAt: new Date().toISOString(),
-        lastRequest: null,
-      }
-      state.agentKeys.push(created)
-      return json({ ...created, key })
+    case "/revoke-session":
+      state.sessions = state.sessions.filter((s) => s.token !== body.token)
+      return json({ status: true })
+    // An agent approval: any code of 8 letters and digits is waiting until this page answers it.
+    case "/device": {
+      const userCode = url.searchParams.get("user_code") ?? ""
+      if (!/^[A-Z0-9]{8}$/.test(userCode))
+        return json({ error: "invalid_request", error_description: "Invalid user code" }, 400)
+      return json({ user_code: userCode, status: "pending", client_id: "mikud-connect" })
     }
+    case "/device/approve":
+    case "/device/deny":
+      return json({ success: true })
     case "/api-key/delete":
       state.agentKeys = state.agentKeys.filter((k) => k.id !== body.keyId)
       return json({ success: true })

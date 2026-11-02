@@ -1,11 +1,12 @@
 // Settings, Account: everything here is Better Auth's own routes through its client, and acts at once (outside the
-// save bar): the signed-in browsers with sign out the others and sign out everywhere, the password, a new
+// save bar): the signed-in browsers (and a session `mikud connect` left behind) with sign out one of them, sign out
+// the others and sign out everywhere, the password, a new
 // authenticator, new backup codes, sign out, and the recovery note.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { type FormEvent, useId, useState } from "react"
 import { useNavigate } from "react-router"
-import { PASSWORD_MAX, PASSWORD_MIN, passwordSchema } from "../../../shared/auth.ts"
+import { CONNECT_CLIENT_ID, PASSWORD_MAX, PASSWORD_MIN, passwordSchema } from "../../../shared/auth.ts"
 import { AuthCallError, type AuthError, authClient, authData, authFailure, FAILURE_TEXT } from "../../api/auth.ts"
 import { api, qk } from "../../api/endpoints.ts"
 import type { BrowserSession } from "../../api/types.ts"
@@ -88,6 +89,23 @@ export function AccountPanel() {
       showToast(t("account.signOutFailed", { reason: errorReason(language, error) }), "error")
     }
   }
+  /** One other session: Better Auth's revokeSession with that session's token. */
+  const endOne = async (session: BrowserSession, name: string) => {
+    const ok = await confirmDialog({
+      title: t("account.endOneTitle", { name }),
+      message: t("account.endOneMessage"),
+      confirmText: t("account.endOne"),
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await authData(authClient.revokeSession({ token: session.token }))
+      showToast(t("account.endOneDone", { name }), "success")
+    } catch (error) {
+      showToast(t("account.endFailed", { reason: errorReason(language, error) }), "error")
+    }
+    await queryClient.invalidateQueries({ queryKey: qk.account })
+  }
   const endOthers = async () => {
     const ok = await confirmDialog({
       title: t("account.endOthersTitle"),
@@ -131,18 +149,36 @@ export function AccountPanel() {
       ) : null}
       {sessions.map((session) => {
         const agent = describeAgent(session.userAgent ?? null)
+        const connecting = session.userAgent === CONNECT_CLIENT_ID
+        const name = connecting
+          ? t("account.connectSession")
+          : agent
+            ? t("account.browserOn", agent)
+            : t("account.unknownBrowser")
         return (
           <div key={session.id} className="ui-item">
             <div className="ui-item-main">
               <span className="ui-item-title">
-                <bdi dir="auto">{agent ? t("account.browserOn", agent) : t("account.unknownBrowser")}</bdi>{" "}
+                <bdi dir="auto">{name}</bdi>{" "}
                 {session.id === current ? <Tag tone="info">{t("account.thisBrowser")}</Tag> : null}
               </span>
               <span className="ui-item-meta">
+                {connecting ? `${t("account.connectSessionHint")} ` : ""}
                 {t("account.signedIn")} <Time value={time(session.createdAt)} mode="full" /> · {t("account.until")}{" "}
                 <Time value={time(session.expiresAt)} mode="full" />
               </span>
             </div>
+            {session.id !== current ? (
+              <div className="ui-item-end">
+                <button
+                  type="button"
+                  className="ui-btn ui-btn-sm ui-btn-danger"
+                  onClick={() => void endOne(session, name)}
+                >
+                  {t("account.endOne")}
+                </button>
+              </div>
+            ) : null}
           </div>
         )
       })}
