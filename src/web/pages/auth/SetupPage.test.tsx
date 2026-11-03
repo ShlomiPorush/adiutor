@@ -60,7 +60,7 @@ it("draws the QR code with the username as the account name and shows Better Aut
   await act(async () => {
     root.render(
       <I18nProvider>
-        <TotpStep known="a password typed before" onEnrolled={() => {}} />
+        <TotpStep known={crypto.randomUUID()} onEnrolled={() => {}} />
       </I18nProvider>,
     )
   })

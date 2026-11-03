@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -12,7 +13,8 @@ import { type Deps, runSync } from "./run.ts"
 const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url))
 const overviewDir = join(fixtures, "overview")
 const projectsFile = join(fixtures, "t3-projects.json")
-const token = "agent-token-for-tests-0123456789abcdef"
+// New on every run: nothing in the repository works as a key.
+const token = randomBytes(24).toString("hex")
 const NODE = "/fake/node"
 
 type Received = { method?: string; url?: string; auth?: string; body: unknown }

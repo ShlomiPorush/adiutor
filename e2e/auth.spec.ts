@@ -4,7 +4,7 @@
 // project creates the owner; the phone finds it and signs in.
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
-import { nextBackupCode, PASSWORD, saveState, signIn, storageFile, totpSecret, USERNAME } from "./helpers.ts"
+import { nextBackupCode, password, saveState, signIn, storageFile, totpSecret, USERNAME } from "./helpers.ts"
 import { freshTotp } from "./totp.ts"
 
 test.describe.configure({ mode: "serial" })
@@ -26,8 +26,8 @@ test("the first run creates the owner, requires TOTP, shows the backup codes onc
   await expect(page).toHaveURL(/\/setup\?next=%2Faccount$/)
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(he.setup.title)
   await page.getByLabel(he.auth.username, { exact: true }).fill(USERNAME)
-  await page.getByLabel(he.auth.password, { exact: true }).fill(PASSWORD)
-  await page.getByLabel(he.auth.repeatPassword, { exact: true }).fill(PASSWORD)
+  await page.getByLabel(he.auth.password, { exact: true }).fill(password())
+  await page.getByLabel(he.auth.repeatPassword, { exact: true }).fill(password())
   await page.getByRole("button", { name: he.setup.create }).click()
 
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(he.setup.totpTitle)
@@ -95,7 +95,7 @@ test("a backup code signs in once, on a fresh browser", async ({ browser }, test
   try {
     await fresh.goto("/login")
     await fresh.getByLabel(he.auth.username, { exact: true }).fill(USERNAME)
-    await fresh.getByLabel(he.auth.password, { exact: true }).fill(PASSWORD)
+    await fresh.getByLabel(he.auth.password, { exact: true }).fill(password())
     await fresh.getByRole("button", { name: he.login.submit }).click()
     await expect(fresh.getByRole("heading", { level: 1 })).toHaveText(he.login.codeTitle)
     await fresh.getByRole("button", { name: he.login.useBackup }).click()

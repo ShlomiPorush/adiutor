@@ -70,6 +70,10 @@ vi.mock("../../api/auth.ts", async (importOriginal) => {
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+// The passwords a change accepts are new on every run; the refused ones (too short, not matching, wrong) are literal.
+const OLD_PASSWORD = crypto.randomUUID()
+const NEW_PASSWORD = crypto.randomUUID()
+
 const SAVED: Settings = {
   id: "s1",
   ...SETTINGS_DEFAULTS,
@@ -515,11 +519,11 @@ describe("the password change in a dialog (S-6, FS-22, DS-9)", () => {
     await submit()
     expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe(en.account.currentMissing)
     expect(document.activeElement).toBe(field(en.account.currentPassword))
-    await fill("Invented old password", "short", "short")
+    await fill(OLD_PASSWORD, "short", "short")
     await submit()
     expect(field(en.account.newPassword)?.getAttribute("aria-invalid")).toBe("true")
     expect(document.activeElement).toBe(field(en.account.newPassword))
-    await fill("Invented old password", "Invented new password", "Invented other password")
+    await fill(OLD_PASSWORD, NEW_PASSWORD, "Invented other password")
     await submit()
     expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe(en.auth.error.mismatch)
     expect(document.activeElement).toBe(field(en.account.repeatNewPassword))
@@ -528,12 +532,12 @@ describe("the password change in a dialog (S-6, FS-22, DS-9)", () => {
 
   it("a change closes the dialog without asking and says so", async () => {
     await open()
-    await fill("Invented old password", "Invented new password", "Invented new password")
+    await fill(OLD_PASSWORD, NEW_PASSWORD, NEW_PASSWORD)
     await submit()
     await settle()
     expect(auth.calls.find((call) => call.route === "change-password")?.body).toEqual({
-      currentPassword: "Invented old password",
-      newPassword: "Invented new password",
+      currentPassword: OLD_PASSWORD,
+      newPassword: NEW_PASSWORD,
       revokeOtherSessions: true,
     })
     expect(dialog()).toBeNull()
@@ -545,24 +549,24 @@ describe("the password change in a dialog (S-6, FS-22, DS-9)", () => {
     auth.changePassword = () =>
       Promise.resolve({ data: null, error: { status: 400, code: "INVALID_PASSWORD", message: "Invalid password" } })
     await open()
-    await fill("Invented wrong password", "Invented new password", "Invented new password")
+    await fill("Invented wrong password", NEW_PASSWORD, NEW_PASSWORD)
     await submit()
     await settle()
     expect(dialog()).toBeTruthy()
     expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe(en.account.wrongCurrent)
     expect(field(en.account.currentPassword)?.value).toBe("")
-    expect(field(en.account.newPassword)?.value).toBe("Invented new password")
+    expect(field(en.account.newPassword)?.value).toBe(NEW_PASSWORD)
     expect(document.activeElement).toBe(field(en.account.currentPassword))
   })
 
   it("Escape asks before it drops what was typed; Keep editing keeps it, Discard closes", async () => {
     await open()
-    await type(field(en.account.currentPassword), "Invented old password")
+    await type(field(en.account.currentPassword), OLD_PASSWORD)
     await key("Escape")
     expect(question()?.textContent).toContain(en.unsaved.discardTitle)
     await click(button(en.unsaved.keepEditing, question() as HTMLElement))
     expect(question()).toBeNull()
-    expect(field(en.account.currentPassword)?.value).toBe("Invented old password")
+    expect(field(en.account.currentPassword)?.value).toBe(OLD_PASSWORD)
     await key("Escape")
     await click(button(en.unsaved.discard, question() as HTMLElement))
     expect(dialog()).toBeNull()
@@ -575,7 +579,7 @@ describe("the password change in a dialog (S-6, FS-22, DS-9)", () => {
         succeed = () => resolve({ data: { token: "t" }, error: null })
       })
     await open()
-    await fill("Invented old password", "Invented new password", "Invented new password")
+    await fill(OLD_PASSWORD, NEW_PASSWORD, NEW_PASSWORD)
     await submit()
     // The request is on its way; Escape asks before dropping what was typed.
     await key("Escape")
@@ -599,7 +603,7 @@ describe("the password change in a dialog (S-6, FS-22, DS-9)", () => {
     expect(dialog()).toBeNull()
 
     await click(button(en.account.change, document.querySelector("#account-password") as HTMLElement))
-    await type(field(en.account.newPassword), "Invented new password")
+    await type(field(en.account.newPassword), NEW_PASSWORD)
     await act(async () => {
       window.dispatchEvent(new PopStateEvent("popstate"))
     })

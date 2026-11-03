@@ -10,11 +10,12 @@ import type { TelegramRuntime } from "../telegram/status.ts"
 import { createAgentKey, ownerBrowser, type TestCore, testCore } from "../testing/app.ts"
 import { StandInBotApi } from "../testing/bot-api.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
+import { testBotToken } from "../testing/secrets.ts"
 import { RateLimiter } from "./auth.ts"
 
 const ORIGIN = "http://127.0.0.1:8090"
-// Assembled at run time: the guards and push protection scan literal text.
-const BOT_TOKEN = `${"7654321"}:${"AAG"}${"t".repeat(33)}`
+// New on every run (src/server/testing/secrets.ts).
+const BOT_TOKEN = testBotToken()
 const CHAT = "4242"
 
 let t: TestDatabase

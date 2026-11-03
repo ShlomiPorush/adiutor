@@ -15,6 +15,7 @@ import { ReloadableSecretScanner } from "../services/secrets.ts"
 import { TEST_AUTH_SECRET, testAuthBase, testCore } from "../testing/app.ts"
 import { TEST_ORIGIN, TEST_PASSWORD, TestBrowser } from "../testing/browser.ts"
 import type { TestDatabase } from "../testing/db.ts"
+import { testSecret } from "../testing/secrets.ts"
 import { totp } from "../testing/totp.ts"
 import { createDatabase, type Database, migrationFailure } from "./client.ts"
 import { authAccount, authSession, authTwoFactor, authUser, authVerification } from "./schema.ts"
@@ -73,7 +74,7 @@ function legacyAuth(on: Database) {
 /** Mikud as it runs now on `on`: MIKUD_AUTH_SECRETS with a new secret, MIKUD_AUTH_SECRET as the legacy fallback. */
 function currentCore(on: Database) {
   const t = { ctx: { db: on.db, secrets: new ReloadableSecretScanner(), clock: () => new Date() } }
-  const newSecret = ["upgraded", "auth", "secret", "for", "tests", "only", "00"].join("-")
+  const newSecret = testSecret()
   const auth = { secrets: [{ version: 2, value: newSecret }], legacySecret: TEST_AUTH_SECRET }
   const core = testCore(t as unknown as TestDatabase, {
     config: { publicUrl: new URL(TEST_ORIGIN), version: "test" },

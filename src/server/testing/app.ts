@@ -11,13 +11,14 @@ import { TelegramService } from "../telegram/runtime.ts"
 import type { TelegramRuntime } from "../telegram/status.ts"
 import { TEST_ORIGIN, TestBrowser } from "./browser.ts"
 import type { TestDatabase } from "./db.ts"
+import { testSecret } from "./secrets.ts"
 
 // The app's core for integration tests: Better Auth on the test database, the settings runtime and a Telegram
 // service that stays off until a test sets it up, with the configuration and limits a test chooses.
 
-/** Assembled at run time: the guards and push protection scan literal text. */
-export const TEST_AUTH_SECRET = ["auth", "secret", "for", "tests", "only", "0000000000"].join("-")
-export const TEST_SETTINGS_KEY = ["settings", "key", "for", "tests", "only", "00000000000"].join("-")
+/** New for every test process (one per test file). */
+export const TEST_AUTH_SECRET = testSecret()
+export const TEST_SETTINGS_KEY = testSecret()
 
 type Core = NonNullable<AppDeps["core"]>
 

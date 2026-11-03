@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest"
 import type { SettingsRow } from "../services/admin.ts"
+import { testBotToken, testSecret } from "../testing/secrets.ts"
 import { createSettingsCipher } from "./crypto.ts"
 import { BOT_TOKEN_COLUMN, effectivePrivateDomains, effectiveTelegram } from "./effective.ts"
 
-// Assembled at run time: the guards and push protection scan literal text.
-const keyOne = { version: 1, value: "k".repeat(32) }
-const keyTwo = { version: 2, value: "n".repeat(32) }
-const botToken = `${"1234567"}:${"AAH"}${"x".repeat(32)}`
+// New on every run (src/server/testing/secrets.ts).
+const keyOne = { version: 1, value: testSecret() }
+const keyTwo = { version: 2, value: testSecret() }
+const botToken = testBotToken()
 
 const row = (patch: Partial<SettingsRow> = {}): SettingsRow => ({
   id: 1,
@@ -49,7 +50,7 @@ describe("settings secrets", () => {
     expect(cipher.decrypt(BOT_TOKEN_COLUMN, `${stored.slice(0, -2)}AA`)).toBeNull()
     expect(cipher.decrypt(BOT_TOKEN_COLUMN, "plain text")).toBeNull()
     // Same version number, other key: not readable.
-    expect(createSettingsCipher([{ version: 1, value: "z".repeat(32) }]).decrypt(BOT_TOKEN_COLUMN, stored)).toBeNull()
+    expect(createSettingsCipher([{ version: 1, value: testSecret() }]).decrypt(BOT_TOKEN_COLUMN, stored)).toBeNull()
   })
 })
 
