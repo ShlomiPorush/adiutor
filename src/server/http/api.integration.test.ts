@@ -342,3 +342,53 @@ describe("routes and error codes", () => {
     expect([again.status, again.json.error.code]).toEqual([409, "suppressed"])
   })
 })
+
+describe("the activity filters", () => {
+  it("answers the first page with a total and counts, later pages without, and pages with the filters", async () => {
+    const headers = { "x-mikud-agent": "Garden" }
+    for (const title of ["Rake the leaves", "Mulch the beds", "Prune the roses"])
+      expect(
+        (await call("/items", { method: "POST", token: AGENT, body: { type: "task", title }, headers })).status,
+      ).toBe(201)
+    const first = await call("/audit?agent=agent:Garden&action=item.create&limit=2", { owner: true })
+    expect(first.status).toBe(200)
+    expect(first.json.total).toBe(3)
+    expect(first.json.counts.actorKind.agent).toBeGreaterThanOrEqual(3)
+    expect(first.json.counts.agents).toEqual([{ label: "agent:Garden", count: 3 }])
+    expect(first.json.counts.actions).toContainEqual({ action: "item.create", count: 3 })
+    expect(first.json.data).toHaveLength(2)
+    const next = await call(
+      `/audit?agent=agent:Garden&action=item.create&limit=2&cursor=${encodeURIComponent(first.json.nextCursor)}`,
+      { owner: true },
+    )
+    expect(next.status).toBe(200)
+    expect(next.json.data).toHaveLength(1)
+    expect(next.json.total).toBeUndefined()
+    expect(next.json.counts).toBeUndefined()
+    // The same cursor with other filters starts nothing: the list begins again from its first page.
+    const other = await call(`/audit?action=item.create&cursor=${encodeURIComponent(first.json.nextCursor)}`, {
+      owner: true,
+    })
+    expect([other.status, other.json.error.code]).toEqual([400, "validation_failed"])
+    // The search matches the labels of the language the request names.
+    const words = await call(`/audit?q=${encodeURIComponent("created the item")}&lang=en`, { owner: true })
+    expect(words.json.total).toBe(3)
+  })
+
+  it("refuses a filter it cannot read with validation_failed", async () => {
+    for (const query of [
+      "actorKind=robot",
+      "agent=codex",
+      "agent=agent:%3Cb%3E",
+      "action=DROP%20TABLE",
+      "projectId=lantern",
+      "itemId=1",
+      `q=${"x".repeat(201)}`,
+      "lang=fr",
+    ]) {
+      const answer = await call(`/audit?${query}`, { owner: true })
+      expect([answer.status, answer.json.error.code], query).toEqual([400, "validation_failed"])
+    }
+    expect((await call("/audit?q=%20%20", { owner: true })).status).toBe(200)
+  })
+})

@@ -46,8 +46,38 @@ describe("request and endpoints", () => {
     expect((await api.session()).browserId).toBe("b1")
     const paged = answer(200, { data: [{ id: 1 }], nextCursor: "abc" })
     setTransport(paged)
-    expect(await api.audit("first")).toEqual({ entries: [{ id: 1 }], nextCursor: "abc" })
-    expect(paged.mock.calls[0]?.[0]).toMatchObject({ method: "GET", path: "/audit?cursor=first&limit=50" })
+    expect(await api.archive("first")).toEqual({ entries: [{ id: 1 }], nextCursor: "abc" })
+    expect(paged.mock.calls[0]?.[0]).toMatchObject({ method: "GET", path: "/archive?cursor=first&limit=50" })
+  })
+
+  it("keeps the activity log's total and counts, and sends its filters with the cursor", async () => {
+    const counts = {
+      actorKind: { owner: 1, agent: 0, bot: 0, sync: 0, system: 0 },
+      agents: [],
+      actions: [],
+      projects: [],
+    }
+    const first = answer(200, { data: [{ id: 1 }], nextCursor: "abc", total: 3, counts })
+    setTransport(first)
+    expect(await api.audit({ actorKind: "owner", q: "trellis", lang: "en" }, null)).toEqual({
+      entries: [{ id: 1 }],
+      nextCursor: "abc",
+      total: 3,
+      counts,
+    })
+    expect(first.mock.calls[0]?.[0]).toMatchObject({
+      method: "GET",
+      path: "/audit?actorKind=owner&q=trellis&lang=en&limit=50",
+    })
+    const next = answer(200, { data: [{ id: 2 }], nextCursor: null })
+    setTransport(next)
+    expect(await api.audit({ actorKind: "owner" }, "abc")).toEqual({
+      entries: [{ id: 2 }],
+      nextCursor: null,
+      total: null,
+      counts: null,
+    })
+    expect(next.mock.calls[0]?.[0]).toMatchObject({ path: "/audit?actorKind=owner&cursor=abc&limit=50" })
   })
 
   it("sends the item version with a change and the decision of a proposal", async () => {

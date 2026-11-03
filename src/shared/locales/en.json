@@ -456,7 +456,8 @@
     "deleteTitle": "Delete {title}?",
     "deleteMessage": "Its comments and thread links go with it, and the sync will not create it again for those threads. This cannot be undone.",
     "deleted": "{title} deleted",
-    "deleteFailed": "Could not delete it: {reason}"
+    "deleteFailed": "Could not delete it: {reason}",
+    "allActivity": "All activity of this item"
   },
   "thread": {
     "settled": "Settled",
@@ -515,7 +516,37 @@
     "allShown": {
       "one": "1 change, all shown",
       "other": "All {count} changes shown"
-    }
+    },
+    "search": "Search activity",
+    "searchPlaceholder": "Search actions, items and names",
+    "who": "Who",
+    "everyone": "Everyone",
+    "agent": "Agent",
+    "allAgents": "All agents",
+    "action": "Action",
+    "allActions": "All actions",
+    "project": "Project",
+    "allProjects": "All projects",
+    "deletedProject": "A deleted project",
+    "item": "Item",
+    "deletedItem": "A deleted item",
+    "removeItem": "Remove the item filter: {title}",
+    "count": {
+      "one": "1 change",
+      "other": "{count} changes"
+    },
+    "counting": "Counting...",
+    "noMatch": "No changes match these filters.",
+    "noMatchSearch": "No changes match \"{q}\".",
+    "noMatchHint": "Change the filters or clear them.",
+    "actorKind": {
+      "owner": "You",
+      "agent": "Agents",
+      "bot": "Telegram bot",
+      "sync": "Sync",
+      "system": "System"
+    },
+    "openAgent": "Show the activity of {agent}"
   },
   "audit": {
     "action": {
@@ -560,7 +591,9 @@
       "device_approve": "approved an agent connection",
       "device_deny": "denied an agent connection",
       "session_connect": "gave mikud connect its short session",
-      "session_revoke": "ended a session"
+      "session_revoke": "ended a session",
+      "account_totp_disable": "turned off two-factor authentication",
+      "account_backup_codes_new": "made new backup codes"
     },
     "field": {
       "status": "Status",
@@ -1061,5 +1094,13 @@
     "search": "Search {label}",
     "noMatches": "No matches",
     "searchProjects": "Search projects"
+  },
+  "filters": {
+    "button": "Filters",
+    "inUse": {
+      "one": "Filters, 1 in use",
+      "other": "Filters, {count} in use"
+    },
+    "clear": "Clear filters"
   }
 }

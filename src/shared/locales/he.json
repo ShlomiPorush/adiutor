@@ -456,7 +456,8 @@
     "deleteTitle": "למחוק את {title}?",
     "deleteMessage": "ההערות וקישורי השיחות נמחקים איתו, והסנכרון לא ייצור אותו מחדש לשיחות האלה. אי אפשר לבטל את זה.",
     "deleted": "{title} נמחק",
-    "deleteFailed": "לא הצלחתי למחוק: {reason}"
+    "deleteFailed": "לא הצלחתי למחוק: {reason}",
+    "allActivity": "כל הפעילות של הפריט"
   },
   "thread": {
     "settled": "הסתיימה",
@@ -515,7 +516,37 @@
     "allShown": {
       "one": "שינוי אחד, הכול מוצג",
       "other": "כל {count} השינויים מוצגים"
-    }
+    },
+    "search": "חיפוש בפעילות",
+    "searchPlaceholder": "חיפוש פעולות, פריטים ושמות",
+    "who": "מי",
+    "everyone": "כולם",
+    "agent": "סוכן",
+    "allAgents": "כל הסוכנים",
+    "action": "פעולה",
+    "allActions": "כל הפעולות",
+    "project": "פרויקט",
+    "allProjects": "כל הפרויקטים",
+    "deletedProject": "פרויקט שנמחק",
+    "item": "פריט",
+    "deletedItem": "פריט שנמחק",
+    "removeItem": "הסרת סינון הפריט: {title}",
+    "count": {
+      "one": "שינוי אחד",
+      "other": "{count} שינויים"
+    },
+    "counting": "סופר...",
+    "noMatch": "אין שינויים שמתאימים לסינון.",
+    "noMatchSearch": "אין שינויים שמתאימים ל-\"{q}\".",
+    "noMatchHint": "אפשר לשנות את הסינון או לנקות אותו.",
+    "actorKind": {
+      "owner": "אתה",
+      "agent": "סוכנים",
+      "bot": "בוט הטלגרם",
+      "sync": "סנכרון",
+      "system": "המערכת"
+    },
+    "openAgent": "הצגת הפעילות של {agent}"
   },
   "audit": {
     "action": {
@@ -560,7 +591,9 @@
       "device_approve": "אישר חיבור סוכן",
       "device_deny": "דחה חיבור סוכן",
       "session_connect": "נתן ל-mikud connect חיבור קצר",
-      "session_revoke": "סיים חיבור"
+      "session_revoke": "סיים חיבור",
+      "account_totp_disable": "כיבה את האימות הדו-שלבי",
+      "account_backup_codes_new": "יצר קודי גיבוי חדשים"
     },
     "field": {
       "status": "סטטוס",
@@ -1061,5 +1094,13 @@
     "search": "חיפוש {label}",
     "noMatches": "אין התאמות",
     "searchProjects": "חיפוש פרויקטים"
+  },
+  "filters": {
+    "button": "סינון",
+    "inUse": {
+      "one": "סינון, אחד בשימוש",
+      "other": "סינון, {count} בשימוש"
+    },
+    "clear": "ניקוי הסינון"
   }
 }

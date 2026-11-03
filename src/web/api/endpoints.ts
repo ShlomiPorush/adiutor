@@ -1,10 +1,13 @@
 // Every route the web UI calls (docs/api.md), with its request and response shape. Answers arrive as
 // {"data": ...}, paged lists as {"data": [...], "nextCursor"}; this file unwraps them.
 
+import type { AuditFilters } from "../../shared/api.ts"
 import type { Stage } from "../../shared/enums.ts"
 import { query, request } from "./client.ts"
 import type {
+  AuditCounts,
   AuditEntry,
+  AuditPage,
   Comment,
   Item,
   ItemDetail,
@@ -36,6 +39,20 @@ async function data<T>(method: Parameters<typeof request>[0], path: string, body
 async function page<T>(path: string): Promise<Page<T>> {
   const answer = await request<Paged<T>>("GET", path)
   return { entries: answer.data, nextCursor: answer.nextCursor }
+}
+
+/** The activity log keeps the first page's total and counts, which `page` drops. */
+async function auditPage(filters: AuditFilters, cursor: string | null): Promise<AuditPage> {
+  const answer = await request<Paged<AuditEntry> & { total?: number; counts?: AuditCounts }>(
+    "GET",
+    `/audit${query({ ...filters, cursor, limit: 50 })}`,
+  )
+  return {
+    entries: answer.data,
+    nextCursor: answer.nextCursor,
+    total: answer.total ?? null,
+    counts: answer.counts ?? null,
+  }
 }
 
 const id = (value: string) => encodeURIComponent(value)
@@ -75,7 +92,8 @@ export const api = {
   capture: (text: string, projectId: string | null) => data<Item>("POST", "/capture", { text, projectId }),
   inbox: () => data<ItemSummary[]>("GET", "/inbox"),
   archive: (cursor: string | null) => page<ItemSummary>(`/archive${query({ cursor, limit: 50 })}`),
-  audit: (cursor: string | null) => page<AuditEntry>(`/audit${query({ cursor, limit: 50 })}`),
+  /** The activity log narrowed by its filters; `lang` goes with `q` (the labels the search also matches). */
+  audit: (filters: AuditFilters, cursor: string | null) => auditPage(filters, cursor),
   syncRuns: () => data<SyncRun[]>("GET", "/sync/runs?limit=10"),
 
   settings: () => data<Settings>("GET", "/settings"),
@@ -100,6 +118,8 @@ export const qk = {
   inbox: ["inbox"] as const,
   archive: ["archive"] as const,
   audit: ["audit"] as const,
+  /** One list per set of filters: a change of filters is a new list from its first page. */
+  auditFiltered: (filters: AuditFilters) => ["audit", filters] as const,
   settings: ["settings"] as const,
   syncRuns: ["sync-runs"] as const,
   telegram: ["telegram"] as const,

@@ -33,6 +33,75 @@ export const JOB_STATES = ["sending", "sent", "failed", "unknown", "skipped"] as
 export const TELEGRAM_OUTCOMES = ["item_created", "ignored", "refused"] as const
 export const LANGUAGES = ["he", "en"] as const
 
+/**
+ * Every audit action written today, then the ones only older rows hold. Each has a label in `audit.action` of
+ * each locale file, keyed with its dots as underscores (locales.test.ts). No database check uses the list: an
+ * unknown code in an old row is still read, shown by its code and filtered by it. Add a new action here.
+ */
+export const AUDIT_ACTIONS = [
+  "item.create",
+  "item.update",
+  "item.delete",
+  "comment.create",
+  "thread.link",
+  "thread.update",
+  "thread.move",
+  "thread.unlink",
+  "project.create",
+  "project.update",
+  "project.delete",
+  "goal.create",
+  "goal.close",
+  "proposal.create",
+  "proposal.update",
+  "proposal.accept",
+  "proposal.reject",
+  "security.update",
+  "suppression.create",
+  "suppression.delete",
+  "settings.update",
+  "telegram.test_message",
+  "account.setup",
+  "account.totp_enable",
+  "account.totp_disable",
+  "account.password_change",
+  "account.password_reset",
+  "account.backup_codes_new",
+  "session.sign_in",
+  "session.sign_out",
+  "session.end",
+  "session.connect",
+  "session.revoke",
+  "api_key.create",
+  "api_key.delete",
+  "device.approve",
+  "device.deny",
+  // Older rows only.
+  "device.pair",
+  "device.revoke",
+  "device.revoke_all",
+  "session.end_others",
+  "session.end_all",
+  "session.sweep",
+  "auth.repair",
+] as const
+/** What an audit row is about; each has a label in `audit.entity` of each locale file. */
+export const AUDIT_ENTITY_TYPES = [
+  "item",
+  "project",
+  "settings",
+  "device",
+  "suppression",
+  "goal",
+  "proposal",
+  "comment",
+  "thread",
+  "session",
+  "account",
+  "api_key",
+  "device_code",
+] as const
+
 export type Stage = (typeof STAGES)[number]
 export type ItemStatus = (typeof ITEM_STATUSES)[number]
 export type ItemType = (typeof ITEM_TYPES)[number]
@@ -47,6 +116,8 @@ export type SyncOutcome = (typeof SYNC_OUTCOMES)[number]
 export type JobState = (typeof JOB_STATES)[number]
 export type TelegramOutcome = (typeof TELEGRAM_OUTCOMES)[number]
 export type Language = (typeof LANGUAGES)[number]
+export type AuditAction = (typeof AUDIT_ACTIONS)[number]
+export type AuditEntityType = (typeof AUDIT_ENTITY_TYPES)[number]
 
 export const stageSchema = z.enum(STAGES)
 export const itemStatusSchema = z.enum(ITEM_STATUSES)

@@ -206,6 +206,17 @@ export type AuditEntry = {
   source: AuditSource
 }
 
+/** The facet counts of the activity log's first page (docs/api.md, Audit filters). */
+export type AuditCounts = {
+  actorKind: Record<ActorKind, number>
+  agents: { label: string; count: number }[]
+  actions: { action: string; count: number }[]
+  projects: { projectId: string; count: number }[]
+}
+
+/** A page of the activity log; the first page also carries the total and the counts. */
+export type AuditPage = Page<AuditEntry> & { total: number | null; counts: AuditCounts | null }
+
 export type ItemDetail = {
   item: Item
   project: { id: string; name: string; slug: string; stage: Stage | null } | null

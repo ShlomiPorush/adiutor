@@ -2,6 +2,7 @@ import { type Context, Hono } from "hono"
 import { bodyLimit } from "hono/body-limit"
 import { z } from "zod"
 import {
+  auditFilterSchema,
   captureBody,
   commentBody,
   createItemBody,
@@ -108,7 +109,8 @@ const findItemsQuery = z.object({
   limit,
 })
 const archiveQuery = z.object({ projectId: z.uuid().optional(), cursor: z.string().max(500).optional(), limit })
-const auditQuery = z.object({
+/** The activity filters (shared with the page's address) and the entity filters that came before them. */
+const auditQuery = auditFilterSchema.extend({
   cursor: z.string().max(500).optional(),
   limit,
   entityType: z.string().max(50).optional(),

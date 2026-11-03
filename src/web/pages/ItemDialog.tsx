@@ -24,7 +24,7 @@ import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { ActorTag, Tag } from "../ui/tags.tsx"
 import { useUnsaved } from "../ui/unsaved.tsx"
-import { actionText, changesOf } from "./audit.ts"
+import { actionText, changesOf, itemActivity } from "./audit.ts"
 import { afterOwnChange, draftBase, saveVersion } from "./draft.ts"
 
 const TITLE_MAX = LIMITS.title
@@ -562,13 +562,17 @@ function ItemBody({
             })}
           </ul>
         )}
-        {item.projectId ? (
-          <p className="ui-hint">
+        <p className="ui-hint ui-history-links">
+          {/* A move to another page: the dialog closes with it, and an unsaved draft asks first (unsaved.tsx). */}
+          <Link to={itemActivity(item.id)} className="ui-link">
+            {t("item.allActivity")}
+          </Link>
+          {item.projectId ? (
             <Link to={`/projects/${item.projectId}`} className="ui-link">
               {t("item.openProject", { project: detail.project?.name ?? "" })}
             </Link>
-          </p>
-        ) : null}
+          ) : null}
+        </p>
       </section>
     </div>
   )

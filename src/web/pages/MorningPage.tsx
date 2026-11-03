@@ -21,6 +21,7 @@ import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { Banner, Empty, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { Progress, StageTag, StatusTag } from "../ui/tags.tsx"
+import { actorActivity } from "./audit.ts"
 import { ItemRow, Panel, rowKeys, selecting } from "./parts.tsx"
 
 export function MorningPage() {
@@ -283,7 +284,7 @@ function UpdateGroup({ group }: { group: AgentUpdateGroup }) {
               </p>
             ) : null}
             <span className="ui-item-meta">
-              <bdi dir="auto">{update.actorLabel}</bdi>
+              <ActorActivityLink kind={update.actorKind} label={update.actorLabel} />
               {update.kind === "status" ? (
                 <>
                   {t("morning.setStatus")} <StatusTag status={update.to} />
@@ -297,6 +298,18 @@ function UpdateGroup({ group }: { group: AgentUpdateGroup }) {
         </div>
       ))}
     </details>
+  )
+}
+
+/** The actor of an agent update, as a link to its own activity (audit A-2): an agent by its label, the sync. */
+function ActorActivityLink({ kind, label }: { kind: AgentUpdateGroup["updates"][number]["actorKind"]; label: string }) {
+  const { t } = useI18n()
+  const to = actorActivity(kind, label)
+  if (!to) return <bdi dir="auto">{label}</bdi>
+  return (
+    <Link to={to} className="ui-link" title={t("activity.openAgent", { agent: label })}>
+      <bdi dir="auto">{label}</bdi>
+    </Link>
   )
 }
 

@@ -43,11 +43,11 @@ export function usePageQuery<T>(options: {
 }
 
 /** A list that loads more as its end scrolls into view, by cursor; a refresh reads every page shown again. */
-export function usePageInfiniteQuery<T>(options: {
+export function usePageInfiniteQuery<P extends Page<unknown>>(options: {
   queryKey: QueryKey
-  queryFn: (cursor: string | null) => Promise<Page<T>>
+  queryFn: (cursor: string | null) => Promise<P>
   every: number
-}): UseInfiniteQueryResult<InfiniteData<Page<T>, string | null>> {
+}): UseInfiniteQueryResult<InfiniteData<P, string | null>> {
   return useInfiniteQuery({
     queryKey: options.queryKey,
     queryFn: ({ pageParam }) => options.queryFn(pageParam),
