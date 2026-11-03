@@ -69,9 +69,17 @@ function focusInto(layer: Layer): void {
   target.focus({ preventScroll: true })
 }
 
+/**
+ * The layer's entry is one step after the page's. React Router numbers its entries (`idx`) to tell Back from
+ * Forward and to block a move that would drop unsaved changes; a link that replaces this entry (More, the account
+ * menu, the bell) keeps its number, so a copy of the page's own would leave two entries with one number, and Back
+ * from the opened page would leave without the Leave question.
+ */
 function pushEntry(): void {
   if (holdsEntry) return
-  history.pushState({ ...(history.state ?? {}), mikudLayer: true }, "")
+  const state = (history.state ?? {}) as { idx?: unknown }
+  const idx = typeof state.idx === "number" ? { idx: state.idx + 1 } : {}
+  history.pushState({ ...state, ...idx, mikudLayer: true }, "")
   holdsEntry = true
 }
 

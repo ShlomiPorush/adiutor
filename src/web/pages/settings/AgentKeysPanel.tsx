@@ -1,4 +1,4 @@
-// Settings, Agent access: the agents connected with `mikud connect`, each with its own key of Better Auth's api-key
+// Settings, Agent access, in two groups (How to connect, Connected agents): the agents connected with `mikud connect`, each with its own key of Better Auth's api-key
 // plugin, through its client. The owner approves every connection in the browser (/connect/device); the key itself
 // never reaches this page. The list shows each key's name, first characters, when it was connected, when it ends and
 // its last request. Disconnect deletes one key, Disconnect all deletes every key (the plugin has no bulk delete, and
@@ -17,8 +17,8 @@ import { Empty, ErrorState, errorReason, Loading } from "../../ui/states.tsx"
 import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag } from "../../ui/tags.tsx"
-import { Panel } from "../parts.tsx"
 import { disconnectEvery } from "./disconnectAll.ts"
+import { Group } from "./parts.tsx"
 
 const time = (value: Date | string) => (typeof value === "string" ? value : value.toISOString())
 
@@ -30,7 +30,7 @@ export function connectCommand(origin: string, name: string, target: "sync" | "c
   return `${BUNDLE} connect --url ${origin} --name ${name} --for ${target}`
 }
 
-export function AgentKeysPanel() {
+export function AgentKeysSection() {
   const { t, tc, language } = useI18n()
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
@@ -94,62 +94,64 @@ export function AgentKeysPanel() {
   }
 
   return (
-    <Panel id="agents" title={t("agentKeys.title")} count={query.data ? keys.length : undefined}>
-      <p className="ui-panel-body ui-hint">{t("agentKeys.hint")}</p>
-      <div className="ui-panel-body ui-connect-cmds">
-        <div>
-          <h3 className="ui-h3">{t("agentKeys.howTitle")}</h3>
+    <>
+      <Group id="settings-connect" title={t("agentKeys.howTitle")}>
+        <div className="ui-panel-body ui-connect-cmds">
           <p className="ui-hint">{t("agentKeys.howHint")}</p>
-        </div>
-        {(["sync", "claude", "codex"] as const).map((target) => (
-          <div key={target} className="ui-field">
-            <span className="ui-label">{t(`agentKeys.how.${target}`)}</span>
-            <span dir="ltr">
-              <Copyable value={connectCommand(origin, target, target)} />
-            </span>
-          </div>
-        ))}
-        <p className="ui-hint">{t("agentKeys.howOptions", { name: "--name", days: "--days" })}</p>
-      </div>
-      {query.isPending ? <Loading label={t("agentKeys.loading")} /> : null}
-      {query.isError && !query.data ? (
-        <ErrorState title={t("agentKeys.failed")} error={query.error} onRetry={() => void query.refetch()} />
-      ) : null}
-      {query.data && keys.length === 0 ? <Empty title={t("agentKeys.empty")} hint={t("agentKeys.emptyHint")} /> : null}
-      {keys.map((key) => {
-        const expired = key.expiresAt !== null && new Date(key.expiresAt).getTime() <= Date.now()
-        return (
-          <div key={key.id} className="ui-item">
-            <div className="ui-item-main">
-              <span className="ui-item-title">
-                <bdi dir="auto">{key.name ?? t("agentKeys.unnamed")}</bdi>{" "}
-                <bdi className="ui-mono ui-key-start" dir="ltr">
-                  {key.start ? `${key.start}…` : ""}
-                </bdi>{" "}
-                {expired ? <Tag tone="fail">{t("agentKeys.expired")}</Tag> : null}
-              </span>
-              <span className="ui-item-meta">
-                {t("agentKeys.created")} <Time value={time(key.createdAt)} mode="full" /> · {t("agentKeys.expires")}{" "}
-                {key.expiresAt ? <Time value={time(key.expiresAt)} mode="full" /> : t("agentKeys.noEnd")} ·{" "}
-                {t("agentKeys.lastUsed")}{" "}
-                {key.lastRequest ? <Time value={time(key.lastRequest)} mode="ago" /> : t("agentKeys.never")}
+          {(["sync", "claude", "codex"] as const).map((target) => (
+            <div key={target} className="ui-field">
+              <span className="ui-label">{t(`agentKeys.how.${target}`)}</span>
+              <span dir="ltr">
+                <Copyable value={connectCommand(origin, target, target)} />
               </span>
             </div>
-            <div className="ui-item-end">
-              <button type="button" className="ui-btn ui-btn-sm ui-btn-danger" onClick={() => void disconnect(key)}>
-                {t("agentKeys.disconnect")}
-              </button>
-            </div>
-          </div>
-        )
-      })}
-      {keys.length > 1 ? (
-        <div className="ui-panel-body ui-account-actions">
-          <button type="button" className="ui-btn ui-btn-danger" disabled={busy} onClick={() => void disconnectAll()}>
-            {t("agentKeys.disconnectAll")}
-          </button>
+          ))}
+          <p className="ui-hint">{t("agentKeys.howOptions", { name: "--name", days: "--days" })}</p>
         </div>
-      ) : null}
-    </Panel>
+      </Group>
+      <Group id="settings-agent-keys" title={t("agentKeys.listTitle")} count={query.data ? keys.length : undefined}>
+        {query.isPending ? <Loading label={t("agentKeys.loading")} /> : null}
+        {query.isError && !query.data ? (
+          <ErrorState title={t("agentKeys.failed")} error={query.error} onRetry={() => void query.refetch()} />
+        ) : null}
+        {query.data && keys.length === 0 ? (
+          <Empty title={t("agentKeys.empty")} hint={t("agentKeys.emptyHint")} />
+        ) : null}
+        {keys.map((key) => {
+          const expired = key.expiresAt !== null && new Date(key.expiresAt).getTime() <= Date.now()
+          return (
+            <div key={key.id} className="ui-item">
+              <div className="ui-item-main">
+                <span className="ui-item-title">
+                  <bdi dir="auto">{key.name ?? t("agentKeys.unnamed")}</bdi>{" "}
+                  <bdi className="ui-mono ui-key-start" dir="ltr">
+                    {key.start ? `${key.start}…` : ""}
+                  </bdi>{" "}
+                  {expired ? <Tag tone="fail">{t("agentKeys.expired")}</Tag> : null}
+                </span>
+                <span className="ui-item-meta">
+                  {t("agentKeys.created")} <Time value={time(key.createdAt)} mode="full" /> · {t("agentKeys.expires")}{" "}
+                  {key.expiresAt ? <Time value={time(key.expiresAt)} mode="full" /> : t("agentKeys.noEnd")} ·{" "}
+                  {t("agentKeys.lastUsed")}{" "}
+                  {key.lastRequest ? <Time value={time(key.lastRequest)} mode="ago" /> : t("agentKeys.never")}
+                </span>
+              </div>
+              <div className="ui-item-end">
+                <button type="button" className="ui-btn ui-btn-sm ui-btn-danger" onClick={() => void disconnect(key)}>
+                  {t("agentKeys.disconnect")}
+                </button>
+              </div>
+            </div>
+          )
+        })}
+        {keys.length > 1 ? (
+          <div className="ui-panel-body ui-account-actions">
+            <button type="button" className="ui-btn ui-btn-danger" disabled={busy} onClick={() => void disconnectAll()}>
+              {t("agentKeys.disconnectAll")}
+            </button>
+          </div>
+        ) : null}
+      </Group>
+    </>
   )
 }

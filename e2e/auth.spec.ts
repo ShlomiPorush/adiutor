@@ -19,11 +19,11 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
 })
 
 test("the first run creates the owner, requires TOTP, shows the backup codes once, and returns to the page", async () => {
-  await page.goto("/settings")
+  await page.goto("/settings/account")
   const status = await page.evaluate(async () => (await (await fetch("/api/setup/status")).json()).data)
   test.skip(status.hasUser, "the owner exists already (created by the other project)")
 
-  await expect(page).toHaveURL(/\/setup\?next=%2Fsettings$/)
+  await expect(page).toHaveURL(/\/setup\?next=%2Fsettings%2Faccount$/)
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(he.setup.title)
   await page.getByLabel(he.auth.username, { exact: true }).fill(USERNAME)
   await page.getByLabel(he.auth.password, { exact: true }).fill(PASSWORD)
@@ -49,7 +49,7 @@ test("the first run creates the owner, requires TOTP, shows the backup codes onc
   await expect(continueButton).toBeDisabled()
   await page.getByLabel(he.backupCodes.saved).check()
   await continueButton.click()
-  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page).toHaveURL(/\/settings\/account$/)
   await expect(page.locator("#account")).toContainText(USERNAME.toLowerCase())
 
   // Sign out from the shell's account menu: the browser goes to sign-in and the app refuses it.
@@ -72,10 +72,10 @@ test("a wrong password stays on the form and says so", async () => {
 
 test("signing in with the password and the code returns to the page asked for", async () => {
   expect(totpSecret()).not.toBe("")
-  await page.goto("/settings")
-  await expect(page).toHaveURL(/\/login\?next=%2Fsettings$/)
+  await page.goto("/settings/account")
+  await expect(page).toHaveURL(/\/login\?next=%2Fsettings%2Faccount$/)
   await signIn(page)
-  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page).toHaveURL(/\/settings\/account$/)
   await expect(page.locator("#account")).toContainText(he.account.thisBrowser)
   // The texts of the tests are the Hebrew ones, whatever ran before.
   await page.evaluate(async () => {

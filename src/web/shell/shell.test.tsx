@@ -2,7 +2,8 @@
 // The shell's tools in a DOM (R10, R3, R4): the folded sidebar is remembered and applied before the page draws,
 // the theme button walks System, Light and Dark, the account menu closes on Escape and Back through the layer
 // owner, signing out asks about unsaved changes first and keeps them when the sign-out fails, and the More sheet
-// closes on Escape and Back.
+// closes on Escape and Back. Stay in the Leave question keeps the account menu and the bell open when a link in
+// them would leave unsaved changes, and the menu and the status card link to their exact Settings section.
 
 import { readFileSync } from "node:fs"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
@@ -17,9 +18,10 @@ import { ConfirmHost } from "../ui/confirm.tsx"
 import { layerCount } from "../ui/layers.ts"
 import { ToastHost } from "../ui/Toast.tsx"
 import { UnsavedProvider, useUnsaved } from "../ui/unsaved.tsx"
+import { Bell } from "./Bell.tsx"
 import { MoreSheet } from "./MoreSheet.tsx"
 import { NAV_KEY, useNavFolded } from "./navFold.ts"
-import { AccountMenu, NavToggle, nextTheme, ThemeButton } from "./ShellTools.tsx"
+import { AccountMenu, NavToggle, nextTheme, SyncStatus, ThemeButton } from "./ShellTools.tsx"
 
 const signOut = vi.fn<() => Promise<{ data: unknown; error: { status?: number; message?: string } | null }>>()
 vi.mock("../api/auth.ts", async (importOriginal) => {
@@ -35,8 +37,8 @@ const BOOT = "src/web/public/boot.js"
 let mounted: { root: Root; host: HTMLElement } | null = null
 let router: ReturnType<typeof createMemoryRouter> | null = null
 
-/** Renders `ui` at "/" inside the app's providers, with a sign-in page at "/login". */
-async function render(ui: ReactNode): Promise<void> {
+/** Renders `ui` at `at` ("/" by default) inside the app's providers, with a sign-in page at "/login". */
+async function render(ui: ReactNode, at = "/"): Promise<void> {
   const host = document.createElement("div")
   document.body.append(host)
   const root = createRoot(host)
@@ -59,11 +61,12 @@ async function render(ui: ReactNode): Promise<void> {
           { path: "/", element: null },
           { path: "/projects", element: null },
           { path: "/login", element: null },
-          { path: "/settings", element: null },
+          { path: "/projects/:projectId", element: null },
+          { path: "/settings/:section?", element: null },
         ],
       },
     ],
-    { initialEntries: ["/"] },
+    { initialEntries: [at] },
   )
   await act(async () => {
     root.render(
@@ -305,13 +308,19 @@ describe("the account menu is a layer of ui/layers.ts (R4)", () => {
     expect(where()).toBe("/")
   })
 
-  it("Account settings opens Settings", async () => {
+  it("Account settings opens Settings, Account", async () => {
     stubMedia(() => false)
     await render(<AccountMenu />)
     await click(button(`owner.name, ${en.shell.accountMenu}`))
     await click(button(en.shell.accountSettings))
     expect(document.querySelector('[role="menu"]')).toBeNull()
-    expect(where()).toBe("/settings")
+    expect(where()).toBe("/settings/account")
+  })
+
+  it("the sync card links to Settings, Status (R11)", async () => {
+    stubMedia(() => false)
+    await render(<SyncStatus morning={undefined} failed={false} />)
+    expect(document.querySelector(".ui-status-card")?.getAttribute("href")).toBe("/settings/status")
   })
 })
 
@@ -328,6 +337,70 @@ async function signOutFromMenu(): Promise<void> {
   await click(button(`owner.name, ${en.shell.accountMenu}`))
   await click(button(en.account.signOut))
 }
+
+/** A morning view with one project that has a critical security finding: one row in the bell. */
+const MORNING = {
+  waiting: [],
+  security: [{ projectId: "p1", projectName: "Beacon", critical: 2, high: 0, asOf: null }],
+} as unknown as Parameters<typeof Bell>[0]["morning"]
+
+describe("Stay keeps the layer a link would have closed (SV-1, the P3 of PR #23)", () => {
+  it("the account menu stays open, on the same page, with the draft", async () => {
+    stubMedia(() => false)
+    await render(
+      <>
+        <AccountMenu />
+        <Draft />
+      </>,
+    )
+    await click(button(`owner.name, ${en.shell.accountMenu}`))
+    await click(button(en.shell.accountSettings))
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(en.unsaved.leaveTitle)
+    await click(button(en.unsaved.stay))
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(where()).toBe("/")
+    expect(document.querySelector('[role="menu"]')).not.toBeNull()
+    expect(layerCount()).toBe(1)
+    expect(draft()?.value).toBe("A draft the owner typed")
+    // Leave goes on to the section; the menu closes once it shows.
+    await click(button(en.shell.accountSettings))
+    await click(button(en.unsaved.leave))
+    expect(where()).toBe("/settings/account")
+    expect(document.querySelector('[role="menu"]')).toBeNull()
+    expect(layerCount()).toBe(0)
+  })
+
+  it("the bell window stays open when Stay cancels a row's page or its morning view link", async () => {
+    stubMedia(() => false)
+    await render(
+      <>
+        <Bell morning={MORNING} failed={false} place="top" />
+        <Draft />
+      </>,
+      "/projects",
+    )
+    const bell = document.querySelector<HTMLButtonElement>("button.ui-bell")
+    await click(bell)
+    const win = () => document.querySelector(".ui-attn-win")
+    expect(win()).not.toBeNull()
+
+    // A row that opens its project.
+    await click(win()?.querySelector("[data-row-open]"))
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(en.unsaved.leaveTitle)
+    await click(button(en.unsaved.stay))
+    expect(where()).toBe("/projects")
+    expect(win()).not.toBeNull()
+    expect(layerCount()).toBe(1)
+
+    // The foot's link to the morning view.
+    await click(win()?.querySelector(".ui-attn-foot a"))
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(en.unsaved.leaveTitle)
+    await click(button(en.unsaved.stay))
+    expect(where()).toBe("/projects")
+    expect(win()).not.toBeNull()
+    expect(draft()?.value).toBe("A draft the owner typed")
+  })
+})
 
 describe("signing out from the shell (R3, SV-1)", () => {
   it("Stay keeps the page and the draft, and never calls Better Auth", async () => {

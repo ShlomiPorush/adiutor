@@ -21,6 +21,8 @@
   --ui-fs-h2: 16px;
   --ui-fs-item: 19px;
   --ui-fs-kpi: 24px;
+  --ui-fs-section: 22px;
+  --ui-fs-caps: 11.5px;
   --ui-h1: 28px;
   --ui-radius: 12px;
   --ui-radius-sm: 8px;
@@ -341,7 +343,7 @@ button {
     text-decoration: underline;
   }
 }
-.ui-crumb-current h1 {
+.ui-crumbs h1 {
   overflow: hidden;
   margin: 0;
   color: var(--ui-ink);
@@ -351,6 +353,16 @@ button {
 }
 .ui-crumbs li + .ui-crumb-current h1 {
   font-weight: 600;
+}
+/* The open section after the page title (Settings › Telegram); the title is then a link back, like a crumb. */
+.ui-crumbs li:not(.ui-crumb-current) h1 {
+  color: var(--ui-muted);
+}
+.ui-crumb-tail > span {
+  overflow: hidden;
+  color: var(--ui-ink);
+  font-weight: 600;
+  text-overflow: ellipsis;
 }
 .ui-crumb-sep {
   flex: none;
@@ -1467,6 +1479,165 @@ a.ui-kpi:focus-visible {
   gap: 14px;
 }
 
+/*
+ * Settings sections (FS-8, FS-10, SV-1): a sidebar of sections under group headings beside the open section. From
+ * 1024px wide and 601px tall the sidebar and the fields scroll separately; otherwise the page scrolls as one. Below
+ * 1024px the sidebar becomes one sticky picker. The fields end with room for the save bar.
+ */
+.ui-set-page {
+  padding-bottom: 96px;
+}
+.ui-set-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+  width: 100%;
+  max-width: 1180px;
+}
+.ui-set-picker {
+  display: none;
+}
+.ui-set-nav {
+  position: sticky;
+  top: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 8px;
+}
+.ui-set-navgroup {
+  display: grid;
+  gap: 2px;
+}
+.ui-set-navgroup > p {
+  margin: 0 0 4px;
+  padding: 0 8px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-caps);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* The open section is marked like the open page in the main navigation. */
+.ui-set-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-ink);
+  font-weight: 500;
+  text-decoration: none;
+}
+@media (hover: hover) {
+  .ui-set-tab:hover {
+    background: var(--ui-hover);
+  }
+}
+.ui-set-tab[aria-current="true"] {
+  background: var(--ui-fill);
+  font-weight: 600;
+}
+/* A section that holds unsaved changes (SV-1). */
+.ui-set-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-inline-start: auto;
+  border-radius: 50%;
+  background: var(--ui-info);
+}
+.ui-set-content,
+.ui-set-section {
+  display: grid;
+  align-content: start;
+  gap: var(--ui-gap);
+  min-width: 0;
+}
+.ui-set-title {
+  margin: 0;
+  font-size: var(--ui-fs-section);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.ui-set-tabdesc {
+  max-width: 75ch;
+  margin: -8px 0 0;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.5;
+}
+/* A group: a small panel with a 13px title; its first row needs no rule under the title. */
+.ui-set-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 13px var(--ui-pad-x) 4px;
+}
+.ui-set-group-title {
+  margin: 0;
+  font-size: var(--ui-fs-ctl);
+  font-weight: 700;
+}
+.ui-set-group-head .ui-count {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-ctl);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.ui-set-group-head + :is(.ui-set-row, .ui-kv, .ui-item) {
+  border-top: 0;
+}
+@media (min-width: 1024px) and (min-height: 601px) {
+  .ui-page.ui-set-page {
+    overflow: hidden;
+    padding-bottom: 0;
+  }
+  .ui-page.ui-set-page > .ui-set-layout {
+    flex: 1 1 auto;
+    align-items: stretch;
+    min-height: 0;
+  }
+  .ui-set-nav {
+    position: static;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .ui-set-content {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin-inline: -4px;
+    padding-inline: 4px;
+    padding-bottom: 96px;
+  }
+}
+@media (max-width: 1023px) {
+  .ui-set-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .ui-set-nav {
+    display: none;
+  }
+  .ui-set-picker {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: block;
+    margin-inline: -4px;
+    padding: 8px 4px;
+    background: var(--ui-bg);
+  }
+  .ui-set-picker .ui-select {
+    width: 100%;
+  }
+}
+
 /* Settings rows: label and explanation at the start, the control at the end (FS-8) */
 .ui-set-row {
   display: grid;
@@ -1924,6 +2095,10 @@ html.ui-layer-on .ui-page {
 .ui-foot-gap {
   margin-inline-end: auto;
 }
+/* A question goes over everything but the toast, the save bar included (v3 ui.css:2408). */
+.ui-dialog-backdrop.ui-confirm {
+  z-index: 99999;
+}
 .ui-confirm-text {
   margin: 0;
   line-height: 1.55;
@@ -2029,9 +2204,6 @@ html.ui-layer-on .ui-page {
 .ui-savebar button:disabled {
   opacity: 0.6;
   cursor: wait;
-}
-.ui-page-has-savebar {
-  padding-bottom: 96px;
 }
 
 /* ---------- Morning, project and item content ---------- */
@@ -2397,12 +2569,6 @@ html.ui-layer-on .ui-page {
 
 /* ---------- Account (Settings) ---------- */
 
-.ui-h3 {
-  margin: 0 0 2px;
-  font-size: var(--ui-fs-item);
-  font-weight: 650;
-}
-
 .ui-account-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2704,7 +2870,9 @@ html.ui-layer-on .ui-page {
   }
 
   /* Every dialog is a bottom sheet: four fifths high, grows with the scroll (DS-1) */
+  /* A sheet opens over the save bar, as v3's .ui-sheet does (z-index 70 against 60). */
   .ui-dialog-backdrop {
+    z-index: 70;
     align-items: flex-end;
     padding: 0;
     background: var(--ui-veil-sheet);

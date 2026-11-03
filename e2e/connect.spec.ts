@@ -89,14 +89,17 @@ test("connect for the sync: approved in the browser, the key saved for the owner
   expect(cli.output()).not.toContain(key)
   expect(await asAgent(key)).toBe(200)
 
-  await page.goto("/settings")
+  await page.goto("/settings/agents")
   const panel = page.locator("#agents")
   const row = panel.locator(".ui-item", { hasText: name })
   await expect(row).toContainText(key.slice(0, 6))
   await expect(row).not.toContainText(key.slice(6))
   // The CLI ended its temporary session: no "mikud connect" session is left in Account.
+  await page.goto("/settings/account")
+  await expect(page.locator("#account")).toContainText(he.account.thisBrowser)
   await expect(page.locator("#account")).not.toContainText(he.account.connectSession)
 
+  await page.goto("/settings/agents")
   await row.getByRole("button", { name: he.agentKeys.disconnect, exact: true }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: he.agentKeys.disconnect, exact: true }).click()
   await expect(panel.locator(".ui-item", { hasText: name })).toHaveCount(0)

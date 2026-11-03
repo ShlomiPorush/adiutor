@@ -1,7 +1,8 @@
-// Settings against the real server, in the browser auth.spec.ts stored: how agents connect (connect.spec.ts runs it), the
-// password changed and changed back without leaving the page, the browsers list, and the Telegram fields editable
-// when no environment variable sets them. Stores the browser again at the end: a password change replaces this
-// browser's session.
+// Settings against the real server, in the browser auth.spec.ts stored: the sections and their addresses (a deep
+// link, a reload, an unknown section, the browser title), the one draft across sections with Back and Forward and one
+// Discard, a refused field in a hidden section, how agents connect (connect.spec.ts runs it), the password changed and
+// changed back without leaving the page, the browsers list, and the Telegram fields editable when no environment
+// variable sets them. Stores the browser again at the end: a password change replaces this browser's session.
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
 import { PASSWORD, storageFile } from "./helpers.ts"
@@ -15,7 +16,7 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
     await browser.newContext({ ...testInfo.project.use, storageState: storageFile(testInfo.project.name) })
   ).newPage()
   await page.goto("/settings")
-  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page).toHaveURL(/\/settings\/general$/)
 })
 
 test.afterAll(async () => {
@@ -23,7 +24,122 @@ test.afterAll(async () => {
   await page.context().close()
 })
 
+const isPhone = () => (page.viewportSize()?.width ?? 1440) <= 760
+const sectionTitle = () => page.locator(".ui-set-title")
+const browserTitle = (section: keyof typeof he.settings.sections) =>
+  `${he.settings.title} · ${he.settings.sections[section].title} · ${he.app.name}`
+
+/** Opens a section as the owner does: the sidebar from 1024px, the picker below (decided by width, not by what drew). */
+async function openSection(section: keyof typeof he.settings.sections): Promise<void> {
+  const nav = page.getByRole("navigation", { name: he.settings.categories })
+  if ((page.viewportSize()?.width ?? 1440) >= 1024)
+    await nav.getByRole("link", { name: he.settings.sections[section].title }).click()
+  else await page.getByLabel(he.settings.category, { exact: true }).selectOption(section)
+  await expect(page).toHaveURL(new RegExp(`/settings/${section}$`))
+}
+
+test("each section has its own address: a deep link, a reload and the browser title", async () => {
+  await page.goto("/settings/telegram")
+  await expect(sectionTitle()).toHaveText(he.settings.sections.telegram.title)
+  await expect(page).toHaveTitle(browserTitle("telegram"))
+  await page.reload()
+  await expect(page).toHaveURL(/\/settings\/telegram$/)
+  await expect(sectionTitle()).toHaveText(he.settings.sections.telegram.title)
+  await expect(page).toHaveTitle(browserTitle("telegram"))
+  if (!isPhone())
+    await expect(page.locator(".ui-trail [aria-current=page]")).toHaveText(he.settings.sections.telegram.title)
+
+  // An address that names no section opens the first one in its place: one Back leaves Settings.
+  await page.goto("/projects")
+  await page.goto("/settings/no-such-section")
+  await expect(page).toHaveURL(/\/settings\/general$/)
+  await expect(sectionTitle()).toHaveText(he.settings.sections.general.title)
+  await expect(page).toHaveTitle(browserTitle("general"))
+  await page.goBack()
+  await expect(page).toHaveURL(/\/projects$/)
+})
+
+test("changes in two sections stay through Back and Forward, a dot marks each, and one Discard drops both", async () => {
+  await page.goto("/settings/general")
+  const closedDays = page.getByLabel(he.settings.closedDays, { exact: true })
+  const before = await closedDays.inputValue()
+  const changed = before === "9" ? "8" : "9"
+  await closedDays.fill(changed)
+  await openSection("telegram")
+  const chatId = page.locator("#telegram").getByLabel(he.telegramSettings.chatId, { exact: true })
+  const chatBefore = await chatId.inputValue()
+  await chatId.fill("5151")
+  const bar = page.getByRole("region", { name: he.savebar.region })
+  await expect(bar.locator(".ui-savebar-count")).toContainText("2")
+  if (isPhone()) {
+    const options = page.getByLabel(he.settings.category, { exact: true }).locator("option")
+    await expect(options.filter({ hasText: he.settings.sections.general.title })).toContainText(
+      he.settings.unsavedOption.replace("{name}", "").trim(),
+    )
+  } else {
+    await expect(page.locator(".ui-set-nav .ui-set-dot")).toHaveCount(2)
+  }
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/settings\/general$/)
+  await expect(closedDays).toHaveValue(changed)
+  await page.goForward()
+  await expect(page).toHaveURL(/\/settings\/telegram$/)
+  await expect(chatId).toHaveValue("5151")
+  await expect(page.getByRole("alertdialog")).toHaveCount(0)
+
+  await bar.getByRole("button", { name: he.savebar.discard }).click()
+  await expect(bar).toHaveCount(0)
+  await expect(chatId).toHaveValue(chatBefore)
+  await openSection("general")
+  await expect(closedDays).toHaveValue(before)
+})
+
+test("Settings opened from the account menu: Back between sections keeps a change, Back out of Settings asks", async () => {
+  await page.goto("/")
+  await page.getByRole("button", { name: new RegExp(`${he.shell.accountMenu}$`) }).click()
+  await page.getByRole("menuitem", { name: he.shell.accountSettings }).click()
+  await expect(page).toHaveURL(/\/settings\/account$/)
+  await openSection("general")
+  const closedDays = page.getByLabel(he.settings.closedDays, { exact: true })
+  const before = await closedDays.inputValue()
+  await closedDays.fill(before === "9" ? "8" : "9")
+  const bar = page.getByRole("region", { name: he.savebar.region })
+  await expect(bar).toBeVisible()
+
+  const question = page.getByRole("alertdialog")
+  await page.goBack()
+  await expect(page).toHaveURL(/\/settings\/account$/)
+  await expect(question).toHaveCount(0)
+  // The entry before is the morning view, where the menu was opened: leaving drops the change, so it asks.
+  // The browser's Back from the page itself: page.goBack() waits for a navigation the question holds back.
+  await page.evaluate(() => history.back())
+  await expect(question).toContainText(he.unsaved.leaveTitle)
+  await question.getByRole("button", { name: he.unsaved.stay }).click()
+  await expect(question).toHaveCount(0)
+  await expect(page).toHaveURL(/\/settings\/account$/)
+  await expect(bar).toBeVisible()
+  await bar.getByRole("button", { name: he.savebar.discard }).click()
+  await expect(bar).toHaveCount(0)
+})
+
+test("a refused field in a hidden section opens that section and takes the focus", async () => {
+  await page.goto("/settings/general")
+  const idle = page.getByLabel(he.settings.session.idleDays, { exact: true })
+  await idle.fill("500")
+  await openSection("secret-check")
+  const bar = page.getByRole("region", { name: he.savebar.region })
+  await bar.getByRole("button", { name: he.savebar.save }).click()
+  await expect(page).toHaveURL(/\/settings\/general$/)
+  await expect(idle).toBeFocused()
+  await expect(idle).toHaveAttribute("aria-invalid", "true")
+  // By keyboard: on a phone the refusal's toast sits over the save bar, and a pointer over it holds it (FB-2).
+  await bar.getByRole("button", { name: he.savebar.discard }).press("Enter")
+  await expect(bar).toHaveCount(0)
+})
+
 test("Agent access has no manual key: it shows how to connect, with this address", async () => {
+  await page.goto("/settings/agents")
   const panel = page.locator("#agents")
   await expect(panel.getByRole("heading", { name: he.agentKeys.howTitle })).toBeVisible()
   await expect(panel).toContainText(
@@ -34,6 +150,7 @@ test("Agent access has no manual key: it shows how to connect, with this address
 })
 
 test("the password changes and changes back without leaving the page", async () => {
+  await page.goto("/settings/account")
   const panel = page.locator("#account")
   const change = async (from: string, to: string) => {
     await panel.getByLabel(he.account.currentPassword, { exact: true }).fill(from)
@@ -46,7 +163,7 @@ test("the password changes and changes back without leaving the page", async () 
   }
   await change(PASSWORD, `${PASSWORD} again`)
   await change(`${PASSWORD} again`, PASSWORD)
-  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page).toHaveURL(/\/settings\/account$/)
   expect(await page.evaluate(async () => (await fetch("/api/v1/session")).status)).toBe(200)
   // Better Auth signed out the other browsers; this one is the only one listed.
   await expect(panel.locator(".ui-item")).toHaveCount(1)
@@ -54,6 +171,7 @@ test("the password changes and changes back without leaving the page", async () 
 })
 
 test("the Telegram fields are editable when no environment variable sets them", async () => {
+  await page.goto("/settings/telegram")
   const panel = page.locator("#telegram")
   await expect(panel.getByLabel(he.telegramSettings.chatId, { exact: true })).toBeEditable()
   await expect(panel.getByLabel(he.telegramSettings.botToken, { exact: true })).toBeEditable()

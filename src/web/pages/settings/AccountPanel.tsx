@@ -1,4 +1,4 @@
-// Settings, Account: everything here is Better Auth's own routes through its client, and acts at once (outside the
+// Settings, Account, in groups (Signed-in browsers, Change password, Two-factor, Recovery): everything here is Better Auth's own routes through its client, and acts at once (outside the
 // save bar): the signed-in browsers (and a session `mikud connect` left behind) with sign out one of them, sign out
 // the others and sign out everywhere, the password, a new
 // authenticator, new backup codes and the recovery note. Signing out of this browser is in the shell's account menu.
@@ -23,7 +23,8 @@ import { Tag } from "../../ui/tags.tsx"
 import { describeAgent } from "../agent.ts"
 import { RECOVERY_COMMAND } from "../auth/LoginPage.tsx"
 import { BackupCodes, FormError, PasswordField } from "../auth/parts.tsx"
-import { Panel } from "../parts.tsx"
+import { Group } from "./parts.tsx"
+import { settingsPath } from "./sections.ts"
 
 /** "Sign out everywhere": asks first, then Better Auth's revokeSessions and on to sign-in. */
 export function useSignOutEverywhere() {
@@ -48,7 +49,7 @@ export function useSignOutEverywhere() {
 
 const time = (value: Date | string) => (typeof value === "string" ? value : value.toISOString())
 
-export function AccountPanel() {
+export function AccountSection() {
   const { t, language } = useI18n()
   const queryClient = useQueryClient()
   const signOutEverywhere = useSignOutEverywhere()
@@ -100,97 +101,98 @@ export function AccountPanel() {
   }
 
   return (
-    <Panel id="account" title={t("account.title")}>
-      <div className="ui-kv">
-        <span>{t("account.signedInAs")}</span>
-        <bdi className="ui-mono" dir="ltr">
-          {me.data?.actor.label ?? "-"}
-        </bdi>
-      </div>
-      <div className="ui-panel-body">
-        <h3 className="ui-h3">{t("account.sessions")}</h3>
-        <p className="ui-hint">{t("account.sessionsHint")}</p>
-      </div>
-      {query.isPending ? <Loading label={t("account.loading")} /> : null}
-      {query.isError && !query.data ? (
-        <ErrorState title={t("account.failed")} error={query.error} onRetry={() => void query.refetch()} />
-      ) : null}
-      {sessions.map((session) => {
-        const agent = describeAgent(session.userAgent ?? null)
-        const connecting = session.userAgent === CONNECT_CLIENT_ID
-        const name = connecting
-          ? t("account.connectSession")
-          : agent
-            ? t("account.browserOn", agent)
-            : t("account.unknownBrowser")
-        return (
-          <div key={session.id} className="ui-item">
-            <div className="ui-item-main">
-              <span className="ui-item-title">
-                <bdi dir="auto">{name}</bdi>{" "}
-                {session.id === current ? <Tag tone="info">{t("account.thisBrowser")}</Tag> : null}
-              </span>
-              <span className="ui-item-meta">
-                {connecting ? `${t("account.connectSessionHint")} ` : ""}
-                {t("account.signedIn")} <Time value={time(session.createdAt)} mode="full" /> · {t("account.until")}{" "}
-                <Time value={time(session.expiresAt)} mode="full" />
-              </span>
-            </div>
-            {session.id !== current ? (
-              <div className="ui-item-end">
-                <button
-                  type="button"
-                  className="ui-btn ui-btn-sm ui-btn-danger"
-                  onClick={() => void endOne(session, name)}
-                >
-                  {t("account.endOne")}
-                </button>
-              </div>
-            ) : null}
-          </div>
-        )
-      })}
-      <div className="ui-panel-body ui-account-actions">
-        {sessions.length > 1 ? (
-          <button type="button" className="ui-btn ui-btn-danger" onClick={() => void endOthers()}>
-            {t("account.endOthers")}
-          </button>
+    <>
+      <Group id="settings-browsers" title={t("account.sessions")}>
+        <p className="ui-panel-body ui-hint">{t("account.sessionsHint")}</p>
+        <div className="ui-kv">
+          <span>{t("account.signedInAs")}</span>
+          <bdi className="ui-mono" dir="ltr">
+            {me.data?.actor.label ?? "-"}
+          </bdi>
+        </div>
+        {query.isPending ? <Loading label={t("account.loading")} /> : null}
+        {query.isError && !query.data ? (
+          <ErrorState title={t("account.failed")} error={query.error} onRetry={() => void query.refetch()} />
         ) : null}
-        <button type="button" className="ui-btn ui-btn-danger" onClick={() => void signOutEverywhere()}>
-          {t("account.endAll")}
-        </button>
-      </div>
-      <PasswordForm />
-      <div className="ui-panel-body ui-account-form">
-        <div>
-          <h3 className="ui-h3">{t("account.twoFactor")}</h3>
+        {sessions.map((session) => {
+          const agent = describeAgent(session.userAgent ?? null)
+          const connecting = session.userAgent === CONNECT_CLIENT_ID
+          const name = connecting
+            ? t("account.connectSession")
+            : agent
+              ? t("account.browserOn", agent)
+              : t("account.unknownBrowser")
+          return (
+            <div key={session.id} className="ui-item">
+              <div className="ui-item-main">
+                <span className="ui-item-title">
+                  <bdi dir="auto">{name}</bdi>{" "}
+                  {session.id === current ? <Tag tone="info">{t("account.thisBrowser")}</Tag> : null}
+                </span>
+                <span className="ui-item-meta">
+                  {connecting ? `${t("account.connectSessionHint")} ` : ""}
+                  {t("account.signedIn")} <Time value={time(session.createdAt)} mode="full" /> · {t("account.until")}{" "}
+                  <Time value={time(session.expiresAt)} mode="full" />
+                </span>
+              </div>
+              {session.id !== current ? (
+                <div className="ui-item-end">
+                  <button
+                    type="button"
+                    className="ui-btn ui-btn-sm ui-btn-danger"
+                    onClick={() => void endOne(session, name)}
+                  >
+                    {t("account.endOne")}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+        <div className="ui-panel-body ui-account-actions">
+          {sessions.length > 1 ? (
+            <button type="button" className="ui-btn ui-btn-danger" onClick={() => void endOthers()}>
+              {t("account.endOthers")}
+            </button>
+          ) : null}
+          <button type="button" className="ui-btn ui-btn-danger" onClick={() => void signOutEverywhere()}>
+            {t("account.endAll")}
+          </button>
+        </div>
+      </Group>
+      <Group id="settings-password" title={t("account.password")}>
+        <PasswordForm />
+      </Group>
+      <Group id="settings-two-factor" title={t("account.twoFactor")}>
+        <div className="ui-panel-body ui-account-form">
           <p className="ui-hint">{t("account.twoFactorHint")}</p>
+          <div className="ui-account-actions">
+            <button type="button" className="ui-btn" onClick={() => setDialog("codes")}>
+              {t("account.newCodes")}
+            </button>
+            <button type="button" className="ui-btn" onClick={() => setDialog("authenticator")}>
+              {t("account.newAuthenticator")}
+            </button>
+          </div>
         </div>
-        <div className="ui-account-actions">
-          <button type="button" className="ui-btn" onClick={() => setDialog("codes")}>
-            {t("account.newCodes")}
-          </button>
-          <button type="button" className="ui-btn" onClick={() => setDialog("authenticator")}>
-            {t("account.newAuthenticator")}
-          </button>
+      </Group>
+      <Group id="settings-recovery" title={t("account.recovery")}>
+        <div className="ui-panel-body ui-auth-note">
+          <p className="ui-hint">{t("account.recoveryHint")}</p>
+          <Copyable value={RECOVERY_COMMAND} />
         </div>
-      </div>
-      <div className="ui-panel-body ui-auth-note">
-        <h3 className="ui-h3">{t("account.recovery")}</h3>
-        <p className="ui-hint">{t("account.recoveryHint")}</p>
-        <Copyable value={RECOVERY_COMMAND} />
-      </div>
+      </Group>
       {dialog === "codes" ? <NewCodesDialog onClose={() => setDialog(null)} /> : null}
       {dialog === "authenticator" ? (
         <NewAuthenticatorDialog
           onClose={() => setDialog(null)}
           onDisabled={() => {
             setDialog(null)
-            navigate("/setup?next=%2Fsettings", { replace: true })
+            navigate(`/setup?next=${encodeURIComponent(settingsPath("account"))}`, { replace: true })
           }}
         />
       ) : null}
-    </Panel>
+    </>
   )
 }
 
@@ -253,10 +255,7 @@ function PasswordForm() {
 
   return (
     <form className="ui-panel-body ui-account-form" onSubmit={submit} noValidate>
-      <div>
-        <h3 className="ui-h3">{t("account.password")}</h3>
-        <p className="ui-hint">{t("account.passwordHint")}</p>
-      </div>
+      <p className="ui-hint">{t("account.passwordHint")}</p>
       <PasswordField
         label={t("account.currentPassword")}
         value={current}
