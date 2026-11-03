@@ -3,7 +3,7 @@ import { inspect } from "node:util"
 import { type ServerType, serve } from "@hono/node-server"
 import { count, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { ownerEmail } from "../../shared/auth.ts"
+import { authenticatorUri, ownerEmail } from "../../shared/auth.ts"
 import { createApp } from "../app.ts"
 import { TWO_FACTOR_CHALLENGE_S } from "../auth/auth.ts"
 import { resetOwnerPassword } from "../auth/recovery.ts"
@@ -121,6 +121,8 @@ describe("first run: Better Auth's sign-up", () => {
       const label = decodeURIComponent(uri.slice("otpauth://totp/".length, uri.indexOf("?")))
       expect(label).toContain(email)
       expect(label).not.toMatch(/u-[0-9a-f]+@/)
+      // The setup page draws it with the username as the account name and Better Auth's query as it is.
+      expect(authenticatorUri(uri)).toBe(`otpauth://totp/Mikud:${name.toLowerCase()}${uri.slice(uri.indexOf("?"))}`)
       const secret = new URL(uri).searchParams.get("secret") ?? ""
       expect((await b.verify(totp(secret))).status).toBe(200)
       const again = browser()
