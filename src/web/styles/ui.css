@@ -1484,7 +1484,8 @@ a.ui-kpi:focus-visible {
  * 1024px wide and 601px tall the sidebar and the fields scroll separately; otherwise the page scrolls as one. Below
  * 1024px the sidebar becomes one sticky picker. The fields end with room for the save bar.
  */
-.ui-set-page {
+/* Room for the save bar under the last field, also on a phone, where a page ends 20px under its content. */
+.ui-page.ui-set-page {
   padding-bottom: 96px;
 }
 .ui-set-layout {

@@ -19,7 +19,7 @@ import { I18nProvider } from "../../i18n/i18n.tsx"
 import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
 import { UnsavedProvider } from "../../ui/unsaved.tsx"
-import { SettingsPage } from "../SettingsPage.tsx"
+import { forgetSettingsVisit, SettingsPage } from "../SettingsPage.tsx"
 import {
   changedSections,
   FIELD_SECTION,
@@ -178,6 +178,7 @@ async function changeTwoSections(): Promise<void> {
 }
 
 beforeEach(() => {
+  forgetSettingsVisit()
   localStorage.clear()
   localStorage.setItem("mikud.language", "en")
   saved = structuredClone(SAVED)
@@ -368,6 +369,22 @@ describe("addresses and titles (NL-3)", () => {
     expect(router?.state.historyAction).toBe("REPLACE")
     await go(-1)
     expect(where()).toBe("/projects")
+  })
+
+  it("/settings reopens the section last open during the visit; a link and an unknown section do not (NL-4)", async () => {
+    await render(["/settings/telegram"])
+    await go("/projects")
+    await go("/settings")
+    expect(where()).toBe("/settings/telegram")
+    expect(router?.state.historyAction).toBe("REPLACE")
+    expect(document.querySelector(".ui-set-title")?.textContent).toBe(en.settings.sections.telegram.title)
+    await go("/settings/status")
+    expect(where()).toBe("/settings/status")
+    await go("/settings/no-such-section")
+    expect(where()).toBe("/settings/general")
+    await go("/projects")
+    await go("/settings")
+    expect(where()).toBe("/settings/general")
   })
 
   it("an unknown section keeps the draft (the page stays mounted)", async () => {

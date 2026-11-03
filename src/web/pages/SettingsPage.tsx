@@ -12,8 +12,18 @@
 
 import { useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import { type FormEvent, type ReactNode, type Ref, type RefObject, useEffect, useId, useRef, useState } from "react"
-import { Link, useNavigate, useParams } from "react-router"
+import {
+  type FormEvent,
+  type ReactNode,
+  type Ref,
+  type RefObject,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
+import { Link, useLocation, useNavigate, useNavigationType, useParams } from "react-router"
 import { SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 import { LANGUAGES } from "../../shared/enums.ts"
 import { ApiError } from "../api/client.ts"
@@ -103,15 +113,32 @@ export function changedFields(saved: Settings, draft: Draft): SettingsPatch {
 /** The sections that edit the draft; the others act at once or only show. */
 const FORM_SECTIONS = new Set<SettingsSection>(["general", "telegram", "secret-check"])
 
+/** The section last open during this visit: /settings, from the navigation, reopens it (NL-4). */
+let lastSection: SettingsSection = FIRST_SECTION
+/** Where each scroll area of Settings was, per history entry, so Back and Forward bring it back (NL-3). */
+const scrollMemory = new Map<string, { page: number; content: number }>()
+
+/** Forgets the section and the scroll positions of this visit (tests). */
+export function forgetSettingsVisit(): void {
+  lastSection = FIRST_SECTION
+  scrollMemory.clear()
+}
+
 export function SettingsPage() {
   const { t } = useI18n()
   const navigate = useNavigate()
   const { section } = useParams()
-  const active: SettingsSection = isSettingsSection(section) ? section : FIRST_SECTION
-  // /settings and an unknown section open the first one in place of the address, adding no Back step (NL-3).
-  // The page stays mounted, so the draft survives the correction.
+  const active: SettingsSection = isSettingsSection(section)
+    ? section
+    : section === undefined
+      ? lastSection
+      : FIRST_SECTION
+  // /settings opens the section last open during the visit, and an unknown section the first one, in place of the
+  // address, adding no Back step (NL-3, NL-4). A link to a section opens that section. The page stays mounted, so
+  // the draft survives the correction.
   useEffect(() => {
-    if (!isSettingsSection(section)) navigate(settingsPath(FIRST_SECTION), { replace: true })
+    if (isSettingsSection(section)) lastSection = section
+    else navigate(settingsPath(section === undefined ? lastSection : FIRST_SECTION), { replace: true })
   }, [section, navigate])
   const sectionTitle = t(`settings.sections.${active}.title`)
   usePageMeta(t("settings.title"), [], { label: sectionTitle, pageTo: "/settings" })
@@ -121,7 +148,25 @@ export function SettingsPage() {
   const pageRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
-  useSectionScroll(active, pageRef, contentRef, pickerRef)
+  const refused = form.focusing !== null && FIELD_SECTION[form.focusing] === active
+  useSectionView(refused, pageRef, contentRef, pickerRef)
+  // A refused field takes the focus once its section shows, after the section's own scroll, and comes into view
+  // clear of the sticky picker, the save bar and a toast (SV-1).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when a refusal asks for a field or its section shows
+  useEffect(() => {
+    const field = form.focusing
+    if (!field || FIELD_SECTION[field] !== active) return
+    const element = document.getElementById(form.ids[field])
+    const target =
+      element instanceof HTMLFieldSetElement
+        ? (element.querySelector<HTMLElement>('[aria-pressed="true"]') ?? element.querySelector<HTMLElement>("button"))
+        : element
+    if (target) {
+      target.focus({ preventScroll: true })
+      reveal(target, pageRef.current, contentRef.current, pickerRef.current)
+    }
+    form.focused()
+  }, [form.focusing, active])
 
   let body: ReactNode
   if (FORM_SECTIONS.has(active)) {
@@ -230,36 +275,103 @@ function SectionPicker({
   )
 }
 
+/** The area that scrolls the fields: their own column from 1024px wide and 601px tall, the whole page otherwise. */
+const scrollArea = (page: HTMLElement, content: HTMLElement) =>
+  getComputedStyle(content).overflowY !== "visible" ? content : page
+
+/** The height the sticky picker takes at the top of the page, with its gap; 0 where the sidebar shows. */
+const pickerHeight = (picker: HTMLElement | null) =>
+  picker && getComputedStyle(picker).display !== "none" ? picker.offsetHeight + 8 : 0
+
 /**
- * A newly opened section starts at its top (FS-10): where the fields scroll on their own, they go back to 0; where
- * the page scrolls as one (under 1024px, short screens), the page scrolls to just under the picker, only when the
- * section starts above it. Only the page's own scroll areas move, never the window (the FS-10 pitfall).
+ * Where a section opens (NL-3, FS-10). Back and Forward bring each scroll area back to where it was on that
+ * history entry; any other move opens the section at its top: where the fields scroll on their own they go back to
+ * 0, and where the page scrolls as one (under 1024px, short screens) it scrolls to just under the picker, only when
+ * the section starts above it. A move made to show a refused field leaves the scroll to that field. Only the page's
+ * own scroll areas move, never the window (the FS-10 pitfall).
  */
-function useSectionScroll(
-  active: SettingsSection,
+function useSectionView(
+  refused: boolean,
   pageRef: RefObject<HTMLDivElement | null>,
   contentRef: RefObject<HTMLDivElement | null>,
   pickerRef: RefObject<HTMLDivElement | null>,
 ) {
-  const first = useRef(true)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the open section changes
+  const { key } = useLocation()
+  const navigationType = useNavigationType()
+  const entry = useRef(key)
+  const shown = useRef<string | null>(null)
+
+  // Each scroll of either area is kept for the history entry that shows.
   useEffect(() => {
-    if (first.current) {
-      first.current = false
-      return
-    }
     const page = pageRef.current
     const content = contentRef.current
     if (!page || !content) return
-    if (getComputedStyle(content).overflowY !== "visible") {
+    const keep = () => scrollMemory.set(entry.current, { page: page.scrollTop, content: content.scrollTop })
+    page.addEventListener("scroll", keep, { passive: true })
+    content.addEventListener("scroll", keep, { passive: true })
+    return () => {
+      page.removeEventListener("scroll", keep)
+      content.removeEventListener("scroll", keep)
+    }
+  }, [pageRef, contentRef])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per history entry, before the page paints
+  useLayoutEffect(() => {
+    if (shown.current === key) return
+    const first = shown.current === null
+    shown.current = key
+    entry.current = key
+    const page = pageRef.current
+    const content = contentRef.current
+    if (!page || !content) return
+    const saved = navigationType === "POP" ? scrollMemory.get(key) : undefined
+    if (saved) {
+      const apply = () => {
+        page.scrollTop = saved.page
+        content.scrollTop = saved.content
+      }
+      apply()
+      // A part that draws a moment later (a list) may have been shorter: once more on the next frame.
+      requestAnimationFrame(apply)
+      return
+    }
+    if (first || refused) return
+    if (scrollArea(page, content) === content) {
       content.scrollTop = 0
       return
     }
-    const picker = pickerRef.current
-    const offset = picker && getComputedStyle(picker).display !== "none" ? picker.offsetHeight + 8 : 0
-    const top = content.getBoundingClientRect().top - page.getBoundingClientRect().top + page.scrollTop - offset
+    const top =
+      content.getBoundingClientRect().top -
+      page.getBoundingClientRect().top +
+      page.scrollTop -
+      pickerHeight(pickerRef.current)
     if (page.scrollTop > top) page.scrollTo({ top, behavior: "smooth" })
-  }, [active])
+  }, [key])
+}
+
+/** Scrolls a field and its note into the visible part of its scroll area: under the picker, above the save bar. */
+function reveal(
+  target: HTMLElement,
+  page: HTMLElement | null,
+  content: HTMLElement | null,
+  picker: HTMLElement | null,
+) {
+  if (!page || !content) return
+  const area = scrollArea(page, content)
+  const bounds = area.getBoundingClientRect()
+  const top = bounds.top + (area === page ? pickerHeight(picker) : 0) + 8
+  let bottom = bounds.bottom - 8
+  const box = target.getBoundingClientRect()
+  const note = document.getElementById(target.getAttribute("aria-describedby") ?? "")
+  const end = Math.max(box.bottom, note?.getBoundingClientRect().bottom ?? 0)
+  // What floats over the page there: the save bar, a toast, the phone tab bar.
+  for (const layer of document.querySelectorAll<HTMLElement>(".ui-savebar, .ui-toast, .ui-tabbar")) {
+    const over = layer.getBoundingClientRect()
+    if (over.height > 0 && over.left < box.right && over.right > box.left && over.top < bottom)
+      bottom = Math.min(bottom, over.top - 8)
+  }
+  if (box.top < top) area.scrollTop -= top - box.top
+  else if (end > bottom) area.scrollTop += Math.min(end - bottom, box.top - top)
 }
 
 type FieldError = { field: DraftField; text: string }
@@ -290,19 +402,6 @@ function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) 
   const patch = saved ? changedFields(saved, draft) : {}
   const count = Object.keys(patch).length
   useUnsaved("settings", { count, kind: "leave", keeps: (next) => isSettingsPath(next.pathname) })
-
-  // A refused field takes the focus once its section shows.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the ids are fixed for the life of the page
-  useEffect(() => {
-    if (!focusing || FIELD_SECTION[focusing] !== active) return
-    const element = document.getElementById(ids[focusing])
-    const target =
-      element instanceof HTMLFieldSetElement
-        ? (element.querySelector<HTMLElement>('[aria-pressed="true"]') ?? element.querySelector<HTMLElement>("button"))
-        : element
-    target?.focus()
-    setFocusing(null)
-  }, [focusing, active])
 
   const set = (change: Partial<Draft>) => {
     setDraft((d) => ({ ...d, ...change }))
@@ -396,6 +495,9 @@ function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) 
     saved,
     draft,
     ids,
+    /** The refused field that waits for the focus until its section shows. */
+    focusing,
+    focused: () => setFocusing(null),
     set,
     refuse,
     save,
