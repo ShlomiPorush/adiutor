@@ -343,13 +343,16 @@ function useSectionView(
 /** How long a restore waits for a section's content to arrive (a list read again after its cache went). */
 export const RESTORE_FOR_MS = 5000
 
-/** Input by which the owner scrolls: any of it ends a restore that is still waiting. */
-const OWN_SCROLL = ["wheel", "touchstart", "pointerdown"] as const
+/** Input by which the owner scrolls or moves the focus: any of it ends a restore that is still waiting. */
+const OWN_SCROLL = ["wheel", "touchstart", "pointerdown", "focusin"] as const
 
 /**
  * Brings the scroll areas back to a saved position (NL-3). A section whose content is still loading is shorter than
  * it was, so the position is set again on every frame until the areas reach it, the owner scrolls by wheel, touch,
- * the scroll bar or a key, another entry shows, or RESTORE_FOR_MS pass. Returns the stop.
+ * the scroll bar or a key or moves the focus into them, another entry shows, or RESTORE_FOR_MS pass. A scroll it
+ * saw no input for (a scroll bar dragged off the main thread, assistive technology) still stops it: before each
+ * write the areas must sit where the last write left them (as the browser clamped it), unless the content grew.
+ * Returns the stop.
  */
 function restoreScroll(page: HTMLElement, content: HTMLElement, saved: { page: number; content: number }) {
   const until = performance.now() + RESTORE_FOR_MS
@@ -362,9 +365,22 @@ function restoreScroll(page: HTMLElement, content: HTMLElement, saved: { page: n
     }
     window.removeEventListener("keydown", stop, true)
   }
+  /** Where the last write left the areas, and how tall they were then. */
+  let wrote: { page: number; content: number; pageHeight: number; contentHeight: number } | null = null
   const step = () => {
+    if (wrote) {
+      const moved = Math.abs(page.scrollTop - wrote.page) > 1 || Math.abs(content.scrollTop - wrote.content) > 1
+      const grew = page.scrollHeight > wrote.pageHeight || content.scrollHeight > wrote.contentHeight
+      if (moved && !grew) return stop()
+    }
     page.scrollTop = saved.page
     content.scrollTop = saved.content
+    wrote = {
+      page: page.scrollTop,
+      content: content.scrollTop,
+      pageHeight: page.scrollHeight,
+      contentHeight: content.scrollHeight,
+    }
     const reached = Math.abs(page.scrollTop - saved.page) <= 1 && Math.abs(content.scrollTop - saved.content) <= 1
     if (reached || performance.now() > until) stop()
     else frame = requestAnimationFrame(step)

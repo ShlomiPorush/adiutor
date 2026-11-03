@@ -372,18 +372,20 @@ describe("one draft across the sections (R2)", () => {
 })
 
 /**
- * The page scroll area as a browser lays it out: 60px a list row in a 500px window, so its position is clamped to
- * what the rows allow, and a position the owner scrolls to is kept from its scroll event.
+ * The page scroll area as a browser lays it out in a 500px window: 800px of head and section, then 60px a list row.
+ * Its position is clamped to what that allows (300 while the list loads), and its height grows with the rows. A
+ * position the owner scrolls to is kept from its scroll event.
  */
 function layOutPage(): HTMLElement {
   const page = document.querySelector<HTMLElement>(".ui-set-page") as HTMLElement
+  const height = () => 800 + page.querySelectorAll(".ui-item").length * 60
   let top = 0
+  Object.defineProperty(page, "scrollHeight", { configurable: true, get: height })
   Object.defineProperty(page, "scrollTop", {
     configurable: true,
     get: () => top,
     set: (value: number) => {
-      const end = Math.max(0, page.querySelectorAll(".ui-item").length * 60 - 500)
-      top = Math.min(Math.max(0, value), end)
+      top = Math.min(Math.max(0, value), height() - 500)
     },
   })
   return page
@@ -415,7 +417,7 @@ async function backToAnEvictedList(): Promise<{ page: HTMLElement; answer: () =>
   expect(where()).toBe("/settings/suppressions")
   // Loading: the section is short, so the position is clamped for now.
   expect(page.querySelectorAll(".ui-item")).toHaveLength(0)
-  expect(page.scrollTop).toBe(0)
+  expect(page.scrollTop).toBe(300)
   return {
     page,
     answer: async () => {
@@ -433,7 +435,7 @@ describe("Back to a list read again (NL-3, a cache that went)", () => {
   it("brings the position back once the list arrives", async () => {
     const { page, answer } = await backToAnEvictedList()
     await settle(100)
-    expect(page.scrollTop).toBe(0)
+    expect(page.scrollTop).toBe(300)
     await answer()
     expect(page.querySelectorAll(".ui-item")).toHaveLength(40)
     expect(page.scrollTop).toBe(1500)
@@ -447,16 +449,47 @@ describe("Back to a list read again (NL-3, a cache that went)", () => {
     expect(page.scrollTop).toBe(0)
   })
 
-  it("stops waiting after RESTORE_FOR_MS", async () => {
+  it("stops at a scroll it saw no input for (a scroll bar dragged off the main thread, assistive technology)", async () => {
+    const { page, answer } = await backToAnEvictedList()
+    await act(async () => {
+      page.scrollTop = 100
+    })
+    await settle(100)
+    await answer()
+    expect(page.querySelectorAll(".ui-item")).toHaveLength(40)
+    expect(page.scrollTop).toBe(100)
+  })
+
+  it("stops when the focus moves into the page", async () => {
+    const { page, answer } = await backToAnEvictedList()
+    const link = navLink("general")
+    await act(async () => link?.focus())
+    expect(document.activeElement).toBe(link)
+    await answer()
+    expect(page.querySelectorAll(".ui-item")).toHaveLength(40)
+    expect(page.scrollTop).toBe(300)
+  })
+
+  it("stops waiting after RESTORE_FOR_MS, and its frames stop with it", async () => {
+    // Only the frames and their clock are fake, from before Back until after the list arrived.
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] })
     try {
       const { page, answer } = await backToAnEvictedList()
       await act(async () => {
-        vi.advanceTimersByTime(RESTORE_FOR_MS + 100)
+        vi.advanceTimersByTime(100)
       })
-      vi.useRealTimers()
+      // Still waiting: a frame is pending.
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      await act(async () => {
+        vi.advanceTimersByTime(RESTORE_FOR_MS)
+      })
       await answer()
-      expect(page.scrollTop).toBe(0)
+      expect(page.querySelectorAll(".ui-item")).toHaveLength(40)
+      await act(async () => {
+        vi.advanceTimersByTime(200)
+      })
+      expect(page.scrollTop).toBe(300)
+      expect(vi.getTimerCount()).toBe(0)
     } finally {
       vi.useRealTimers()
     }

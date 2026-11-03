@@ -239,8 +239,12 @@ test("the password changes and changes back without leaving the page", async () 
   const fields = [he.account.currentPassword, he.account.newPassword, he.account.repeatNewPassword].map((label) =>
     panel.getByLabel(label, { exact: true }),
   )
+  const browsers = panel.locator(".ui-item")
   const change = async (from: string, to: string) => {
     const [current, next, repeat] = fields
+    // The browsers list above the form loads after the page, and on a phone it is long: a click made before it
+    // drew lands where the button was, not where it is.
+    await expect(browsers.filter({ hasText: he.account.thisBrowser })).toBeVisible()
     await current?.fill(from)
     await next?.fill(to)
     await repeat?.fill(to)
@@ -252,6 +256,8 @@ test("the password changes and changes back without leaving the page", async () 
     expect((await answer).ok()).toBe(true)
     // A refusal empties only the current password; a change empties all three.
     for (const field of fields) await expect(field).toHaveValue("")
+    // Better Auth signed out the other browsers: the list, read again, holds this one only, so the form stays put.
+    await expect(browsers).toHaveCount(1)
   }
   await change(PASSWORD, `${PASSWORD} again`)
   await change(`${PASSWORD} again`, PASSWORD)
