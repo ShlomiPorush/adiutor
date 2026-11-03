@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "./auth.ts"
 import {
+  actorKindSchema,
   itemStatusSchema,
   itemTypeSchema,
   languageSchema,
@@ -196,6 +197,33 @@ export const securitySnapshotBody = z.object({
     .max(2_000),
 })
 
+/** The label an agent writes as (`X-Mikud-Agent`, docs/api.md): `agent`, or `agent:` and its name. */
+export const AGENT_LABEL = /^agent(:[A-Za-z0-9 ._:-]{1,60})?$/
+
+/**
+ * The filters of the activity log: the query of `GET /audit` and the Activity page's address use the same names.
+ * `q` is trimmed and an empty one is no filter; `lang` names the language whose labels `q` also matches.
+ */
+export const auditFilterSchema = z.object({
+  actorKind: actorKindSchema.optional(),
+  agent: z.string().regex(AGENT_LABEL, "an agent label").optional(),
+  action: z
+    .string()
+    .regex(/^[a-z_]{1,30}\.[a-z_]{1,30}$/, "an action code")
+    .optional(),
+  projectId: id.optional(),
+  itemId: id.optional(),
+  q: z
+    .string()
+    .max(200)
+    .transform((value) => value.trim() || undefined)
+    .optional(),
+  lang: languageSchema.optional(),
+})
+/** The filters the Activity page keeps in its address, in the order they are written there. */
+export const AUDIT_FILTER_KEYS = ["actorKind", "agent", "action", "projectId", "itemId", "q"] as const
+
+export type AuditFilters = z.infer<typeof auditFilterSchema>
 export type CreateItemBody = z.infer<typeof createItemBody>
 export type UpdateItemBody = z.infer<typeof updateItemBody>
 export type StartThreadBody = z.infer<typeof startThreadBody>

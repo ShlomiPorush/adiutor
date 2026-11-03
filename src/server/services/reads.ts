@@ -1,5 +1,15 @@
+import { createHash } from "node:crypto"
 import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lt, or, type SQL, sql } from "drizzle-orm"
-import { CLOSED_STATUSES, type ItemStatus, type ItemType, type SyncOutcome } from "../../shared/enums.ts"
+import type { AuditFilters } from "../../shared/api.ts"
+import { auditCodesMatching } from "../../shared/audit-search.ts"
+import {
+  ACTOR_KINDS,
+  type ActorKind,
+  CLOSED_STATUSES,
+  type ItemStatus,
+  type ItemType,
+  type SyncOutcome,
+} from "../../shared/enums.ts"
 import {
   audit,
   comments,
@@ -544,27 +554,179 @@ export async function archive(
   }
 }
 
-/** The audit log, newest first, paged by cursor. */
-export async function auditLog(
-  ctx: Ctx,
-  options: { cursor?: string; limit?: number; entityType?: string; entityId?: string } = {},
-): Promise<Page<typeof audit.$inferSelect>> {
-  const limit = Math.min(Math.max(options.limit ?? 50, 1), 200)
-  const where: SQL[] = []
-  if (options.entityType) where.push(eq(audit.entityType, options.entityType))
-  if (options.entityId) where.push(eq(audit.entityId, options.entityId))
-  if (options.cursor) {
-    const [id] = decodeCursor(options.cursor)
-    if (typeof id !== "number" || !Number.isInteger(id)) throw invalid("The cursor is not valid.")
-    where.push(lt(audit.id, id))
+export type AuditLogOptions = AuditFilters & { cursor?: string; limit?: number; entityType?: string; entityId?: string }
+
+/** What each facet counts; every count is the rows choosing that value lists (v3 TB-18). */
+export type AuditCounts = {
+  actorKind: Record<ActorKind, number>
+  agents: { label: string; count: number }[]
+  actions: { action: string; count: number }[]
+  projects: { projectId: string; count: number }[]
+}
+export type AuditPage = Page<typeof audit.$inferSelect> & { total?: number; counts?: AuditCounts }
+
+/** The filters that existed before the activity filters: a cursor without a hash still pages with them. */
+const ENTITY_FILTERS = new Set(["entityType", "entityId"])
+
+/** The filters as the conditions and the cursor see them: only those set, ids in lower case, `lang` only with `q`. */
+type AuditScope = Partial<Record<keyof AuditLogOptions, string>>
+function auditScope(options: AuditLogOptions): AuditScope {
+  const scope: AuditScope = {}
+  const q = options.q?.trim()
+  const set = (key: keyof AuditLogOptions, value: string | undefined) => {
+    if (value) scope[key] = value
   }
-  const rows = await ctx.db
-    .select()
-    .from(audit)
-    .where(and(...where))
-    .orderBy(desc(audit.id))
-    .limit(limit + 1)
-  const page = rows.slice(0, limit)
-  const last = page[page.length - 1]
-  return { data: page, nextCursor: rows.length > limit && last ? encodeCursor([last.id]) : null }
+  set("actorKind", options.actorKind)
+  set("agent", options.agent)
+  set("action", options.action)
+  set("projectId", options.projectId?.toLowerCase())
+  set("itemId", options.itemId?.toLowerCase())
+  set("q", q)
+  if (q) set("lang", options.lang)
+  set("entityType", options.entityType)
+  set("entityId", options.entityId)
+  return scope
+}
+
+/** A short hash of every filter in effect, so a cursor pages only the list it came from; null with no filter. */
+function scopeHash(scope: AuditScope): string | null {
+  const entries = Object.entries(scope).sort(([a], [b]) => a.localeCompare(b))
+  if (entries.length === 0) return null
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex").slice(0, 12)
+}
+
+/** The search: the stored fields, and the labels of the request's language mapped to their codes. */
+function auditSearch(q: string, language: string | undefined): SQL {
+  const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+  // The name the UI shows for a row: an item's title, a project's name, a key's label (ActivityPage entityLabel).
+  const label = sql`coalesce(${audit.after}->>'title', ${audit.after}->>'name', ${audit.after}->>'label', ${audit.before}->>'title', ${audit.before}->>'name', ${audit.before}->>'label')`
+  const parts: SQL[] = [
+    ilike(audit.action, pattern),
+    ilike(audit.entityType, pattern),
+    ilike(audit.actorLabel, pattern),
+    sql`${label} ilike ${pattern}`,
+  ]
+  if (language === "he" || language === "en") {
+    const codes = auditCodesMatching(language, q)
+    if (codes.actions.length) parts.push(inArray(audit.action, codes.actions))
+    if (codes.entityTypes.length) parts.push(inArray(audit.entityType, codes.entityTypes))
+  }
+  return sql`(${sql.join(parts, sql` or `)})`
+}
+
+type AuditFacet = "actorKind" | "agent" | "action" | "projectId"
+
+/**
+ * The one filter of the activity log: the list, the total and every facet count use it (TB-18). `omit` leaves
+ * out the filters a facet's own choice replaces.
+ */
+function auditConditions(scope: AuditScope, omit: readonly AuditFacet[] = []): SQL[] {
+  const where: SQL[] = []
+  const use = (facet: AuditFacet) => !omit.includes(facet)
+  if (scope.actorKind && use("actorKind")) where.push(eq(audit.actorKind, scope.actorKind as ActorKind))
+  if (scope.agent && use("agent"))
+    where.push(sql`(${audit.actorKind} = 'agent' and ${audit.actorLabel} = ${scope.agent})`)
+  if (scope.action && use("action")) where.push(eq(audit.action, scope.action))
+  if (scope.projectId && use("projectId"))
+    // The project's own rows, and the rows of the items in it now (a comment or a thread is its item's row).
+    where.push(
+      sql`((${audit.entityType} = 'project' and ${audit.entityId} = ${scope.projectId}) or (${audit.entityType} = 'item' and ${audit.entityId} in (select ${items.id}::text from ${items} where ${items.projectId} = ${scope.projectId})))`,
+    )
+  if (scope.itemId) where.push(sql`(${audit.entityType} = 'item' and ${audit.entityId} = ${scope.itemId})`)
+  if (scope.entityType) where.push(eq(audit.entityType, scope.entityType))
+  if (scope.entityId) where.push(eq(audit.entityId, scope.entityId))
+  if (scope.q) where.push(auditSearch(scope.q, scope.lang))
+  return where
+}
+
+/** The cursor's last id; a cursor from other filters is refused, so a filter change starts on the first page. */
+function auditCursor(cursor: string, scope: AuditScope): number {
+  const [id, hash, ...rest] = decodeCursor(cursor)
+  if (typeof id !== "number" || !Number.isInteger(id) || rest.length > 0) throw invalid("The cursor is not valid.")
+  if (hash === undefined) {
+    // A cursor written before the activity filters: it held no filter, so it pages only the lists it could.
+    if (Object.keys(scope).some((key) => !ENTITY_FILTERS.has(key)))
+      throw invalid("The cursor does not match the filters.")
+    return id
+  }
+  if (hash !== scopeHash(scope)) throw invalid("The cursor does not match the filters.")
+  return id
+}
+
+const byCount =
+  <T extends { count: number }>(key: (row: T) => string) =>
+  (a: T, b: T) =>
+    b.count - a.count || key(a).localeCompare(key(b))
+
+/**
+ * The audit log, newest first, paged by cursor, narrowed by the filters (docs/api.md, Audit filters). The first
+ * page also carries the total and the facet counts; each facet applies every filter but the ones its own choice
+ * replaces: a kind choice clears the agent, so the kinds ignore both. One read-only snapshot holds the page and
+ * its counts together.
+ */
+export async function auditLog(ctx: Ctx, options: AuditLogOptions = {}): Promise<AuditPage> {
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 200)
+  const scope = auditScope(options)
+  const hash = scopeHash(scope)
+  const where = auditConditions(scope)
+  const cursorId = options.cursor ? auditCursor(options.cursor, scope) : null
+  return ctx.db.transaction(
+    async (tx) => {
+      const rows = await tx
+        .select()
+        .from(audit)
+        .where(and(...where, ...(cursorId === null ? [] : [lt(audit.id, cursorId)])))
+        .orderBy(desc(audit.id))
+        .limit(limit + 1)
+      const page = rows.slice(0, limit)
+      const last = page[page.length - 1]
+      const nextCursor = rows.length > limit && last ? encodeCursor(hash ? [last.id, hash] : [last.id]) : null
+      if (cursorId !== null) return { data: page, nextCursor }
+
+      const count = sql<number>`count(*)::int`
+      const [totalRow] = await tx
+        .select({ count })
+        .from(audit)
+        .where(and(...where))
+      const kindRows = await tx
+        .select({ kind: audit.actorKind, count })
+        .from(audit)
+        .where(and(...auditConditions(scope, ["actorKind", "agent"])))
+        .groupBy(audit.actorKind)
+      const agentRows = await tx
+        .select({ label: audit.actorLabel, count })
+        .from(audit)
+        .where(and(...auditConditions(scope, ["agent"]), eq(audit.actorKind, "agent"), isNotNull(audit.actorLabel)))
+        .groupBy(audit.actorLabel)
+      const actionRows = await tx
+        .select({ action: audit.action, count })
+        .from(audit)
+        .where(and(...auditConditions(scope, ["action"])))
+        .groupBy(audit.action)
+      const subject = sql<
+        string | null
+      >`coalesce(case when ${audit.entityType} = 'project' then ${audit.entityId} end, ${items.projectId}::text)`
+      const projectRows = await tx
+        .select({ projectId: subject, count })
+        .from(audit)
+        .leftJoin(items, sql`${audit.entityType} = 'item' and ${items.id}::text = ${audit.entityId}`)
+        .where(and(...auditConditions(scope, ["projectId"])))
+        .groupBy(subject)
+
+      const actorKind = Object.fromEntries(ACTOR_KINDS.map((kind) => [kind, 0])) as Record<ActorKind, number>
+      for (const row of kindRows) actorKind[row.kind] = row.count
+      const counts: AuditCounts = {
+        actorKind,
+        agents: agentRows
+          .flatMap((row) => (row.label ? [{ label: row.label, count: row.count }] : []))
+          .sort(byCount((row) => row.label)),
+        actions: actionRows.map((row) => ({ action: row.action, count: row.count })).sort(byCount((row) => row.action)),
+        projects: projectRows
+          .flatMap((row) => (row.projectId ? [{ projectId: row.projectId, count: row.count }] : []))
+          .sort(byCount((row) => row.projectId)),
+      }
+      return { data: page, nextCursor, total: totalRow?.count ?? 0, counts }
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  )
 }

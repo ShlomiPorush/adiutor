@@ -109,8 +109,10 @@ const MORNING: Morning = {
   sync: { lastSuccessAt: AT, stale: false, lastPartialAt: null, securityLastSuccessAt: AT },
 }
 
+let morning: Morning = MORNING
+
 async function transport({ method, path }: TransportRequest) {
-  if (path.startsWith("/morning") && method === "GET") return { status: 200, body: { data: MORNING } }
+  if (path.startsWith("/morning") && method === "GET") return { status: 200, body: { data: morning } }
   if (path === "/visits") return { status: 200, body: { data: { at: MORNING.now, previous: null } } }
   return { status: 404, body: { error: { code: "not_found", message: "Not here." } } }
 }
@@ -165,6 +167,7 @@ const tabStops = (scope: ParentNode) =>
 const sectionOf = (element: Element) => element.closest("section")?.id
 
 beforeEach(() => {
+  morning = MORNING
   localStorage.setItem("mikud.language", "en")
   setTransport(transport)
 })
@@ -226,5 +229,33 @@ describe("the morning view's columns", () => {
         /(^|[\s;])(order|grid-row|grid-area|direction)\s*:|display:\s*contents/,
       )
     }
+  })
+})
+
+describe("agent updates", () => {
+  it("link an agent and the sync to their own activity, and leave other labels as text (A-2)", async () => {
+    const update = MORNING.agentUpdates[0]?.updates[0]
+    if (!update) throw new Error("no update")
+    morning = {
+      ...MORNING,
+      agentUpdates: [
+        {
+          projectId: "p-lantern",
+          projectName: "Lantern",
+          updates: [
+            { ...update, actorLabel: "agent:garden" },
+            { ...update, at: "2026-11-02T06:20:00.000Z", actorKind: "sync", actorLabel: "sync" },
+            { ...update, at: "2026-11-02T06:10:00.000Z", actorLabel: "Garden agent" },
+          ],
+        },
+      ],
+    }
+    await render()
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("#updates .ui-update a.ui-link"))
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "/activity?agent=agent%3Agarden",
+      "/activity?actorKind=sync",
+    ])
+    expect(document.querySelector("#updates")?.textContent).toContain("Garden agent")
   })
 })

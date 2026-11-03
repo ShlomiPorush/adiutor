@@ -3,9 +3,10 @@
 // The mock is always signed in with two-factor; the sign-in pages need the real server. Better Auth's routes
 // are answered by mock/auth.ts over the same state. Ending the other sessions is kept in sessionStorage.
 
-import type { ItemStatus, Stage } from "../../../shared/enums.ts"
+import { auditCodesMatching } from "../../../shared/audit-search.ts"
+import { ACTOR_KINDS, type ActorKind, type ItemStatus, type Language, type Stage } from "../../../shared/enums.ts"
 import type { TransportRequest, TransportResponse } from "../client.ts"
-import type { AuditEntry, Item, ItemSummary, Morning, ProjectListEntry, SecurityLine } from "../types.ts"
+import type { AuditCounts, AuditEntry, Item, ItemSummary, Morning, ProjectListEntry, SecurityLine } from "../types.ts"
 import { ago, createState, type MockState, uuid } from "./fixtures.ts"
 
 const state: MockState = createState()
@@ -232,6 +233,84 @@ function page<T>(rows: T[], cursor: string | null, limit: number) {
   return { status: 200, body: { data: slice, nextCursor: start + limit < rows.length ? String(start + limit) : null } }
 }
 
+type AuditFacet = "actorKind" | "agent" | "action" | "projectId"
+
+/** The project an audit row belongs to: its own, or its item's project now (docs/api.md, Audit filters). */
+function auditProject(entry: AuditEntry): string | null {
+  if (entry.entityType === "project") return entry.entityId
+  if (entry.entityType === "item") return state.items.find((item) => item.id === entry.entityId)?.projectId ?? null
+  return null
+}
+
+/** The name the row shows: an item's title, a project's name, a key's label. */
+function auditName(entry: AuditEntry): string {
+  for (const side of [entry.after, entry.before])
+    for (const field of ["title", "name", "label"]) {
+      const value = side?.[field]
+      if (typeof value === "string") return value
+    }
+  return ""
+}
+
+/**
+ * The server's audit filter over the mock's rows: the list, the total and every facet use it, each facet leaving
+ * out the filters its own choice replaces (a kind choice clears the agent).
+ */
+export function mockAuditMatches(params: URLSearchParams, omit: readonly AuditFacet[] = []) {
+  const get = (key: string) => params.get(key)?.trim() || undefined
+  const use = (facet: AuditFacet) => !omit.includes(facet)
+  const q = get("q")?.toLocaleLowerCase()
+  const language = get("lang") as Language | undefined
+  const codes = q && language ? auditCodesMatching(language, q) : { actions: [], entityTypes: [] }
+  return (entry: AuditEntry) => {
+    const kind = get("actorKind")
+    if (kind && use("actorKind") && entry.actorKind !== kind) return false
+    const agent = get("agent")
+    if (agent && use("agent") && !(entry.actorKind === "agent" && entry.actorLabel === agent)) return false
+    const action = get("action")
+    if (action && use("action") && entry.action !== action) return false
+    const projectId = get("projectId")
+    if (projectId && use("projectId") && auditProject(entry) !== projectId) return false
+    const itemId = get("itemId")
+    if (itemId && !(entry.entityType === "item" && entry.entityId === itemId)) return false
+    if (q) {
+      const fields = [entry.action, entry.entityType, entry.actorLabel, auditName(entry)]
+      const found =
+        fields.some((field) => field.toLocaleLowerCase().includes(q)) ||
+        codes.actions.includes(entry.action) ||
+        codes.entityTypes.includes(entry.entityType)
+      if (!found) return false
+    }
+    return true
+  }
+}
+
+function auditAnswer(params: URLSearchParams): TransportResponse {
+  const rows = state.audit.filter(mockAuditMatches(params))
+  const cursor = params.get("cursor")
+  const listed = page(rows, cursor, Number(params.get("limit") ?? 50))
+  if (cursor) return listed
+  const tally = <K extends string>(facet: AuditFacet[], key: (entry: AuditEntry) => K | null) => {
+    const counts = new Map<K, number>()
+    for (const entry of state.audit.filter(mockAuditMatches(params, facet))) {
+      const value = key(entry)
+      if (value !== null) counts.set(value, (counts.get(value) ?? 0) + 1)
+    }
+    return [...counts].sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
+  }
+  const actorKind = Object.fromEntries(ACTOR_KINDS.map((kind) => [kind, 0])) as Record<ActorKind, number>
+  for (const [kind, count] of tally(["actorKind", "agent"], (entry) => entry.actorKind)) actorKind[kind] = count
+  const counts: AuditCounts = {
+    actorKind,
+    agents: tally(["agent"], (entry) => (entry.actorKind === "agent" ? entry.actorLabel : null)).map(
+      ([label, count]) => ({ label, count }),
+    ),
+    actions: tally(["action"], (entry) => entry.action).map(([action, count]) => ({ action, count })),
+    projects: tally(["projectId"], auditProject).map(([projectId, count]) => ({ projectId, count })),
+  }
+  return { status: 200, body: { ...(listed.body as object), total: rows.length, counts } }
+}
+
 function route(method: string, path: string, body: Record<string, unknown>): TransportResponse {
   const url = new URL(path, "http://mock.invalid")
   const parts = url.pathname.split("/").filter(Boolean)
@@ -444,8 +523,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
       .sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? ""))
     return page(closed.map(summary), url.searchParams.get("cursor"), Number(url.searchParams.get("limit") ?? 50))
   }
-  if (head === "audit")
-    return page(state.audit, url.searchParams.get("cursor"), Number(url.searchParams.get("limit") ?? 50))
+  if (head === "audit") return auditAnswer(url.searchParams)
   if (head === "sync" && id === "runs")
     return ok([
       {

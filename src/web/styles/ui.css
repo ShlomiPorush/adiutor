@@ -1571,6 +1571,162 @@ a.ui-kpi:focus-visible {
   color: var(--ui-ink);
   font-weight: 600;
 }
+.ui-clear-filters {
+  font-size: inherit;
+  color: var(--ui-ink);
+}
+
+/* ---------- The filter bar (MP-6, TB-17, SR-10): built only by ui/FilterBar.tsx ---------- */
+
+.ui-fbar {
+  display: grid;
+  gap: 10px;
+}
+.ui-fbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ui-fbar-search {
+  flex: 0 1 300px;
+  min-width: 0;
+}
+.ui-fbar-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* The rare filters open under the bar, one line of their own (MP-6) */
+.ui-fbar-more {
+  display: grid;
+  flex-basis: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+.ui-fbar-more[hidden] {
+  display: none;
+}
+.ui-fbar-more .ui-picker,
+.ui-fbar-more .ui-picker-pill {
+  width: 100%;
+}
+.ui-fbar-more .ui-picker-value {
+  flex: 1;
+  text-align: start;
+}
+.ui-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--ui-ctl-h);
+  padding: 0 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  cursor: text;
+  transition: border-color 0.15s ease;
+}
+.ui-search:focus-within {
+  border-color: var(--ui-accent);
+}
+.ui-search-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--ui-muted);
+}
+.ui-search input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-ink);
+  font: inherit;
+  font-size: var(--ui-fs-ctl);
+  outline: none;
+}
+.ui-search input::placeholder {
+  color: var(--ui-muted);
+  opacity: 0.8;
+}
+/* The Filters button: no fill, the frame of the Sort button, ink while open; a count of filters in use (MP-6) */
+.ui-icon-btn.ui-filters-toggle {
+  border: 1px solid var(--ui-line);
+  background: var(--ui-bg);
+}
+.ui-filters-toggle[aria-expanded="true"] {
+  border-color: var(--ui-ink);
+  color: var(--ui-ink);
+}
+.ui-filters-n {
+  position: absolute;
+  top: -6px;
+  inset-inline-end: -6px;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--ui-accent);
+  color: var(--ui-bg);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* An item a link narrowed the list to: a pill in use with its own remove mark */
+.ui-fbar-tag-x {
+  font-size: 16px;
+  line-height: 1;
+}
+.ui-history-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+@media (max-width: 760px) {
+  /* The search keeps its line with the Filters button; the pickers share the next lines, two to a line. */
+  .ui-fbar-search {
+    flex: 1 1 0;
+  }
+  .ui-search,
+  .ui-icon-btn.ui-filters-toggle {
+    height: var(--ui-touch);
+  }
+  .ui-icon-btn.ui-filters-toggle {
+    width: var(--ui-touch);
+  }
+  .ui-search input {
+    font-size: var(--ui-fs-field-phone);
+  }
+  .ui-fbar-pickers {
+    flex-basis: 100%;
+  }
+  .ui-fbar-pickers > * {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+  }
+  .ui-fbar-pickers .ui-picker-pill {
+    width: 100%;
+    min-height: var(--ui-touch);
+  }
+  .ui-fbar-more {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* An odd last filter takes the whole line (MO-8) */
+  .ui-fbar-more > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+  .ui-fbar-more .ui-picker-pill {
+    min-height: var(--ui-touch);
+  }
+}
 .ui-list-end {
   margin: 0;
   padding: 12px var(--ui-pad-x);
