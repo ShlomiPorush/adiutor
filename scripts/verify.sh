@@ -80,10 +80,10 @@ run_checks() {
 }
 
 # Fixed values only: neither a developer's .env.dev (real tokens), nor an interpolation file, nor the developer's
-# MIKUD_BIND or MIKUD_PUBLIC_URL reaches the verification stack. Its password and keys are new on every run
+# MIKUD_PUBLIC_URL reaches the verification stack. Its password and keys are new on every run
 # (stack.env in its temporary data directory). The tests' Origin is http://127.0.0.1:8090.
 stack() {
-  env -u COMPOSE_ENV_FILES MIKUD_IMAGE_TAG=verify MIKUD_PORT=0 MIKUD_BIND=127.0.0.1 MIKUD_LOCAL_ENV_FILE=/dev/null \
+  env -u COMPOSE_ENV_FILES MIKUD_IMAGE_TAG=verify MIKUD_PORT=0 MIKUD_LOCAL_ENV_FILE=/dev/null \
     MIKUD_PUBLIC_URL=http://127.0.0.1:8090 MIKUD_STACK_ENV_FILE="${MIKUD_DATA_DIR:-/nonexistent}/stack.env" \
     docker compose --env-file /dev/null -p "$PROJECT" --project-directory "$REPO_ROOT" \
     -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
