@@ -57,10 +57,10 @@
     "main": "Main",
     "more": "More",
     "allPages": "All pages",
-    "homeLabel": "Mikud, morning view",
+    "homeLabel": "Mikud, overview",
     "youAreHere": "You are here",
     "inboxCount": "{count} unsorted in the inbox",
-    "morning": "Morning",
+    "morning": "Overview",
     "projects": "Projects",
     "inbox": "Inbox",
     "activity": "Activity",
@@ -75,7 +75,7 @@
     "theme": "Theme",
     "accountMenu": "Account menu",
     "account": "Account",
-    "accountSettings": "Account settings",
+    "account": "Account",
     "twoFactorOn": "Two-factor on",
     "syncCard": "T3 sync",
     "syncStale": "Out of date",
@@ -215,7 +215,7 @@
     "someFailed": "The last check failed. This is what it showed before.",
     "allClear": "Nothing needs you right now.",
     "allClearHint": "Items waiting on you, stage proposals and critical security findings appear here.",
-    "openMorning": "Open the morning view"
+    "openMorning": "Open the overview"
   },
   "proposal": {
     "title": "Proposed stage: {stage}",
@@ -244,10 +244,10 @@
     "failed": "Could not add it: {reason}"
   },
   "morning": {
-    "title": "Morning",
+    "title": "Overview",
     "description": "What waits on you, what changed since your last visit, and whether anything in security is critical.",
-    "loading": "Loading the morning view...",
-    "failed": "Could not load the morning view",
+    "loading": "Loading the overview...",
+    "failed": "Could not load the overview",
     "kpiWaiting": "Waiting on you",
     "kpiWaitingHint": {
       "one": "1 needs a decision or a test",
@@ -649,11 +649,7 @@
     "sections": {
       "general": {
         "title": "General",
-        "hint": "The board's language, how it writes dates and times, how long closed items stay in the morning view, and how long a browser stays signed in."
-      },
-      "account": {
-        "title": "Account",
-        "hint": "The browsers signed in to your account, your password, two-factor authentication and the way back in. Each action here takes effect at once."
+        "hint": "The board's language, how it writes dates and times, how long closed items stay in the overview, and how long a browser stays signed in."
       },
       "agents": {
         "title": "Agent access",
@@ -678,7 +674,7 @@
     },
     "groupTitles": {
       "formats": "Language and formats",
-      "morning": "Morning view",
+      "morning": "Overview",
       "sessions": "Browser sessions",
       "telegramBot": "Bot",
       "telegramCodes": "Sign-in codes",
@@ -703,8 +699,8 @@
     "example": "Example: {example}",
     "timeZone": "Time zone",
     "timeZoneHint": "Every time on the board is in this zone.",
-    "closedDays": "Closed items in the morning view",
-    "closedDaysHint": "Days a done or not relevant item stays in the morning view before it is only in the archive. Default: 7.",
+    "closedDays": "Closed items in the overview",
+    "closedDaysHint": "Days a done or not relevant item stays in the overview before it is only in the archive. Default: 7.",
     "daysInvalid": "a whole number from {min} to {max}",
     "saved": "Settings saved",
     "saveFailed": "Could not save settings: {reason}",
@@ -790,7 +786,7 @@
   "notFound": {
     "title": "This page does not exist",
     "hint": "The address may be old or mistyped.",
-    "home": "Open the morning view"
+    "home": "Open the overview"
   },
   "telegram": {
     "help": "Send me any text and I will save it in Mikud, under {inbox}. Every morning, Sunday to Friday at 08:00, I send you what is waiting on you.",
@@ -896,6 +892,8 @@
     "signOutOthersRetry": "Sign out the other browsers"
   },
   "account": {
+    "title": "Account",
+    "description": "The browsers signed in to your account, your password, two-factor authentication and the way back in. Each action here takes effect at once.",
     "signedInAs": "Signed in as",
     "sessions": "Signed-in browsers",
     "sessionsHint": "Each browser where you are signed in, and when it is signed out unless you open Mikud there again.",

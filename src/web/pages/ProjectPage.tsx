@@ -77,7 +77,7 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
 
   return (
     <div className="ui-page">
-      <div className="ui-page-narrow ui-section">
+      <div className="ui-section">
         <PageHead
           title={project.name}
           titleDir="auto"

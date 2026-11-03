@@ -17,6 +17,7 @@ export function Group({
   count,
   extra,
   intro,
+  heading: Heading = "h3",
   children,
 }: {
   id: string
@@ -26,14 +27,16 @@ export function Group({
   extra?: ReactNode
   /** One muted line under the head that says what the group is for. */
   intro?: ReactNode
+  /** h3 under a Settings section's h2; h2 on a page without sections (Account). */
+  heading?: "h2" | "h3"
   children: ReactNode
 }) {
   return (
     <section id={id} className="ui-panel ui-set-group" aria-labelledby={`${id}-title`}>
       <div className="ui-set-group-head">
-        <h3 id={`${id}-title`} className="ui-set-group-title">
+        <Heading id={`${id}-title`} className="ui-set-group-title">
           {title}
-        </h3>
+        </Heading>
         {count !== undefined ? <span className="ui-count">{formatNumber(count)}</span> : null}
         {extra ? <div className="ui-set-group-acts">{extra}</div> : null}
       </div>

@@ -1,6 +1,6 @@
 # Mikud
 
-Mikud (Hebrew for "focus") is a planned personal system that shows one person what needs him across all of his projects: a morning board, a Telegram morning message, and an MCP server that AI agents use to keep work items up to date.
+Mikud (Hebrew for "focus") is a planned personal system that shows one person what needs him across all of his projects: an overview board, a Telegram morning message, and an MCP server that AI agents use to keep work items up to date.
 
 **Status: foundation.** The repository has the server (API, MCP tools, Telegram bot and morning message), the web board, the sync tool, the container image, the workflow scripts and CI. None of it has run in production yet; the dry run on the development stack comes first.
 

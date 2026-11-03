@@ -226,7 +226,7 @@ describe("the catalogue", () => {
   it("holds the owner's groups and sections, each with a title and a paragraph in both languages", () => {
     expect(SETTINGS_GROUPS.map((group) => [group.id, [...group.sections]])).toEqual([
       ["general", ["general"]],
-      ["security", ["account", "agents", "secret-check"]],
+      ["security", ["agents", "secret-check"]],
       ["integrations", ["telegram"]],
       ["sync", ["status", "suppressions"]],
     ])

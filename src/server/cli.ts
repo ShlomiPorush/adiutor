@@ -45,7 +45,7 @@ try {
     out(`New password: ${result.password}`)
     out("Every session was ended. Two-factor authentication is unchanged.")
     out("Sign in with this password and your authenticator (or a saved backup code), then change the password in")
-    out("Settings, Account.")
+    out("Account (the account menu).")
   }
 } catch (error) {
   err(`The reset failed: ${error instanceof Error ? error.name : "unknown error"}. Nothing was changed.`)

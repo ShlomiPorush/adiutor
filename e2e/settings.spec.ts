@@ -130,11 +130,24 @@ test("changes in two sections stay through Back and Forward, a dot marks each, a
   await expect(closedDays).toHaveValue(before)
 })
 
-test("Settings opened from the account menu: Back between sections keeps a change, Back out of Settings asks", async () => {
+test("Account opens from the account menu as a page of its own; its old Settings address leads there", async () => {
   await page.goto("/")
   await page.getByRole("button", { name: new RegExp(`${he.shell.accountMenu}$`) }).click()
-  await page.getByRole("menuitem", { name: he.shell.accountSettings }).click()
-  await expect(page).toHaveURL(/\/settings\/account$/)
+  await page.getByRole("menuitem", { name: he.shell.account }).click()
+  await expect(page).toHaveURL(/\/account$/)
+  await expect(page.getByRole("heading", { level: 1, name: he.account.title })).toHaveCount(1)
+  await expect(page.locator("#account-password")).toBeVisible()
+  await expect(page.locator(".ui-set-nav, .ui-set-picker")).toHaveCount(0)
+  await page.goto("/settings/account")
+  await expect(page).toHaveURL(/\/account$/)
+})
+
+test("Settings opened from the navigation: Back between sections keeps a change, Back out of Settings asks", async () => {
+  // A new page load: Settings opens on its first section, General.
+  await page.goto("/")
+  await navigateTo("/settings")
+  await expect(page).toHaveURL(/\/settings\/general$/)
+  await openSection("telegram")
   await openSection("general")
   const closedDays = page.getByLabel(he.settings.closedDays, { exact: true })
   const before = await closedDays.inputValue()
@@ -144,15 +157,17 @@ test("Settings opened from the account menu: Back between sections keeps a chang
 
   const question = page.getByRole("alertdialog")
   await page.goBack()
-  await expect(page).toHaveURL(/\/settings\/account$/)
+  await expect(page).toHaveURL(/\/settings\/telegram$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/\/settings\/general$/)
   await expect(question).toHaveCount(0)
-  // The entry before is the morning view, where the menu was opened: leaving drops the change, so it asks.
+  // The entry before is the overview, where Settings was opened: leaving drops the change, so it asks.
   // The browser's Back from the page itself: page.goBack() waits for a navigation the question holds back.
   await page.evaluate(() => history.back())
   await expect(question).toContainText(he.unsaved.leaveTitle)
   await question.getByRole("button", { name: he.unsaved.stay }).click()
   await expect(question).toHaveCount(0)
-  await expect(page).toHaveURL(/\/settings\/account$/)
+  await expect(page).toHaveURL(/\/settings\/general$/)
   await expect(bar).toBeVisible()
   await bar.getByRole("button", { name: he.savebar.discard }).click()
   await expect(bar).toHaveCount(0)
@@ -226,10 +241,10 @@ test("Settings reopens on the section last open during the visit; a direct link 
 
 test("Back and Forward bring each section back to where it was scrolled; a new section opens at its top (NL-3)", async () => {
   await shortScreen()
-  await page.goto("/settings/account")
-  await expect(page.locator("#account .ui-item").first()).toBeVisible()
-  const account = await scrolled("end")
-  expect(account).toBeGreaterThan(0)
+  await page.goto("/settings/general")
+  await expect(page.getByLabel(he.settings.session.idleDays, { exact: true })).toBeVisible()
+  const general = await scrolled("end")
+  expect(general).toBeGreaterThan(0)
   // Agent access, not Telegram: with Telegram off here, its section is too short to scroll on every screen.
   await openSection("agents")
   await expect(page.getByRole("heading", { name: he.agentKeys.howTitle })).toBeVisible()
@@ -238,8 +253,8 @@ test("Back and Forward bring each section back to where it was scrolled; a new s
   expect(agents).toBeGreaterThan(0)
 
   await page.goBack()
-  await expect(page).toHaveURL(/\/settings\/account$/)
-  await expect.poll(() => scrolled()).toBe(account)
+  await expect(page).toHaveURL(/\/settings\/general$/)
+  await expect.poll(() => scrolled()).toBe(general)
   await page.goForward()
   await expect(page).toHaveURL(/\/settings\/agents$/)
   await expect.poll(() => scrolled()).toBe(agents)
@@ -285,18 +300,18 @@ test("Changed marks a value that differs from its default, and Reset puts the de
 })
 
 test("the password changes and changes back in its dialog without leaving the page", async () => {
-  await page.goto("/settings/account")
+  await page.goto("/account")
   const panel = page.locator("#account")
   const browsers = panel.locator(".ui-item")
   // Sign out everywhere sits at the end of the browsers' head (S-12).
-  await expect(panel.locator("#settings-browsers .ui-set-group-acts")).toContainText(he.account.endAll)
+  await expect(panel.locator("#account-browsers .ui-set-group-acts")).toContainText(he.account.endAll)
   const dialog = page.getByRole("dialog", { name: he.account.passwordTitle })
   const change = async (from: string, to: string) => {
     // The browsers list above loads after the page, and on a phone it is long. A click made before it drew may land
     // where the button was rather than where it is; that is the likely cause of an earlier failure here, not a
     // confirmed one, so the test waits for the list first.
     await expect(browsers.filter({ hasText: he.account.thisBrowser })).toBeVisible()
-    await panel.locator("#settings-password").getByRole("button", { name: he.account.change }).click()
+    await panel.locator("#account-password").getByRole("button", { name: he.account.change }).click()
     await expect(dialog).toBeVisible()
     await dialog.getByLabel(he.account.currentPassword, { exact: true }).fill(from)
     await dialog.getByLabel(he.account.newPassword, { exact: true }).fill(to)
@@ -322,10 +337,10 @@ test("the password changes and changes back in its dialog without leaving the pa
 })
 
 test("the password dialog checks its fields first, and asks before it drops what was typed", async () => {
-  await page.goto("/settings/account")
+  await page.goto("/account")
   const panel = page.locator("#account")
   await expect(panel.locator(".ui-item").filter({ hasText: he.account.thisBrowser })).toBeVisible()
-  await panel.locator("#settings-password").getByRole("button", { name: he.account.change }).click()
+  await panel.locator("#account-password").getByRole("button", { name: he.account.change }).click()
   const dialog = page.getByRole("dialog", { name: he.account.passwordTitle })
   await dialog.getByLabel(he.account.currentPassword, { exact: true }).fill("Invented old password")
   await dialog.getByLabel(he.account.newPassword, { exact: true }).fill("Invented new password")

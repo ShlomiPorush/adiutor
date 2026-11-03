@@ -25,7 +25,7 @@ export function InboxPage() {
   const items = query.data ?? []
   return (
     <div className="ui-page">
-      <div className="ui-page-narrow ui-section">
+      <div className="ui-section">
         <PageHead title={t("inbox")} description={t("inboxPage.description")} />
         <StaleNote failed={query.isError && !!query.data} />
         {query.isPending ? <Loading label={t("inboxPage.loading")} /> : null}

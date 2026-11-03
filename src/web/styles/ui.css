@@ -611,10 +611,6 @@ button {
 .ui-page > * {
   flex: none;
 }
-.ui-page-narrow {
-  width: 100%;
-  max-width: 1180px;
-}
 /* A page's head: from 761px its icon, its name drawn large and its description; the h1 is in the top bar. */
 .ui-page-head {
   display: flex;
@@ -2040,11 +2036,18 @@ a.ui-kpi:focus-visible {
   background: var(--ui-info);
 }
 .ui-set-content,
-.ui-set-section {
+.ui-set-section,
+.ui-account {
   display: grid;
   align-content: start;
   gap: var(--ui-gap);
   min-width: 0;
+}
+/* The Account page's groups are as wide as a Settings section's fields (1180px less the 220px sidebar and its 28px
+   gap): a row keeps its label and its control within one look. */
+.ui-account {
+  width: 100%;
+  max-width: 932px;
 }
 .ui-set-title {
   margin: 0;

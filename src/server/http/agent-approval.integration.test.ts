@@ -432,7 +432,7 @@ describe("agent approval: Settings and the audit", () => {
     expect((await sessions()).some((s) => s.token === token)).toBe(false)
   })
 
-  it("the owner ends a leftover device session from Settings, Account (Better Auth's revokeSession)", async () => {
+  it("the owner ends a leftover device session from the Account page (Better Auth's revokeSession)", async () => {
     const b = await owner()
     const token = await approvedToken(b)
     const listed = (await b.call("GET", "/api/auth/list-sessions")).json as { token: string; userAgent: string }[]

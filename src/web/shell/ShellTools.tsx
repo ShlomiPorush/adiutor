@@ -3,7 +3,7 @@
 // the last T3 sync. The theme lives only here: light, dark or the system's, kept in this browser.
 
 import { useQuery } from "@tanstack/react-query"
-import { LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Settings, ShieldCheck, Sun } from "lucide-react"
+import { LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, ShieldCheck, Sun, UserRound } from "lucide-react"
 import { useRef, useState } from "react"
 import { Link } from "react-router"
 import { api, qk } from "../api/endpoints.ts"
@@ -13,6 +13,7 @@ import { settingsPath } from "../pages/settings/sections.ts"
 import { Menu } from "../ui/Menu.tsx"
 import { Time } from "../ui/Time.tsx"
 import { isMac } from "./navFold.ts"
+import { ACCOUNT_PATH } from "./navigation.ts"
 import { useSignOut } from "./signOut.ts"
 import { THEMES, type Theme, useTheme } from "./theme.ts"
 
@@ -136,9 +137,9 @@ export function AccountMenu({ compact = false }: { compact?: boolean }) {
             { kind: "separator" },
             {
               kind: "link",
-              label: t("shell.accountSettings"),
-              icon: <Settings aria-hidden="true" />,
-              to: settingsPath("account"),
+              label: t("shell.account"),
+              icon: <UserRound aria-hidden="true" />,
+              to: ACCOUNT_PATH,
             },
             {
               kind: "item",

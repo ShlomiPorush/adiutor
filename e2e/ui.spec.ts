@@ -42,8 +42,8 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
 })
 
 test("the stored session opens the board without signing in again", async () => {
-  await page.goto("/settings/account")
-  await expect(page).toHaveURL(/\/settings\/account$/)
+  await page.goto("/account")
+  await expect(page).toHaveURL(/\/account$/)
   await expect(page.locator("#account")).toContainText(he.account.thisBrowser)
 })
 
