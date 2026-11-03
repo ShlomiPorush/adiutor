@@ -10,6 +10,7 @@ import { api, qk } from "../api/endpoints.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { confirmDialog } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
+import { Picker } from "../ui/Picker.tsx"
 import { errorReason } from "../ui/states.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { useOpenItem, useRefreshItems } from "./items.ts"
@@ -123,22 +124,21 @@ export function QuickAdd({ onClose, projectId: initialProject = "" }: { onClose:
           )}
         </div>
         <div className="ui-field">
-          <label className="ui-label" htmlFor={projectFieldId}>
+          <span className="ui-label" id={projectFieldId}>
             {t("quickAdd.project")}
-          </label>
-          <select
-            id={projectFieldId}
-            className="ui-select"
+          </span>
+          <Picker
+            variant="field"
+            labelledBy={projectFieldId}
+            label={t("quickAdd.project")}
+            searchLabel={t("picker.searchProjects")}
             value={projectId}
-            onChange={(event) => setProjectId(event.target.value)}
-          >
-            <option value="">{t("quickAdd.noProject")}</option>
-            {(projects.data ?? []).map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: t("quickAdd.noProject") },
+              ...(projects.data ?? []).map((project) => ({ value: project.id, label: project.name })),
+            ]}
+            onChange={setProjectId}
+          />
         </div>
       </form>
     </Dialog>

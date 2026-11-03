@@ -105,7 +105,29 @@
   },
   "sort": {
     "ascending": ", sorted ascending",
-    "descending": ", sorted descending"
+    "descending": ", sorted descending",
+    "button": "Sort: {column}, {order}",
+    "panel": "Sort {name}",
+    "by": "Sort by",
+    "order": "Order",
+    "words": {
+      "text": {
+        "asc": "A to Z",
+        "desc": "Z to A"
+      },
+      "number": {
+        "asc": "Low to high",
+        "desc": "High to low"
+      },
+      "date": {
+        "asc": "Oldest first",
+        "desc": "Newest first"
+      },
+      "other": {
+        "asc": "Ascending",
+        "desc": "Descending"
+      }
+    }
   },
   "errors": {
     "network": "Mikud did not answer. Check the connection",
@@ -318,7 +340,8 @@
     "nameRequired": "Give the project a name.",
     "create": "Create project",
     "created": "Project {name} created",
-    "createFailed": "Could not create the project: {reason}"
+    "createFailed": "Could not create the project: {reason}",
+    "sortName": "projects"
   },
   "project": {
     "loading": "Loading the project...",
@@ -464,7 +487,7 @@
     "empty": "The inbox is empty.",
     "emptyHint": "Quick add without a project, the Telegram bot and agents put notes here.",
     "captured": "Captured",
-    "pickProject": "Move to project...",
+    "pickProject": "Move to project",
     "projectFor": "Project for {title}",
     "typeFor": "Type of {title}"
   },
@@ -1033,5 +1056,10 @@
     "remove": "Remove",
     "removeDomain": "Remove {domain}",
     "domainInvalid": "a domain name, like corp.example"
+  },
+  "picker": {
+    "search": "Search {label}",
+    "noMatches": "No matches",
+    "searchProjects": "Search projects"
   }
 }

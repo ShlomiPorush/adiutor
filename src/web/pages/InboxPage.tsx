@@ -1,5 +1,6 @@
 // The unsorted inbox: quick captures with no project yet. Each row assigns a project and a type in
-// place; a project moves the item out of the inbox at once, with Undo.
+// place; a project picked in the row's picker (with a search above more than ten) moves the item out of
+// the inbox at once, with Undo.
 
 import { useQuery } from "@tanstack/react-query"
 import { useId } from "react"
@@ -10,6 +11,7 @@ import { useI18n } from "../i18n/i18n.tsx"
 import { PageHead } from "../shell/chrome.tsx"
 import { useItemActions, useOpenItem } from "../shell/items.ts"
 import { usePageMeta } from "../shell/pageMeta.tsx"
+import { Picker } from "../ui/Picker.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { Empty, ErrorState, Loading, StaleNote } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
@@ -47,7 +49,6 @@ function InboxRow({ item, projects }: { item: ItemSummary; projects: ProjectList
   const { t } = useI18n()
   const openItem = useOpenItem()
   const actions = useItemActions()
-  const projectId = useId()
   const typeId = useId()
   return (
     <div className="ui-item ui-inbox-row">
@@ -66,27 +67,20 @@ function InboxRow({ item, projects }: { item: ItemSummary; projects: ProjectList
         </span>
       </div>
       <div className="ui-item-end">
-        <label className="ui-sr-only" htmlFor={projectId}>
-          {t("inboxPage.projectFor", { title: item.title })}
-        </label>
-        <select
-          id={projectId}
-          className="ui-select ui-select-sm"
+        <Picker
+          variant="action"
+          label={t("item.project")}
+          text={t("inboxPage.pickProject")}
+          ariaLabel={t("inboxPage.projectFor", { title: item.title })}
+          searchLabel={t("picker.searchProjects")}
+          align="end"
           value=""
-          onChange={(event) => {
-            const next = event.target.value
-            if (!next) return
+          options={projects.map((project) => ({ value: project.id, label: project.name }))}
+          onChange={(next) => {
             const name = projects.find((project) => project.id === next)?.name ?? null
             void actions.moveTo(item, next, name)
           }}
-        >
-          <option value="">{t("inboxPage.pickProject")}</option>
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-            </option>
-          ))}
-        </select>
+        />
         <label className="ui-sr-only" htmlFor={typeId}>
           {t("inboxPage.typeFor", { title: item.title })}
         </label>

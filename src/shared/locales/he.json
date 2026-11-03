@@ -105,7 +105,29 @@
   },
   "sort": {
     "ascending": ", ממוין בסדר עולה",
-    "descending": ", ממוין בסדר יורד"
+    "descending": ", ממוין בסדר יורד",
+    "button": "מיון: {column}, {order}",
+    "panel": "מיון {name}",
+    "by": "מיון לפי",
+    "order": "סדר",
+    "words": {
+      "text": {
+        "asc": "א עד ת",
+        "desc": "ת עד א"
+      },
+      "number": {
+        "asc": "מהנמוך לגבוה",
+        "desc": "מהגבוה לנמוך"
+      },
+      "date": {
+        "asc": "הישן קודם",
+        "desc": "החדש קודם"
+      },
+      "other": {
+        "asc": "סדר עולה",
+        "desc": "סדר יורד"
+      }
+    }
   },
   "errors": {
     "network": "מיקוד לא עונה. כדאי לבדוק את החיבור",
@@ -318,7 +340,8 @@
     "nameRequired": "צריך לתת לפרויקט שם.",
     "create": "יצירת פרויקט",
     "created": "הפרויקט {name} נוצר",
-    "createFailed": "לא הצלחתי ליצור את הפרויקט: {reason}"
+    "createFailed": "לא הצלחתי ליצור את הפרויקט: {reason}",
+    "sortName": "פרויקטים"
   },
   "project": {
     "loading": "טוען את הפרויקט...",
@@ -464,7 +487,7 @@
     "empty": "אין מה למיין.",
     "emptyHint": "הוספה מהירה בלי פרויקט, בוט הטלגרם וסוכנים שמים כאן רשומות.",
     "captured": "נרשם",
-    "pickProject": "העברה לפרויקט...",
+    "pickProject": "העברה לפרויקט",
     "projectFor": "פרויקט עבור {title}",
     "typeFor": "סוג של {title}"
   },
@@ -1033,5 +1056,10 @@
     "remove": "הסרה",
     "removeDomain": "הסרת {domain}",
     "domainInvalid": "שם דומיין, למשל corp.example"
+  },
+  "picker": {
+    "search": "חיפוש {label}",
+    "noMatches": "אין התאמות",
+    "searchProjects": "חיפוש פרויקטים"
   }
 }

@@ -1,5 +1,7 @@
 // All projects, filtered by stage (unset included) through chips whose counts are the rows a click
-// shows. The filter lives in the address (?stage=poc, ?stage=unset); the sort order lives in memory.
+// shows; on a phone the chips fold into one picker named by its value ("Stage: All", MP-3). The filter
+// lives in the address (?stage=poc, ?stage=unset); the sort order lives in memory, and the headers and
+// the Sort button at the end of the count line set it together (TB-1, TB-28).
 
 import { type CSSProperties, type FormEvent, useId, useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router"
@@ -12,7 +14,9 @@ import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { useDiscardGuard } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
+import { Picker } from "../ui/Picker.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
+import { headerSort, SortButton, type SortColumn, type SortState } from "../ui/SortButton.tsx"
 import { Empty, ErrorState, errorReason, Loading, StaleNote } from "../ui/states.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Progress, StageTag } from "../ui/tags.tsx"
@@ -21,10 +25,25 @@ import { rowKeys, selecting } from "./parts.tsx"
 
 type StageFilter = Stage | "unset" | "all"
 type SortKey = "name" | "stage" | "goal" | "open" | "proposals" | "issues"
-type Sort = { key: SortKey; dir: "asc" | "desc" }
+type Sort = SortState<SortKey>
 
+/** The order the list arrives in: the most open items first. */
+const DEFAULT_SORT: Sort = { key: "open", dir: "desc" }
 // The header order survives refreshes and page changes, not a reload (v3 TB-3).
-let rememberedSort: Sort = { key: "open", dir: "desc" }
+let rememberedSort: Sort = DEFAULT_SORT
+
+/** The sortable columns, by their header labels, and how each order is worded (TB-28). */
+function sortColumns(t: (key: string) => string): SortColumn<SortKey>[] {
+  return [
+    { key: "name", label: t("projects.colName"), kind: "text" },
+    // Stages sort in their own order (idea first), not by name.
+    { key: "stage", label: t("projects.colStage"), kind: "other" },
+    { key: "goal", label: t("projects.colGoal"), kind: "number" },
+    { key: "open", label: t("projects.colOpen"), kind: "number" },
+    { key: "proposals", label: t("projects.colProposals"), kind: "number" },
+    { key: "issues", label: t("projects.colIssues"), kind: "number" },
+  ]
+}
 
 function parseStage(value: string | null): StageFilter {
   if (value === "unset") return "unset"
@@ -95,6 +114,15 @@ export function ProjectsPage() {
     sort,
   )
 
+  const stageLabel = (option: StageFilter) =>
+    option === "all" ? t("projects.allStages") : option === "unset" ? t("common.stageUnset") : t(`stage.${option}`)
+  const stageOptions = (["all", ...STAGES, "unset"] as StageFilter[]).map((option) => ({
+    value: option,
+    label: stageLabel(option),
+    hint: formatNumber(counts[option] ?? 0),
+  }))
+  const columns = sortColumns(t)
+
   const pick = (next: StageFilter) =>
     setParams((current) => {
       if (next === "all") current.delete("stage")
@@ -114,7 +142,7 @@ export function ProjectsPage() {
         }
       />
       <StaleNote failed={query.isError && !!query.data} />
-      <fieldset className="ui-chips ui-plain-fieldset">
+      <fieldset className="ui-chips ui-plain-fieldset ui-stage-chips">
         <legend className="ui-sr-only">{t("projects.filterLegend")}</legend>
         {(["all", ...STAGES, "unset"] as StageFilter[]).map((option) => (
           <button
@@ -124,19 +152,31 @@ export function ProjectsPage() {
             aria-pressed={stage === option}
             onClick={() => pick(option)}
           >
-            {option === "all"
-              ? t("projects.allStages")
-              : option === "unset"
-                ? t("common.stageUnset")
-                : t(`stage.${option}`)}
+            {stageLabel(option)}
             <small>{formatNumber(counts[option] ?? 0)}</small>
           </button>
         ))}
       </fieldset>
+      <div className="ui-stage-picker">
+        <Picker
+          label={t("projects.filterLegend")}
+          value={stage}
+          defaultValue="all"
+          options={stageOptions}
+          onChange={(next) => pick(next as StageFilter)}
+        />
+      </div>
       {query.data ? (
-        <p className="ui-list-summary" aria-live="polite">
-          <b>{tc("projects.count", shown.length)}</b>
-        </p>
+        <div className="ui-list-summary">
+          <b aria-live="polite">{tc("projects.count", shown.length)}</b>
+          <SortButton
+            name={t("projects.sortName")}
+            columns={columns}
+            value={sort}
+            defaultValue={DEFAULT_SORT}
+            onChange={setSort}
+          />
+        </div>
       ) : null}
       {query.isPending ? <Loading label={t("projects.loading")} /> : null}
       {query.isError && !query.data ? (
@@ -150,7 +190,7 @@ export function ProjectsPage() {
           />
         </div>
       ) : null}
-      {shown.length > 0 ? <SortableProjects projects={shown} sort={sort} onSort={setSort} /> : null}
+      {shown.length > 0 ? <SortableProjects projects={shown} columns={columns} sort={sort} onSort={setSort} /> : null}
       {creating ? <NewProjectDialog onClose={() => setCreating(false)} /> : null}
     </div>
   )
@@ -158,27 +198,26 @@ export function ProjectsPage() {
 
 function SortableProjects({
   projects,
+  columns,
   sort,
   onSort,
 }: {
   projects: ProjectListEntry[]
+  columns: SortColumn<SortKey>[]
   sort: Sort
   onSort: (sort: Sort) => void
 }) {
   const { t } = useI18n()
   const navigate = useNavigate()
-  const header = (key: SortKey, label: string, end = false) => {
+  const header = (key: SortKey, end = false) => {
+    const column = columns.find((entry) => entry.key === key)
+    if (!column) return null
     const state = sort.key === key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
-    // Text starts A to Z, numbers start high to low; a further click turns the order around (TB-1).
-    const first: Sort["dir"] = key === "name" || key === "stage" ? "asc" : "desc"
     return (
       <span className={end ? "ui-td-end" : undefined} data-sort-state={state}>
-        <button
-          type="button"
-          className="ui-sort"
-          onClick={() => onSort({ key, dir: sort.key === key ? (sort.dir === "asc" ? "desc" : "asc") : first })}
-        >
-          {label}
+        {/* Text starts A to Z, numbers start high to low; a further click turns the order around (TB-1). */}
+        <button type="button" className="ui-sort" onClick={() => onSort(headerSort(sort, column))}>
+          {column.label}
           <span className="ui-sr-only">{state === "none" ? "" : t(`sort.${state}`)}</span>
         </button>
       </span>
@@ -195,13 +234,13 @@ function SortableProjects({
       }
     >
       <div className="ui-tr ui-tr-head">
-        {header("name", t("projects.colName"))}
-        {header("stage", t("projects.colStage"))}
-        {header("goal", t("projects.colGoal"))}
+        {header("name")}
+        {header("stage")}
+        {header("goal")}
         <span>{t("projects.colWhere")}</span>
-        {header("open", t("projects.colOpen"), true)}
-        {header("proposals", t("projects.colProposals"), true)}
-        {header("issues", t("projects.colIssues"), true)}
+        {header("open", true)}
+        {header("proposals", true)}
+        {header("issues", true)}
       </div>
       {projects.map((project) => {
         const open = () => navigate(`/projects/${project.id}`)

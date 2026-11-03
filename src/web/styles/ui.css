@@ -772,6 +772,288 @@ button {
   color: var(--ui-ink);
 }
 
+/* ---------- Pickers and the Sort menu (MP-1, MP-4, MP-5, TB-28): layers of ui/layers.ts, built only by ui/Picker.tsx ---------- */
+
+.ui-picker {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+.ui-picker.is-field {
+  display: flex;
+  width: 100%;
+}
+.ui-select-arrow {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--ui-muted);
+  transition: transform 0.15s ease;
+}
+.ui-picker-btn[aria-expanded="true"] .ui-select-arrow {
+  transform: rotate(180deg);
+}
+/* A list filter: the pill names its filter, then its value; solid while not at its default (MP-1, MP-3) */
+.ui-picker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--ui-chip-h);
+  padding-inline: 12px 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  background: var(--ui-raise);
+  color: var(--ui-ink);
+  font: inherit;
+  font-size: var(--ui-fs-ctl);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .ui-picker-pill:hover {
+    border-color: var(--ui-muted);
+  }
+}
+.ui-picker-pill[data-set] {
+  border-color: var(--ui-ink);
+  background: var(--ui-ink);
+  color: var(--ui-bg);
+}
+.ui-picker-pill[data-set] .ui-select-arrow {
+  color: inherit;
+}
+.ui-picker-name {
+  font-weight: 500;
+  opacity: 0.75;
+}
+.ui-picker-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A form value looks like the select it replaced, as wide as its field (MP-1 field) */
+.ui-select-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: var(--ui-ctl-h);
+  padding-inline: 12px 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.ui-select-btn > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-select-btn:focus-visible,
+.ui-select-btn[aria-expanded="true"] {
+  outline: none;
+  border-color: var(--ui-accent);
+}
+.ui-select-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+/* An action that picks (Move to project): a small button with the picker's arrow */
+.ui-picker-action {
+  gap: 6px;
+  max-width: 220px;
+}
+.ui-picker-action > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 74;
+}
+/* Over a dialog and a phone sheet, under a question and the toast */
+.ui-picker-panel {
+  position: fixed;
+  z-index: 75;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  overflow: hidden;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-raise);
+  color: var(--ui-ink);
+  box-shadow:
+    var(--ui-shadow-float),
+    0 0 0 1px var(--ui-line);
+}
+.ui-picker-w-list {
+  width: max-content;
+  min-width: 200px;
+  max-width: min(320px, calc(100vw - 16px));
+}
+.ui-picker-w-search {
+  width: min(320px, calc(100vw - 16px));
+}
+.ui-picker-w-field {
+  min-width: min(280px, calc(100vw - 16px));
+}
+.ui-picker-w-sort {
+  width: 240px;
+}
+.ui-picker-panel .ui-picker-search {
+  flex: none;
+  width: 100%;
+}
+/* Options never scroll sideways: a long label is cut, its hint stays whole (MP-1, MP-4) */
+.ui-picker-panel .ui-picker-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 1px;
+  min-height: 0;
+  max-height: min(420px, 60vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.ui-picker-panel .ui-picker-list.has-search {
+  max-height: min(320px, 45vh);
+}
+.ui-picker-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ui-picker-opt-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-picker-opt small {
+  flex: none;
+  /* The chosen option's hint takes its colour (currentColor is the inherited one) */
+  color: var(--ui-picker-hint, var(--ui-muted));
+  font-size: var(--ui-fs-meta);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (hover: hover) {
+  .ui-picker-opt:hover {
+    background: var(--ui-hover);
+  }
+}
+.ui-picker-opt:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: -2px;
+}
+.ui-picker-opt[aria-selected="true"] {
+  --ui-picker-hint: currentColor;
+  background: var(--ui-accent);
+  color: var(--ui-on-accent);
+  font-weight: 700;
+}
+.ui-picker-none {
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+}
+/* The Sort menu: two groups of radios that apply at once (TB-28) */
+.ui-picker-dialog {
+  gap: 12px;
+  padding: 12px;
+  overflow-y: auto;
+}
+.ui-sort-slot {
+  display: inline-flex;
+  flex: none;
+}
+.ui-icon-btn.ui-sort-btn-icon {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--ui-line);
+  background: var(--ui-bg);
+}
+/* biome-ignore lint/style/noDescendingSpecificity: icon sizes per component; each rule targets its own component */
+.ui-sort-btn-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.ui-sort-btn-icon[aria-expanded="true"] {
+  border-color: var(--ui-ink);
+  color: var(--ui-ink);
+}
+.ui-sort-btn-icon[data-set] {
+  color: var(--ui-ink);
+}
+/* A list in an order of its own choosing stands out, as a filter in use does */
+.ui-sort-btn-icon[data-set]::after {
+  content: "";
+  position: absolute;
+  top: -4px;
+  inset-inline-end: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+  box-shadow: 0 0 0 2px var(--ui-panel);
+}
+.ui-sort-group {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ui-sort-group legend {
+  padding: 0 0 4px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-caps);
+  font-weight: 700;
+}
+.ui-sort-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-ink);
+  cursor: pointer;
+}
+.ui-sort-opt input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--ui-accent);
+}
+@media (hover: hover) {
+  .ui-sort-opt:hover {
+    background: var(--ui-hover);
+  }
+}
+.ui-sort-opt:has(input:checked) {
+  font-weight: 600;
+}
+
 /* ---------- Wide screens: the full sidebar, or the rail it folds into ---------- */
 
 @media (min-width: 1101px) {
@@ -1237,9 +1519,29 @@ a.ui-kpi:focus-visible {
   border-bottom: 5px solid currentColor;
 }
 .ui-list-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
   margin: 0;
   color: var(--ui-muted);
   font-size: var(--ui-fs-sm);
+}
+/* The list's Sort button sits at the far end of its count line (TB-28) */
+.ui-list-summary > .ui-sort-slot {
+  margin-inline-start: auto;
+}
+/* Projects: the stage chips on wide screens, one picker named by its value on a phone (MP-3) */
+.ui-stage-picker {
+  display: none;
+}
+@media (max-width: 760px) {
+  .ui-chips.ui-stage-chips {
+    display: none;
+  }
+  .ui-stage-picker {
+    display: flex;
+  }
 }
 .ui-list-summary b {
   color: var(--ui-ink);
@@ -2381,6 +2683,13 @@ html.ui-layer-on .ui-page {
   min-height: var(--ui-ctl-h);
   padding-block: 6px;
 }
+/* The title grows with its text instead of scrolling or being cut (audit B-2) */
+.ui-textarea.ui-item-title-input {
+  min-height: var(--ui-ctl-h);
+  overflow: hidden;
+  resize: none;
+  line-height: 1.35;
+}
 .ui-comment {
   display: grid;
   gap: 4px;
@@ -2815,6 +3124,16 @@ html.ui-layer-on .ui-page {
   }
   .ui-menu-item {
     min-height: var(--ui-touch);
+  }
+  .ui-picker-opt,
+  .ui-sort-opt {
+    min-height: var(--ui-touch);
+  }
+  .ui-picker-pill {
+    min-height: 36px;
+  }
+  .ui-select-btn {
+    font-size: var(--ui-fs-field-phone);
   }
   .ui-page {
     padding-bottom: 20px;
