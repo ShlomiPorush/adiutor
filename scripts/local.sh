@@ -22,7 +22,8 @@ Usage: scripts/local.sh <command>
   logs     Follow the logs.
   nuke     Stop the stack and delete its data directory (asks first).
 
-Data directory: $MIKUD_DATA_DIR
+Data directory: $MIKUD_DATA_DIR (the database, and stack.env with its generated password and keys)
+Overrides: .env.dev at the repository root (docker/dev.env.example lists them)
 EOF
 }
 
@@ -30,9 +31,9 @@ compose() {
   dev_compose "$@"
 }
 
+# The data directory and its generated database password and keys (stack.env), before anything starts.
 prepare_data_dir() {
-  require_linux_dir "$MIKUD_DATA_DIR"
-  mkdir -p "$MIKUD_DATA_DIR/postgres"
+  ensure_stack_env "$MIKUD_DATA_DIR"
 }
 
 build() {
@@ -80,7 +81,7 @@ main() {
         die "the stack did not become healthy; see: scripts/local.sh logs"
       }
       status
-      info "Ready: http://127.0.0.1:${MIKUD_PORT:-8090}"
+      info "Ready: listening on $(compose port mikud 8080)"
       ;;
     down)
       compose down --remove-orphans

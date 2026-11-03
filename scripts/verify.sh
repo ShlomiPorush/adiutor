@@ -79,10 +79,19 @@ run_checks() {
     die "src/server/db/schema.ts has changes without a migration; run: pnpm db:generate --name <change>"
 }
 
+# Fixed values only: neither a developer's .env.dev (real tokens), nor an interpolation file, nor the developer's
+# MIKUD_BIND or MIKUD_PUBLIC_URL reaches the verification stack. Its password and keys are new on every run
+# (stack.env in its temporary data directory). The tests' Origin is http://127.0.0.1:8090.
 stack() {
-  # MIKUD_LOCAL_ENV_FILE=/dev/null: a developer's .env.dev (real tokens) never reaches the verification stack.
-  MIKUD_IMAGE_TAG=verify MIKUD_PORT=0 MIKUD_LOCAL_ENV_FILE=/dev/null \
-    docker compose -p "$PROJECT" --project-directory "$REPO_ROOT" -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
+  env -u COMPOSE_ENV_FILES MIKUD_IMAGE_TAG=verify MIKUD_PORT=0 MIKUD_BIND=127.0.0.1 MIKUD_LOCAL_ENV_FILE=/dev/null \
+    MIKUD_PUBLIC_URL=http://127.0.0.1:8090 MIKUD_STACK_ENV_FILE="${MIKUD_DATA_DIR:-/nonexistent}/stack.env" \
+    docker compose --env-file /dev/null -p "$PROJECT" --project-directory "$REPO_ROOT" \
+    -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
+}
+
+# The verification database, with this run's generated password.
+stack_db_url() {
+  echo "postgres://mikud:$(stack_db_password "$MIKUD_DATA_DIR")@postgres:5432/mikud"
 }
 
 cleanup_stack() {
@@ -107,7 +116,7 @@ run_e2e() {
     die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
   docker run --rm --ipc=host --network "${PROJECT}_default" \
     --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=mikud:8080 \
-    -e E2E_DATABASE_URL=postgres://mikud:dev-only-password@postgres:5432/mikud \
+    -e E2E_DATABASE_URL="$(stack_db_url)" \
     -v "$REPO_ROOT:/repo" -w /repo "$PLAYWRIGHT_IMAGE" \
     npx --no-install playwright test --config config/playwright.config.ts
 }
@@ -115,14 +124,13 @@ run_e2e() {
 run_integration() {
   MIKUD_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mikud-verify.XXXXXX")"
   export MIKUD_DATA_DIR
-  require_linux_dir "$MIKUD_DATA_DIR"
-  mkdir -p "$MIKUD_DATA_DIR/postgres"
   trap cleanup_stack EXIT
+  ensure_stack_env "$MIKUD_DATA_DIR"
 
   info "Integration: disposable PostgreSQL ($PROJECT)"
   stack up -d --remove-orphans --wait --wait-timeout 120 postgres || fail_stack "PostgreSQL did not become healthy"
   TOOLCHAIN_EXTRA_ARGS=(--network "${PROJECT}_default"
-    -e MIKUD_TEST_DATABASE_URL=postgres://mikud:dev-only-password@postgres:5432/mikud)
+    -e MIKUD_TEST_DATABASE_URL="$(stack_db_url)")
   in_toolchain "pnpm test:integration" || die "integration tests failed"
   TOOLCHAIN_EXTRA_ARGS=()
 

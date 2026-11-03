@@ -57,10 +57,6 @@ save_state() {
   } >"$STATE_FILE"
 }
 
-random_hex() {
-  od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
-}
-
 # The PostgreSQL image of the development template, so both stacks follow the same pinned version.
 postgres_image() {
   local image
