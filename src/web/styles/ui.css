@@ -1578,8 +1578,11 @@ a.ui-kpi:focus-visible {
 
 /* ---------- The filter bar (MP-6, TB-17, SR-10): built only by ui/FilterBar.tsx ---------- */
 
+/* One column that never grows past the page: a long item title in its tag is cut, not the page widened */
 .ui-fbar {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 10px;
 }
 .ui-fbar-row {

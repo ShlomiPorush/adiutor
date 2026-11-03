@@ -164,6 +164,10 @@ test("the item dialog's All activity opens the item's activity, and asks first a
   await expect(page.getByRole("dialog")).toHaveCount(0)
   await expect(page).toHaveURL(new RegExp(`/activity\\?itemId=${trellis.id}$`))
   await expect(page.locator(".ui-fbar-tag")).toContainText(trellis.title)
+  // A long title is cut inside its tag; the page never scrolls sideways.
+  expect(
+    await page.locator(".ui-page").evaluate((element) => element.scrollWidth - element.clientWidth),
+  ).toBeLessThanOrEqual(0)
   // The item's creation and its status change.
   await expect(countLine()).toHaveText(fill(he.activity.count.other, { count: 2 }))
 })
