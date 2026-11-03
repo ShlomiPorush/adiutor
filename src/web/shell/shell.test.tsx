@@ -63,6 +63,7 @@ async function render(ui: ReactNode, at = "/"): Promise<void> {
           { path: "/login", element: null },
           { path: "/projects/:projectId", element: null },
           { path: "/settings/:section?", element: null },
+          { path: "/account", element: null },
         ],
       },
     ],
@@ -276,7 +277,7 @@ describe("the account menu is a layer of ui/layers.ts (R4)", () => {
       en.theme.light,
       en.theme.dark,
       en.theme.system,
-      en.shell.accountSettings,
+      en.shell.account,
       en.account.signOut,
     ])
     expect(document.activeElement).toBe(items[0])
@@ -308,13 +309,13 @@ describe("the account menu is a layer of ui/layers.ts (R4)", () => {
     expect(where()).toBe("/")
   })
 
-  it("Account settings opens Settings, Account", async () => {
+  it("Account opens the Account page", async () => {
     stubMedia(() => false)
     await render(<AccountMenu />)
     await click(button(`owner.name, ${en.shell.accountMenu}`))
-    await click(button(en.shell.accountSettings))
+    await click(button(en.shell.account))
     expect(document.querySelector('[role="menu"]')).toBeNull()
-    expect(where()).toBe("/settings/account")
+    expect(where()).toBe("/account")
   })
 
   it("the sync card links to Settings, Status (R11)", async () => {
@@ -354,7 +355,7 @@ describe("Stay keeps the layer a link would have closed (SV-1, the P3 of PR #23)
       </>,
     )
     await click(button(`owner.name, ${en.shell.accountMenu}`))
-    await click(button(en.shell.accountSettings))
+    await click(button(en.shell.account))
     expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(en.unsaved.leaveTitle)
     await click(button(en.unsaved.stay))
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
@@ -363,9 +364,9 @@ describe("Stay keeps the layer a link would have closed (SV-1, the P3 of PR #23)
     expect(layerCount()).toBe(1)
     expect(draft()?.value).toBe("A draft the owner typed")
     // Leave goes on to the section; the menu closes once it shows.
-    await click(button(en.shell.accountSettings))
+    await click(button(en.shell.account))
     await click(button(en.unsaved.leave))
-    expect(where()).toBe("/settings/account")
+    expect(where()).toBe("/account")
     expect(document.querySelector('[role="menu"]')).toBeNull()
     expect(layerCount()).toBe(0)
   })

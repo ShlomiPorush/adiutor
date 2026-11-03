@@ -19,7 +19,7 @@ export function ArchivePage() {
   const unique = items.filter((item, index) => items.findIndex((other) => other.id === item.id) === index)
   return (
     <div className="ui-page">
-      <div className="ui-page-narrow ui-section">
+      <div className="ui-section">
         <PageHead title={t("archive.title")} description={t("archive.description")} />
         <StaleNote failed={query.isRefetchError} />
         {query.isPending ? <Loading label={t("archive.loading")} /> : null}

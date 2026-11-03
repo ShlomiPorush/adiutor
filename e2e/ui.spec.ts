@@ -1,4 +1,4 @@
-// The web UI against the real server: the morning view, an item status change with Undo, quick add, and
+// The web UI against the real server: the overview, an item status change with Undo, quick add, and
 // signing out from the shell's account menu (Stay, a failed sign-out that keeps the draft, then a sign-out). It runs after auth.spec.ts and reuses the browser that signed in there (sign-in is rate
 // limited). Texts come from the Hebrew locale file (the default language), and the data is invented and
 // created here through the API, so the tests run on an empty database.
@@ -42,12 +42,12 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
 })
 
 test("the stored session opens the board without signing in again", async () => {
-  await page.goto("/settings/account")
-  await expect(page).toHaveURL(/\/settings\/account$/)
+  await page.goto("/account")
+  await expect(page).toHaveURL(/\/account$/)
   await expect(page.locator("#account")).toContainText(he.account.thisBrowser)
 })
 
-test("the morning view shows what waits on the owner, and the bell counts it", async () => {
+test("the overview shows what waits on the owner, and the bell counts it", async () => {
   const project = await api<{ id: string }>("POST", "/projects", { name: `Lantern ${run}`, stage: "production" })
   await api("POST", "/items", { type: "decision", status: "waiting_on_you", title: itemTitle, projectId: project.id })
 
@@ -63,7 +63,7 @@ test("the morning view shows what waits on the owner, and the bell counts it", a
 
 const MORNING_ORDER = ["waiting", "security", "new", "updates", "projects"]
 
-test("the morning view reads in one order: two columns on a wide screen, one on a phone, and Tab follows it", async () => {
+test("the overview reads in one order: two columns on a wide screen, one on a phone, and Tab follows it", async () => {
   // Something new since the visit the test before recorded, so the second column has a row to reach.
   await api("POST", "/items", { type: "task", title: `Prune the hedge ${run}` })
   await page.goto("/")

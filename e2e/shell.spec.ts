@@ -153,12 +153,12 @@ test("the account menu closes on Escape and on Back, and stays on the page", asy
   await expect(page).not.toHaveURL(/\/projects$/)
 })
 
-test("Account settings from the menu takes the menu's Back step: one Back returns, the next one leaves", async () => {
+test("Account from the menu takes the menu's Back step: one Back returns, the next one leaves", async () => {
   await page.goto("/")
   await page.goto("/projects")
   await accountButton().click()
-  await page.getByRole("menuitem", { name: he.shell.accountSettings }).click()
-  await expect(page).toHaveURL(/\/settings\/account$/)
+  await page.getByRole("menuitem", { name: he.shell.account }).click()
+  await expect(page).toHaveURL(/\/account$/)
   await expect(page.getByRole("menu")).toHaveCount(0)
   await page.goBack()
   await expect(page).toHaveURL(/\/projects$/)

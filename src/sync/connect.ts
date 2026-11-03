@@ -499,7 +499,7 @@ export async function connect(options: ConnectOptions, deps: ConnectDeps): Promi
     if ("error" in ended || ended.status !== 200 || ended.body?.status !== true)
       say(
         `connect: could not confirm that the approval's temporary session ended (${reason(ended)}). End the session ` +
-          `"mikud connect (agent approval)" in Mikud, Settings, Account.`,
+          `"mikud connect (agent approval)" on the Account page in Mikud.`,
       )
   }
   return exit

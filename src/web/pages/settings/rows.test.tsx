@@ -19,6 +19,7 @@ import { I18nProvider } from "../../i18n/i18n.tsx"
 import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
 import { UnsavedProvider } from "../../ui/unsaved.tsx"
+import { AccountPage } from "../AccountPage.tsx"
 import { changedFields, forgetSettingsVisit, SettingsPage, typedNumber } from "../SettingsPage.tsx"
 import { removeEvery } from "./SyncSections.tsx"
 
@@ -128,9 +129,15 @@ async function render(path: string): Promise<void> {
       <ToastHost />
     </UnsavedProvider>
   )
-  const router = createMemoryRouter([{ path: "/settings/:section?", element: frame(<SettingsPage />) }], {
-    initialEntries: [path],
-  })
+  const router = createMemoryRouter(
+    [
+      { path: "/settings/:section?", element: frame(<SettingsPage />) },
+      { path: "/account", element: frame(<AccountPage />) },
+    ],
+    {
+      initialEntries: [path],
+    },
+  )
   await act(async () => {
     root.render(
       <StrictMode>
@@ -492,8 +499,8 @@ describe("the password change in a dialog (S-6, FS-22, DS-9)", () => {
     return document.getElementById(id ?? "") as HTMLInputElement | null
   }
   const open = async () => {
-    await render("/settings/account")
-    await click(button(en.account.change, document.querySelector("#settings-password") as HTMLElement))
+    await render("/account")
+    await click(button(en.account.change, document.querySelector("#account-password") as HTMLElement))
     expect(dialog()?.textContent).toContain(en.account.passwordTitle)
   }
   const fill = async (current: string, next: string, repeat: string) => {
@@ -591,7 +598,7 @@ describe("the password change in a dialog (S-6, FS-22, DS-9)", () => {
     await settle()
     expect(dialog()).toBeNull()
 
-    await click(button(en.account.change, document.querySelector("#settings-password") as HTMLElement))
+    await click(button(en.account.change, document.querySelector("#account-password") as HTMLElement))
     await type(field(en.account.newPassword), "Invented new password")
     await act(async () => {
       window.dispatchEvent(new PopStateEvent("popstate"))
@@ -628,8 +635,8 @@ describe("bulk actions at the end of a list's head (S-12, DS-20)", () => {
       session("this", "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0"),
       session("other", "Mozilla/5.0 (Linux; Android 14) Chrome/130.0"),
     ]
-    await render("/settings/account")
-    const acts = head("settings-browsers") as HTMLElement
+    await render("/account")
+    const acts = head("account-browsers") as HTMLElement
     expect(buttons(acts).map((b) => b.textContent)).toEqual([en.account.endOthers, en.account.endAll])
     await click(button(en.account.endOthers, acts))
     expect(question()?.textContent).toContain(en.account.endOthersTitle)
@@ -637,7 +644,7 @@ describe("bulk actions at the end of a list's head (S-12, DS-20)", () => {
     await settle()
     expect(auth.calls.map((call) => call.route)).toContain("revoke-other-sessions")
     // One browser left: only Sign out everywhere stays.
-    expect(buttons(head("settings-browsers") as HTMLElement).map((b) => b.textContent)).toEqual([en.account.endAll])
+    expect(buttons(head("account-browsers") as HTMLElement).map((b) => b.textContent)).toEqual([en.account.endAll])
   })
 
   it("Agent access: Disconnect all sits in the list's head, names the count and deletes every key", async () => {

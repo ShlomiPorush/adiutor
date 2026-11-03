@@ -60,7 +60,7 @@ export function MorningPage() {
 
   return (
     <div className="ui-page" ref={page}>
-      <div className="ui-page-narrow ui-section">
+      <div className="ui-section">
         <PageHead title={t("morning.title")} description={t("morning.description")} />
         {morning.isPending ? <Loading label={t("morning.loading")} /> : null}
         {morning.isError && !morning.data ? (

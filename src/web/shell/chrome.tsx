@@ -4,6 +4,7 @@
 // the one h1 is the title in the top bar. Up to 760px the page keeps its h1 with the main action on
 // the same line (NL-14), and the top bar names the page in small type above nothing else.
 
+import type { LucideIcon } from "lucide-react"
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import { useLocation } from "react-router"
@@ -51,15 +52,19 @@ export function PageHead({
   description,
   actions,
   titleDir,
+  icon,
 }: {
   title: string
   description?: ReactNode
   actions?: ReactNode
   /** "auto" for a title the user wrote (a project name). */
   titleDir?: "auto"
+  /** The icon of a page outside the navigation (Account); a page in it shows its navigation icon. */
+  icon?: LucideIcon
 }) {
   const wide = useTopBar()
-  const Icon = navPageFor(useLocation().pathname)?.icon
+  const navIcon = navPageFor(useLocation().pathname)?.icon
+  const Icon = icon ?? navIcon
   if (wide)
     return (
       <>

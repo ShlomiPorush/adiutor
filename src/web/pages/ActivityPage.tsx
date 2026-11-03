@@ -125,7 +125,7 @@ export function ActivityPage() {
 
   return (
     <div className="ui-page">
-      <div className="ui-page-narrow ui-section">
+      <div className="ui-section">
         <PageHead title={t("activity.title")} description={t("activity.description")} />
         <StaleNote failed={query.isRefetchError} />
         <FilterBar

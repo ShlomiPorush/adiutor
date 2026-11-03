@@ -226,7 +226,7 @@ describe("the catalogue", () => {
   it("holds the owner's groups and sections, each with a title and a paragraph in both languages", () => {
     expect(SETTINGS_GROUPS.map((group) => [group.id, [...group.sections]])).toEqual([
       ["general", ["general"]],
-      ["security", ["account", "agents", "secret-check"]],
+      ["security", ["agents", "secret-check"]],
       ["integrations", ["telegram"]],
       ["sync", ["status", "suppressions"]],
     ])
@@ -265,8 +265,8 @@ describe("one draft across the sections (R2)", () => {
     // The picker of narrow screens says the same in its options.
     const options = Array.from(document.querySelectorAll(".ui-set-picker option")).map((o) => o.textContent)
     expect(options[0]).toBe(en.settings.unsavedOption.replace("{name}", `⁨${en.settings.sections.general.title}⁩`))
-    expect(options[4]).toContain(en.settings.unsavedOption.replace("{name}", "").trim())
-    expect(options[1]).toBe(en.settings.sections.account.title)
+    expect(options[3]).toContain(en.settings.unsavedOption.replace("{name}", "").trim())
+    expect(options[1]).toBe(en.settings.sections.agents.title)
 
     await go(-1)
     expect(where()).toBe("/settings/general")

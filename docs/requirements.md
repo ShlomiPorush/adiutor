@@ -17,7 +17,7 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 - Devices: the owner's desktop and his phone.
 - Network: reachable only over the owner's private overlay network (NetBird). Never published to the internet.
 - Every API and MCP call from an agent or the sync carries an agent key, in addition to the network restriction. An agent or the sync gets its key from `mikud connect` after the owner approves it in the browser; the key never shows in the UI. Settings, Agent access lists the keys and disconnects them. There is no owner key: owner actions happen in the signed-in browser.
-- The owner's browsers sign in (owner's decision, 2026-11-01, replacing "There is no login screen" and the paste-a-token pairing of browsers): one account with a username and a password, and a TOTP code from an authenticator app, which is required. The first run creates the account, sets up TOTP and shows 10 backup codes once. A browser stays signed in while the owner opens Mikud there at least once in 30 days (owner's setting, 1 to 90 days); he can see the signed-in browsers, sign out the others or sign out everywhere, change the password, make new backup codes and set up a new authenticator. A forgotten password is reset by a command run on the server, never a route over the network; a lost authenticator is replaced with a backup code. Authentication uses Better Auth only as it documents itself (owner's decision, 2026-11-02); what it does not guarantee is listed as accepted gaps in the foundation plan, "Security design".
+- The owner's browsers sign in (owner's decision, 2026-11-01, replacing "There is no login screen" and the paste-a-token pairing of browsers): one account with a username and a password, and a TOTP code from an authenticator app, which is required. The first run creates the account, sets up TOTP and shows 10 backup codes once. A browser stays signed in while the owner opens Mikud there at least once in 30 days (owner's setting, 1 to 90 days); he can see the signed-in browsers, sign out the others or sign out everywhere, change the password, make new backup codes and set up a new authenticator, on an Account page of its own that the account menu opens (owner's decision, 2026-11-03; it was a Settings section). A forgotten password is reset by a command run on the server, never a route over the network; a lost authenticator is replaced with a backup code. Authentication uses Better Auth only as it documents itself (owner's decision, 2026-11-02); what it does not guarantee is listed as accepted gaps in the foundation plan, "Security design".
 
 ## 3. Domain model
 
@@ -26,7 +26,7 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 - Fields: name, stage, near goal, count of items closed toward that goal out of the items attached to it, a one-line "where we are", a link to the GitHub repository and its open Issues count (Issues stay in GitHub: no import, no sync).
 - Stages: `idea` → `poc` → `development` → `production`, plus `redesign` and `frozen`.
 - Only the owner changes a stage. Agents may propose a stage change; the proposal waits for the owner.
-- Every T3 project is a Mikud project. A project with no open items does not appear in the morning view.
+- Every T3 project is a Mikud project. A project with no open items does not appear in the overview.
 - A project's stage may be unset until the owner sets it. Drafts written by agents arrive as stage proposals.
 
 ### Item (card)
@@ -54,9 +54,11 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 
 ### Archive
 
-- Closed items (`done`, `not_relevant`) leave the morning view after 7 days and stay in the archive.
+- Closed items (`done`, `not_relevant`) leave the overview after 7 days and stay in the archive.
 
-## 4. Morning view (home screen)
+## 4. Overview (home screen)
+
+The home screen is named Overview (owner's decision, 2026-11-03; it was the morning view). The Telegram morning message keeps its name: it goes out at 08:00. The view uses the whole width of the content area, as the other list pages do.
 
 The parts, in reading order:
 
@@ -106,6 +108,6 @@ The inbox count is visible on the home screen and links to the inbox.
 There is one launch and no partial use.
 
 1. Everything in this document is built and verified.
-2. Dry run on real data, on the development stack on the owner's PC: every project is seeded with drafts (a stage proposal, goal, "where we are") written by an agent from T3 threads and the repositories; one real Telegram morning message is sent; the morning view is shown at desktop and phone sizes.
+2. Dry run on real data, on the development stack on the owner's PC: every project is seeded with drafts (a stage proposal, goal, "where we are") written by an agent from T3 threads and the repositories; one real Telegram morning message is sent; the overview is shown at desktop and phone sizes.
 3. The owner reviews and approves or corrects.
 4. Only after approval: the owner deploys to production, the agent instruction goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.

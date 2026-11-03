@@ -56,7 +56,7 @@ import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { useUnsaved } from "../ui/unsaved.tsx"
-import { AccountSection, useSignOutEverywhere } from "./settings/AccountPanel.tsx"
+import { useSignOutEverywhere } from "./AccountPage.tsx"
 import { AgentKeysSection } from "./settings/AgentKeysPanel.tsx"
 import { Fact, Facts, Group, type ResetMark, Row, SwitchRow } from "./settings/parts.tsx"
 import { StatusSection, SuppressionsSection } from "./settings/SyncSections.tsx"
@@ -208,8 +208,7 @@ export function SettingsPage() {
     else if (query.isError)
       body = <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
     else body = <Loading label={t("settings.loading")} />
-  } else if (active === "account") body = <AccountSection />
-  else if (active === "agents") body = <AgentKeysSection />
+  } else if (active === "agents") body = <AgentKeysSection />
   else if (active === "status") body = <StatusSection />
   else body = <SuppressionsSection />
 

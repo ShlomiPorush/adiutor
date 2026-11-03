@@ -1,32 +1,36 @@
-// Settings, Account, as v3 rows in groups (S-6, FS-8): Signed in, Browsers, Password, Two-factor and Recovery.
-// Everything here is Better Auth's own routes through its client, and acts at once, outside the save bar: the
+// The Account page, /account, opened from the account menu: v3 rows in groups (S-6, FS-8), Signed in, Browsers,
+// Password, Two-factor and Recovery. It is the owner's own account, not a setting of the board, so it has a page of its
+// own outside Settings and its draft. Everything here is Better Auth's own routes through its client, and acts at once, outside the save bar: the
 // signed-in browsers (and a session `mikud connect` left behind) with Sign out per browser and, at the end of the
 // list's head, Sign out other browsers and Sign out everywhere (S-12); the password changed in a dialog (FS-22, DS-9:
 // it asks before dropping what was typed); new backup codes and a new authenticator, each in a dialog; and the
 // recovery command. Signing out of this browser is in the shell's account menu.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { UserRound } from "lucide-react"
 import { type FormEvent, useId, useRef, useState } from "react"
 import { useNavigate } from "react-router"
-import { CONNECT_CLIENT_ID, PASSWORD_MAX, PASSWORD_MIN, passwordSchema } from "../../../shared/auth.ts"
-import { AuthCallError, type AuthError, authClient, authData, authFailure, FAILURE_TEXT } from "../../api/auth.ts"
-import { api, qk } from "../../api/endpoints.ts"
-import type { BrowserSession } from "../../api/types.ts"
-import { useI18n } from "../../i18n/i18n.tsx"
-import { useSignedOut } from "../../shell/signOut.ts"
-import { Copyable } from "../../ui/Copyable.tsx"
-import { confirmDialog, useDiscardGuard } from "../../ui/confirm.tsx"
-import { Dialog } from "../../ui/Dialog.tsx"
-import { EVERY, usePageQuery } from "../../ui/refresh.ts"
-import { ErrorState, errorReason, Loading } from "../../ui/states.tsx"
-import { Time } from "../../ui/Time.tsx"
-import { showToast } from "../../ui/Toast.tsx"
-import { Tag } from "../../ui/tags.tsx"
-import { describeAgent } from "../agent.ts"
-import { RECOVERY_COMMAND } from "../auth/LoginPage.tsx"
-import { BackupCodes, FormError, PasswordField } from "../auth/parts.tsx"
-import { Group, Row } from "./parts.tsx"
-import { settingsPath } from "./sections.ts"
+import { CONNECT_CLIENT_ID, PASSWORD_MAX, PASSWORD_MIN, passwordSchema } from "../../shared/auth.ts"
+import { AuthCallError, type AuthError, authClient, authData, authFailure, FAILURE_TEXT } from "../api/auth.ts"
+import { api, qk } from "../api/endpoints.ts"
+import type { BrowserSession } from "../api/types.ts"
+import { useI18n } from "../i18n/i18n.tsx"
+import { PageHead } from "../shell/chrome.tsx"
+import { ACCOUNT_PATH } from "../shell/navigation.ts"
+import { usePageMeta } from "../shell/pageMeta.tsx"
+import { useSignedOut } from "../shell/signOut.ts"
+import { Copyable } from "../ui/Copyable.tsx"
+import { confirmDialog, useDiscardGuard } from "../ui/confirm.tsx"
+import { Dialog } from "../ui/Dialog.tsx"
+import { EVERY, usePageQuery } from "../ui/refresh.ts"
+import { ErrorState, errorReason, Loading } from "../ui/states.tsx"
+import { Time } from "../ui/Time.tsx"
+import { showToast } from "../ui/Toast.tsx"
+import { Tag } from "../ui/tags.tsx"
+import { describeAgent } from "./agent.ts"
+import { RECOVERY_COMMAND } from "./auth/LoginPage.tsx"
+import { BackupCodes, FormError, PasswordField } from "./auth/parts.tsx"
+import { Group, Row } from "./settings/parts.tsx"
 
 /** "Sign out everywhere": asks first, then Better Auth's revokeSessions and on to sign-in. */
 export function useSignOutEverywhere() {
@@ -51,7 +55,20 @@ export function useSignOutEverywhere() {
 
 const time = (value: Date | string) => (typeof value === "string" ? value : value.toISOString())
 
-export function AccountSection() {
+export function AccountPage() {
+  const { t } = useI18n()
+  usePageMeta(t("account.title"))
+  return (
+    <div className="ui-page">
+      <PageHead title={t("account.title")} description={t("account.description")} icon={UserRound} />
+      <div id="account" className="ui-account">
+        <AccountSection />
+      </div>
+    </div>
+  )
+}
+
+function AccountSection() {
   const { t, language } = useI18n()
   const queryClient = useQueryClient()
   const signOutEverywhere = useSignOutEverywhere()
@@ -104,7 +121,7 @@ export function AccountSection() {
 
   return (
     <>
-      <Group id="settings-signed-in" title={t("account.signedInGroup")}>
+      <Group id="account-signed-in" heading="h2" title={t("account.signedInGroup")}>
         <Row label={t("account.signedInAs")}>
           <bdi className="ui-mono ui-set-value" dir="ltr">
             {me.data?.actor.label ?? "-"}
@@ -112,7 +129,8 @@ export function AccountSection() {
         </Row>
       </Group>
       <Group
-        id="settings-browsers"
+        id="account-browsers"
+        heading="h2"
         title={t("account.sessions")}
         count={query.data ? sessions.length : undefined}
         intro={t("account.sessionsHint")}
@@ -169,14 +187,14 @@ export function AccountSection() {
           )
         })}
       </Group>
-      <Group id="settings-password" title={t("account.passwordGroup")}>
+      <Group id="account-password" heading="h2" title={t("account.passwordGroup")}>
         <Row label={t("account.passwordRow")} hint={t("account.passwordHint")}>
           <button type="button" className="ui-btn" onClick={() => setDialog("password")}>
             {t("account.change")}
           </button>
         </Row>
       </Group>
-      <Group id="settings-two-factor" title={t("account.twoFactor")}>
+      <Group id="account-two-factor" heading="h2" title={t("account.twoFactor")}>
         <Row label={t("account.codesRow")} hint={t("account.codesHint")}>
           <button type="button" className="ui-btn" onClick={() => setDialog("codes")}>
             {t("account.newCodes")}
@@ -188,7 +206,7 @@ export function AccountSection() {
           </button>
         </Row>
       </Group>
-      <Group id="settings-recovery" title={t("account.recovery")}>
+      <Group id="account-recovery" heading="h2" title={t("account.recovery")}>
         <Row label={t("account.recoveryRow")} hint={t("account.recoveryHint")}>
           <span className="ui-set-command" dir="ltr">
             <Copyable value={RECOVERY_COMMAND} />
@@ -202,7 +220,7 @@ export function AccountSection() {
           onClose={() => setDialog(null)}
           onDisabled={() => {
             setDialog(null)
-            navigate(`/setup?next=${encodeURIComponent(settingsPath("account"))}`, { replace: true })
+            navigate(`/setup?next=${encodeURIComponent(ACCOUNT_PATH)}`, { replace: true })
           }}
         />
       ) : null}

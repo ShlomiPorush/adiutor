@@ -6,7 +6,7 @@ import type { SettingsPatch } from "../../api/types.ts"
 
 export const SETTINGS_GROUPS = [
   { id: "general", sections: ["general"] },
-  { id: "security", sections: ["account", "agents", "secret-check"] },
+  { id: "security", sections: ["agents", "secret-check"] },
   { id: "integrations", sections: ["telegram"] },
   { id: "sync", sections: ["status", "suppressions"] },
 ] as const

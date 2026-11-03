@@ -3,6 +3,7 @@
 
 import type { ComponentType } from "react"
 import { createBrowserRouter, Navigate, useParams } from "react-router"
+import { AccountPage } from "./pages/AccountPage.tsx"
 import { ActivityPage } from "./pages/ActivityPage.tsx"
 import { ArchivePage } from "./pages/ArchivePage.tsx"
 import { ConnectDevicePage } from "./pages/auth/ConnectDevicePage.tsx"
@@ -26,6 +27,7 @@ export const PAGES: readonly PageRoute[] = [
   { id: "inbox", path: "/inbox", Component: InboxPage },
   { id: "archive", path: "/archive", Component: ArchivePage },
   { id: "activity", path: "/activity", Component: ActivityPage },
+  { id: "account", path: "/account", Component: AccountPage },
   // One route for /settings and every /settings/<section>, so the page and its draft stay mounted between sections.
   { id: "settings", path: "/settings/:section?", Component: SettingsPage },
   { id: "not-found", path: "*", Component: NotFoundPage },
@@ -51,6 +53,8 @@ export function createRouter() {
           children: [
             ...PAGES.map(({ path, Component }) => ({ path, element: <Component /> })),
             { path: "/items/:itemId", element: <ItemLink /> },
+            // Account was a Settings section before it had a page of its own.
+            { path: "/settings/account", element: <Navigate to="/account" replace /> },
           ],
         },
       ],

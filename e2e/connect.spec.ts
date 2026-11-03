@@ -95,7 +95,7 @@ test("connect for the sync: approved in the browser, the key saved for the owner
   await expect(row).toContainText(key.slice(0, 6))
   await expect(row).not.toContainText(key.slice(6))
   // The CLI ended its temporary session: no "mikud connect" session is left in Account.
-  await page.goto("/settings/account")
+  await page.goto("/account")
   await expect(page.locator("#account")).toContainText(he.account.thisBrowser)
   await expect(page.locator("#account")).not.toContainText(he.account.connectSession)
 
