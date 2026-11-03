@@ -8,11 +8,12 @@ import type { Ctx } from "../services/context.ts"
 import { createAgentKey, ownerBrowser, testCore } from "../testing/app.ts"
 import { StandInBotApi, waitFor } from "../testing/bot-api.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
+import { testBotToken } from "../testing/secrets.ts"
 import { BotApi, type TelegramUpdate } from "./api.ts"
 import { handleUpdate, TelegramBot } from "./bot.ts"
 
-// Assembled at run time: the guards and push protection scan literal text.
-const TOKEN = `${"7654321"}:${"AAF"}${"q".repeat(33)}`
+// New on every run (src/server/testing/secrets.ts).
+const TOKEN = testBotToken()
 const OWNER_CHAT = "4242"
 const PUBLIC_URL = new URL("http://127.0.0.1:8090")
 

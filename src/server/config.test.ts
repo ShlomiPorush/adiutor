@@ -1,11 +1,13 @@
+import { randomBytes, randomInt } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { ConfigError, loadConfig } from "./config.ts"
+import { testBotToken, testSecret } from "./testing/secrets.ts"
 
-// Assembled at run time: the guards and push protection scan literal text.
-const authSecret = "a".repeat(32)
-const settingsKey = "s".repeat(32)
+// Every value the loader accepts is new on each run; only refused values are literal.
+const authSecret = testSecret()
+const settingsKey = testSecret()
 const valid = {
-  DATABASE_URL: "postgres://mikud:example@db.example.com:5432/mikud",
+  DATABASE_URL: `postgres://mikud:${randomBytes(16).toString("hex")}@db.example.com:5432/mikud`,
   MIKUD_PUBLIC_URL: "https://mikud.example.com",
   MIKUD_AUTH_SECRETS: `1:${authSecret}`,
   MIKUD_SETTINGS_KEYS: `1:${settingsKey}`,
@@ -45,7 +47,7 @@ describe("loadConfig", () => {
   )
 
   it("reads versioned keys, newest first, and refuses a bad entry, a repeated version or a short key unprinted", () => {
-    const older = "o".repeat(32)
+    const older = testSecret()
     expect(loadConfig({ ...valid, MIKUD_AUTH_SECRETS: `2:${authSecret}, 1:${older}` }).authSecrets).toEqual([
       { version: 2, value: authSecret },
       { version: 1, value: older },
@@ -56,15 +58,16 @@ describe("loadConfig", () => {
     const message = refusal({ ...valid, MIKUD_SETTINGS_KEYS: `1:${short}` })
     expect(message).toContain("MIKUD_SETTINGS_KEYS entry 1 must be at least 32 bytes")
     expect(message).not.toContain(short)
-    // Counted in bytes: 16 two-byte characters are enough.
-    expect(loadConfig({ ...valid, MIKUD_AUTH_SECRETS: `1:${"é".repeat(16)}` }).authSecrets).toHaveLength(1)
+    // Counted in bytes: 16 two-byte characters are enough (U+0100 to U+07FF: two bytes each, none that trim() drops).
+    const twoByte = String.fromCodePoint(...Array.from({ length: 16 }, () => randomInt(0x100, 0x800)))
+    expect(loadConfig({ ...valid, MIKUD_AUTH_SECRETS: `1:${twoByte}` }).authSecrets).toHaveLength(1)
   })
 
   it("keeps the settings key apart from every auth secret, the legacy one too", () => {
     expect(refusal({ ...valid, MIKUD_SETTINGS_KEYS: `1:${authSecret}` })).toContain(
       "MIKUD_SETTINGS_KEYS must differ from every auth secret",
     )
-    const legacy = "l".repeat(32)
+    const legacy = testSecret()
     expect(loadConfig({ ...valid, MIKUD_AUTH_SECRET: legacy }).legacyAuthSecret).toBe(legacy)
     expect(refusal({ ...valid, MIKUD_AUTH_SECRET: legacy, MIKUD_SETTINGS_KEYS: `1:${legacy}` })).toContain(
       "must differ from every auth secret",
@@ -110,8 +113,7 @@ describe("loadConfig", () => {
   })
 
   describe("owner settings the environment overrides, per field", () => {
-    // Assembled at run time: the guards and push protection scan literal text.
-    const botToken = `${"1234567"}:${"AAH"}${"x".repeat(32)}`
+    const botToken = testBotToken()
 
     it("sets nothing without the variables, or with empty ones", () => {
       expect(loadConfig({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: "", MIKUD_TELEGRAM_CHAT_ID: " " }).overrides).toEqual({})

@@ -7,7 +7,7 @@
 // password change replaces this browser's session.
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
-import { PASSWORD, storageFile } from "./helpers.ts"
+import { password, storageFile } from "./helpers.ts"
 
 test.describe.configure({ mode: "serial" })
 
@@ -328,8 +328,8 @@ test("the password changes and changes back in its dialog without leaving the pa
     // Better Auth signed out the other browsers: the list, read again, holds this one only.
     await expect(browsers).toHaveCount(1)
   }
-  await change(PASSWORD, `${PASSWORD} again`)
-  await change(`${PASSWORD} again`, PASSWORD)
+  await change(password(), `${password()} again`)
+  await change(`${password()} again`, password())
   await expect(page).toHaveURL(/\/account$/)
   expect(await page.evaluate(async () => (await fetch("/api/v1/session")).status)).toBe(200)
   await expect(browsers).toHaveCount(1)

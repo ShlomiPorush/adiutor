@@ -3,6 +3,7 @@ import postgres from "postgres"
 import { describe, expect, it } from "vitest"
 import * as schema from "../db/schema.ts"
 import { createSecretScanner } from "../services/secrets.ts"
+import { testSecret } from "../testing/secrets.ts"
 import { ALLOWED_PATHS, createAuth, OTP_PATHS, TRUST_DEVICE_PATHS } from "./auth.ts"
 
 // The allow-list names Better Auth's route patterns. A route renamed or removed by an update would leave a dead entry
@@ -14,7 +15,7 @@ const db = drizzle(postgres("postgres://nobody@127.0.0.1:1/none", { max: 1 }), {
 function routePaths(): Set<string> {
   const auth = createAuth({
     ctx: { db, secrets: createSecretScanner(), clock: () => new Date() },
-    secrets: [{ version: 1, value: "r".repeat(32) }],
+    secrets: [{ version: 1, value: testSecret() }],
     publicUrl: new URL("https://mikud.example.com"),
     trustedProxies: [],
     sessionIdleDays: 30,

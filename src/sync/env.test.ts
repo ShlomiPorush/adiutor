@@ -1,7 +1,9 @@
+import { randomBytes } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { loadSyncConfig, parseEnvFile, redactor, SyncConfigError } from "./env.ts"
 
-const token = "t".repeat(40)
+// New on every run: nothing in the repository works as a key.
+const token = randomBytes(24).toString("hex")
 
 describe("parseEnvFile", () => {
   it("reads KEY=VALUE lines, comments, export, quotes, CRLF and a BOM", () => {

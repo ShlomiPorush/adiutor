@@ -1,13 +1,12 @@
 // Better Auth's routes for the mock API (development and screenshots only; the production build drops it): the
 // session, the browsers, the password, the backup codes, the agent keys and agent approvals, over the mock's state.
-// The sign-in pages need the real server.
+// The sign-in pages need the real server. Any password that is not empty is right: the mock holds none.
 
 import { ENDED_OTHERS_KEY, endedOthers, mockState as state } from "./transport.ts"
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 const fail = (status: number, code: string, message: string) => json({ code, message }, status)
-const MOCK_PASSWORD = "correct horse battery staple"
 
 const letters = (n: number) =>
   Array.from(
@@ -44,13 +43,13 @@ export async function mockAuthFetch(input: RequestInfo | URL, init?: RequestInit
     case "/sign-out":
       return json({ success: true })
     case "/change-password":
-      if (body.currentPassword !== MOCK_PASSWORD) return fail(400, "INVALID_PASSWORD", "Invalid password")
+      if (!body.currentPassword) return fail(400, "INVALID_PASSWORD", "Invalid password")
       return json({ token: "mock", user: { id: "owner" } })
     case "/two-factor/generate-backup-codes":
-      if (body.password !== MOCK_PASSWORD) return fail(400, "INVALID_PASSWORD", "Invalid password")
+      if (!body.password) return fail(400, "INVALID_PASSWORD", "Invalid password")
       return json({ status: true, backupCodes: backupCodes() })
     case "/two-factor/disable":
-      if (body.password !== MOCK_PASSWORD) return fail(400, "INVALID_PASSWORD", "Invalid password")
+      if (!body.password) return fail(400, "INVALID_PASSWORD", "Invalid password")
       return json({ status: true })
     case "/api-key/list":
       return json({ apiKeys: state.agentKeys, total: state.agentKeys.length })

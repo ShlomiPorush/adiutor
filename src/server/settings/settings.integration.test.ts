@@ -11,14 +11,15 @@ import { createAgentKey, ownerBrowser, type TestCore, type TestCoreOptions, test
 import { StandInBotApi, waitFor } from "../testing/bot-api.ts"
 import type { TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
+import { testBotToken } from "../testing/secrets.ts"
 import { BOT_TOKEN_COLUMN } from "./effective.ts"
 
 // The owner's settings in the UI (Part B): stored in the database, the bot token encrypted, each field locked when
 // the environment sets it, and a save taking effect without a restart.
 
-// Assembled at run time: the guards and push protection scan literal text.
-const TOKEN = `${"7654321"}:${"AAG"}${"s".repeat(33)}`
-const OTHER_TOKEN = `${"7654322"}:${"AAG"}${"o".repeat(33)}`
+// New on every run (src/server/testing/secrets.ts).
+const TOKEN = testBotToken()
+const OTHER_TOKEN = testBotToken()
 const ORIGIN = "http://127.0.0.1:8090"
 
 let t: TestDatabase
