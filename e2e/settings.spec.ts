@@ -330,7 +330,7 @@ test("the password changes and changes back in its dialog without leaving the pa
   }
   await change(PASSWORD, `${PASSWORD} again`)
   await change(`${PASSWORD} again`, PASSWORD)
-  await expect(page).toHaveURL(/\/settings\/account$/)
+  await expect(page).toHaveURL(/\/account$/)
   expect(await page.evaluate(async () => (await fetch("/api/v1/session")).status)).toBe(200)
   await expect(browsers).toHaveCount(1)
   await expect(browsers).toContainText(he.account.thisBrowser)
@@ -365,7 +365,7 @@ test("the password dialog checks its fields first, and asks before it drops what
   await page.keyboard.press("Escape")
   await question.getByRole("button", { name: he.unsaved.discard }).click()
   await expect(dialog).toHaveCount(0)
-  await expect(page).toHaveURL(/\/settings\/account$/)
+  await expect(page).toHaveURL(/\/account$/)
 })
 
 test("with Telegram off its fields are editable, and the test and the sign-in codes are locked areas", async () => {

@@ -2834,7 +2834,9 @@ html.ui-layer-on .ui-page {
   color: var(--ui-muted);
   font-weight: 500;
 }
+/* Written text (a goal, "where we are", a comment) keeps a readable line on a page as wide as the screen. */
 .ui-text-block {
+  max-width: 75ch;
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

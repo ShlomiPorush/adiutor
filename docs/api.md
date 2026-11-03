@@ -66,7 +66,7 @@ One account, the owner's: a username, a password and a second factor, through Be
 | `POST /two-factor/generate-backup-codes`                                     | `{password}`: 10 new codes; the old ones stop working                                                                                                                                                |
 | `POST /two-factor/disable`                                                   | `{password}`: before setting up a new authenticator                                                                                                                                                  |
 | `POST /two-factor/send-otp`, `POST /two-factor/verify-otp`                   | Only while Settings sends sign-in codes to Telegram (off by default): the code goes to the owner's chat                                                                                              |
-| `POST /revoke-session`                                                       | `{token}`: ends one session (the Account page; and `mikud connect` ending its own)                                                                                                                  |
+| `POST /revoke-session`                                                       | `{token}`: ends one session (the Account page; and `mikud connect` ending its own)                                                                                                                   |
 | `POST /api-key/create`, `GET /api-key/list`, `POST /api-key/delete`          | Agent keys: `{name, expiresIn}` (1 to 32 characters; 1 to 365 days in seconds) answers the key once; `list` shows name, start, created, ends, last request; `delete {keyId}` disconnects it at once  |
 | `POST /device/code`, `POST /device/token`                                    | Agent approval, for `mikud connect` (no session): a code for client id `mikud-connect`, then its answer (below)                                                                                      |
 | `GET /device`, `POST /device/approve`, `POST /device/deny`                   | Agent approval, for the owner's browser on `/connect/device`: claim the code, then answer it once                                                                                                    |
@@ -130,13 +130,13 @@ Fields are always present; `null` when unset.
 
 "Owner" routes answer `forbidden` to the agent token.
 
-### Session and the morning view
+### Session and the overview
 
 | Method and path | Who     | Body or query   | Answer                                                                                                                                                                                                                          |
 | --------------- | ------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /session`  | any     |                 | `{actor: {kind, label}, via: "token"\|"session", browserId, expiresAt}`. `expiresAt` (a session only): when it ends unless the Better Auth client refreshes it first                                                            |
 | `GET /morning`  | any     | `since?` (time) | Morning (below). `since` is this browser's previous visit unless the query gives one                                                                                                                                            |
-| `POST /visits`  | browser | `{at?}` (time)  | `201 {at, previous}`. Call after the morning view was shown, with that read's `now`; recorded one minute before `at`, or before now when `at` is missing or later than the server's clock (see below). `forbidden` with a token |
+| `POST /visits`  | browser | `{at?}` (time)  | `201 {at, previous}`. Call after the overview was shown, with that read's `now`; recorded one minute before `at`, or before now when `at` is missing or later than the server's clock (see below). `forbidden` with a token |
 
 "browser" routes need the owner's browser session (`forbidden` with a key). The password, the browsers list and signing out are Better Auth's routes (above).
 
@@ -304,7 +304,7 @@ The bot and the morning message run inside the server, never through this API. T
 
 - `lastMorning.state`: `sending` (in progress), `sent`, `failed` (Telegram refused it with a 4xx answer, or there was no connection; retried every 30 seconds until 11:00), `unknown` (it may have gone out: a timeout, a dropped connection, a 5xx or an answer that is not Telegram's, or a restart during the send; never resent) or `skipped` (11:00 passed without a send). `at` is the time of the latest state change.
 - **Quick add**: plain text from the owner's chat becomes an inbox item exactly like `POST /capture` (type `idea`, status `future`), created by actor kind `bot` with audit source `telegram`. The bot answers with a link to `<MIKUD_PUBLIC_URL>/items/<id>`. Text that looks like a secret is refused as agent text is, and the bot answers that nothing was saved without repeating the text. `/start`, `/help` and other commands answer with a help text; photos and other non-text messages with a short note. Other chats get no answer.
-- **Morning message**: 08:00 Asia/Jerusalem, Sunday to Friday, in the language of the settings, built from the morning view (above) with `since` set to the owner's last visit on any device or the last morning message, whichever is later. Deep links: `<MIKUD_PUBLIC_URL>/` and `<MIKUD_PUBLIC_URL>/items/<id>`.
+- **Morning message**: 08:00 Asia/Jerusalem, Sunday to Friday, in the language of the settings, built from the overview's read (above) with `since` set to the owner's last visit on any device or the last morning message, whichever is later. Deep links: `<MIKUD_PUBLIC_URL>/` and `<MIKUD_PUBLIC_URL>/items/<id>`.
 - **Test message**: `POST /telegram/test-message` (Settings, "Send a test morning message") builds the same message the job would send now and sends it to the owner's chat at once. It never reads or writes `job_runs`, so the 08:00 message still goes out, and it records two audit rows (action `telegram.test_message`): `after: {state: "sending"}`, committed before the send, then `after: {state, code?}` with `sent`, `failed` or `uncertain` and the failure code. Not retried.
 
 ## MCP
