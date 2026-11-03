@@ -236,14 +236,22 @@ test("Agent access has no manual key: it shows how to connect, with this address
 test("the password changes and changes back without leaving the page", async () => {
   await page.goto("/settings/account")
   const panel = page.locator("#account")
+  const fields = [he.account.currentPassword, he.account.newPassword, he.account.repeatNewPassword].map((label) =>
+    panel.getByLabel(label, { exact: true }),
+  )
   const change = async (from: string, to: string) => {
-    await panel.getByLabel(he.account.currentPassword, { exact: true }).fill(from)
-    await panel.getByLabel(he.account.newPassword, { exact: true }).fill(to)
-    await panel.getByLabel(he.account.repeatNewPassword, { exact: true }).fill(to)
+    const [current, next, repeat] = fields
+    await current?.fill(from)
+    await next?.fill(to)
+    await repeat?.fill(to)
+    const answer = page.waitForResponse(
+      (response) => response.url().endsWith("/api/auth/change-password") && response.request().method() === "POST",
+    )
     await panel.getByRole("button", { name: he.account.change }).click()
-    // The form empties only when Better Auth answered: then this browser holds its new session cookie.
-    await expect(panel.getByLabel(he.account.currentPassword, { exact: true })).toHaveValue("")
-    await expect(page.getByText(he.account.changed).first()).toBeVisible()
+    // Better Auth's own answer, not the toast that leaves after 4 seconds: then this browser holds its new session.
+    expect((await answer).ok()).toBe(true)
+    // A refusal empties only the current password; a change empties all three.
+    for (const field of fields) await expect(field).toHaveValue("")
   }
   await change(PASSWORD, `${PASSWORD} again`)
   await change(`${PASSWORD} again`, PASSWORD)

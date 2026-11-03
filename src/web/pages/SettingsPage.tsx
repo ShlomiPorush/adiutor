@@ -317,25 +317,16 @@ function useSectionView(
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per history entry, before the page paints
   useLayoutEffect(() => {
-    if (shown.current === key) return
-    const first = shown.current === null
+    const previous = shown.current
     shown.current = key
     entry.current = key
     const page = pageRef.current
     const content = contentRef.current
     if (!page || !content) return
     const saved = navigationType === "POP" ? scrollMemory.get(key) : undefined
-    if (saved) {
-      const apply = () => {
-        page.scrollTop = saved.page
-        content.scrollTop = saved.content
-      }
-      apply()
-      // A part that draws a moment later (a list) may have been shorter: once more on the next frame.
-      requestAnimationFrame(apply)
-      return
-    }
-    if (first || refused) return
+    // Started again when StrictMode runs the effect twice: its cleanup stopped the first restore.
+    if (saved) return restoreScroll(page, content, saved)
+    if (previous === null || previous === key || refused) return
     if (scrollArea(page, content) === content) {
       content.scrollTop = 0
       return
@@ -347,6 +338,44 @@ function useSectionView(
       pickerHeight(pickerRef.current)
     if (page.scrollTop > top) page.scrollTo({ top, behavior: "smooth" })
   }, [key])
+}
+
+/** How long a restore waits for a section's content to arrive (a list read again after its cache went). */
+export const RESTORE_FOR_MS = 5000
+
+/** Input by which the owner scrolls: any of it ends a restore that is still waiting. */
+const OWN_SCROLL = ["wheel", "touchstart", "pointerdown"] as const
+
+/**
+ * Brings the scroll areas back to a saved position (NL-3). A section whose content is still loading is shorter than
+ * it was, so the position is set again on every frame until the areas reach it, the owner scrolls by wheel, touch,
+ * the scroll bar or a key, another entry shows, or RESTORE_FOR_MS pass. Returns the stop.
+ */
+function restoreScroll(page: HTMLElement, content: HTMLElement, saved: { page: number; content: number }) {
+  const until = performance.now() + RESTORE_FOR_MS
+  let frame = 0
+  const stop = () => {
+    cancelAnimationFrame(frame)
+    for (const type of OWN_SCROLL) {
+      page.removeEventListener(type, stop, true)
+      content.removeEventListener(type, stop, true)
+    }
+    window.removeEventListener("keydown", stop, true)
+  }
+  const step = () => {
+    page.scrollTop = saved.page
+    content.scrollTop = saved.content
+    const reached = Math.abs(page.scrollTop - saved.page) <= 1 && Math.abs(content.scrollTop - saved.content) <= 1
+    if (reached || performance.now() > until) stop()
+    else frame = requestAnimationFrame(step)
+  }
+  for (const type of OWN_SCROLL) {
+    page.addEventListener(type, stop, { capture: true, passive: true })
+    content.addEventListener(type, stop, { capture: true, passive: true })
+  }
+  window.addEventListener("keydown", stop, true)
+  step()
+  return stop
 }
 
 /** Scrolls a field and its note into the visible part of its scroll area: under the picker, above the save bar. */

@@ -14,12 +14,12 @@ import en from "../../../shared/locales/en.json"
 import he from "../../../shared/locales/he.json"
 import { setTransport, type TransportRequest } from "../../api/client.ts"
 import { qk } from "../../api/endpoints.ts"
-import type { Settings, SettingsPatch } from "../../api/types.ts"
+import type { Settings, SettingsPatch, Suppression } from "../../api/types.ts"
 import { I18nProvider } from "../../i18n/i18n.tsx"
 import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
 import { UnsavedProvider } from "../../ui/unsaved.tsx"
-import { forgetSettingsVisit, SettingsPage } from "../SettingsPage.tsx"
+import { forgetSettingsVisit, RESTORE_FOR_MS, SettingsPage } from "../SettingsPage.tsx"
 import {
   changedSections,
   FIELD_SECTION,
@@ -76,10 +76,25 @@ async function transport({ method, path, body }: TransportRequest) {
     }
     return { status: 200, body: { data: saved } }
   }
+  if (path === "/suppressions" && method === "GET") {
+    await suppressionsAnswer
+    return { status: 200, body: { data: SUPPRESSIONS } }
+  }
   // The morning view and the Telegram status are read after a save; nothing else is asked for here.
   return { status: 404, body: { error: { code: "not_found", message: "Not here." } } }
 }
 
+/** A long Suppressions list, so the section scrolls far; its answer waits for `suppressionsAnswer`. */
+const SUPPRESSIONS: Suppression[] = Array.from({ length: 40 }, (_, index) => ({
+  id: `s${index}`,
+  kind: "thread",
+  externalId: `thread-${index}`,
+  label: `Invented thread ${index}`,
+  createdAt: "2026-10-01T08:00:00.000Z",
+}))
+let suppressionsAnswer: Promise<void> = Promise.resolve()
+
+let queryClient: QueryClient | null = null
 let mounted: { root: Root; host: HTMLElement } | null = null
 let router: ReturnType<typeof createMemoryRouter> | null = null
 
@@ -93,7 +108,7 @@ async function render(entries: string[]): Promise<void> {
   document.body.append(host)
   const root = createRoot(host)
   mounted = { root, host }
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   queryClient.setQueryData(qk.session, { actor: { kind: "owner", label: "owner.name" } })
   const frame = (page: ReactNode) => (
     <UnsavedProvider>
@@ -113,7 +128,7 @@ async function render(entries: string[]): Promise<void> {
   await act(async () => {
     root.render(
       <StrictMode>
-        <QueryClientProvider client={queryClient}>
+        <QueryClientProvider client={queryClient as QueryClient}>
           <I18nProvider>
             <RouterProvider router={router as ReturnType<typeof createMemoryRouter>} />
           </I18nProvider>
@@ -353,6 +368,98 @@ describe("one draft across the sections (R2)", () => {
     expect(where()).toBe("/settings/general")
     expect(document.activeElement).toBe(closedDays())
     expect(saveBar()?.textContent).toContain("2")
+  })
+})
+
+/**
+ * The page scroll area as a browser lays it out: 60px a list row in a 500px window, so its position is clamped to
+ * what the rows allow, and a position the owner scrolls to is kept from its scroll event.
+ */
+function layOutPage(): HTMLElement {
+  const page = document.querySelector<HTMLElement>(".ui-set-page") as HTMLElement
+  let top = 0
+  Object.defineProperty(page, "scrollTop", {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => {
+      const end = Math.max(0, page.querySelectorAll(".ui-item").length * 60 - 500)
+      top = Math.min(Math.max(0, value), end)
+    },
+  })
+  return page
+}
+
+/** Scrolls as the owner does: the input, the new position, then its scroll event. */
+async function ownerScrolls(page: HTMLElement, to: number): Promise<void> {
+  await act(async () => {
+    page.dispatchEvent(new Event("wheel", { bubbles: true }))
+    page.scrollTop = to
+    page.dispatchEvent(new Event("scroll"))
+  })
+}
+
+/** Suppressions scrolled far down, Telegram, the list's cache gone, its next answer held, then Back. */
+async function backToAnEvictedList(): Promise<{ page: HTMLElement; answer: () => Promise<void> }> {
+  await render(["/settings/suppressions"])
+  const page = layOutPage()
+  expect(page.querySelectorAll(".ui-item")).toHaveLength(40)
+  await ownerScrolls(page, 1500)
+  expect(page.scrollTop).toBe(1500)
+  await click(navLink("telegram"))
+  queryClient?.removeQueries({ queryKey: qk.suppressions })
+  let release = () => {}
+  suppressionsAnswer = new Promise((resolve) => {
+    release = resolve
+  })
+  await go(-1)
+  expect(where()).toBe("/settings/suppressions")
+  // Loading: the section is short, so the position is clamped for now.
+  expect(page.querySelectorAll(".ui-item")).toHaveLength(0)
+  expect(page.scrollTop).toBe(0)
+  return {
+    page,
+    answer: async () => {
+      release()
+      await settle(120)
+    },
+  }
+}
+
+describe("Back to a list read again (NL-3, a cache that went)", () => {
+  afterEach(() => {
+    suppressionsAnswer = Promise.resolve()
+  })
+
+  it("brings the position back once the list arrives", async () => {
+    const { page, answer } = await backToAnEvictedList()
+    await settle(100)
+    expect(page.scrollTop).toBe(0)
+    await answer()
+    expect(page.querySelectorAll(".ui-item")).toHaveLength(40)
+    expect(page.scrollTop).toBe(1500)
+  })
+
+  it("leaves the position to the owner who scrolls while the list loads", async () => {
+    const { page, answer } = await backToAnEvictedList()
+    await ownerScrolls(page, 0)
+    await answer()
+    expect(page.querySelectorAll(".ui-item")).toHaveLength(40)
+    expect(page.scrollTop).toBe(0)
+  })
+
+  it("stops waiting after RESTORE_FOR_MS", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] })
+    try {
+      const { page, answer } = await backToAnEvictedList()
+      await act(async () => {
+        vi.advanceTimersByTime(RESTORE_FOR_MS + 100)
+      })
+      vi.useRealTimers()
+      await answer()
+      expect(page.scrollTop).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
