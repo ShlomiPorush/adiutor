@@ -579,10 +579,60 @@
   },
   "settings": {
     "title": "Settings",
-    "description": "Language, dates, the morning view, your account, Telegram, agent keys and what the sync may not recreate.",
+    "description": "How the board writes dates, who may sign in or connect, how Telegram reaches you, and how the sync is doing.",
+    "categories": "Settings categories",
+    "category": "Settings category",
+    "unsavedHere": "Unsaved changes",
+    "unsavedOption": "{name} (unsaved changes)",
+    "groups": {
+      "general": "General",
+      "security": "Security",
+      "integrations": "Integrations",
+      "sync": "Sync"
+    },
+    "sections": {
+      "general": {
+        "title": "General",
+        "hint": "The board's language, how it writes dates and times, how long closed items stay in the morning view, and how long a browser stays signed in."
+      },
+      "account": {
+        "title": "Account",
+        "hint": "The browsers signed in to your account, your password, two-factor authentication and the way back in. Each action here takes effect at once."
+      },
+      "agents": {
+        "title": "Agent access",
+        "hint": "Agents and the sync connect with mikud connect: you approve each one in the browser, and it gets its own key with a name and an end date. A key keeps working after you sign out; disconnect it here when a machine is lost or a key leaks."
+      },
+      "secret-check": {
+        "title": "Secret check",
+        "hint": "Text from agents and the Telegram bot is refused when it looks like a secret: tokens, keys, passwords, addresses, and host names under the domains below."
+      },
+      "telegram": {
+        "title": "Telegram",
+        "hint": "The bot saves what you send it under the inbox, and sends the morning message at 08:00. It serves only your chat. Changes apply when you save, without a restart."
+      },
+      "status": {
+        "title": "Status",
+        "hint": "The last T3 sync and when security data came in. Read only: the sync runs on your PC."
+      },
+      "suppressions": {
+        "title": "Suppressions",
+        "hint": "Threads and T3 projects whose item or project you deleted. The sync never recreates them."
+      }
+    },
+    "groupTitles": {
+      "formats": "Language and formats",
+      "morning": "Morning view",
+      "sessions": "Browser sessions",
+      "telegramBot": "Bot",
+      "telegramCodes": "Sign-in codes",
+      "telegramRuntime": "Bot status",
+      "privateNetwork": "Private network",
+      "sync": "T3 sync",
+      "suppressed": "Not recreated by the sync"
+    },
     "loading": "Loading settings...",
     "failed": "Could not load settings",
-    "general": "General",
     "language": "Language",
     "languageHint": "The board and the Telegram morning message. Default: Hebrew.",
     "dateFormat": "Date format",
@@ -604,8 +654,6 @@
     "saved": "Settings saved",
     "saveFailed": "Could not save settings: {reason}",
     "saveInvalid": "Settings were not saved: {reason}",
-    "status": "Sync",
-    "statusHint": "Read only. The sync runs on your PC.",
     "lastSync": "Last successful T3 sync",
     "lastOutcome": "Last T3 sync run",
     "securityAsOf": "Security data synced",
@@ -650,8 +698,6 @@
     }
   },
   "suppressions": {
-    "title": "Suppressions",
-    "hint": "Threads and T3 projects whose item or project you deleted. The sync never recreates them.",
     "loading": "Loading suppressions...",
     "failed": "Could not load suppressions",
     "empty": "Nothing is suppressed.",
@@ -776,7 +822,6 @@
     "signOutOthersRetry": "Sign out the other browsers"
   },
   "account": {
-    "title": "Account",
     "signedInAs": "Signed in as",
     "sessions": "Signed-in browsers",
     "sessionsHint": "Each browser where you are signed in, and when it is signed out unless you open Mikud there again.",
@@ -839,8 +884,6 @@
     "fileHeading": "Mikud backup codes. Each code signs in once without the authenticator app."
   },
   "agentKeys": {
-    "title": "Agent access",
-    "hint": "Agents and the sync connect with mikud connect: you approve each one in the browser, and it gets its own key with a name and an end date. A key keeps working after you sign out; disconnect it here when a machine is lost or a key leaks.",
     "howTitle": "How to connect",
     "howHint": "Run the command in the Mikud checkout on your computer. It opens Mikud to approve the agent; the key never shows on this page.",
     "how": {
@@ -849,6 +892,7 @@
       "codex": "Codex"
     },
     "howOptions": "{name} sets the name shown below and {days} how long the key works (1 to 365 days, 90 if left out). For Claude Code and Codex the command adds Mikud to the client itself; restart Codex afterwards. If the client's command is missing or fails, it prints the setup once instead, and that can stay in your shell history.",
+    "listTitle": "Connected agents",
     "loading": "Loading the agents...",
     "failed": "Could not load the agents",
     "empty": "No agents connected yet",
@@ -924,8 +968,6 @@
     "toBoard": "Go to the board"
   },
   "telegramSettings": {
-    "title": "Telegram",
-    "hint": "The bot saves what you send it under the inbox, and sends the morning message at 08:00. It serves only your chat. Changes apply when you save, without a restart.",
     "state": "State",
     "states": {
       "off": "Off",
@@ -954,8 +996,6 @@
     "otpNeedsTelegram": "Set up the bot token and the chat ID first."
   },
   "secretCheck": {
-    "title": "Secret check",
-    "hint": "Text from agents and the Telegram bot is refused when it looks like a secret: tokens, keys, passwords, addresses, and host names under the domains below.",
     "domains": "Private domains",
     "domainsHint": "Your private network's domains. A host name under them in agent text is refused.",
     "none": "None",

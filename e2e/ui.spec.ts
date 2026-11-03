@@ -42,8 +42,8 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
 })
 
 test("the stored session opens the board without signing in again", async () => {
-  await page.goto("/settings")
-  await expect(page).toHaveURL(/\/settings$/)
+  await page.goto("/settings/account")
+  await expect(page).toHaveURL(/\/settings\/account$/)
   await expect(page.locator("#account")).toContainText(he.account.thisBrowser)
 })
 
@@ -158,7 +158,7 @@ test("quick add files a note in the inbox", async () => {
 const accountMenu = () => page.getByRole("button", { name: new RegExp(`${he.shell.accountMenu}$`) })
 
 test("signing out asks about unsaved changes, and a failed sign-out keeps them (R3)", async () => {
-  await page.goto("/settings")
+  await page.goto("/settings/telegram")
   const chatId = page.locator("#telegram").getByLabel(he.telegramSettings.chatId, { exact: true })
   await chatId.fill("4242")
   await expect(page.locator(".ui-savebar")).toBeVisible()
@@ -173,7 +173,7 @@ test("signing out asks about unsaved changes, and a failed sign-out keeps them (
   await expect(question).toContainText(he.unsaved.leaveTitle)
   await question.getByRole("button", { name: he.unsaved.stay }).click()
   await expect(question).toHaveCount(0)
-  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page).toHaveURL(/\/settings\/telegram$/)
   await expect(chatId).toHaveValue("4242")
 
   // Leave, but the sign-out fails: it says so, and the draft and its guard stay.
@@ -181,7 +181,7 @@ test("signing out asks about unsaved changes, and a failed sign-out keeps them (
   await signOut()
   await question.getByRole("button", { name: he.unsaved.leave }).click()
   await expect(page.locator(".ui-toast")).toContainText(he.account.signOutFailed.split(":")[0] ?? "")
-  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page).toHaveURL(/\/settings\/telegram$/)
   await expect(chatId).toHaveValue("4242")
   await expect(page.locator(".ui-savebar")).toBeVisible()
   expect(await page.evaluate(async () => (await fetch("/api/v1/session")).status)).toBe(200)
@@ -192,7 +192,7 @@ test("signing out ends this browser's session; a copy of its cookies is refused"
   const other = await browser.newContext({ ...testInfo.project.use, storageState: await page.context().storageState() })
   try {
     // Still on Settings with the draft of the test before: Leave, and this time the sign-out works.
-    await expect(page).toHaveURL(/\/settings$/)
+    await expect(page).toHaveURL(/\/settings\/telegram$/)
     // Only this browser: the other project keeps its stored session.
     await accountMenu().click()
     await page.getByRole("menuitem", { name: he.account.signOut }).click()

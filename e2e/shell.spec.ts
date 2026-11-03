@@ -158,7 +158,7 @@ test("Account settings from the menu takes the menu's Back step: one Back return
   await page.goto("/projects")
   await accountButton().click()
   await page.getByRole("menuitem", { name: he.shell.accountSettings }).click()
-  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page).toHaveURL(/\/settings\/account$/)
   await expect(page.getByRole("menu")).toHaveCount(0)
   await page.goBack()
   await expect(page).toHaveURL(/\/projects$/)
@@ -258,11 +258,11 @@ test("More on a phone: Escape and Back close it, a page chosen in it takes its B
   await expect(page).toHaveURL(/\/projects$/)
 })
 
-test("the sync card opens Settings", async () => {
+test("the sync card opens Settings, Status", async () => {
   test.skip(isPhone(), "the card is in the sidebar")
   await page.goto("/")
   const card = page.locator(".ui-status-card")
   await expect(card).toContainText(he.shell.syncCard)
   await card.click()
-  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page).toHaveURL(/\/settings\/status$/)
 })

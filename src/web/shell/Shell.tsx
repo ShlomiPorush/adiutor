@@ -196,11 +196,21 @@ function Trail() {
             <ChevronRight className="ui-crumb-sep" aria-hidden="true" />
           </li>
         ))}
-        <li className="ui-crumb-current">
+        <li className={meta.tail ? undefined : "ui-crumb-current"}>
           <h1 dir="auto">
-            <span aria-current="page">{meta.title}</span>
+            {meta.tail ? (
+              <Link to={meta.tail.pageTo}>{meta.title}</Link>
+            ) : (
+              <span aria-current="page">{meta.title}</span>
+            )}
           </h1>
         </li>
+        {meta.tail ? (
+          <li className="ui-crumb-current ui-crumb-tail">
+            <ChevronRight className="ui-crumb-sep" aria-hidden="true" />
+            <span aria-current="page">{meta.tail.label}</span>
+          </li>
+        ) : null}
       </ol>
     </nav>
   )

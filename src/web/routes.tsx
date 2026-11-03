@@ -26,7 +26,8 @@ export const PAGES: readonly PageRoute[] = [
   { id: "inbox", path: "/inbox", Component: InboxPage },
   { id: "archive", path: "/archive", Component: ArchivePage },
   { id: "activity", path: "/activity", Component: ActivityPage },
-  { id: "settings", path: "/settings", Component: SettingsPage },
+  // One route for /settings and every /settings/<section>, so the page and its draft stay mounted between sections.
+  { id: "settings", path: "/settings/:section?", Component: SettingsPage },
   { id: "not-found", path: "*", Component: NotFoundPage },
 ]
 

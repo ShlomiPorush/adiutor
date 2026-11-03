@@ -1,12 +1,29 @@
-// Settings, in this order: General (language, formats, closed-item days, how long a browser stays signed in),
-// Account (Better Auth's routes, acting at once), Telegram (the bot token, the chat, sign-in codes), Agent access
-// (agent keys, acting at once), Secret check (private domains), Suppressions and Status. The theme is not a
-// setting: it lives in the shell (the account menu and the theme button). General,
-// Telegram and Secret check share one save bar. A setting the environment sets is locked and names its variable.
+// Settings in sections (v3 FS-8, FS-10, NL-3, SV-1): a section sidebar under the owner's groups (Q-2), General;
+// Security: Account, Agent access, Secret check; Integrations: Telegram; Sync: Status, Suppressions. Each section
+// has its own address, /settings/<section>; /settings and an address that names no section open the first one,
+// replacing the address. Below 1024px the sidebar is one sticky picker. The theme is not a setting: it lives in
+// the shell (the account menu and the theme button).
+//
+// General, Telegram and Secret check share one draft and one save bar above all sections: a change is kept while
+// the owner moves between sections (the unsaved guard keeps moves inside /settings), each section that holds one
+// shows a dot, and a refused field, by the page's own check or by the server, opens its section and takes the
+// focus. Account and Agent access act at once, outside the save bar. A setting the environment sets is locked and
+// names its variable.
 
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import { type FormEvent, useId, useState } from "react"
+import {
+  type FormEvent,
+  type ReactNode,
+  type Ref,
+  type RefObject,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
+import { Link, useLocation, useNavigate, useNavigationType, useParams } from "react-router"
 import { SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 import { LANGUAGES } from "../../shared/enums.ts"
 import { ApiError } from "../api/client.ts"
@@ -25,19 +42,29 @@ import {
 import { type Language, useI18n } from "../i18n/i18n.tsx"
 import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
-import { Copyable } from "../ui/Copyable.tsx"
-import { confirmDialog } from "../ui/confirm.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { SaveBar } from "../ui/SaveBar.tsx"
-import { Empty, ErrorState, errorReason, Loading } from "../ui/states.tsx"
+import { ErrorState, errorReason, Loading } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { useUnsaved } from "../ui/unsaved.tsx"
-import { Panel } from "./parts.tsx"
-import { AccountPanel, useSignOutEverywhere } from "./settings/AccountPanel.tsx"
-import { AgentKeysPanel } from "./settings/AgentKeysPanel.tsx"
-import { EnvLock, Row, SwitchRow } from "./settings/parts.tsx"
+import { AccountSection, useSignOutEverywhere } from "./settings/AccountPanel.tsx"
+import { AgentKeysSection } from "./settings/AgentKeysPanel.tsx"
+import { EnvLock, Group, Row, SwitchRow } from "./settings/parts.tsx"
+import { StatusSection, SuppressionsSection } from "./settings/SyncSections.tsx"
+import {
+  changedSections,
+  type DraftField,
+  FIELD_SECTION,
+  FIRST_SECTION,
+  isSettingsPath,
+  isSettingsSection,
+  refusedField,
+  SETTINGS_GROUPS,
+  type SettingsSection,
+  settingsPath,
+} from "./settings/sections.ts"
 
 export const CLOSED_DAYS_MIN = 1
 export const CLOSED_DAYS_MAX = 365
@@ -83,84 +110,381 @@ export function changedFields(saved: Settings, draft: Draft): SettingsPatch {
   return patch
 }
 
+/** The sections that edit the draft; the others act at once or only show. */
+const FORM_SECTIONS = new Set<SettingsSection>(["general", "telegram", "secret-check"])
+
+/** The section last open during this visit: /settings, from the navigation, reopens it (NL-4). */
+let lastSection: SettingsSection = FIRST_SECTION
+/** Where each scroll area of Settings was, per history entry, so Back and Forward bring it back (NL-3). */
+const scrollMemory = new Map<string, { page: number; content: number }>()
+
+/** Forgets the section and the scroll positions of this visit (tests). */
+export function forgetSettingsVisit(): void {
+  lastSection = FIRST_SECTION
+  scrollMemory.clear()
+}
+
 export function SettingsPage() {
   const { t } = useI18n()
-  usePageMeta(t("settings.title"))
+  const navigate = useNavigate()
+  const { section } = useParams()
+  const active: SettingsSection = isSettingsSection(section)
+    ? section
+    : section === undefined
+      ? lastSection
+      : FIRST_SECTION
+  // /settings opens the section last open during the visit, and an unknown section the first one, in place of the
+  // address, adding no Back step (NL-3, NL-4). A link to a section opens that section. The page stays mounted, so
+  // the draft survives the correction.
+  useEffect(() => {
+    if (isSettingsSection(section)) lastSection = section
+    else navigate(settingsPath(section === undefined ? lastSection : FIRST_SECTION), { replace: true })
+  }, [section, navigate])
+  const sectionTitle = t(`settings.sections.${active}.title`)
+  usePageMeta(t("settings.title"), [], { label: sectionTitle, pageTo: "/settings" })
   const query = usePageQuery({ queryKey: qk.settings, queryFn: api.settings, every: EVERY.slow })
+  const form = useSettingsDraft(query.data, active)
+
+  const pageRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  const refused = form.focusing !== null && FIELD_SECTION[form.focusing] === active
+  useSectionView(refused, pageRef, contentRef, pickerRef)
+  // A refused field takes the focus once its section shows, after the section's own scroll, and comes into view
+  // clear of the sticky picker, the save bar and a toast (SV-1).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when a refusal asks for a field or its section shows
+  useEffect(() => {
+    const field = form.focusing
+    if (!field || FIELD_SECTION[field] !== active) return
+    const element = document.getElementById(form.ids[field])
+    const target =
+      element instanceof HTMLFieldSetElement
+        ? (element.querySelector<HTMLElement>('[aria-pressed="true"]') ?? element.querySelector<HTMLElement>("button"))
+        : element
+    if (target) {
+      target.focus({ preventScroll: true })
+      reveal(target, pageRef.current, contentRef.current, pickerRef.current)
+    }
+    form.focused()
+  }, [form.focusing, active])
+
+  let body: ReactNode
+  if (FORM_SECTIONS.has(active)) {
+    if (form.saved) body = <FormSection section={active} form={form} saved={form.saved} />
+    else if (query.isError)
+      body = <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
+    else body = <Loading label={t("settings.loading")} />
+  } else if (active === "account") body = <AccountSection />
+  else if (active === "agents") body = <AgentKeysSection />
+  else if (active === "status") body = <StatusSection />
+  else body = <SuppressionsSection />
+
   return (
-    <div className="ui-page">
-      <div className="ui-page-narrow ui-section ui-page-has-savebar">
-        <PageHead title={t("settings.title")} description={t("settings.description")} />
-        {query.isPending ? <Loading label={t("settings.loading")} /> : null}
-        {query.isError && !query.data ? (
-          <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
-        ) : null}
-        {query.data ? <SettingsForm saved={query.data} /> : <AccountPanel />}
-        <SuppressionsPanel />
-        <StatusPanel />
+    <div ref={pageRef} className="ui-page ui-set-page">
+      <PageHead title={t("settings.title")} description={t("settings.description")} />
+      <div className="ui-set-layout">
+        <SectionPicker ref={pickerRef} active={active} changed={form.changed} />
+        <SectionNav active={active} changed={form.changed} />
+        <div ref={contentRef} className="ui-set-content">
+          <section id={active} className="ui-set-section" aria-labelledby={`${active}-title`}>
+            <h2 id={`${active}-title`} className="ui-set-title">
+              {sectionTitle}
+            </h2>
+            <p className="ui-set-tabdesc">{t(`settings.sections.${active}.hint`)}</p>
+            {body}
+          </section>
+        </div>
       </div>
+      <SaveBar count={form.count} busy={form.busy} onSave={() => void form.save()} onDiscard={form.discard} />
     </div>
   )
 }
 
-type FieldError = { field: "days" | "idle" | "token" | "chat" | "domain"; text: string }
+/** The sidebar of sections under their group headings; the open one is marked like the main navigation. */
+function SectionNav({ active, changed }: { active: SettingsSection; changed: Set<SettingsSection> }) {
+  const { t } = useI18n()
+  return (
+    <nav className="ui-set-nav" aria-label={t("settings.categories")}>
+      {SETTINGS_GROUPS.map((group) => (
+        <div key={group.id} className="ui-set-navgroup">
+          <p>{t(`settings.groups.${group.id}`)}</p>
+          {group.sections.map((section) => (
+            <Link
+              key={section}
+              to={settingsPath(section)}
+              className="ui-set-tab"
+              aria-current={section === active ? "true" : undefined}
+            >
+              <span>{t(`settings.sections.${section}.title`)}</span>
+              {changed.has(section) ? (
+                <span
+                  className="ui-set-dot"
+                  role="img"
+                  aria-label={t("settings.unsavedHere")}
+                  title={t("settings.unsavedHere")}
+                />
+              ) : null}
+            </Link>
+          ))}
+        </div>
+      ))}
+    </nav>
+  )
+}
 
-/** General, Telegram and Secret check, with one draft and one save bar; Account and Agent access sit between. */
-function SettingsForm({ saved }: { saved: Settings }) {
+/** Below 1024px the sidebar is one sticky picker, the groups as its option groups (FS-10). */
+function SectionPicker({
+  ref,
+  active,
+  changed,
+}: {
+  ref: Ref<HTMLDivElement>
+  active: SettingsSection
+  changed: Set<SettingsSection>
+}) {
+  const { t } = useI18n()
+  const navigate = useNavigate()
+  const id = useId()
+  return (
+    <div ref={ref} className="ui-set-picker">
+      <label htmlFor={id} className="ui-sr-only">
+        {t("settings.category")}
+      </label>
+      <select
+        id={id}
+        className="ui-select"
+        value={active}
+        onChange={(event) => {
+          if (isSettingsSection(event.target.value)) navigate(settingsPath(event.target.value))
+        }}
+      >
+        {SETTINGS_GROUPS.map((group) => (
+          <optgroup key={group.id} label={t(`settings.groups.${group.id}`)}>
+            {group.sections.map((section) => {
+              const name = t(`settings.sections.${section}.title`)
+              return (
+                <option key={section} value={section}>
+                  {changed.has(section) ? t("settings.unsavedOption", { name }) : name}
+                </option>
+              )
+            })}
+          </optgroup>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+/** The area that scrolls the fields: their own column from 1024px wide and 601px tall, the whole page otherwise. */
+const scrollArea = (page: HTMLElement, content: HTMLElement) =>
+  getComputedStyle(content).overflowY !== "visible" ? content : page
+
+/** The height the sticky picker takes at the top of the page, with its gap; 0 where the sidebar shows. */
+const pickerHeight = (picker: HTMLElement | null) =>
+  picker && getComputedStyle(picker).display !== "none" ? picker.offsetHeight + 8 : 0
+
+/**
+ * Where a section opens (NL-3, FS-10). Back and Forward bring each scroll area back to where it was on that
+ * history entry; any other move opens the section at its top: where the fields scroll on their own they go back to
+ * 0, and where the page scrolls as one (under 1024px, short screens) it scrolls to just under the picker, only when
+ * the section starts above it. A move made to show a refused field leaves the scroll to that field. Only the page's
+ * own scroll areas move, never the window (the FS-10 pitfall).
+ */
+function useSectionView(
+  refused: boolean,
+  pageRef: RefObject<HTMLDivElement | null>,
+  contentRef: RefObject<HTMLDivElement | null>,
+  pickerRef: RefObject<HTMLDivElement | null>,
+) {
+  const { key } = useLocation()
+  const navigationType = useNavigationType()
+  const entry = useRef(key)
+  const shown = useRef<string | null>(null)
+
+  // Each scroll of either area is kept for the history entry that shows.
+  useEffect(() => {
+    const page = pageRef.current
+    const content = contentRef.current
+    if (!page || !content) return
+    const keep = () => scrollMemory.set(entry.current, { page: page.scrollTop, content: content.scrollTop })
+    page.addEventListener("scroll", keep, { passive: true })
+    content.addEventListener("scroll", keep, { passive: true })
+    return () => {
+      page.removeEventListener("scroll", keep)
+      content.removeEventListener("scroll", keep)
+    }
+  }, [pageRef, contentRef])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per history entry, before the page paints
+  useLayoutEffect(() => {
+    const previous = shown.current
+    shown.current = key
+    entry.current = key
+    const page = pageRef.current
+    const content = contentRef.current
+    if (!page || !content) return
+    const saved = navigationType === "POP" ? scrollMemory.get(key) : undefined
+    // Started again when StrictMode runs the effect twice: its cleanup stopped the first restore.
+    if (saved) return restoreScroll(page, content, saved)
+    if (previous === null || previous === key || refused) return
+    if (scrollArea(page, content) === content) {
+      content.scrollTop = 0
+      return
+    }
+    const top =
+      content.getBoundingClientRect().top -
+      page.getBoundingClientRect().top +
+      page.scrollTop -
+      pickerHeight(pickerRef.current)
+    if (page.scrollTop > top) page.scrollTo({ top, behavior: "smooth" })
+  }, [key])
+}
+
+/** How long a restore waits for a section's content to arrive (a list read again after its cache went). */
+export const RESTORE_FOR_MS = 5000
+
+/** Input by which the owner scrolls or moves the focus: any of it ends a restore that is still waiting. */
+const OWN_SCROLL = ["wheel", "touchstart", "pointerdown", "focusin"] as const
+
+/**
+ * Brings the scroll areas back to a saved position (NL-3). A section whose content is still loading is shorter than
+ * it was, so the position is set again on every frame until the areas reach it, the owner scrolls by wheel, touch,
+ * the scroll bar or a key or moves the focus into them, another entry shows, or RESTORE_FOR_MS pass. A scroll it
+ * saw no input for (a scroll bar dragged off the main thread, assistive technology) still stops it: before each
+ * write the areas must sit where the last write left them (as the browser clamped it), unless the content grew.
+ * Returns the stop.
+ */
+function restoreScroll(page: HTMLElement, content: HTMLElement, saved: { page: number; content: number }) {
+  const until = performance.now() + RESTORE_FOR_MS
+  let frame = 0
+  const stop = () => {
+    cancelAnimationFrame(frame)
+    for (const type of OWN_SCROLL) {
+      page.removeEventListener(type, stop, true)
+      content.removeEventListener(type, stop, true)
+    }
+    window.removeEventListener("keydown", stop, true)
+  }
+  /** Where the last write left the areas, and how tall they were then. */
+  let wrote: { page: number; content: number; pageHeight: number; contentHeight: number } | null = null
+  const step = () => {
+    if (wrote) {
+      const moved = Math.abs(page.scrollTop - wrote.page) > 1 || Math.abs(content.scrollTop - wrote.content) > 1
+      const grew = page.scrollHeight > wrote.pageHeight || content.scrollHeight > wrote.contentHeight
+      if (moved && !grew) return stop()
+    }
+    page.scrollTop = saved.page
+    content.scrollTop = saved.content
+    wrote = {
+      page: page.scrollTop,
+      content: content.scrollTop,
+      pageHeight: page.scrollHeight,
+      contentHeight: content.scrollHeight,
+    }
+    const reached = Math.abs(page.scrollTop - saved.page) <= 1 && Math.abs(content.scrollTop - saved.content) <= 1
+    if (reached || performance.now() > until) stop()
+    else frame = requestAnimationFrame(step)
+  }
+  for (const type of OWN_SCROLL) {
+    page.addEventListener(type, stop, { capture: true, passive: true })
+    content.addEventListener(type, stop, { capture: true, passive: true })
+  }
+  window.addEventListener("keydown", stop, true)
+  step()
+  return stop
+}
+
+/** Scrolls a field and its note into the visible part of its scroll area: under the picker, above the save bar. */
+function reveal(
+  target: HTMLElement,
+  page: HTMLElement | null,
+  content: HTMLElement | null,
+  picker: HTMLElement | null,
+) {
+  if (!page || !content) return
+  const area = scrollArea(page, content)
+  const bounds = area.getBoundingClientRect()
+  const top = bounds.top + (area === page ? pickerHeight(picker) : 0) + 8
+  let bottom = bounds.bottom - 8
+  const box = target.getBoundingClientRect()
+  const note = document.getElementById(target.getAttribute("aria-describedby") ?? "")
+  const end = Math.max(box.bottom, note?.getBoundingClientRect().bottom ?? 0)
+  // What floats over the page there: the save bar, a toast, the phone tab bar.
+  for (const layer of document.querySelectorAll<HTMLElement>(".ui-savebar, .ui-toast, .ui-tabbar")) {
+    const over = layer.getBoundingClientRect()
+    if (over.height > 0 && over.left < box.right && over.right > box.left && over.top < bottom)
+      bottom = Math.min(bottom, over.top - 8)
+  }
+  if (box.top < top) area.scrollTop -= top - box.top
+  else if (end > bottom) area.scrollTop += Math.min(end - bottom, box.top - top)
+}
+
+type FieldError = { field: DraftField; text: string }
+
+/** The one settings draft for every section, its save bar and its guard (SV-1, R2). */
+function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) {
   const { t, language, setLanguage } = useI18n()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const signOutEverywhere = useSignOutEverywhere()
-  const ids = { days: useId(), idle: useId(), token: useId(), chat: useId(), domain: useId(), error: useId() }
+  const base = useId()
+  const ids: Record<DraftField, string> = {
+    language: `${base}-language`,
+    dateFormat: `${base}-date`,
+    timeFormat: `${base}-time`,
+    closedItemDays: `${base}-days`,
+    sessionIdleDays: `${base}-idle`,
+    otpViaTelegram: `${base}-otp`,
+    botToken: `${base}-token`,
+    chatId: `${base}-chat`,
+    privateDomains: `${base}-domain`,
+  }
+  const errorId = `${base}-error`
   const [draft, setDraft] = useState<Draft>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<FieldError | null>(null)
-  const patch = changedFields(saved, draft)
+  const [focusing, setFocusing] = useState<DraftField | null>(null)
+  const patch = saved ? changedFields(saved, draft) : {}
   const count = Object.keys(patch).length
-  useUnsaved("settings", { count, kind: "leave" })
+  useUnsaved("settings", { count, kind: "leave", keeps: (next) => isSettingsPath(next.pathname) })
 
-  const current = {
-    language: draft.language ?? saved.language,
-    dateFormat: draft.dateFormat ?? saved.dateFormat,
-    timeFormat: draft.timeFormat ?? saved.timeFormat,
-    closedItemDays: draft.closedItemDays ?? String(saved.closedItemDays),
-    sessionIdleDays: draft.sessionIdleDays ?? String(saved.sessionIdleDays),
-    otpViaTelegram: draft.otpViaTelegram ?? saved.otpViaTelegram,
-    chatId: draft.chatId ?? saved.telegram.chatId.value ?? "",
-    privateDomains: draft.privateDomains ?? saved.privateDomains.value,
-  }
   const set = (change: Partial<Draft>) => {
     setDraft((d) => ({ ...d, ...change }))
     setError(null)
   }
-  const example = withFormatPrefs({ dateFormat: current.dateFormat, timeFormat: current.timeFormat }, () =>
-    formatTime(new Date(), { seconds: false }),
-  )
 
-  const refuse = (field: FieldError["field"], label: string, text: string) => {
+  /** Marks a field, opens its section when another one shows, and focuses it there. */
+  const mark = (field: DraftField, text: string) => {
     setError({ field, text })
+    const section = FIELD_SECTION[field]
+    if (section !== active) navigate(settingsPath(section))
+    setFocusing(field)
+  }
+  const refuse = (field: DraftField, label: string, text: string) => {
     showToast(`${label}: ${text}`, "error")
-    document.getElementById(ids[field])?.focus()
+    mark(field, text)
   }
 
   const save = async () => {
+    if (!saved) return
     const outside = (value: number | undefined, min: number, max: number) =>
       value !== undefined && (!Number.isInteger(value) || value < min || value > max)
     if (outside(patch.closedItemDays, CLOSED_DAYS_MIN, CLOSED_DAYS_MAX))
       return refuse(
-        "days",
+        "closedItemDays",
         t("settings.closedDays"),
         t("settings.daysInvalid", { min: CLOSED_DAYS_MIN, max: CLOSED_DAYS_MAX }),
       )
     if (outside(patch.sessionIdleDays, SESSION_IDLE_DAYS_MIN, SESSION_IDLE_DAYS_MAX))
       return refuse(
-        "idle",
+        "sessionIdleDays",
         t("settings.session.idleDays"),
         t("settings.daysInvalid", { min: SESSION_IDLE_DAYS_MIN, max: SESSION_IDLE_DAYS_MAX }),
       )
     if (typeof patch.telegramBotToken === "string" && !BOT_TOKEN.test(patch.telegramBotToken))
-      return refuse("token", t("telegramSettings.botToken"), t("telegramSettings.tokenInvalid"))
+      return refuse("botToken", t("telegramSettings.botToken"), t("telegramSettings.tokenInvalid"))
     if (typeof patch.telegramChatId === "string" && !CHAT_ID.test(patch.telegramChatId))
-      return refuse("chat", t("telegramSettings.chatId"), t("telegramSettings.chatInvalid"))
+      return refuse("chatId", t("telegramSettings.chatId"), t("telegramSettings.chatInvalid"))
     setError(null)
     setBusy(true)
     try {
@@ -179,192 +503,266 @@ function SettingsForm({ saved }: { saved: Settings }) {
         })
       else showToast(t("settings.saved"), "success")
     } catch (failure) {
-      if (failure instanceof ApiError && failure.code === "setting_locked")
-        showToast(t("settings.env.refused"), "error")
-      else if (failure instanceof ApiError && failure.code === "validation_failed")
-        showToast(t("settings.saveInvalid", { reason: errorReason(language, failure) }), "error")
-      else showToast(t("settings.saveFailed", { reason: errorReason(language, failure) }), "error")
+      let text: string
+      if (failure instanceof ApiError && failure.code === "setting_locked") {
+        text = t("settings.env.refused")
+        showToast(text, "error")
+      } else if (failure instanceof ApiError && failure.code === "validation_failed") {
+        text = errorReason(language, failure)
+        showToast(t("settings.saveInvalid", { reason: text }), "error")
+      } else {
+        text = errorReason(language, failure)
+        showToast(t("settings.saveFailed", { reason: text }), "error")
+      }
+      // A refusal that names a field opens that field's section and focuses it (SV-1, R2).
+      const field = failure instanceof ApiError ? refusedField(failure.code, failure.details) : null
+      if (field) mark(field, text)
     } finally {
       setBusy(false)
     }
   }
 
-  const fieldError = (field: FieldError["field"]) =>
+  const discard = () => {
+    setDraft({})
+    setError(null)
+  }
+
+  const fieldError = (field: DraftField) =>
     error?.field === field ? (
-      <p id={ids.error} className="ui-field-error">
+      <p id={errorId} className="ui-field-error">
         {error.text}
       </p>
     ) : null
-  const invalid = (field: FieldError["field"]) =>
-    error?.field === field ? { "aria-invalid": true as const, "aria-describedby": ids.error } : {}
+  const invalid = (field: DraftField) =>
+    error?.field === field ? { "aria-invalid": true as const, "aria-describedby": errorId } : {}
+
+  return {
+    saved,
+    draft,
+    ids,
+    /** The refused field that waits for the focus until its section shows. */
+    focusing,
+    focused: () => setFocusing(null),
+    set,
+    refuse,
+    save,
+    discard,
+    fieldError,
+    invalid,
+    count,
+    busy,
+    error,
+    changed: changedSections(patch),
+  }
+}
+
+type SettingsForm = ReturnType<typeof useSettingsDraft>
+
+/** General, Telegram and Secret check: the parts of the one draft. */
+function FormSection({ section, form, saved }: { section: SettingsSection; form: SettingsForm; saved: Settings }) {
+  const { t } = useI18n()
+  const { draft, ids, set, invalid, fieldError } = form
+  const current = {
+    language: draft.language ?? saved.language,
+    dateFormat: draft.dateFormat ?? saved.dateFormat,
+    timeFormat: draft.timeFormat ?? saved.timeFormat,
+    closedItemDays: draft.closedItemDays ?? String(saved.closedItemDays),
+    sessionIdleDays: draft.sessionIdleDays ?? String(saved.sessionIdleDays),
+    otpViaTelegram: draft.otpViaTelegram ?? saved.otpViaTelegram,
+    chatId: draft.chatId ?? saved.telegram.chatId.value ?? "",
+    privateDomains: draft.privateDomains ?? saved.privateDomains.value,
+  }
+  const example = withFormatPrefs({ dateFormat: current.dateFormat, timeFormat: current.timeFormat }, () =>
+    formatTime(new Date(), { seconds: false }),
+  )
+
+  if (section === "general")
+    return (
+      <>
+        <Group id="settings-formats" title={t("settings.groupTitles.formats")}>
+          <Row label={t("settings.language")} hint={t("settings.languageHint")}>
+            <fieldset id={ids.language} className="ui-seg ui-plain-fieldset">
+              <legend className="ui-sr-only">{t("settings.language")}</legend>
+              {LANGUAGES.map((code) => (
+                <button
+                  key={code}
+                  type="button"
+                  lang={code}
+                  aria-pressed={current.language === code}
+                  onClick={() => set({ language: code as Language })}
+                >
+                  {new Intl.DisplayNames([code], { type: "language" }).of(code)}
+                </button>
+              ))}
+            </fieldset>
+            {fieldError("language")}
+          </Row>
+          <Row label={t("settings.dateFormat")} hint={t("settings.dateFormatHint")} htmlFor={ids.dateFormat}>
+            <select
+              id={ids.dateFormat}
+              className="ui-select"
+              value={current.dateFormat}
+              {...invalid("dateFormat")}
+              onChange={(event) => set({ dateFormat: event.target.value as DateFormat })}
+            >
+              {isDateFormat(current.dateFormat) ? null : (
+                <option value={current.dateFormat}>{current.dateFormat}</option>
+              )}
+              {DATE_FORMATS.map((format) => (
+                <option key={format} value={format}>
+                  {format === "browser" ? t("settings.dateBrowser") : format.toUpperCase()}
+                </option>
+              ))}
+            </select>
+            {fieldError("dateFormat")}
+          </Row>
+          <Row label={t("settings.timeFormat")} hint={t("settings.timeFormatHint")}>
+            <fieldset id={ids.timeFormat} className="ui-seg ui-plain-fieldset">
+              <legend className="ui-sr-only">{t("settings.timeFormat")}</legend>
+              {TIME_FORMATS.map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  aria-pressed={
+                    current.timeFormat === format || (format === "HH:mm" && !isTimeFormat(current.timeFormat))
+                  }
+                  onClick={() => set({ timeFormat: format })}
+                >
+                  {t(`settings.timeFormats.${format === "HH:mm" ? "h24" : format === "h:mm a" ? "h12" : "browser"}`)}
+                </button>
+              ))}
+            </fieldset>
+            <span className="ui-hint ui-num" aria-live="polite">
+              {t("settings.example", { example })}
+            </span>
+            {fieldError("timeFormat")}
+          </Row>
+          <Row label={t("settings.timeZone")} hint={t("settings.timeZoneHint")}>
+            <span className="ui-mono">{APP_TIME_ZONE}</span>
+          </Row>
+        </Group>
+        <Group id="settings-morning" title={t("settings.groupTitles.morning")}>
+          <Row label={t("settings.closedDays")} hint={t("settings.closedDaysHint")} htmlFor={ids.closedItemDays}>
+            <input
+              id={ids.closedItemDays}
+              className="ui-input ui-input-num"
+              type="number"
+              inputMode="numeric"
+              min={CLOSED_DAYS_MIN}
+              max={CLOSED_DAYS_MAX}
+              value={current.closedItemDays}
+              {...invalid("closedItemDays")}
+              onChange={(event) => set({ closedItemDays: event.target.value })}
+            />
+            {fieldError("closedItemDays")}
+          </Row>
+        </Group>
+        <Group id="settings-sessions" title={t("settings.groupTitles.sessions")}>
+          <Row
+            label={t("settings.session.idleDays")}
+            hint={t("settings.session.idleDaysHint")}
+            htmlFor={ids.sessionIdleDays}
+          >
+            <input
+              id={ids.sessionIdleDays}
+              className="ui-input ui-input-num"
+              type="number"
+              inputMode="numeric"
+              min={SESSION_IDLE_DAYS_MIN}
+              max={SESSION_IDLE_DAYS_MAX}
+              value={current.sessionIdleDays}
+              {...invalid("sessionIdleDays")}
+              onChange={(event) => set({ sessionIdleDays: event.target.value })}
+            />
+            {fieldError("sessionIdleDays")}
+          </Row>
+        </Group>
+      </>
+    )
+
+  if (section === "telegram")
+    return (
+      <>
+        <Group id="settings-telegram-bot" title={t("settings.groupTitles.telegramBot")}>
+          <TelegramState saved={saved} />
+          <Row label={t("telegramSettings.botToken")} hint={t("telegramSettings.botTokenHint")} htmlFor={ids.botToken}>
+            <BotTokenField
+              id={ids.botToken}
+              saved={saved.telegram.botToken}
+              draft={draft.botToken}
+              onChange={(botToken) => set({ botToken })}
+              invalidProps={invalid("botToken")}
+            />
+            {fieldError("botToken")}
+          </Row>
+          <Row label={t("telegramSettings.chatId")} hint={t("telegramSettings.chatIdHint")} htmlFor={ids.chatId}>
+            {saved.telegram.chatId.locked ? (
+              <>
+                <input
+                  id={ids.chatId}
+                  className="ui-input"
+                  value={current.chatId}
+                  disabled
+                  dir="ltr"
+                  {...invalid("chatId")}
+                />
+                <EnvLock variable={saved.telegram.chatId.variable} />
+              </>
+            ) : (
+              <input
+                id={ids.chatId}
+                className="ui-input"
+                inputMode="numeric"
+                dir="ltr"
+                maxLength={21}
+                placeholder={t("telegramSettings.notSet")}
+                value={current.chatId}
+                {...invalid("chatId")}
+                onChange={(event) => set({ chatId: event.target.value })}
+              />
+            )}
+            {fieldError("chatId")}
+          </Row>
+        </Group>
+        <Group id="settings-telegram-codes" title={t("settings.groupTitles.telegramCodes")}>
+          <SwitchRow
+            id={ids.otpViaTelegram}
+            label={t("telegramSettings.otp")}
+            hint={t("telegramSettings.otpHint")}
+            checked={current.otpViaTelegram}
+            disabled={saved.telegram.state !== "on" && !saved.otpViaTelegram}
+            invalidProps={invalid("otpViaTelegram")}
+            note={
+              form.error?.field === "otpViaTelegram"
+                ? fieldError("otpViaTelegram")
+                : saved.telegram.state !== "on" && !saved.otpViaTelegram
+                  ? t("telegramSettings.otpNeedsTelegram")
+                  : current.otpViaTelegram
+                    ? t("telegramSettings.otpWarning")
+                    : undefined
+            }
+            onChange={(otpViaTelegram) => set({ otpViaTelegram })}
+          />
+        </Group>
+        <TelegramRuntime on={saved.telegram.state === "on"} />
+      </>
+    )
 
   return (
-    <>
-      <Panel id="general" title={t("settings.general")}>
-        <Row label={t("settings.language")} hint={t("settings.languageHint")}>
-          <fieldset className="ui-seg ui-plain-fieldset">
-            <legend className="ui-sr-only">{t("settings.language")}</legend>
-            {LANGUAGES.map((code) => (
-              <button
-                key={code}
-                type="button"
-                lang={code}
-                aria-pressed={current.language === code}
-                onClick={() => set({ language: code as Language })}
-              >
-                {new Intl.DisplayNames([code], { type: "language" }).of(code)}
-              </button>
-            ))}
-          </fieldset>
-        </Row>
-        <Row label={t("settings.dateFormat")} hint={t("settings.dateFormatHint")} htmlFor={`${ids.days}-date`}>
-          <select
-            id={`${ids.days}-date`}
-            className="ui-select"
-            value={current.dateFormat}
-            onChange={(event) => set({ dateFormat: event.target.value as DateFormat })}
-          >
-            {isDateFormat(current.dateFormat) ? null : <option value={current.dateFormat}>{current.dateFormat}</option>}
-            {DATE_FORMATS.map((format) => (
-              <option key={format} value={format}>
-                {format === "browser" ? t("settings.dateBrowser") : format.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        </Row>
-        <Row label={t("settings.timeFormat")} hint={t("settings.timeFormatHint")}>
-          <fieldset className="ui-seg ui-plain-fieldset">
-            <legend className="ui-sr-only">{t("settings.timeFormat")}</legend>
-            {TIME_FORMATS.map((format) => (
-              <button
-                key={format}
-                type="button"
-                aria-pressed={
-                  current.timeFormat === format || (format === "HH:mm" && !isTimeFormat(current.timeFormat))
-                }
-                onClick={() => set({ timeFormat: format })}
-              >
-                {t(`settings.timeFormats.${format === "HH:mm" ? "h24" : format === "h:mm a" ? "h12" : "browser"}`)}
-              </button>
-            ))}
-          </fieldset>
-          <span className="ui-hint ui-num" aria-live="polite">
-            {t("settings.example", { example })}
-          </span>
-        </Row>
-        <Row label={t("settings.timeZone")} hint={t("settings.timeZoneHint")}>
-          <span className="ui-mono">{APP_TIME_ZONE}</span>
-        </Row>
-        <Row label={t("settings.closedDays")} hint={t("settings.closedDaysHint")} htmlFor={ids.days}>
-          <input
-            id={ids.days}
-            className="ui-input ui-input-num"
-            type="number"
-            inputMode="numeric"
-            min={CLOSED_DAYS_MIN}
-            max={CLOSED_DAYS_MAX}
-            value={current.closedItemDays}
-            {...invalid("days")}
-            onChange={(event) => set({ closedItemDays: event.target.value })}
-          />
-          {fieldError("days")}
-        </Row>
-        <Row label={t("settings.session.idleDays")} hint={t("settings.session.idleDaysHint")} htmlFor={ids.idle}>
-          <input
-            id={ids.idle}
-            className="ui-input ui-input-num"
-            type="number"
-            inputMode="numeric"
-            min={SESSION_IDLE_DAYS_MIN}
-            max={SESSION_IDLE_DAYS_MAX}
-            value={current.sessionIdleDays}
-            {...invalid("idle")}
-            onChange={(event) => set({ sessionIdleDays: event.target.value })}
-          />
-          {fieldError("idle")}
-        </Row>
-      </Panel>
-
-      <AccountPanel />
-
-      <Panel id="telegram" title={t("telegramSettings.title")}>
-        <p className="ui-panel-body ui-hint">{t("telegramSettings.hint")}</p>
-        <TelegramState saved={saved} />
-        <Row label={t("telegramSettings.botToken")} hint={t("telegramSettings.botTokenHint")} htmlFor={ids.token}>
-          <BotTokenField
-            id={ids.token}
-            saved={saved.telegram.botToken}
-            draft={draft.botToken}
-            onChange={(botToken) => set({ botToken })}
-            invalidProps={invalid("token")}
-          />
-          {fieldError("token")}
-        </Row>
-        <Row label={t("telegramSettings.chatId")} hint={t("telegramSettings.chatIdHint")} htmlFor={ids.chat}>
-          {saved.telegram.chatId.locked ? (
-            <>
-              <input id={ids.chat} className="ui-input" value={current.chatId} disabled dir="ltr" />
-              <EnvLock variable={saved.telegram.chatId.variable} />
-            </>
-          ) : (
-            <input
-              id={ids.chat}
-              className="ui-input"
-              inputMode="numeric"
-              dir="ltr"
-              maxLength={21}
-              placeholder={t("telegramSettings.notSet")}
-              value={current.chatId}
-              {...invalid("chat")}
-              onChange={(event) => set({ chatId: event.target.value })}
-            />
-          )}
-          {fieldError("chat")}
-        </Row>
-        <SwitchRow
-          label={t("telegramSettings.otp")}
-          hint={t("telegramSettings.otpHint")}
-          checked={current.otpViaTelegram}
-          disabled={saved.telegram.state !== "on" && !saved.otpViaTelegram}
-          note={
-            saved.telegram.state !== "on" && !saved.otpViaTelegram
-              ? t("telegramSettings.otpNeedsTelegram")
-              : current.otpViaTelegram
-                ? t("telegramSettings.otpWarning")
-                : undefined
-          }
-          onChange={(otpViaTelegram) => set({ otpViaTelegram })}
+    <Group id="settings-private-domains" title={t("settings.groupTitles.privateNetwork")}>
+      <Row label={t("secretCheck.domains")} hint={t("secretCheck.domainsHint")} htmlFor={ids.privateDomains}>
+        <DomainsField
+          id={ids.privateDomains}
+          value={current.privateDomains}
+          locked={saved.privateDomains.locked}
+          variable={saved.privateDomains.variable}
+          invalidProps={invalid("privateDomains")}
+          onChange={(privateDomains) => set({ privateDomains })}
+          onInvalid={(text) => form.refuse("privateDomains", t("secretCheck.domains"), text)}
         />
-        <TelegramRuntimeRows on={saved.telegram.state === "on"} />
-      </Panel>
-
-      <AgentKeysPanel />
-
-      <Panel id="secret-check" title={t("secretCheck.title")}>
-        <p className="ui-panel-body ui-hint">{t("secretCheck.hint")}</p>
-        <Row label={t("secretCheck.domains")} hint={t("secretCheck.domainsHint")} htmlFor={ids.domain}>
-          <DomainsField
-            id={ids.domain}
-            value={current.privateDomains}
-            locked={saved.privateDomains.locked}
-            variable={saved.privateDomains.variable}
-            onChange={(privateDomains) => set({ privateDomains })}
-            onInvalid={(text) => refuse("domain", t("secretCheck.domains"), text)}
-          />
-          {fieldError("domain")}
-        </Row>
-      </Panel>
-
-      <SaveBar
-        count={count}
-        busy={busy}
-        onSave={() => void save()}
-        onDiscard={() => {
-          setDraft({})
-          setError(null)
-        }}
-      />
-    </>
+        {fieldError("privateDomains")}
+      </Row>
+    </Group>
   )
 }
 
@@ -408,7 +806,9 @@ function BotTokenField({
   if (saved.locked)
     return (
       <>
-        <span className="ui-set-secret">{t("telegramSettings.setByEnv")}</span>
+        <span id={id} tabIndex={-1} className="ui-set-secret">
+          {t("telegramSettings.setByEnv")}
+        </span>
         <EnvLock variable={saved.variable} />
       </>
     )
@@ -459,7 +859,12 @@ function BotTokenField({
         </button>
       ) : (
         <>
-          <button type="button" className="ui-btn ui-btn-sm" onClick={() => onChange({ mode: "replace", value: "" })}>
+          <button
+            id={id}
+            type="button"
+            className="ui-btn ui-btn-sm"
+            onClick={() => onChange({ mode: "replace", value: "" })}
+          >
             {t("telegramSettings.replace")}
           </button>
           <button type="button" className="ui-btn ui-btn-sm" onClick={() => onChange({ mode: "remove" })}>
@@ -477,6 +882,7 @@ function DomainsField({
   value,
   locked,
   variable,
+  invalidProps,
   onChange,
   onInvalid,
 }: {
@@ -484,6 +890,7 @@ function DomainsField({
   value: string[]
   locked: boolean
   variable: string | null
+  invalidProps: Record<string, unknown>
   onChange: (next: string[]) => void
   onInvalid: (text: string) => void
 }) {
@@ -537,6 +944,7 @@ function DomainsField({
             spellCheck={false}
             placeholder={t("secretCheck.placeholder")}
             value={typed}
+            {...invalidProps}
             onChange={(event) => setTyped(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") add(event)
@@ -554,10 +962,10 @@ function DomainsField({
 const JOB_TONE = { sent: "ok", sending: "info", failed: "fail", unknown: "warn", skipped: "warn" } as const
 
 /** What the running bot reports, and the test message, while Telegram is on. */
-function TelegramRuntimeRows({ on }: { on: boolean }) {
+function TelegramRuntime({ on }: { on: boolean }) {
   const { t, language } = useI18n()
   const [sendingTest, setSendingTest] = useState(false)
-  const telegram = usePageQuery({ queryKey: qk.telegram, queryFn: api.telegramStatus, every: EVERY.slow })
+  const telegram = usePageQuery({ queryKey: qk.telegram, queryFn: api.telegramStatus, every: EVERY.slow, enabled: on })
   const sendTest = async () => {
     setSendingTest(true)
     try {
@@ -574,169 +982,61 @@ function TelegramRuntimeRows({ on }: { on: boolean }) {
       setSendingTest(false)
     }
   }
-  if (!on) return null
-  if (telegram.isError && !telegram.data)
-    return (
-      <div className="ui-panel-body">
-        <ErrorState
-          title={t("settings.telegramFailed")}
-          error={telegram.error}
-          onRetry={() => void telegram.refetch()}
-        />
-      </div>
-    )
-  if (!telegram.data) return null
+  if (!on || (!telegram.data && !telegram.isError)) return null
   return (
-    <>
-      <div className="ui-kv">
-        <span>{t("settings.bot")}</span>
-        <span>
-          <Tag tone={telegram.data.polling ? "ok" : "warn"}>
-            {telegram.data.polling ? t("settings.botPolling") : t("settings.botNotPolling")}
-          </Tag>
-        </span>
-      </div>
-      <div className="ui-kv">
-        <span>{t("settings.lastUpdate")}</span>
-        <span>
-          {telegram.data.lastUpdateAt ? (
-            <Time value={telegram.data.lastUpdateAt} mode="full" />
-          ) : (
-            t("settings.noUpdateYet")
-          )}
-        </span>
-      </div>
-      <div className="ui-kv">
-        <span>{t("settings.lastMorning")}</span>
-        <span>
-          {telegram.data.lastMorning ? (
-            <>
-              <Time value={telegram.data.lastMorning.at ?? telegram.data.lastMorning.localDate} mode="day" />{" "}
-              <Tag tone={JOB_TONE[telegram.data.lastMorning.state]}>
-                {t(`settings.job.${telegram.data.lastMorning.state}`)}
+    <Group id="settings-telegram-runtime" title={t("settings.groupTitles.telegramRuntime")}>
+      {telegram.isError && !telegram.data ? (
+        <div className="ui-panel-body">
+          <ErrorState
+            title={t("settings.telegramFailed")}
+            error={telegram.error}
+            onRetry={() => void telegram.refetch()}
+          />
+        </div>
+      ) : null}
+      {telegram.data ? (
+        <>
+          <div className="ui-kv">
+            <span>{t("settings.bot")}</span>
+            <span>
+              <Tag tone={telegram.data.polling ? "ok" : "warn"}>
+                {telegram.data.polling ? t("settings.botPolling") : t("settings.botNotPolling")}
               </Tag>
-            </>
-          ) : (
-            t("settings.noMorningYet")
-          )}
-        </span>
-      </div>
-      <div className="ui-panel-body">
-        <p className="ui-hint">{t("settings.telegramTestHint")}</p>
-        <button type="button" className="ui-btn" disabled={sendingTest} onClick={() => void sendTest()}>
-          {sendingTest ? t("settings.telegramTestSending") : t("settings.telegramTest")}
-        </button>
-      </div>
-    </>
-  )
-}
-
-function SuppressionsPanel() {
-  const { t, language } = useI18n()
-  const queryClient = useQueryClient()
-  const query = usePageQuery({ queryKey: qk.suppressions, queryFn: api.suppressions, every: EVERY.slow })
-  const list = query.data ?? []
-  const remove = async (id: string, label: string) => {
-    const ok = await confirmDialog({
-      title: t("suppressions.removeTitle", { label }),
-      message: t("suppressions.removeMessage"),
-      confirmText: t("suppressions.remove"),
-      danger: true,
-    })
-    if (!ok) return
-    try {
-      await api.deleteSuppression(id)
-      showToast(t("suppressions.removed", { label }), "success")
-      await queryClient.invalidateQueries({ queryKey: qk.suppressions })
-    } catch (error) {
-      showToast(t("suppressions.removeFailed", { label, reason: errorReason(language, error) }), "error")
-    }
-  }
-  return (
-    <Panel id="suppressions" title={t("suppressions.title")} count={query.data ? list.length : undefined}>
-      <p className="ui-panel-body ui-hint">{t("suppressions.hint")}</p>
-      {query.isPending ? <Loading label={t("suppressions.loading")} /> : null}
-      {query.isError && !query.data ? (
-        <ErrorState title={t("suppressions.failed")} error={query.error} onRetry={() => void query.refetch()} />
-      ) : null}
-      {query.data && list.length === 0 ? (
-        <Empty title={t("suppressions.empty")} hint={t("suppressions.emptyHint")} />
-      ) : null}
-      {list.map((entry) => {
-        const label = entry.label ?? entry.externalId
-        return (
-          <div key={entry.id} className="ui-item">
-            <div className="ui-item-main">
-              <span className="ui-item-title">
-                <bdi dir="auto">{label}</bdi>
-              </span>
-              <span className="ui-item-meta">
-                <Tag tone="neutral" line>
-                  {t(`suppressions.kind.${entry.kind}`)}
-                </Tag>
-                <Copyable value={entry.externalId} />
-                <span>
-                  {t("suppressions.since")} <Time value={entry.createdAt} />
-                </span>
-              </span>
-            </div>
-            <div className="ui-item-end">
-              <button
-                type="button"
-                className="ui-btn ui-btn-sm ui-btn-danger"
-                onClick={() => void remove(entry.id, label)}
-              >
-                {t("suppressions.remove")}
-              </button>
-            </div>
+            </span>
           </div>
-        )
-      })}
-    </Panel>
-  )
-}
-
-const OUTCOME_TONE = { succeeded: "ok", partial: "warn", failed: "fail" } as const
-
-function StatusPanel() {
-  const { t } = useI18n()
-  const morning = useQuery({ queryKey: qk.morning, queryFn: api.morning, staleTime: EVERY.live })
-  const runs = usePageQuery({ queryKey: qk.syncRuns, queryFn: api.syncRuns, every: EVERY.slow })
-  const sync = morning.data?.sync
-  const lastT3 = runs.data?.find((run) => run.kind === "t3" && run.outcome)
-  return (
-    <Panel id="status" title={t("settings.status")}>
-      <p className="ui-panel-body ui-hint">{t("settings.statusHint")}</p>
-      <div className="ui-kv">
-        <span>{t("settings.lastSync")}</span>
-        <span>
-          {sync?.lastSuccessAt ? <Time value={sync.lastSuccessAt} mode="full" /> : sync ? t("sync.never") : "-"}{" "}
-          {sync?.stale ? <Tag tone="warn">{t("security.stale")}</Tag> : null}
-        </span>
-      </div>
-      <div className="ui-kv">
-        <span>{t("settings.lastOutcome")}</span>
-        <span>
-          {lastT3?.outcome ? (
-            <>
-              <Tag tone={OUTCOME_TONE[lastT3.outcome]}>{t(`settings.outcome.${lastT3.outcome}`)}</Tag>{" "}
-              <Time value={lastT3.finishedAt ?? lastT3.startedAt} />
-            </>
-          ) : (
-            "-"
-          )}
-        </span>
-      </div>
-      <div className="ui-kv">
-        <span>{t("settings.securityAsOf")}</span>
-        <span>
-          {sync?.securityLastSuccessAt ? (
-            <Time value={sync.securityLastSuccessAt} mode="full" />
-          ) : (
-            t("security.asOfUnknown")
-          )}
-        </span>
-      </div>
-    </Panel>
+          <div className="ui-kv">
+            <span>{t("settings.lastUpdate")}</span>
+            <span>
+              {telegram.data.lastUpdateAt ? (
+                <Time value={telegram.data.lastUpdateAt} mode="full" />
+              ) : (
+                t("settings.noUpdateYet")
+              )}
+            </span>
+          </div>
+          <div className="ui-kv">
+            <span>{t("settings.lastMorning")}</span>
+            <span>
+              {telegram.data.lastMorning ? (
+                <>
+                  <Time value={telegram.data.lastMorning.at ?? telegram.data.lastMorning.localDate} mode="day" />{" "}
+                  <Tag tone={JOB_TONE[telegram.data.lastMorning.state]}>
+                    {t(`settings.job.${telegram.data.lastMorning.state}`)}
+                  </Tag>
+                </>
+              ) : (
+                t("settings.noMorningYet")
+              )}
+            </span>
+          </div>
+          <div className="ui-panel-body">
+            <p className="ui-hint">{t("settings.telegramTestHint")}</p>
+            <button type="button" className="ui-btn" disabled={sendingTest} onClick={() => void sendTest()}>
+              {sendingTest ? t("settings.telegramTestSending") : t("settings.telegramTest")}
+            </button>
+          </div>
+        </>
+      ) : null}
+    </Group>
   )
 }

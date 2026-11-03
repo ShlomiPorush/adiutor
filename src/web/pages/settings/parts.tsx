@@ -1,10 +1,39 @@
-// The rows of the Settings page: label and explanation at the start, the control at the end (v3 FS-8), the lock of a
-// setting the environment sets (FS-6), and an on/off switch built from a real checkbox whose whole row is its label
-// (FS-1, FS-2).
+// The parts of a Settings section: a group, a small panel with a 13px title; rows with the label and explanation at
+// the start and the control at the end (v3 FS-8), the lock of a setting the environment sets (FS-6), and an on/off
+// switch built from a real checkbox whose whole row is its label (FS-1, FS-2).
 
 import { Lock } from "lucide-react"
 import { type ReactNode, useId } from "react"
+import { formatNumber } from "../../format/number.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
+
+/** A group of a section: a small panel with a 13px title, its count and its list actions at the end of its head. */
+export function Group({
+  id,
+  title,
+  count,
+  extra,
+  children,
+}: {
+  id: string
+  title: string
+  count?: number
+  extra?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <section id={id} className="ui-panel ui-set-group" aria-labelledby={`${id}-title`}>
+      <div className="ui-set-group-head">
+        <h3 id={`${id}-title`} className="ui-set-group-title">
+          {title}
+        </h3>
+        {count !== undefined ? <span className="ui-count">{formatNumber(count)}</span> : null}
+        {extra}
+      </div>
+      {children}
+    </section>
+  )
+}
 
 export function Row({
   label,
@@ -49,13 +78,17 @@ export function EnvLock({ variable }: { variable: string | null }) {
 
 /** An on/off setting: the whole row flips it; a locked one says why in a visible note. */
 export function SwitchRow({
+  id: givenId,
   label,
   hint,
   checked,
   onChange,
   disabled,
   note,
+  invalidProps,
 }: {
+  /** The checkbox id, when the page focuses it (a refused save). */
+  id?: string
   label: string
   hint: ReactNode
   checked: boolean
@@ -63,8 +96,10 @@ export function SwitchRow({
   disabled?: boolean
   /** Why the switch cannot change now; shown under the hint. */
   note?: ReactNode
+  invalidProps?: Record<string, unknown>
 }) {
-  const id = useId()
+  const ownId = useId()
+  const id = givenId ?? ownId
   return (
     <div className={`ui-set-row ui-set-bool${disabled ? " is-locked" : ""}`}>
       <label className="ui-set-bool-main" htmlFor={id}>
@@ -76,6 +111,7 @@ export function SwitchRow({
           className="ui-switch"
           checked={checked}
           disabled={disabled}
+          {...invalidProps}
           onChange={(event) => onChange(event.target.checked)}
         />
         <span className="ui-set-bool-text">

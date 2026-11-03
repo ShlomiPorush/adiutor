@@ -72,7 +72,7 @@ export function Dialog(props: DialogProps) {
     // biome-ignore lint/a11y/useKeyWithClickEvents: as above
     <div
       ref={backdropRef}
-      className="ui-dialog-backdrop"
+      className={isQuestion ? "ui-dialog-backdrop ui-confirm" : "ui-dialog-backdrop"}
       data-layer="dialog"
       onMouseDown={(event) => {
         pressedOnBackdrop.current = event.target === event.currentTarget

@@ -106,6 +106,26 @@ describe("layers under StrictMode", () => {
     }
   })
 
+  it("a layer's history entry is one step after the page's, so a link that replaces it keeps the order", async () => {
+    const back = vi.spyOn(history, "back").mockImplementation(() => {})
+    try {
+      // React Router's own entry for the page: its key and its place in the history.
+      history.replaceState({ usr: null, key: "page", idx: 3 }, "")
+      await render(
+        <Dialog title="Quick add" size="sm" onClose={() => {}}>
+          <textarea />
+        </Dialog>,
+      )
+      expect(history.state).toMatchObject({ key: "page", idx: 4, mikudLayer: true })
+      await unmount()
+      await Promise.resolve()
+      expect(back).toHaveBeenCalledTimes(1)
+    } finally {
+      back.mockRestore()
+      history.replaceState(null, "")
+    }
+  })
+
   it("the bell window keeps its list in the page", async () => {
     await render(<Bell morning={undefined} failed={false} place="top" />)
     const button = document.body.querySelector<HTMLButtonElement>("button.ui-bell")

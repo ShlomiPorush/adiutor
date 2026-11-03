@@ -20,13 +20,21 @@ export class ApiError extends Error {
   readonly code: ApiErrorCode | "network" | "unknown"
   /** The server's own sentence, shown as the reason after the UI's own text. */
   readonly serverMessage: string | null
+  /** The error's other fields (docs/api.md, "Details"), such as `variable`, `field` or `issues`. */
+  readonly details: Record<string, unknown>
 
-  constructor(status: number, code: ApiError["code"], serverMessage: string | null) {
+  constructor(
+    status: number,
+    code: ApiError["code"],
+    serverMessage: string | null,
+    details: Record<string, unknown> = {},
+  ) {
     super(serverMessage ?? code)
     this.name = "ApiError"
     this.status = status
     this.code = code
     this.serverMessage = serverMessage
+    this.details = details
   }
 }
 
@@ -81,7 +89,10 @@ function errorFrom(status: number, body: unknown): ApiError {
       ? (error.code as ApiErrorCode)
       : null
   const message = typeof error?.message === "string" && error.message.trim() ? error.message.trim() : null
-  if (code) return new ApiError(status, code, message)
+  if (code) {
+    const { code: _code, message: _message, ...details } = error as Record<string, unknown>
+    return new ApiError(status, code, message, details)
+  }
   if (status === 401) return new ApiError(status, "unauthorized", message)
   if (status === 403) return new ApiError(status, "forbidden", message)
   if (status === 404) return new ApiError(status, "not_found", message)

@@ -115,6 +115,7 @@ function BellWindow({
   const closeRef = useRef(onClose)
   closeRef.current = onClose
   const pressedOutside = useRef(false)
+  const { pathname } = useLocation()
   const [place, setPlace] = useState<{ top: number; inset: number }>({ top: 70, inset: 16 })
   const { count } = attentionOf(morning)
 
@@ -179,7 +180,16 @@ function BellWindow({
           <AttentionList morning={morning} failed={failed} onDone={() => closeRef.current()} />
         </div>
         <div className="ui-attn-foot">
-          <Link to="/" replace className="ui-link" onClick={() => closeRef.current()}>
+          {/* Another page: the link takes the window's entry and the window closes once the page shows, so Stay in
+              the Leave question keeps it open. On the morning view already, it only closes. */}
+          <Link
+            to="/"
+            replace
+            className="ui-link"
+            onClick={() => {
+              if (pathname === "/") closeRef.current()
+            }}
+          >
             {t("bell.openMorning")}
           </Link>
         </div>

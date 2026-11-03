@@ -67,11 +67,16 @@ describe("request and endpoints", () => {
     })
   })
 
-  it("turns {error: {code, message}} into an ApiError with the server's code and sentence", async () => {
+  it("turns {error: {code, message, ...details}} into an ApiError with the server's code, sentence and details", async () => {
     setTransport(answer(409, { error: { code: "version_conflict", message: "The item changed.", currentVersion: 5 } }))
     const error = await api.updateItem("i1", 4, { title: "x" }).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(ApiError)
-    expect(error).toMatchObject({ status: 409, code: "version_conflict", serverMessage: "The item changed." })
+    expect(error).toMatchObject({
+      status: 409,
+      code: "version_conflict",
+      serverMessage: "The item changed.",
+      details: { currentVersion: 5 },
+    })
   })
 
   it("names an answer without a known code by its HTTP status", async () => {
