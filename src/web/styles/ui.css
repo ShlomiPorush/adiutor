@@ -14,6 +14,7 @@
 
   --ui-fs: 14px;
   --ui-fs-sm: 12.5px;
+  --ui-fs-xs: 11px;
   --ui-fs-meta: 12px;
   --ui-fs-ctl: 13px;
   --ui-fs-panel: 15px;
@@ -33,7 +34,8 @@
   --ui-touch: 44px;
   --ui-side-w: 240px;
   --ui-rail-w: 72px;
-  --ui-topbar-h: 60px;
+  --ui-topbar-h: 64px;
+  --ui-frame-gap: 8px;
   --ui-mtop-h: 56px;
   --ui-tabbar-h: 64px;
 
@@ -59,11 +61,12 @@
   --ui-fail: #c42b1c;
   --ui-info: #1f5fbf;
 
-  --ui-side: #ffffff;
-  --ui-side-ink: #1b2420;
-  --ui-side-muted: #6b7671;
-  --ui-side-on: #111814;
-  --ui-side-on-ink: #ffffff;
+  /* The shell (n8n-ops Regular): the grey canvas under the page card, the soft fill of the current page. */
+  --ui-canvas: var(--ui-panel);
+  --ui-fill: color-mix(in srgb, var(--ui-ink) 8%, transparent);
+  --ui-hover: color-mix(in srgb, var(--ui-ink) 5%, transparent);
+  --ui-shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --ui-card-ring: color-mix(in srgb, var(--ui-ink) 10%, transparent);
 
   color-scheme: light;
 }
@@ -84,11 +87,7 @@
   --ui-fail: #ff6b61;
   --ui-info: #7db3ff;
 
-  --ui-side: #0e1110;
-  --ui-side-ink: #e9eeeb;
-  --ui-side-muted: #86918b;
-  --ui-side-on: #f2f5f3;
-  --ui-side-on-ink: #0e1110;
+  --ui-shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.3);
 
   color-scheme: dark;
 }
@@ -183,21 +182,31 @@ button {
 
 /* ---------- Shell ---------- */
 
+/*
+ * Copied from n8n-ops' shell in its Regular design (apps/web/src/app/shell.tsx at afba697), with Mikud's tokens:
+ * the sidebar and the brand on a grey canvas, the top bar and the page in one floating card. The card is drawn
+ * behind them (.ui-frame), so their order for the keyboard and screen readers stays as is. Above 1100px the
+ * sidebar folds into the icon rail (html[data-nav="rail"], NL-7); from 761 to 1100px it is always the rail.
+ */
 .ui-shell {
   display: grid;
   height: 100dvh;
   grid-template-columns: var(--ui-side-w) minmax(0, 1fr);
+  grid-template-rows: var(--ui-topbar-h) minmax(0, 1fr);
+  background: var(--ui-canvas);
+  transition: grid-template-columns 0.18s ease;
 }
-.ui-sidenav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  height: 100%;
-  overflow-y: auto;
-  padding: 14px 10px;
-  background: var(--ui-side);
-  color: var(--ui-side-ink);
-  border-inline-end: 1px solid var(--ui-line);
+.ui-frame {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  margin: var(--ui-frame-gap);
+  margin-inline-start: 0;
+  border-radius: var(--ui-radius);
+  background: var(--ui-bg);
+  box-shadow:
+    var(--ui-shadow-card),
+    0 0 0 1px var(--ui-card-ring);
+  pointer-events: none;
 }
 .ui-brand {
   display: flex;
@@ -225,6 +234,171 @@ button {
   width: 18px;
   height: 18px;
 }
+
+/* The top bar from 761px (NL-6): the brand over the sidebar's column, the bar over the page's. */
+.ui-topbar {
+  grid-column: 1 / 3;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: subgrid;
+  min-width: 0;
+  height: var(--ui-topbar-h);
+}
+.ui-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding-inline: 18px 10px;
+}
+.ui-bar-brand {
+  display: flex;
+  flex: none;
+  border-radius: var(--ui-radius-sm);
+}
+.ui-bar-brand-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.25;
+}
+.ui-bar-brand-text b,
+.ui-bar-brand-text span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ui-bar-brand-text b {
+  font-size: var(--ui-fs-h2);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ui-bar-brand-text span {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+.ui-topbar-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin-top: var(--ui-frame-gap);
+  margin-inline-end: var(--ui-frame-gap);
+  border-bottom: 1px solid var(--ui-line);
+}
+/* The fold toggle sits at the start of the bar behind a short divider, only where the full sidebar exists. */
+.ui-topbar-fold {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-inline-start: 12px;
+}
+.ui-topbar-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--ui-line);
+}
+/* The sidebar is on the right under RTL, so its fold icon points the other way. */
+[dir="rtl"] .ui-flip-rtl {
+  transform: scaleX(-1);
+}
+.ui-trail {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding-inline: 22px;
+}
+.ui-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ui-fs);
+  color: var(--ui-muted);
+}
+.ui-crumbs li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: none;
+  white-space: nowrap;
+}
+.ui-crumbs li.ui-crumb-current {
+  flex: 0 1 auto;
+}
+.ui-crumbs a {
+  color: inherit;
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+@media (hover: hover) {
+  .ui-crumbs a:hover {
+    text-decoration: underline;
+  }
+}
+.ui-crumb-current h1 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ui-ink);
+  font-size: inherit;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+.ui-crumbs li + .ui-crumb-current h1 {
+  font-weight: 600;
+}
+.ui-crumb-sep {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+[dir="rtl"] .ui-crumb-sep {
+  transform: scaleX(-1);
+}
+.ui-topbar-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-inline-start: 12px;
+}
+.ui-topbar-actions:empty {
+  display: none;
+}
+.ui-topbar-end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  margin-inline: 10px 22px;
+}
+.ui-kbd {
+  padding: 0 5px;
+  border: 1px solid var(--ui-line);
+  border-radius: 4px;
+  color: var(--ui-muted);
+  font-family: var(--ui-mono);
+  font-size: var(--ui-fs-xs);
+  line-height: 16px;
+}
+
+/* The sidebar: on the canvas, the pages, then at its foot the sync card, the account and the theme. */
+.ui-sidenav {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 10px;
+  color: var(--ui-ink);
+}
 .ui-nav {
   display: flex;
   flex-direction: column;
@@ -236,32 +410,32 @@ button {
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 34px;
-  padding: 6px 10px;
+  min-height: 32px;
+  padding: 0 10px;
   border: 0;
   border-radius: var(--ui-radius-sm);
   background: none;
-  color: var(--ui-side-ink);
+  color: var(--ui-ink);
   font-weight: 500;
   text-align: start;
   text-decoration: none;
   cursor: pointer;
+  transition: background-color 0.15s ease;
 }
 .ui-nav-item svg {
   width: 18px;
   height: 18px;
   flex: none;
-  color: var(--ui-side-muted);
+  color: var(--ui-muted);
 }
 @media (hover: hover) {
   .ui-nav-item:hover {
-    background: color-mix(in srgb, var(--ui-side-ink) 8%, transparent);
+    background: var(--ui-hover);
   }
 }
 .ui-nav-item[aria-current="page"] {
-  background: var(--ui-side-on);
-  color: var(--ui-side-on-ink);
-  font-weight: 650;
+  background: var(--ui-fill);
+  font-weight: 600;
 }
 .ui-nav-item[aria-current="page"] svg {
   color: inherit;
@@ -269,125 +443,143 @@ button {
 .ui-nav-count {
   margin-inline-start: auto;
   padding: 1px 7px;
-  border-radius: var(--ui-radius-tag);
+  border-radius: 999px;
   font-size: 11.5px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--ui-warn);
   background: color-mix(in srgb, var(--ui-warn) 18%, transparent);
 }
-.ui-nav-item[aria-current="page"] .ui-nav-count {
-  background: transparent;
-  color: inherit;
-}
 .ui-side-foot {
   display: grid;
-  gap: 8px;
+  gap: 4px;
   margin-top: auto;
-  padding: 14px 10px 0;
-  color: var(--ui-side-muted);
-  font-size: var(--ui-fs-meta);
+  padding-top: 14px;
 }
-.ui-side-sync {
+.ui-status-card {
   display: flex;
   align-items: center;
-  gap: 6px;
-  line-height: 1.4;
+  gap: 10px;
+  min-width: 0;
+  margin-inline: 4px;
+  padding: 8px 12px;
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-ink);
+  text-decoration: none;
 }
-/* biome-ignore lint/style/noDescendingSpecificity: icon sizes per component; each rule targets its own component */
-.ui-side-sync svg {
-  width: 14px;
-  height: 14px;
+@media (hover: hover) {
+  .ui-status-card:hover {
+    background: var(--ui-hover);
+  }
+}
+.ui-status-dot {
+  width: 8px;
+  height: 8px;
   flex: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ui-muted) 50%, transparent);
 }
-.ui-side-sync.is-stale {
+.ui-status-card[data-sync-tone="ok"] .ui-status-dot {
+  background: var(--ui-ok);
+}
+.ui-status-card[data-sync-tone="warn"] .ui-status-dot {
+  background: var(--ui-warn);
+}
+.ui-status-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.35;
+}
+.ui-status-text > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ui-status-text b {
+  font-size: var(--ui-fs-ctl);
+  font-weight: 600;
+}
+.ui-status-text > span {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+.ui-status-text > span.ui-text-warn {
   color: var(--ui-warn);
 }
 .ui-utilities {
   display: flex;
-  gap: 2px;
-  margin-inline-start: -6px;
-}
-
-.ui-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  height: 100dvh;
-  overflow: hidden;
-}
-.ui-topbar {
-  display: flex;
   align-items: center;
-  gap: 12px;
-  flex: none;
-  height: var(--ui-topbar-h);
-  padding-inline: 28px 20px;
-  border-bottom: 1px solid var(--ui-line);
+  gap: 4px;
+  padding-inline: 4px;
 }
-.ui-crumbs {
+.ui-account-btn {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--ui-fs-ctl);
-  color: var(--ui-muted);
-}
-.ui-crumbs li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  white-space: nowrap;
-}
-.ui-crumbs a {
-  text-decoration: none;
-}
-@media (hover: hover) {
-  .ui-crumbs a:hover {
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-}
-.ui-crumbs [aria-current="page"] {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--ui-ink);
-  font-weight: 650;
-}
-.ui-crumb-sep {
-  flex: none;
-  width: 14px;
-  height: 14px;
-}
-[dir="rtl"] .ui-crumb-sep {
-  transform: scaleX(-1);
-}
-.ui-topbar-end {
-  display: flex;
+  flex: 1;
   align-items: center;
   gap: 10px;
-  margin-inline-start: auto;
+  min-width: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: none;
+  color: var(--ui-ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
 }
-.ui-kbd {
-  padding: 0 5px;
-  border: 1px solid var(--ui-line);
-  border-radius: 4px;
+.ui-account-btn[aria-expanded="true"] {
+  background: var(--ui-hover);
+}
+@media (hover: hover) {
+  .ui-account-btn:hover {
+    background: var(--ui-hover);
+  }
+}
+.ui-account-btn.is-compact {
+  flex: none;
+}
+.ui-avatar {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ui-fill);
+  font-size: var(--ui-fs-meta);
+  font-weight: 700;
+}
+.ui-account-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.3;
+}
+.ui-account-name {
+  overflow: hidden;
+  font-size: var(--ui-fs-ctl);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ui-account-sub {
   color: var(--ui-muted);
-  font-family: var(--ui-mono);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--ui-fs-meta);
 }
+
+/* The page: in the card, under the bar; it scrolls inside (NL-1). */
 .ui-content {
+  grid-column: 2;
+  grid-row: 2;
   display: flex;
   flex-direction: column;
-  flex: 1;
+  min-width: 0;
   min-height: 0;
-  padding: 22px 28px 0;
+  overflow: hidden;
+  margin-inline-end: var(--ui-frame-gap);
+  margin-bottom: var(--ui-frame-gap);
+  padding: 22px 22px 0;
+  border-end-start-radius: var(--ui-radius);
+  border-end-end-radius: var(--ui-radius);
 }
 .ui-page {
   display: flex;
@@ -407,23 +599,58 @@ button {
   width: 100%;
   max-width: 1180px;
 }
+/* A page's head: from 761px its icon, its name drawn large and its description; the h1 is in the top bar. */
 .ui-page-head {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px 16px;
+  align-items: flex-start;
+  gap: 14px;
   margin-bottom: 4px;
 }
-.ui-page-head > div:first-child {
-  min-width: 0;
-  flex: 1 1 320px;
-}
-.ui-page-head p {
-  margin: 6px 0 0;
+.ui-page-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  margin-top: 2px;
+  border-radius: var(--ui-radius);
+  background: var(--ui-panel);
   color: var(--ui-muted);
+  box-shadow:
+    var(--ui-shadow-card),
+    0 0 0 1px var(--ui-card-ring);
+}
+/* biome-ignore lint/style/noDescendingSpecificity: icon sizes per component; each rule targets its own component */
+.ui-page-icon svg {
+  width: 20px;
+  height: 20px;
+}
+.ui-page-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.ui-page-head-text > .ui-h1 {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.ui-page-desc,
+.ui-page-head-text > p {
+  margin: 4px 0 0;
+  color: var(--ui-muted);
+}
+.ui-page-head-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.ui-page-head-row > .ui-h1 {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .ui-page-actions {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   gap: 8px;
 }
@@ -435,6 +662,219 @@ button {
 .ui-mtop,
 .ui-tabbar {
   display: none;
+}
+
+/* ---------- The account menu (MP-7, DS-24): a layer of ui/layers.ts, built only by ui/Menu.tsx ---------- */
+
+.ui-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 56;
+}
+.ui-menu {
+  position: fixed;
+  z-index: 57;
+  width: 224px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-raise);
+  color: var(--ui-ink);
+  box-shadow:
+    var(--ui-shadow-float),
+    0 0 0 1px var(--ui-line);
+}
+.ui-menu-header {
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+}
+.ui-account-head-name {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ui-account-head-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+/* biome-ignore lint/style/noDescendingSpecificity: icon sizes per component; each rule targets its own component */
+.ui-account-head-sub svg {
+  width: 12px;
+  height: 12px;
+}
+.ui-menu-sep {
+  height: 1px;
+  margin: 4px -4px;
+  border: 0;
+  background: var(--ui-line);
+}
+.ui-menu-label {
+  padding: 6px 10px 2px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+  font-weight: 600;
+}
+.ui-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ui-ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+/* biome-ignore lint/style/noDescendingSpecificity: icon sizes per component; each rule targets its own component */
+.ui-menu-item svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--ui-muted);
+}
+.ui-menu-item:focus-visible {
+  outline-offset: -2px;
+  background: var(--ui-hover);
+}
+@media (hover: hover) {
+  .ui-menu-item:hover {
+    background: var(--ui-hover);
+  }
+}
+.ui-menu-item .ui-menu-check {
+  margin-inline-start: auto;
+  color: var(--ui-ink);
+}
+
+/* ---------- Wide screens: the full sidebar, or the rail it folds into ---------- */
+
+@media (min-width: 1101px) {
+  .ui-topbar-fold {
+    display: flex;
+  }
+  .ui-trail {
+    padding-inline: 14px 28px;
+  }
+  .ui-topbar-end {
+    margin-inline-end: 28px;
+  }
+  .ui-content {
+    padding-inline: 28px;
+  }
+}
+
+/* The icon rail (NL-7): always from 761 to 1100px, and above 1100px once the owner folds the sidebar. */
+@media (max-width: 1100px) {
+  .ui-shell {
+    grid-template-columns: var(--ui-rail-w) minmax(0, 1fr);
+  }
+  .ui-topbar-brand {
+    justify-content: center;
+    padding-inline: 0;
+  }
+  .ui-bar-brand-text {
+    display: none;
+  }
+  .ui-sidenav {
+    align-items: center;
+  }
+  .ui-sidenav .ui-nav {
+    align-items: center;
+  }
+  .ui-sidenav .ui-nav-label {
+    display: none;
+  }
+  .ui-sidenav .ui-nav-item {
+    justify-content: center;
+    width: 48px;
+    height: 42px;
+    padding: 0;
+  }
+  .ui-sidenav .ui-nav-count {
+    position: absolute;
+    top: 7px;
+    inset-inline-end: 8px;
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+    background: var(--ui-warn);
+  }
+  .ui-sidenav .ui-status-card {
+    display: none;
+  }
+  .ui-sidenav .ui-utilities {
+    flex-direction: column;
+    padding-inline: 0;
+  }
+  .ui-sidenav .ui-account-btn {
+    flex: none;
+  }
+  .ui-sidenav .ui-account-text {
+    display: none;
+  }
+}
+@media (min-width: 1101px) {
+  html[data-nav="rail"] .ui-shell {
+    grid-template-columns: var(--ui-rail-w) minmax(0, 1fr);
+  }
+  html[data-nav="rail"] .ui-topbar-brand {
+    justify-content: center;
+    padding-inline: 0;
+  }
+  html[data-nav="rail"] .ui-bar-brand-text {
+    display: none;
+  }
+  html[data-nav="rail"] .ui-sidenav {
+    align-items: center;
+  }
+  html[data-nav="rail"] .ui-sidenav .ui-nav {
+    align-items: center;
+  }
+  html[data-nav="rail"] .ui-sidenav .ui-nav-label {
+    display: none;
+  }
+  html[data-nav="rail"] .ui-sidenav .ui-nav-item {
+    justify-content: center;
+    width: 48px;
+    height: 42px;
+    padding: 0;
+  }
+  html[data-nav="rail"] .ui-sidenav .ui-nav-count {
+    position: absolute;
+    top: 7px;
+    inset-inline-end: 8px;
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+    background: var(--ui-warn);
+  }
+  html[data-nav="rail"] .ui-sidenav .ui-status-card {
+    display: none;
+  }
+  html[data-nav="rail"] .ui-sidenav .ui-utilities {
+    flex-direction: column;
+    padding-inline: 0;
+  }
+  html[data-nav="rail"] .ui-sidenav .ui-account-btn {
+    flex: none;
+  }
+  html[data-nav="rail"] .ui-sidenav .ui-account-text {
+    display: none;
+  }
 }
 
 /* ---------- Panels, rows, figures ---------- */
@@ -1979,61 +2419,6 @@ html.ui-layer-on .ui-page {
 
 /* ---------- Rail: 761 to 1100px (icon rail, dot counters) ---------- */
 
-@media (max-width: 1100px) {
-  .ui-shell {
-    grid-template-columns: var(--ui-rail-w) minmax(0, 1fr);
-  }
-  .ui-sidenav {
-    align-items: center;
-    padding: 14px 10px;
-  }
-  .ui-brand {
-    padding: 4px 0 14px;
-  }
-  .ui-sidenav .ui-brand-name,
-  .ui-sidenav .ui-nav-label,
-  .ui-sidenav .ui-side-sync span {
-    display: none;
-  }
-  .ui-sidenav .ui-nav {
-    align-items: center;
-  }
-  .ui-sidenav .ui-nav-item {
-    justify-content: center;
-    width: 48px;
-    height: 42px;
-    padding: 0;
-  }
-  .ui-sidenav .ui-nav-count {
-    position: absolute;
-    top: 7px;
-    inset-inline-end: 8px;
-    width: 8px;
-    height: 8px;
-    padding: 0;
-    border-radius: 50%;
-    font-size: 0;
-    background: var(--ui-warn);
-  }
-  .ui-side-foot {
-    justify-items: center;
-    padding: 10px 0 0;
-  }
-  .ui-side-sync {
-    justify-content: center;
-  }
-  .ui-utilities {
-    flex-direction: column;
-    margin: 0;
-  }
-  .ui-topbar {
-    padding-inline: 22px 16px;
-  }
-  .ui-content {
-    padding: 22px 22px 0;
-  }
-}
-
 /* ---------- One column below 1000px ---------- */
 
 @media (max-width: 1000px) {
@@ -2048,7 +2433,9 @@ html.ui-layer-on .ui-page {
   .ui-shell {
     display: flex;
     flex-direction: column;
+    background: var(--ui-bg);
   }
+  .ui-frame,
   .ui-sidenav,
   .ui-topbar {
     display: none;
@@ -2107,13 +2494,14 @@ html.ui-layer-on .ui-page {
     top: -1px;
     inset-inline-end: -2px;
   }
-  .ui-main {
-    flex: 1;
-    height: auto;
-    padding-bottom: calc(var(--ui-tabbar-h) + env(safe-area-inset-bottom));
+  .ui-mtop .ui-account-btn {
+    padding: 6px;
   }
   .ui-content {
-    padding: 16px 12px 0;
+    flex: 1;
+    margin: 0;
+    padding: 16px 12px calc(var(--ui-tabbar-h) + env(safe-area-inset-bottom));
+    border-radius: 0;
   }
   .ui-tabbar {
     position: fixed;
@@ -2184,7 +2572,7 @@ html.ui-layer-on .ui-page {
     max-height: calc(100dvh - var(--ui-tabbar-h) - 60px - env(safe-area-inset-bottom));
     overflow-y: auto;
     padding: 8px 12px 12px;
-    background: var(--ui-side);
+    background: var(--ui-bg);
     border-radius: 20px 20px 0 0;
     border-bottom: 1px solid var(--ui-line);
     animation: ui-more-in 0.2s ease-out;
@@ -2196,23 +2584,35 @@ html.ui-layer-on .ui-page {
     height: 4px;
     margin: 4px auto 6px;
     border-radius: 4px;
-    background: var(--ui-side-muted);
+    background: var(--ui-muted);
     opacity: 0.5;
   }
   .ui-moresheet-panel .ui-nav-item {
+    min-height: var(--ui-touch);
+  }
+  .ui-moresheet-foot {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--ui-line);
+  }
+  .ui-menu-item {
     min-height: var(--ui-touch);
   }
   .ui-page {
     padding-bottom: 20px;
   }
   .ui-page-head {
-    align-items: flex-start;
+    display: grid;
+    gap: 6px;
+  }
+  /* The main action on the title's line, without its icon, so the title keeps its room (NL-14). */
+  .ui-page-head-row .ui-page-actions .ui-btn > svg {
+    display: none;
   }
   .ui-h1 {
     font-size: 24px;
-  }
-  .ui-page-actions {
-    width: 100%;
   }
   .ui-input,
   .ui-select,

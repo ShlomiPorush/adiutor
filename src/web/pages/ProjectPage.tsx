@@ -13,6 +13,7 @@ import type { ItemSummary, Project, ProjectDetail, SecuritySource } from "../api
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { ProposalRow } from "../shell/Bell.tsx"
+import { PageHead } from "../shell/chrome.tsx"
 import { useRefreshItems } from "../shell/items.ts"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { QuickAdd } from "../shell/QuickAdd.tsx"
@@ -77,11 +78,10 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
   return (
     <div className="ui-page">
       <div className="ui-page-narrow ui-section">
-        <div className="ui-page-head">
-          <div>
-            <h1 className="ui-h1" dir="auto">
-              {project.name}
-            </h1>
+        <PageHead
+          title={project.name}
+          titleDir="auto"
+          description={
             <p className="ui-project-sub">
               <StageTag stage={project.stage} />
               <span>{tc("project.openCount", openItems.length)}</span>
@@ -101,14 +101,14 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
                 </>
               ) : null}
             </p>
-          </div>
-          <div className="ui-page-actions">
+          }
+          actions={
             <button type="button" className="ui-btn" onClick={() => setEditing("add")}>
               <Plus aria-hidden="true" />
               {t("project.addItem")}
             </button>
-          </div>
-        </div>
+          }
+        />
         <StaleNote failed={refreshFailed} />
 
         <StagePanel project={project} />

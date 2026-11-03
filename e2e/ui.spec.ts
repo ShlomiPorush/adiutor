@@ -1,5 +1,5 @@
 // The web UI against the real server: the morning view, an item status change with Undo, quick add, and
-// signing out. It runs after auth.spec.ts and reuses the browser that signed in there (sign-in is rate
+// signing out from the shell's account menu (Stay, a failed sign-out that keeps the draft, then a sign-out). It runs after auth.spec.ts and reuses the browser that signed in there (sign-in is rate
 // limited). Texts come from the Hebrew locale file (the default language), and the data is invented and
 // created here through the API, so the tests run on an empty database.
 import { type Browser, expect, type Page, test } from "@playwright/test"
@@ -155,13 +155,50 @@ test("quick add files a note in the inbox", async () => {
   await expect(page.locator("#inbox")).toContainText(captureText)
 })
 
+const accountMenu = () => page.getByRole("button", { name: new RegExp(`${he.shell.accountMenu}$`) })
+
+test("signing out asks about unsaved changes, and a failed sign-out keeps them (R3)", async () => {
+  await page.goto("/settings")
+  const chatId = page.locator("#telegram").getByLabel(he.telegramSettings.chatId, { exact: true })
+  await chatId.fill("4242")
+  await expect(page.locator(".ui-savebar")).toBeVisible()
+  const signOut = async () => {
+    await accountMenu().click()
+    await page.getByRole("menuitem", { name: he.account.signOut }).click()
+  }
+  const question = page.getByRole("alertdialog")
+
+  // Stay: nothing is sent, the page and the draft stay.
+  await signOut()
+  await expect(question).toContainText(he.unsaved.leaveTitle)
+  await question.getByRole("button", { name: he.unsaved.stay }).click()
+  await expect(question).toHaveCount(0)
+  await expect(page).toHaveURL(/\/settings$/)
+  await expect(chatId).toHaveValue("4242")
+
+  // Leave, but the sign-out fails: it says so, and the draft and its guard stay.
+  await page.route("**/api/auth/sign-out", (route) => route.abort("connectionrefused"))
+  await signOut()
+  await question.getByRole("button", { name: he.unsaved.leave }).click()
+  await expect(page.locator(".ui-toast")).toContainText(he.account.signOutFailed.split(":")[0] ?? "")
+  await expect(page).toHaveURL(/\/settings$/)
+  await expect(chatId).toHaveValue("4242")
+  await expect(page.locator(".ui-savebar")).toBeVisible()
+  expect(await page.evaluate(async () => (await fetch("/api/v1/session")).status)).toBe(200)
+  await page.unroute("**/api/auth/sign-out")
+})
+
 test("signing out ends this browser's session; a copy of its cookies is refused", async ({ browser }, testInfo) => {
   const other = await browser.newContext({ ...testInfo.project.use, storageState: await page.context().storageState() })
   try {
-    await page.goto("/settings")
+    // Still on Settings with the draft of the test before: Leave, and this time the sign-out works.
+    await expect(page).toHaveURL(/\/settings$/)
     // Only this browser: the other project keeps its stored session.
-    await page.locator("#account").getByRole("button", { name: he.account.signOut }).click()
+    await accountMenu().click()
+    await page.getByRole("menuitem", { name: he.account.signOut }).click()
+    await page.getByRole("alertdialog").getByRole("button", { name: he.unsaved.leave }).click()
     await expect(page).toHaveURL(/\/login$/)
+    await expect(page.getByRole("alertdialog")).toHaveCount(0)
     // A copy of the old cookies is refused as well, and the board sends it to sign-in.
     const tab = await other.newPage()
     await tab.goto("/inbox")

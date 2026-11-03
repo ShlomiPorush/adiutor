@@ -1,7 +1,7 @@
 // Settings, Account: everything here is Better Auth's own routes through its client, and acts at once (outside the
 // save bar): the signed-in browsers (and a session `mikud connect` left behind) with sign out one of them, sign out
 // the others and sign out everywhere, the password, a new
-// authenticator, new backup codes, sign out, and the recovery note.
+// authenticator, new backup codes and the recovery note. Signing out of this browser is in the shell's account menu.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { type FormEvent, useId, useState } from "react"
@@ -11,6 +11,7 @@ import { AuthCallError, type AuthError, authClient, authData, authFailure, FAILU
 import { api, qk } from "../../api/endpoints.ts"
 import type { BrowserSession } from "../../api/types.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
+import { useSignedOut } from "../../shell/signOut.ts"
 import { Copyable } from "../../ui/Copyable.tsx"
 import { confirmDialog, useDiscardGuard } from "../../ui/confirm.tsx"
 import { Dialog } from "../../ui/Dialog.tsx"
@@ -19,23 +20,10 @@ import { ErrorState, errorReason, Loading } from "../../ui/states.tsx"
 import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag } from "../../ui/tags.tsx"
-import { useClearUnsaved } from "../../ui/unsaved.tsx"
 import { describeAgent } from "../agent.ts"
 import { RECOVERY_COMMAND } from "../auth/LoginPage.tsx"
 import { BackupCodes, FormError, PasswordField } from "../auth/parts.tsx"
 import { Panel } from "../parts.tsx"
-
-/** Leaves for sign-in after this browser's session ended on purpose; nothing asks about unsaved changes. */
-export function useSignedOut() {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  const clearUnsaved = useClearUnsaved()
-  return () => {
-    clearUnsaved()
-    queryClient.clear()
-    navigate("/login", { replace: true })
-  }
-}
 
 /** "Sign out everywhere": asks first, then Better Auth's revokeSessions and on to sign-in. */
 export function useSignOutEverywhere() {
@@ -63,7 +51,6 @@ const time = (value: Date | string) => (typeof value === "string" ? value : valu
 export function AccountPanel() {
   const { t, language } = useI18n()
   const queryClient = useQueryClient()
-  const signedOut = useSignedOut()
   const signOutEverywhere = useSignOutEverywhere()
   const navigate = useNavigate()
   const me = useQuery({ queryKey: qk.session, queryFn: api.session, staleTime: Number.POSITIVE_INFINITY })
@@ -73,22 +60,11 @@ export function AccountPanel() {
     queryFn: () => authData(authClient.listSessions()) as Promise<BrowserSession[]>,
     every: EVERY.slow,
   })
-  const [signingOut, setSigningOut] = useState(false)
   const [dialog, setDialog] = useState<"codes" | "authenticator" | null>(null)
   const sessions = [...(query.data ?? [])].sort(
     (a, b) => Number(b.id === current) - Number(a.id === current) || time(b.createdAt).localeCompare(time(a.createdAt)),
   )
 
-  const signOut = async () => {
-    setSigningOut(true)
-    try {
-      await authData(authClient.signOut())
-      signedOut()
-    } catch (error) {
-      setSigningOut(false)
-      showToast(t("account.signOutFailed", { reason: errorReason(language, error) }), "error")
-    }
-  }
   /** One other session: Better Auth's revokeSession with that session's token. */
   const endOne = async (session: BrowserSession, name: string) => {
     const ok = await confirmDialog({
@@ -124,15 +100,7 @@ export function AccountPanel() {
   }
 
   return (
-    <Panel
-      id="account"
-      title={t("account.title")}
-      extra={
-        <button type="button" className="ui-more" disabled={signingOut} onClick={() => void signOut()}>
-          {t("account.signOut")}
-        </button>
-      }
-    >
+    <Panel id="account" title={t("account.title")}>
       <div className="ui-kv">
         <span>{t("account.signedInAs")}</span>
         <bdi className="ui-mono" dir="ltr">

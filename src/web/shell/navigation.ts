@@ -21,8 +21,11 @@ export const NAV: readonly NavPage[] = [
 ]
 
 /** The navigation item that a path belongs to. */
+export function navPageFor(pathname: string): NavPage | null {
+  if (pathname === "/") return NAV[0] ?? null
+  return NAV.find((page) => page.to !== "/" && (pathname === page.to || pathname.startsWith(`${page.to}/`))) ?? null
+}
+
 export function navIdFor(pathname: string): NavPage["id"] | null {
-  if (pathname === "/") return "morning"
-  const found = NAV.find((page) => page.to !== "/" && (pathname === page.to || pathname.startsWith(`${page.to}/`)))
-  return found?.id ?? null
+  return navPageFor(pathname)?.id ?? null
 }

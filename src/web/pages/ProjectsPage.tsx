@@ -8,6 +8,7 @@ import { api, qk } from "../api/endpoints.ts"
 import type { ProjectListEntry } from "../api/types.ts"
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
+import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { useDiscardGuard } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
@@ -103,17 +104,15 @@ export function ProjectsPage() {
 
   return (
     <div className="ui-page">
-      <div className="ui-page-head">
-        <div>
-          <h1 className="ui-h1">{t("projects.title")}</h1>
-          <p>{t("projects.description")}</p>
-        </div>
-        <div className="ui-page-actions">
+      <PageHead
+        title={t("projects.title")}
+        description={t("projects.description")}
+        actions={
           <button type="button" className="ui-btn" onClick={() => setCreating(true)}>
             {t("projects.new")}
           </button>
-        </div>
-      </div>
+        }
+      />
       <StaleNote failed={query.isError && !!query.data} />
       <fieldset className="ui-chips ui-plain-fieldset">
         <legend className="ui-sr-only">{t("projects.filterLegend")}</legend>

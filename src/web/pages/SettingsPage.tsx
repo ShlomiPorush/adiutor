@@ -1,6 +1,7 @@
 // Settings, in this order: General (language, formats, closed-item days, how long a browser stays signed in),
 // Account (Better Auth's routes, acting at once), Telegram (the bot token, the chat, sign-in codes), Agent access
-// (agent keys, acting at once), Secret check (private domains), Appearance, Suppressions and Status. General,
+// (agent keys, acting at once), Secret check (private domains), Suppressions and Status. The theme is not a
+// setting: it lives in the shell (the account menu and the theme button). General,
 // Telegram and Secret check share one save bar. A setting the environment sets is locked and names its variable.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -22,8 +23,8 @@ import {
   withFormatPrefs,
 } from "../format/datetime.ts"
 import { type Language, useI18n } from "../i18n/i18n.tsx"
+import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
-import { THEMES, useTheme } from "../shell/theme.ts"
 import { Copyable } from "../ui/Copyable.tsx"
 import { confirmDialog } from "../ui/confirm.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
@@ -89,18 +90,12 @@ export function SettingsPage() {
   return (
     <div className="ui-page">
       <div className="ui-page-narrow ui-section ui-page-has-savebar">
-        <div className="ui-page-head">
-          <div>
-            <h1 className="ui-h1">{t("settings.title")}</h1>
-            <p>{t("settings.description")}</p>
-          </div>
-        </div>
+        <PageHead title={t("settings.title")} description={t("settings.description")} />
         {query.isPending ? <Loading label={t("settings.loading")} /> : null}
         {query.isError && !query.data ? (
           <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
         ) : null}
         {query.data ? <SettingsForm saved={query.data} /> : <AccountPanel />}
-        <AppearancePanel />
         <SuppressionsPanel />
         <StatusPanel />
       </div>
@@ -633,25 +628,6 @@ function TelegramRuntimeRows({ on }: { on: boolean }) {
         </button>
       </div>
     </>
-  )
-}
-
-function AppearancePanel() {
-  const { t } = useI18n()
-  const [theme, setTheme] = useTheme()
-  return (
-    <Panel id="appearance" title={t("settings.appearance")}>
-      <Row label={t("settings.theme")} hint={t("settings.themeHint")}>
-        <fieldset className="ui-seg ui-plain-fieldset">
-          <legend className="ui-sr-only">{t("settings.theme")}</legend>
-          {THEMES.map((option) => (
-            <button key={option} type="button" aria-pressed={theme === option} onClick={() => setTheme(option)}>
-              {t(`theme.${option}`)}
-            </button>
-          ))}
-        </fieldset>
-      </Row>
-    </Panel>
   )
 }
 

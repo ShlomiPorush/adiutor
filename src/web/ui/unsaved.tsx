@@ -1,7 +1,8 @@
 // Unsaved changes are protected (v3 SV-1, DS-9). A page or a dialog registers how many changes it
 // holds and which moves keep them. One router blocker asks before a move would drop them (links,
 // Back and Forward, which are undone while the question is open), and the browser asks before the
-// tab closes or reloads.
+// tab closes or reloads. A leave the router does not see (signing out) asks the same question through
+// useConfirmLeave, and drops nothing itself: the caller clears the changes once the leave worked.
 
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { type Location, useBeforeUnload, useBlocker } from "react-router"
@@ -16,7 +17,12 @@ export type UnsavedGuard = {
   keeps?: (next: Location, current: Location) => boolean
 }
 
-type Registry = { set(id: string, guard: UnsavedGuard | null): void; clear(): void }
+type Registry = {
+  set(id: string, guard: UnsavedGuard | null): void
+  clear(): void
+  /** Asks before a leave the router does not see; true to go on. Nothing is dropped here. */
+  confirmLeave(): Promise<boolean>
+}
 const UnsavedContext = createContext<Registry | null>(null)
 
 export function UnsavedProvider({ children }: { children: ReactNode }) {
@@ -30,6 +36,34 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
     setTotal(sum)
   }, [])
 
+  /** The one question for every leave: "Leave without saving?", or "Discard your changes?" for dialogs only. */
+  const ask = useCallback(
+    (dropping: UnsavedGuard[]) => {
+      const count = dropping.reduce((sum, guard) => sum + guard.count, 0)
+      const discard = dropping.every((guard) => guard.kind === "discard")
+      return confirmDialog(
+        discard
+          ? {
+              title: t("unsaved.discardTitle"),
+              message: t("unsaved.discardMessage"),
+              confirmText: t("unsaved.discard"),
+              cancelText: t("unsaved.keepEditing"),
+              focusCancel: true,
+              noHistory: true,
+            }
+          : {
+              title: t("unsaved.leaveTitle"),
+              message: tc("unsaved.leaveMessage", count),
+              confirmText: t("unsaved.leave"),
+              cancelText: t("unsaved.stay"),
+              focusCancel: true,
+              noHistory: true,
+            },
+      )
+    },
+    [t, tc],
+  )
+
   const registry = useMemo<Registry>(
     () => ({
       set(id, guard) {
@@ -41,8 +75,12 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
         guards.current.clear()
         recount()
       },
+      async confirmLeave() {
+        const dropping = [...guards.current.values()].filter((guard) => guard.count > 0)
+        return dropping.length === 0 || ask(dropping)
+      },
     }),
-    [recount],
+    [recount, ask],
   )
 
   const blocker = useBlocker(({ currentLocation, nextLocation }) => {
@@ -57,27 +95,7 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (blocker.state !== "blocked") return
     const dropping = [...guards.current.values()].filter((guard) => guard.count > 0)
-    const count = dropping.reduce((sum, guard) => sum + guard.count, 0)
-    const discard = dropping.every((guard) => guard.kind === "discard")
-    void confirmDialog(
-      discard
-        ? {
-            title: t("unsaved.discardTitle"),
-            message: t("unsaved.discardMessage"),
-            confirmText: t("unsaved.discard"),
-            cancelText: t("unsaved.keepEditing"),
-            focusCancel: true,
-            noHistory: true,
-          }
-        : {
-            title: t("unsaved.leaveTitle"),
-            message: tc("unsaved.leaveMessage", count),
-            confirmText: t("unsaved.leave"),
-            cancelText: t("unsaved.stay"),
-            focusCancel: true,
-            noHistory: true,
-          },
-    ).then((leave) => {
+    void ask(dropping).then((leave) => {
       if (leave) {
         guards.current.clear()
         recount()
@@ -86,7 +104,7 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
         blocker.reset?.()
       }
     })
-  }, [blocker, t, tc, recount])
+  }, [blocker, ask, recount])
 
   useBeforeUnload(
     useCallback(
@@ -122,4 +140,10 @@ export function useUnsaved(id: string, guard: UnsavedGuard): void {
 export function useClearUnsaved(): () => void {
   const registry = useContext(UnsavedContext)
   return useCallback(() => registry?.clear(), [registry])
+}
+
+/** Asks about unsaved changes before a leave the router does not see, such as signing out (SV-1). */
+export function useConfirmLeave(): () => Promise<boolean> {
+  const registry = useContext(UnsavedContext)
+  return useCallback(() => registry?.confirmLeave() ?? Promise.resolve(true), [registry])
 }
