@@ -1,7 +1,10 @@
-// The morning view (requirements section 4), top to bottom: waiting on you, new since your last
-// visit, security (one line per project), agent updates folded by project, and the projects with
-// open items. The inbox count links to the inbox; the last T3 sync time shows, with a banner when it
-// is stale. One column, so the reading order on screen is the order in the page.
+// The morning view (requirements section 4): the figure strip and the stale-sync banner, then two columns
+// from 1001px: waiting on you and security (one line per project) in the first, new since your last visit and
+// agent updates folded by project in the second; the projects with open items span both below. At 1000px and
+// below it is one column in the same order, waiting on you first (v3 NL-17). Each column is its own wrapper, so
+// the DOM order (waiting, security, new, agent updates, projects) is the visual, keyboard and screen-reader
+// order: nothing is reordered by CSS. The inbox count links to the inbox; the last T3 sync time shows, with a
+// banner when it is stale.
 
 import { ChevronRight } from "lucide-react"
 import { type CSSProperties, useEffect, useRef, useState } from "react"
@@ -138,73 +141,79 @@ function MorningBody({
         </div>
       </div>
 
-      <Panel id="waiting" title={t("morning.waitingTitle")} count={waiting}>
-        {waiting === 0 ? <Empty title={t("morning.waitingEmpty")} hint={t("morning.waitingEmptyHint")} /> : null}
-        {morning.waiting.map((entry) =>
-          entry.kind === "stage_proposal" ? (
-            <ProposalRow key={entry.proposal.id} proposal={entry.proposal} />
+      <div className="ui-morning">
+        <div className="ui-morning-col" data-column="first">
+          <Panel id="waiting" title={t("morning.waitingTitle")} count={waiting}>
+            {waiting === 0 ? <Empty title={t("morning.waitingEmpty")} hint={t("morning.waitingEmptyHint")} /> : null}
+            {morning.waiting.map((entry) =>
+              entry.kind === "stage_proposal" ? (
+                <ProposalRow key={entry.proposal.id} proposal={entry.proposal} />
+              ) : (
+                <ItemRow key={entry.item.id} item={entry.item} />
+              ),
+            )}
+          </Panel>
+
+          <Panel id="security" title={t("morning.securityTitle")} count={securityLines.length}>
+            {securityLines.length === 0 ? <Empty title={t("morning.securityEmpty")} hint={t("security.rule")} /> : null}
+            {securityLines.map((line) => (
+              <SecurityRow key={line.projectId} line={line} />
+            ))}
+          </Panel>
+        </div>
+
+        <div className="ui-morning-col" data-column="second">
+          <Panel
+            id="new"
+            title={t("morning.newTitle")}
+            count={morning.new.length}
+            extra={
+              <span className="ui-muted ui-num">
+                {t("morning.since")} <Time value={morning.since} mode="full" />
+              </span>
+            }
+          >
+            {morning.new.length === 0 ? <Empty title={t("morning.newEmpty")} hint={t("morning.newEmptyHint")} /> : null}
+            {morning.new.map((entry) => (
+              <ItemRow
+                key={entry.item.id}
+                item={entry.item}
+                badge={entry.change === "created" ? t("morning.created") : t("morning.updated")}
+              />
+            ))}
+          </Panel>
+
+          <Panel
+            id="updates"
+            title={t("morning.updatesTitle")}
+            count={morning.agentUpdates.reduce((sum, group) => sum + group.updates.length, 0)}
+          >
+            {morning.agentUpdates.length === 0 ? (
+              <Empty title={t("morning.updatesEmpty")} hint={t("morning.updatesEmptyHint")} />
+            ) : null}
+            {morning.agentUpdates.map((group) => (
+              <UpdateGroup key={group.projectId ?? "inbox"} group={group} />
+            ))}
+          </Panel>
+        </div>
+
+        <Panel
+          id="projects"
+          title={t("morning.projectsTitle")}
+          count={morning.projects.length}
+          extra={
+            <Link to="/projects" className="ui-more">
+              {t("morning.allProjects")}
+            </Link>
+          }
+        >
+          {morning.projects.length === 0 ? (
+            <Empty title={t("morning.projectsEmpty")} hint={t("morning.projectsEmptyHint")} />
           ) : (
-            <ItemRow key={entry.item.id} item={entry.item} />
-          ),
-        )}
-      </Panel>
-
-      <Panel
-        id="new"
-        title={t("morning.newTitle")}
-        count={morning.new.length}
-        extra={
-          <span className="ui-muted ui-num">
-            {t("morning.since")} <Time value={morning.since} mode="full" />
-          </span>
-        }
-      >
-        {morning.new.length === 0 ? <Empty title={t("morning.newEmpty")} hint={t("morning.newEmptyHint")} /> : null}
-        {morning.new.map((entry) => (
-          <ItemRow
-            key={entry.item.id}
-            item={entry.item}
-            badge={entry.change === "created" ? t("morning.created") : t("morning.updated")}
-          />
-        ))}
-      </Panel>
-
-      <Panel id="security" title={t("morning.securityTitle")} count={securityLines.length}>
-        {securityLines.length === 0 ? <Empty title={t("morning.securityEmpty")} hint={t("security.rule")} /> : null}
-        {securityLines.map((line) => (
-          <SecurityRow key={line.projectId} line={line} />
-        ))}
-      </Panel>
-
-      <Panel
-        id="updates"
-        title={t("morning.updatesTitle")}
-        count={morning.agentUpdates.reduce((sum, group) => sum + group.updates.length, 0)}
-      >
-        {morning.agentUpdates.length === 0 ? (
-          <Empty title={t("morning.updatesEmpty")} hint={t("morning.updatesEmptyHint")} />
-        ) : null}
-        {morning.agentUpdates.map((group) => (
-          <UpdateGroup key={group.projectId ?? "inbox"} group={group} />
-        ))}
-      </Panel>
-
-      <Panel
-        id="projects"
-        title={t("morning.projectsTitle")}
-        count={morning.projects.length}
-        extra={
-          <Link to="/projects" className="ui-more">
-            {t("morning.allProjects")}
-          </Link>
-        }
-      >
-        {morning.projects.length === 0 ? (
-          <Empty title={t("morning.projectsEmpty")} hint={t("morning.projectsEmptyHint")} />
-        ) : (
-          <ProjectTable projects={morning.projects} />
-        )}
-      </Panel>
+            <ProjectTable projects={morning.projects} />
+          )}
+        </Panel>
+      </div>
     </>
   )
 }

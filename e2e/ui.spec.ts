@@ -61,6 +61,72 @@ test("the morning view shows what waits on the owner, and the bell counts it", a
   await expect(bell).toHaveAttribute("aria-label", new RegExp(`^${he.bell.title}`))
 })
 
+const MORNING_ORDER = ["waiting", "security", "new", "updates", "projects"]
+
+test("the morning view reads in one order: two columns on a wide screen, one on a phone, and Tab follows it", async () => {
+  // Something new since the visit the test before recorded, so the second column has a row to reach.
+  await api("POST", "/items", { type: "task", title: `Prune the hedge ${run}` })
+  await page.goto("/")
+  await expect(page.locator("#new")).toContainText(`Prune the hedge ${run}`)
+  await expect(page.locator("#waiting")).toContainText(itemTitle)
+
+  const boxes = await page.evaluate((ids) => {
+    const rtl = document.documentElement.dir === "rtl"
+    return {
+      rtl,
+      parts: ids.map((id) => {
+        const r = document.getElementById(id)?.getBoundingClientRect()
+        if (!r) throw new Error(`no #${id}`)
+        // The start edge: the right edge in Hebrew, the left one in English.
+        return { id, start: rtl ? r.right : r.left, top: r.top, bottom: r.bottom, width: r.width }
+      }),
+    }
+  }, MORNING_ORDER)
+  const [waiting, security, fresh, updates, projects] = boxes.parts as [
+    (typeof boxes.parts)[0],
+    (typeof boxes.parts)[0],
+    (typeof boxes.parts)[0],
+    (typeof boxes.parts)[0],
+    (typeof boxes.parts)[0],
+  ]
+  expect(boxes.rtl).toBe(true)
+  if (isPhone()) {
+    // One column, top to bottom in the page's order, waiting on you first.
+    for (const part of boxes.parts) {
+      expect(Math.abs(part.start - waiting.start)).toBeLessThanOrEqual(1)
+      expect(Math.abs(part.width - waiting.width)).toBeLessThanOrEqual(1)
+    }
+    const tops = boxes.parts.map((part) => part.top)
+    expect([...tops].sort((a, b) => a - b)).toEqual(tops)
+  } else {
+    // First column at the start side: waiting, then security; the second beside it: new, then agent updates.
+    expect(Math.abs(security.start - waiting.start)).toBeLessThanOrEqual(1)
+    expect(Math.abs(updates.start - fresh.start)).toBeLessThanOrEqual(1)
+    expect(Math.abs(fresh.top - waiting.top)).toBeLessThanOrEqual(1)
+    expect(security.top).toBeGreaterThan(waiting.bottom)
+    expect(updates.top).toBeGreaterThan(fresh.bottom)
+    expect(fresh.start).toBeLessThan(waiting.start - waiting.width / 2) // the second column is toward the end (left)
+    expect(Math.abs(fresh.width - waiting.width)).toBeLessThanOrEqual(1)
+    // Projects span both columns below them.
+    expect(projects.top).toBeGreaterThan(Math.max(security.bottom, updates.bottom))
+    expect(Math.abs(projects.start - waiting.start)).toBeLessThanOrEqual(1)
+    expect(projects.width).toBeGreaterThan(waiting.width + fresh.width)
+  }
+
+  // Tab from the last figure before the columns walks the parts in the page's order.
+  await page.locator(".ui-kpis a.ui-kpi").focus()
+  const reached: string[] = []
+  for (let step = 0; step < 80 && reached.at(-1) !== "projects"; step += 1) {
+    await page.keyboard.press("Tab")
+    const id = await page.evaluate(() => document.activeElement?.closest(".ui-morning section")?.id ?? null)
+    if (id && reached.at(-1) !== id) reached.push(id)
+  }
+  expect(reached).toEqual(MORNING_ORDER.filter((id) => reached.includes(id)))
+  expect(reached[0]).toBe("waiting")
+  expect(reached).toContain("new")
+  expect(reached.at(-1)).toBe("projects")
+})
+
 /**
  * Another tab of the paired browser with a clock the test moves: pages refresh every 30 seconds, so moving
  * the clock 31 seconds brings the background refresh at once. The caller closes its context.

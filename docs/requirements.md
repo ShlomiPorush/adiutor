@@ -58,13 +58,15 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 
 ## 4. Morning view (home screen)
 
-Top to bottom:
+The parts, in reading order:
 
 1. **Waiting on you**: items in `waiting_on_you` and pending stage proposals.
-2. **New since your last visit**: items created or changed since the previous visit, marked unread.
-3. **Security**: one line per project, not a list of alerts (see section 6).
+2. **Security**: one line per project, not a list of alerts (see section 6).
+3. **New since your last visit**: items created or changed since the previous visit, marked unread.
 4. **Agent updates**: comments and status changes by agents since the last visit, folded by project.
 5. **Projects**: for every project with open items: stage, near goal with progress, "where we are", open Issues count.
+
+On a wide screen the view has two columns: the first holds Waiting on you, then Security; the second holds New since your last visit, then Agent updates. Projects span both columns below them. On a narrow screen it is one column in the reading order, Waiting on you first. The order on screen, for the keyboard and for a screen reader is the same reading order.
 
 The inbox count is visible on the home screen and links to the inbox.
 
