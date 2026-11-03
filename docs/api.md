@@ -132,10 +132,10 @@ Fields are always present; `null` when unset.
 
 ### Session and the overview
 
-| Method and path | Who     | Body or query   | Answer                                                                                                                                                                                                                          |
-| --------------- | ------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /session`  | any     |                 | `{actor: {kind, label}, via: "token"\|"session", browserId, expiresAt}`. `expiresAt` (a session only): when it ends unless the Better Auth client refreshes it first                                                            |
-| `GET /morning`  | any     | `since?` (time) | Morning (below). `since` is this browser's previous visit unless the query gives one                                                                                                                                            |
+| Method and path | Who     | Body or query   | Answer                                                                                                                                                                                                                      |
+| --------------- | ------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /session`  | any     |                 | `{actor: {kind, label}, via: "token"\|"session", browserId, expiresAt}`. `expiresAt` (a session only): when it ends unless the Better Auth client refreshes it first                                                        |
+| `GET /morning`  | any     | `since?` (time) | Morning (below). `since` is this browser's previous visit unless the query gives one                                                                                                                                        |
 | `POST /visits`  | browser | `{at?}` (time)  | `201 {at, previous}`. Call after the overview was shown, with that read's `now`; recorded one minute before `at`, or before now when `at` is missing or later than the server's clock (see below). `forbidden` with a token |
 
 "browser" routes need the owner's browser session (`forbidden` with a key). The password, the browsers list and signing out are Better Auth's routes (above).
