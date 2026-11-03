@@ -434,6 +434,7 @@ function reveal(
   page: HTMLElement | null,
   content: HTMLElement | null,
   picker: HTMLElement | null,
+  always = false,
 ) {
   if (!page || !content) return
   const area = scrollArea(page, content)
@@ -454,8 +455,9 @@ function reveal(
   }
   const by = box.top < top ? box.top - top : end > bottom ? Math.min(end - bottom, box.top - top) : 0
   // An instant scroll: it also ends a smooth scroll still running from the last section change, which would otherwise
-  // carry on from where it was and leave the field short of where this puts it.
-  if (by !== 0) area.scrollTo({ top: area.scrollTop + by, behavior: "instant" })
+  // carry on from where it was and leave the field short of where this puts it. `always` writes even when the field
+  // is in view, only to end that smooth scroll.
+  if (by !== 0 || always) area.scrollTo({ top: area.scrollTop + by, behavior: "instant" })
 }
 
 /** How long a refused field is held in view while the page settles after its section opens. */
@@ -465,9 +467,11 @@ export const REVEAL_FOR_MS = 400
  * Brings a refused field and its note into view (`reveal`), then keeps them there for REVEAL_FOR_MS: on a phone a
  * smooth scroll from the last section change may still be running, and the refusal's toast mounts after the field
  * took the focus, over the save bar. Each frame checks again; it stops once the field loses the focus, or the owner
- * scrolls, touches, clicks or presses a key.
+ * scrolls, touches, clicks or presses a key. A scroll it saw no input for (a scroll bar dragged off the main thread,
+ * assistive technology) stops it too, as it stops `restoreScroll`: before each write the areas must sit where the
+ * last write left them, unless the content grew. The first write always runs, to end a smooth scroll still running.
  */
-function keepRevealed(
+export function keepRevealed(
   target: HTMLElement,
   page: HTMLElement | null,
   content: HTMLElement | null,
@@ -485,9 +489,22 @@ function keepRevealed(
     }
     window.removeEventListener("keydown", stop, true)
   }
+  /** Where the last write left the areas, and how tall they were then. */
+  let wrote: { page: number; content: number; pageHeight: number; contentHeight: number } | null = null
   const step = () => {
     if (document.activeElement !== target) return stop()
-    reveal(target, page, content, picker)
+    if (wrote) {
+      const moved = Math.abs(page.scrollTop - wrote.page) > 1 || Math.abs(content.scrollTop - wrote.content) > 1
+      const grew = page.scrollHeight > wrote.pageHeight || content.scrollHeight > wrote.contentHeight
+      if (moved && !grew) return stop()
+    }
+    reveal(target, page, content, picker, wrote === null)
+    wrote = {
+      page: page.scrollTop,
+      content: content.scrollTop,
+      pageHeight: page.scrollHeight,
+      contentHeight: content.scrollHeight,
+    }
     if (performance.now() > until) stop()
     else frame = requestAnimationFrame(step)
   }

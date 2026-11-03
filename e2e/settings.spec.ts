@@ -193,7 +193,13 @@ test("a refused field in a hidden section opens that section, takes the focus an
         aboveToast: clearOf(".ui-toast"),
       }
     })
-  await expect.poll(place, { timeout: 2000 }).toEqual({ onTop: true, note: true, aboveBar: true, aboveToast: true })
+  const clear = { onTop: true, note: true, aboveBar: true, aboveToast: true }
+  // The refusal's toast is there first, so "clear of the toast" is about a toast that shows.
+  await expect(page.locator(".ui-toast")).toBeVisible()
+  await expect.poll(place, { timeout: 2000 }).toEqual(clear)
+  // And it stays so once the page settled: after the hold that keeps the field in view (REVEAL_FOR_MS, 400ms) ended.
+  await page.waitForTimeout(600)
+  expect(await place()).toEqual(clear)
   // By keyboard: on a phone the refusal's toast sits over the save bar, and a pointer over it holds it (FB-2).
   await bar.getByRole("button", { name: he.savebar.discard }).press("Enter")
   await expect(bar).toHaveCount(0)
