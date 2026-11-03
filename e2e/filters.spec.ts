@@ -35,6 +35,16 @@ const isPhone = () => (page.viewportSize()?.width ?? 1440) <= 760
 const pill = (name: string) => page.locator(".ui-fbar .ui-picker-pill", { hasText: `${name}:` })
 const countLine = () => page.locator(".ui-fbar .ui-list-summary b")
 
+/**
+ * Opens a page and waits until it settled: the shell draws the page again once the owner's settings arrive (its
+ * date, time and language), which would drop what a test opened before that.
+ */
+async function open(path: string): Promise<void> {
+  await page.goto(path)
+  await page.waitForLoadState("networkidle")
+  await expect(countLine()).toBeVisible()
+}
+
 async function pick(name: string, option: string): Promise<void> {
   await pill(name).click()
   const search = page.locator(".ui-picker-panel input[type=search]")
@@ -51,7 +61,7 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
   page = await (
     await browser.newContext({ ...testInfo.project.use, storageState: storageFile(testInfo.project.name) })
   ).newPage()
-  await page.goto("/activity")
+  await open("/activity")
   project = await api("POST", "/projects", { name: `Trellis walk ${run}` })
   const item = await api<{ id: string; title: string; version: number }>("POST", "/items", {
     type: "task",
@@ -64,8 +74,7 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
 })
 
 test("Who narrows the list with the server's counts, and the address keeps it", async () => {
-  await page.goto("/activity")
-  await expect(countLine()).toBeVisible()
+  await open("/activity")
   await expect(page.locator(".ui-clear-filters")).toHaveCount(0)
   await pill(he.activity.who).click()
   const owner = page.getByRole("option", { name: new RegExp(`^${he.activity.actorKind.owner}`) })
@@ -77,6 +86,7 @@ test("Who narrows the list with the server's counts, and the address keeps it", 
   await expect(page.locator(".ui-clear-filters")).toBeVisible()
 
   await page.reload()
+  await page.waitForLoadState("networkidle")
   await expect(pill(he.activity.who)).toContainText(he.activity.actorKind.owner)
   await page.goBack()
   await expect(page).toHaveURL(/\/activity$/)
@@ -87,7 +97,7 @@ test("Who narrows the list with the server's counts, and the address keeps it", 
 })
 
 test("a project and a search in Hebrew words narrow the list to one change; Clear filters empties the address", async () => {
-  await page.goto("/activity")
+  await open("/activity")
   await page.locator(".ui-filters-toggle").click()
   await pick(he.activity.project, project.name)
   await expect(page).toHaveURL(new RegExp(`projectId=${project.id}`))
@@ -105,7 +115,7 @@ test("a project and a search in Hebrew words narrow the list to one change; Clea
 })
 
 test("the Filters button opens by keyboard on its first field; Escape closes only a picker (MP-6, R5)", async () => {
-  await page.goto("/activity")
+  await open("/activity")
   const toggle = page.locator(".ui-filters-toggle")
   await toggle.focus()
   await page.keyboard.press("Enter")
@@ -138,7 +148,7 @@ test("the Filters button opens by keyboard on its first field; Escape closes onl
 })
 
 test("the item dialog's All activity opens the item's activity, and asks first about an unsaved comment (R6)", async () => {
-  await page.goto(`/activity?item=${trellis.id}`)
+  await open(`/activity?item=${trellis.id}`)
   const dialog = page.getByRole("dialog")
   await expect(dialog.locator("#item-title")).toHaveValue(trellis.title)
   await dialog.getByLabel(he.item.newComment).fill("Half a thought")
