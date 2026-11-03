@@ -445,8 +445,16 @@ describe("the panel's geometry (MP-5)", () => {
       Object.defineProperty(element, name, { configurable: true, value })
   }
 
+  // The list's limits as ui.css gives them, in a stylesheet: place() clears the panel's own style first.
+  const sheet = document.createElement("style")
+  sheet.textContent = ".test-limits { min-width: 200px; max-width: 320px; }"
+  beforeEach(() => {
+    document.head.append(sheet)
+  })
+
   afterEach(() => {
     Reflect.deleteProperty(window, "visualViewport")
+    sheet.remove()
   })
 
   it("scrolls the chosen option into the list by the list's own top, not the panel's, above which the search sits", () => {
@@ -485,10 +493,17 @@ describe("the panel's geometry (MP-5)", () => {
     const panel = document.createElement("div")
     document.body.append(anchor, panel)
     anchor.getBoundingClientRect = () => box(500, 30, 330, 50)
+    // The list's own limits, as ui.css gives them: its min-width would otherwise win over any max-width.
+    panel.className = "test-limits"
     fixed(panel, { offsetWidth: 280, scrollHeight: 200 })
     place(anchor, panel, { width: "list", align: "start", rtl: false, first: false })
     const left = Number.parseFloat(panel.style.left)
-    const width = Math.min(280, Number.parseFloat(panel.style.maxWidth))
+    const minWidth = Number.parseFloat(panel.style.minWidth)
+    const maxWidth = Number.parseFloat(panel.style.maxWidth)
+    // The width the browser gives it: its content (280px), between the limits; the min-width wins a conflict.
+    const width = Math.max(minWidth, Math.min(280, maxWidth))
+    expect(minWidth).toBeLessThanOrEqual(179)
+    expect(maxWidth).toBeLessThanOrEqual(179)
     const top = Number.parseFloat(panel.style.top)
     const height = Number.parseFloat(panel.style.maxHeight)
     expect(left).toBeGreaterThanOrEqual(200 + 8)
@@ -496,6 +511,21 @@ describe("the panel's geometry (MP-5)", () => {
     // Above its button, where there is more room, and not above the visible top.
     expect(top).toBeGreaterThanOrEqual(300 + 8)
     expect(top + Math.min(200, height)).toBeLessThanOrEqual(500)
+    anchor.remove()
+    panel.remove()
+  })
+
+  it("keeps the stylesheet's width limits when the screen has room", () => {
+    const anchor = document.createElement("button")
+    const panel = document.createElement("div")
+    document.body.append(anchor, panel)
+    anchor.getBoundingClientRect = () => box(100, 30, 40, 120)
+    panel.className = "test-limits"
+    fixed(panel, { offsetWidth: 320, scrollHeight: 200 })
+    place(anchor, panel, { width: "list", align: "start", rtl: false, first: false })
+    // A long label does not widen a list past its 320px.
+    expect(panel.style.minWidth).toBe("200px")
+    expect(panel.style.maxWidth).toBe("320px")
     anchor.remove()
     panel.remove()
   })

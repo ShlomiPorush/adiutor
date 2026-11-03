@@ -104,6 +104,16 @@ function room(anchor: HTMLElement): { top: number; bottom: number; left: number;
   return { top, bottom, left: view.left + EDGE, right: view.right - EDGE }
 }
 
+/**
+ * A width limit no larger than `across`: in pixels when the browser resolved it, else as a CSS min(); `unset` when
+ * the stylesheet sets none.
+ */
+function capped(limit: string, across: number, unset: string): string {
+  if (limit === "" || limit === "none" || limit === "auto") return unset
+  const pixels = /^-?[\d.]+px$/.test(limit) ? Number.parseFloat(limit) : Number.NaN
+  return Number.isFinite(pixels) ? `${Math.min(pixels, across)}px` : `min(${limit}, ${across}px)`
+}
+
 export function place(
   anchor: HTMLElement,
   panel: HTMLElement,
@@ -123,15 +133,20 @@ export function place(
   style.top = ""
   style.bottom = ""
   style.maxHeight = ""
+  style.minWidth = ""
   style.maxWidth = ""
-  const across = bounds.right - bounds.left
+  const across = Math.max(bounds.right - bounds.left, 0)
+  // The stylesheet's width limits, each capped by the visible width: a min-width would otherwise win over any
+  // max-width, and the stylesheet's own max-width (320px for a list) must stay when there is room.
+  const css = getComputedStyle(panel)
+  style.minWidth = capped(css.minWidth, across, "0px")
+  style.maxWidth = capped(css.maxWidth, across, `${across}px`)
   style.width = options.width === "field" ? `${Math.min(Math.max(rect.width, 280), across)}px` : ""
   // Panels at the end of a row span the visible width on a phone, with 16px margins (MP-5).
   if (options.align === "end" && options.width !== "field" && matchMedia(PHONE).matches) {
     style.left = `${bounds.left - EDGE + 16}px`
     style.width = `${Math.max(across + 2 * EDGE - 32, 0)}px`
   } else {
-    style.maxWidth = `${Math.max(across, 0)}px`
     const width = Math.min(panel.offsetWidth, across)
     // The start edge is the button's start in the reading direction; the end edge, its end.
     const startsAt = options.rtl ? rect.right - width : rect.left
