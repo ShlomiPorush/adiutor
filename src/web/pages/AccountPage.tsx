@@ -7,8 +7,8 @@
 // recovery command. Signing out of this browser is in the shell's account menu.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { type FormEvent, useId, useRef, useState } from "react"
 import { UserRound } from "lucide-react"
+import { type FormEvent, useId, useRef, useState } from "react"
 import { useNavigate } from "react-router"
 import { CONNECT_CLIENT_ID, PASSWORD_MAX, PASSWORD_MIN, passwordSchema } from "../../shared/auth.ts"
 import { AuthCallError, type AuthError, authClient, authData, authFailure, FAILURE_TEXT } from "../api/auth.ts"
@@ -129,7 +129,8 @@ function AccountSection() {
         </Row>
       </Group>
       <Group
-        id="account-browsers" heading="h2"
+        id="account-browsers"
+        heading="h2"
         title={t("account.sessions")}
         count={query.data ? sessions.length : undefined}
         intro={t("account.sessionsHint")}

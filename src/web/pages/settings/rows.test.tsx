@@ -135,8 +135,9 @@ async function render(path: string): Promise<void> {
       { path: "/account", element: frame(<AccountPage />) },
     ],
     {
-    initialEntries: [path],
-  })
+      initialEntries: [path],
+    },
+  )
   await act(async () => {
     root.render(
       <StrictMode>
