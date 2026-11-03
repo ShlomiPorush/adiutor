@@ -119,8 +119,10 @@ export function openLayer(options: LayerOptions): () => void {
   stack.push(layer)
   syncInert()
   if (!layer.noHistory) pushEntry()
+  // In the next frame, unless the focus is inside the layer already: typing that started in that frame (a fast
+  // typist, a password manager) keeps its field instead of landing in the first one.
   requestAnimationFrame(() => {
-    if (stack.includes(layer)) focusInto(layer)
+    if (stack.includes(layer) && !layer.root.contains(document.activeElement)) focusInto(layer)
   })
   return () => {
     const index = stack.indexOf(layer)
@@ -131,6 +133,10 @@ export function openLayer(options: LayerOptions): () => void {
     const opener = layer.opener
     const below = stack.at(-1)
     requestAnimationFrame(() => {
+      // A layer on top that holds the focus keeps it: a close never pulls it out of the layer the owner works in
+      // (StrictMode's second run of the same dialog, or a picker closed by a click into its dialog).
+      const top = stack.at(-1)
+      if (top?.root.contains(document.activeElement)) return
       if (opener instanceof HTMLElement && opener.isConnected && !opener.closest("[inert]"))
         opener.focus({ preventScroll: true })
       else if (below) focusInto(below)
