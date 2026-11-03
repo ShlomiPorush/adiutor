@@ -66,22 +66,45 @@ export function typeAhead(labels: string[], typedText: string, from: number): nu
 type PanelWidth = "list" | "search" | "field" | "sort"
 
 /**
- * Where the panel may hang: the screen 8px in from each end, below the phone's top bar and above its tab bar.
- * A picker inside another layer (a dialog or sheet) sits over those bars, so only the screen counts.
+ * The part of the page the owner sees, in the coordinates `getBoundingClientRect` and a fixed panel use (the layout
+ * viewport's). Zoomed in by a pinch on a phone, that is the visual viewport: smaller than the layout and moved by its
+ * offsets. Without `visualViewport`, the window.
  */
-function room(anchor: HTMLElement): { top: number; bottom: number } {
-  let top = EDGE
-  let bottom = window.innerHeight - EDGE
-  if (!anchor.closest("[data-layer]")) {
-    const bar = document.querySelector(".ui-mtop")?.getBoundingClientRect()
-    if (bar && bar.height > 0 && bar.bottom > 0) top = Math.max(top, bar.bottom + EDGE)
-    const tabs = document.querySelector(".ui-tabbar")?.getBoundingClientRect()
-    if (tabs && tabs.height > 0 && tabs.top < window.innerHeight) bottom = Math.min(bottom, tabs.top - EDGE)
+export function visibleArea(): { left: number; top: number; right: number; bottom: number } {
+  const view = window.visualViewport
+  if (view && view.width > 0 && view.height > 0)
+    return {
+      left: view.offsetLeft,
+      top: view.offsetTop,
+      right: view.offsetLeft + view.width,
+      bottom: view.offsetTop + view.height,
+    }
+  return {
+    left: 0,
+    top: 0,
+    right: document.documentElement.clientWidth || window.innerWidth,
+    bottom: window.innerHeight,
   }
-  return { top, bottom }
 }
 
-function place(
+/**
+ * Where the panel may hang: the visible area 8px in from each end, below the phone's top bar and above its tab bar.
+ * A picker inside another layer (a dialog or sheet) sits over those bars, so only the visible area counts.
+ */
+function room(anchor: HTMLElement): { top: number; bottom: number; left: number; right: number } {
+  const view = visibleArea()
+  let top = view.top + EDGE
+  let bottom = view.bottom - EDGE
+  if (!anchor.closest("[data-layer]")) {
+    const bar = document.querySelector(".ui-mtop")?.getBoundingClientRect()
+    if (bar && bar.height > 0 && bar.bottom > view.top) top = Math.max(top, bar.bottom + EDGE)
+    const tabs = document.querySelector(".ui-tabbar")?.getBoundingClientRect()
+    if (tabs && tabs.height > 0 && tabs.top < view.bottom) bottom = Math.min(bottom, tabs.top - EDGE)
+  }
+  return { top, bottom, left: view.left + EDGE, right: view.right - EDGE }
+}
+
+export function place(
   anchor: HTMLElement,
   panel: HTMLElement,
   options: { width: PanelWidth; align: "start" | "end"; rtl: boolean; first: boolean },
@@ -94,27 +117,27 @@ function place(
     bounds = room(anchor)
     rect = anchor.getBoundingClientRect()
   }
-  const screen = document.documentElement.clientWidth || window.innerWidth
   const style = panel.style
   style.left = ""
   style.right = ""
   style.top = ""
   style.bottom = ""
   style.maxHeight = ""
-  style.width = options.width === "field" ? `${Math.min(Math.max(rect.width, 280), screen - 2 * EDGE)}px` : ""
-  // Panels at the end of a row span the screen on a phone, with margins (MP-5).
+  style.maxWidth = ""
+  const across = bounds.right - bounds.left
+  style.width = options.width === "field" ? `${Math.min(Math.max(rect.width, 280), across)}px` : ""
+  // Panels at the end of a row span the visible width on a phone, with 16px margins (MP-5).
   if (options.align === "end" && options.width !== "field" && matchMedia(PHONE).matches) {
-    style.left = "16px"
-    style.right = "16px"
-    style.width = "auto"
+    style.left = `${bounds.left - EDGE + 16}px`
+    style.width = `${Math.max(across + 2 * EDGE - 32, 0)}px`
   } else {
-    const width = panel.offsetWidth
-    // The panel's start edge, measured from the start edge of the screen in the reading direction.
-    const buttonStart = options.rtl ? screen - rect.right : rect.left
-    const buttonEnd = options.rtl ? screen - rect.left : rect.right
-    const wanted = options.align === "start" ? buttonStart : buttonEnd - width
-    const start = Math.max(EDGE, Math.min(wanted, screen - width - EDGE))
-    style.left = `${options.rtl ? screen - start - width : start}px`
+    style.maxWidth = `${Math.max(across, 0)}px`
+    const width = Math.min(panel.offsetWidth, across)
+    // The start edge is the button's start in the reading direction; the end edge, its end.
+    const startsAt = options.rtl ? rect.right - width : rect.left
+    const endsAt = options.rtl ? rect.left : rect.right - width
+    const wanted = options.align === "start" ? startsAt : endsAt
+    style.left = `${Math.max(bounds.left, Math.min(wanted, bounds.right - width))}px`
   }
   const height = panel.scrollHeight
   const below = bounds.bottom - rect.bottom - GAP
@@ -124,10 +147,23 @@ function place(
     style.top = `${rect.bottom + GAP}px`
     style.maxHeight = `${Math.max(below, 0)}px`
   } else {
-    style.bottom = `${window.innerHeight - rect.top + GAP}px`
+    // Measured from the top, as the visible area is: its bottom is not the layout's while zoomed in.
+    style.top = `${rect.top - GAP - Math.min(height, Math.max(above, 0))}px`
     style.maxHeight = `${Math.max(above, 0)}px`
   }
   style.visibility = "visible"
+}
+
+/**
+ * Scrolls a list so an option inside it shows, centred, when it is out of view. Measured against the list itself: the
+ * option's offsetTop counts from the panel, above which the search field and its gap sit.
+ */
+export function showInList(list: HTMLElement, option: HTMLElement): void {
+  const box = list.getBoundingClientRect()
+  const item = option.getBoundingClientRect()
+  if (item.top >= box.top && item.bottom <= box.top + list.clientHeight) return
+  const offset = item.top - box.top + list.scrollTop
+  list.scrollTop = Math.max(0, offset - (list.clientHeight - item.height) / 2)
 }
 
 /** Whether a Tab from `from` would leave the panel: the panel's own tab stops, one per radio group. */
@@ -400,8 +436,7 @@ export function Picker(props: PickerProps) {
             const chosen = options.find((option) => option.getAttribute("aria-selected") === "true") ?? options[0]
             const list = chosen?.parentElement
             // Only the list scrolls to show it; the page stays where it is.
-            if (chosen && list && chosen.offsetTop + chosen.offsetHeight > list.clientHeight)
-              list.scrollTop = chosen.offsetTop - (list.clientHeight - chosen.offsetHeight) / 2
+            if (chosen && list) showInList(list, chosen)
             return chosen ?? null
           }}
         >

@@ -16,7 +16,7 @@ import { I18nProvider } from "../i18n/i18n.tsx"
 import { ProjectsPage } from "../pages/ProjectsPage.tsx"
 import { Dialog } from "./Dialog.tsx"
 import { layerCount } from "./layers.ts"
-import { filterOptions, Picker, type PickerOption, typeAhead } from "./Picker.tsx"
+import { filterOptions, Picker, type PickerOption, place, showInList, typeAhead } from "./Picker.tsx"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -434,5 +434,69 @@ describe("the Projects page's Sort button and headers share one order (TB-1, TB-
     await press("Escape")
     expect(document.body.querySelector(".ui-picker-panel")).toBeNull()
     expect(focused()).toBe(sortButton())
+  })
+})
+
+describe("the panel's geometry (MP-5)", () => {
+  const box = (top: number, height: number, left = 0, width = 300) =>
+    ({ top, bottom: top + height, left, right: left + width, height, width, x: left, y: top }) as DOMRect
+  const fixed = (element: HTMLElement, values: Record<string, number>) => {
+    for (const [name, value] of Object.entries(values))
+      Object.defineProperty(element, name, { configurable: true, value })
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, "visualViewport")
+  })
+
+  it("scrolls the chosen option into the list by the list's own top, not the panel's, above which the search sits", () => {
+    // The list starts 44px into the panel, under the search; it shows one option of 44px.
+    const list = document.createElement("div")
+    const option = document.createElement("div")
+    list.append(option)
+    fixed(list, { clientHeight: 44 })
+    list.getBoundingClientRect = () => box(144, 44)
+    // The chosen option is the sixth: 220px down the list.
+    option.getBoundingClientRect = () => box(144 + 220 - list.scrollTop, 44)
+    showInList(list, option)
+    expect(list.scrollTop).toBe(220)
+    const shown = option.getBoundingClientRect()
+    expect(shown.top).toBeGreaterThanOrEqual(144)
+    expect(shown.bottom).toBeLessThanOrEqual(144 + 44)
+    // Already in view: the list stays.
+    showInList(list, option)
+    expect(list.scrollTop).toBe(220)
+  })
+
+  it("keeps the panel inside the visual viewport while the page is zoomed in", () => {
+    // Zoomed in: the owner sees 195 by 300 px of the layout, from (200, 300).
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: {
+        offsetLeft: 200,
+        offsetTop: 300,
+        width: 195,
+        height: 300,
+        addEventListener() {},
+        removeEventListener() {},
+      },
+    })
+    const anchor = document.createElement("button")
+    const panel = document.createElement("div")
+    document.body.append(anchor, panel)
+    anchor.getBoundingClientRect = () => box(500, 30, 330, 50)
+    fixed(panel, { offsetWidth: 280, scrollHeight: 200 })
+    place(anchor, panel, { width: "list", align: "start", rtl: false, first: false })
+    const left = Number.parseFloat(panel.style.left)
+    const width = Math.min(280, Number.parseFloat(panel.style.maxWidth))
+    const top = Number.parseFloat(panel.style.top)
+    const height = Number.parseFloat(panel.style.maxHeight)
+    expect(left).toBeGreaterThanOrEqual(200 + 8)
+    expect(left + width).toBeLessThanOrEqual(395 - 8)
+    // Above its button, where there is more room, and not above the visible top.
+    expect(top).toBeGreaterThanOrEqual(300 + 8)
+    expect(top + Math.min(200, height)).toBeLessThanOrEqual(500)
+    anchor.remove()
+    panel.remove()
   })
 })
