@@ -24,6 +24,10 @@
   --ui-fs-section: 22px;
   --ui-fs-caps: 11.5px;
   --ui-h1: 28px;
+  /* The page title on a phone, and on a very narrow one; phone fields stay 16px so iOS does not zoom (MO-2). */
+  --ui-h1-phone: 24px;
+  --ui-h1-xs: 21px;
+  --ui-fs-field-phone: 16px;
   --ui-radius: 12px;
   --ui-radius-sm: 8px;
   --ui-radius-tag: 6px;
@@ -456,7 +460,7 @@ button {
   margin-inline-start: auto;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: var(--ui-fs-caps);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--ui-warn);
@@ -1593,6 +1597,59 @@ a.ui-kpi:focus-visible {
 .ui-set-group-head + :is(.ui-set-row, .ui-kv, .ui-item) {
   border-top: 0;
 }
+/* Actions on the whole list (Disconnect all, Remove all): at the end of the head, red text (S-12, DS-20). */
+.ui-set-group-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+.ui-set-group-intro,
+.ui-set-group-foot {
+  max-width: 75ch;
+  margin: 0;
+  padding: 0 var(--ui-pad-x) 12px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  line-height: 1.5;
+}
+.ui-set-group-foot {
+  max-width: none;
+  padding-top: 12px;
+  border-top: 1px solid var(--ui-line);
+}
+/* A control that needs something missing, in its group's place (FB-1). */
+.ui-set-locked {
+  padding: 2px var(--ui-pad-x) var(--ui-pad-x);
+}
+/* A Status group's facts (FS-8): name over value, cell lines drawn with outline so a short last row leaves no block. */
+.ui-set-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  margin: 2px var(--ui-pad-x) var(--ui-pad-x);
+  overflow: hidden;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+}
+.ui-set-fact {
+  min-width: 0;
+  padding: 10px 14px;
+  outline: 1px solid var(--ui-line);
+}
+.ui-set-fact > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+  font-weight: 600;
+}
+.ui-set-fact > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  overflow-wrap: anywhere;
+}
 @media (min-width: 1024px) and (min-height: 601px) {
   .ui-page.ui-set-page {
     overflow: hidden;
@@ -1644,30 +1701,46 @@ a.ui-kpi:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
   gap: 4px 28px;
-  align-items: center;
+  align-items: start;
   padding: 14px var(--ui-pad-x);
   border-top: 1px solid var(--ui-line);
 }
-.ui-set-row > div:first-child {
+.ui-set-label {
   display: grid;
+  align-content: start;
   gap: 2px;
+  min-width: 0;
 }
-.ui-set-row > div:first-child span {
+.ui-set-label-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.ui-set-desc {
   color: var(--ui-muted);
   font-size: var(--ui-fs-sm);
+  line-height: 1.5;
 }
-.ui-set-row > :last-child {
-  justify-self: end;
-}
+/* The control fills its column; a segmented control, a button and a plain value sit at its end edge. */
 .ui-set-control {
   display: grid;
   gap: 6px;
-  justify-items: end;
+  justify-items: stretch;
   min-width: 0;
+}
+.ui-set-control > :is(.ui-seg, .ui-btn, .ui-set-value) {
+  justify-self: end;
 }
 .ui-set-control .ui-select,
 .ui-set-control .ui-input {
-  width: min(260px, 100%);
+  width: 100%;
+}
+.ui-set-value {
+  min-height: var(--ui-ctl-h);
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
 }
 
 /* ---------- Tags, chips, segmented control ---------- */
@@ -1754,8 +1827,9 @@ a.ui-kpi:focus-visible {
   border-radius: var(--ui-radius-sm);
   background: var(--ui-panel);
 }
+/* On a panel the track is a shade of it, so the lifted segment shows in both themes (S-10). */
 .ui-panel .ui-seg {
-  background: var(--ui-bg);
+  background: color-mix(in srgb, var(--ui-ink) 6%, var(--ui-panel));
 }
 .ui-seg button {
   min-height: 28px;
@@ -1769,12 +1843,9 @@ a.ui-kpi:focus-visible {
   cursor: pointer;
 }
 .ui-seg button[aria-pressed="true"] {
-  background: var(--ui-raise);
+  background: var(--ui-bg);
   color: var(--ui-ink);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-}
-.ui-panel .ui-seg button[aria-pressed="true"] {
-  background: var(--ui-panel);
 }
 .ui-seg button:disabled {
   opacity: 0.5;
@@ -1956,7 +2027,7 @@ a.ui-kpi:focus-visible {
   box-shadow: 0 0 0 2px var(--ui-bg);
   background: var(--ui-warn);
   color: var(--ui-bg);
-  font-size: 11px;
+  font-size: var(--ui-fs-xs);
   font-weight: 750;
   line-height: 19px;
   text-align: center;
@@ -2446,7 +2517,7 @@ html.ui-layer-on .ui-page {
 }
 .ui-code-input {
   font-family: var(--ui-mono);
-  font-size: 1.35rem;
+  font-size: var(--ui-fs-section);
   letter-spacing: 0.4em;
   text-align: center;
 }
@@ -2536,9 +2607,11 @@ html.ui-layer-on .ui-page {
   border-radius: var(--ui-radius-sm);
   background: var(--ui-panel);
 }
+/* The mono face ships up to 700: a heavier weight would be a bold the browser fakes (RT-3). */
 .ui-consent-code b {
-  font-size: var(--ui-fs-kpi);
-  font-weight: 800;
+  font-family: var(--ui-mono);
+  font-size: var(--ui-h1);
+  font-weight: 700;
   letter-spacing: 0.12em;
   justify-self: start;
 }
@@ -2551,22 +2624,6 @@ html.ui-layer-on .ui-page {
   flex: 1;
   width: auto;
 }
-.ui-connect-cmds {
-  display: grid;
-  gap: 10px;
-}
-.ui-connect-cmds .ui-copy {
-  justify-self: start;
-  max-width: 100%;
-  text-align: start;
-}
-/* A command wraps instead of being cut: it is read before it is pasted. */
-.ui-connect-cmds .ui-copy bdi {
-  overflow: visible;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  line-height: 1.5;
-}
 
 /* ---------- Account (Settings) ---------- */
 
@@ -2574,14 +2631,6 @@ html.ui-layer-on .ui-page {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-.ui-account-form {
-  display: grid;
-  gap: 12px;
-  max-width: 420px;
-}
-.ui-account-form .ui-btn {
-  justify-self: start;
 }
 
 /* ---------- Rail: 761 to 1100px (icon rail, dot counters) ---------- */
@@ -2635,7 +2684,7 @@ html.ui-layer-on .ui-page {
   .ui-mtop-app {
     overflow: hidden;
     color: var(--ui-muted);
-    font-size: 11px;
+    font-size: var(--ui-fs-xs);
     font-weight: 600;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -2693,7 +2742,7 @@ html.ui-layer-on .ui-page {
     border: 0;
     background: none;
     color: var(--ui-muted);
-    font-size: 11px;
+    font-size: var(--ui-fs-xs);
     font-weight: 600;
     text-decoration: none;
     cursor: pointer;
@@ -2779,12 +2828,12 @@ html.ui-layer-on .ui-page {
     display: none;
   }
   .ui-h1 {
-    font-size: 24px;
+    font-size: var(--ui-h1-phone);
   }
   .ui-input,
   .ui-select,
   .ui-textarea {
-    font-size: 16px;
+    font-size: var(--ui-fs-field-phone);
   }
   .ui-btn {
     min-height: 40px;
@@ -2817,14 +2866,8 @@ html.ui-layer-on .ui-page {
   .ui-set-row {
     grid-template-columns: minmax(0, 1fr);
   }
-  .ui-set-row > :last-child,
-  .ui-set-control {
-    justify-self: stretch;
-    justify-items: start;
-  }
-  .ui-set-control .ui-select,
-  .ui-set-control .ui-input {
-    width: 100%;
+  .ui-set-control > :is(.ui-seg, .ui-btn, .ui-set-value) {
+    justify-self: start;
   }
   .ui-locked {
     grid-template-columns: 20px minmax(0, 1fr);
@@ -2936,7 +2979,7 @@ html.ui-layer-on .ui-page {
 
 @media (max-width: 380px) {
   .ui-h1 {
-    font-size: 21px;
+    font-size: var(--ui-h1-xs);
   }
 }
 
@@ -3006,9 +3049,6 @@ html.ui-layer-on .ui-page {
   flex: none;
   accent-color: var(--ui-accent);
   cursor: pointer;
-}
-.ui-input-num {
-  width: 120px;
 }
 .ui-mono-input {
   font-family: var(--ui-mono);
@@ -3096,35 +3136,78 @@ button.ui-item-title {
   outline: 2px solid var(--ui-focus);
   outline-offset: 2px;
 }
-.ui-set-lock {
-  display: grid;
-  gap: 4px;
-  justify-items: end;
-  text-align: end;
-}
 .ui-set-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 1px 8px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--ui-info) 14%, transparent);
-  color: var(--ui-info);
-  font-size: 11px;
+  padding: 0 7px;
+  border-radius: var(--ui-radius-tag);
+  background: var(--ui-bg);
+  box-shadow: inset 0 0 0 1px var(--ui-line);
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-xs);
   font-weight: 700;
+  line-height: 1.6;
+  white-space: nowrap;
 }
-.ui-set-control input:disabled {
+.ui-set-pill.is-changed {
+  background: color-mix(in srgb, var(--ui-info) 14%, transparent);
+  box-shadow: none;
+  color: var(--ui-info);
+}
+.ui-set-env {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+}
+.ui-set-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-muted);
+  font: inherit;
+  font-size: var(--ui-fs-meta);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .ui-set-clear:hover {
+    color: var(--ui-fail);
+  }
+}
+.ui-set-clear.is-reset {
+  color: var(--ui-info);
+}
+.ui-set-bool-marks {
+  grid-column: 1 / -1;
+  display: grid;
+  justify-items: start;
+}
+/* A value the environment sets stays in place, disabled (FS-6). */
+.ui-set-control :is(input, select, .ui-btn):disabled {
   opacity: 0.7;
+  cursor: not-allowed;
 }
 .ui-set-secret-row {
-  display: inline-flex;
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: end;
   gap: 8px;
+  min-height: var(--ui-ctl-h);
 }
 .ui-set-secret {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--ui-ctl-h);
   font-weight: 600;
+}
+.ui-set-secret-row > .ui-set-secret {
+  flex: 1;
 }
 .ui-set-secret.is-removing {
   color: var(--ui-fail);
@@ -3144,40 +3227,83 @@ button.ui-item-title {
     text-decoration: underline;
   }
 }
-.ui-domain-chips {
+.ui-value-chips {
   display: flex;
   flex-wrap: wrap;
-  justify-content: end;
   gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.ui-domain-chips .ui-chip {
-  cursor: default;
-  padding-inline-end: 6px;
+.ui-value-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 7px;
+  border-radius: var(--ui-radius-tag);
+  background: var(--ui-bg);
+  font-family: var(--ui-mono);
+  font-size: var(--ui-fs-meta);
 }
-.ui-chip-x {
+.ui-value-chip:has(.ui-value-chip-x) {
+  padding-inline-end: 2px;
+}
+.ui-value-chip-x {
   display: inline-grid;
   place-items: center;
   width: 20px;
   height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: var(--ui-radius-tag);
   background: none;
   color: var(--ui-muted);
   cursor: pointer;
 }
 @media (hover: hover) {
-  .ui-chip-x:hover {
+  .ui-value-chip-x:hover {
     color: var(--ui-fail);
+  }
+}
+@media (max-width: 760px) {
+  /* A 44px target on a phone, without making the chip taller than its line (MO-5). */
+  .ui-value-chip-x {
+    position: relative;
+  }
+  .ui-value-chip-x::after {
+    content: "";
+    position: absolute;
+    inset: -12px;
   }
 }
 .ui-domain-add {
   display: flex;
   gap: 6px;
 }
+/* The field takes the row; named by its place, not by .ui-input, so no field rule above is outranked. */
+.ui-domain-add > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.ui-set-group > .ui-empty,
+.ui-set-group > .ui-loading {
+  border-top: 1px solid var(--ui-line);
+}
+.ui-set-command {
+  min-width: 0;
+}
+.ui-set-command .ui-copy {
+  max-width: 100%;
+  text-align: start;
+}
+/* A command wraps instead of being cut: it is read before it is pasted. */
+.ui-set-command .ui-copy bdi {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
 .ui-key-start {
   color: var(--ui-muted);
   font-size: var(--ui-fs-meta);

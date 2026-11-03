@@ -1,5 +1,6 @@
 import { and, desc, eq, lt } from "drizzle-orm"
 import type { Language } from "../../shared/enums.ts"
+import { CLOSED_ITEM_DAYS_MAX, CLOSED_ITEM_DAYS_MIN } from "../../shared/settings.ts"
 import type { EnvOverrides } from "../config.ts"
 import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { settings, suppressions, visits } from "../db/schema.ts"
@@ -59,8 +60,9 @@ const locked = (variable: string) =>
 
 export async function updateSettings(ctx: Ctx, by: By, patch: SettingsPatch, env?: SettingsEnv): Promise<SettingsRow> {
   requireOwner(by, "change settings")
-  if (patch.closedItemDays !== undefined && !(patch.closedItemDays >= 1 && patch.closedItemDays <= 365))
-    throw invalid("closedItemDays must be between 1 and 365.")
+  const days = patch.closedItemDays
+  if (days !== undefined && !(days >= CLOSED_ITEM_DAYS_MIN && days <= CLOSED_ITEM_DAYS_MAX))
+    throw invalid(`closedItemDays must be between ${CLOSED_ITEM_DAYS_MIN} and ${CLOSED_ITEM_DAYS_MAX}.`)
   const overrides = env?.overrides ?? {}
   if (patch.telegramBotToken !== undefined && overrides.telegramBotToken !== undefined)
     throw locked("MIKUD_TELEGRAM_BOT_TOKEN")

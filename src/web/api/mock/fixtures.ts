@@ -38,6 +38,56 @@ function storedLanguage(): "he" | "en" {
   }
 }
 
+/**
+ * What the mock pretends the environment sets, for screenshots of locked settings (FS-6): `mikud.mock.env` in
+ * localStorage holds variable names separated by commas (MIKUD_TELEGRAM_BOT_TOKEN, MIKUD_TELEGRAM_CHAT_ID,
+ * MIKUD_PRIVATE_DOMAINS); `mikud.mock.telegram` set to "off" starts with no bot token and no chat id.
+ */
+function mockEnv(): { variables: Set<string>; telegramOff: boolean } {
+  try {
+    const variables = (localStorage.getItem("mikud.mock.env") ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean)
+    return { variables: new Set(variables), telegramOff: localStorage.getItem("mikud.mock.telegram") === "off" }
+  } catch {
+    return { variables: new Set(), telegramOff: false }
+  }
+}
+
+function mockSettings(): Settings {
+  const env = mockEnv()
+  const lock = (variable: string) =>
+    env.variables.has(variable) ? { locked: true, variable } : { locked: false, variable: null }
+  const tokenLock = lock("MIKUD_TELEGRAM_BOT_TOKEN")
+  const chatLock = lock("MIKUD_TELEGRAM_CHAT_ID")
+  const tokenSet = tokenLock.locked || !env.telegramOff
+  const chatId = chatLock.locked ? "70012345" : env.telegramOff ? null : "4242"
+  const missing = [...(tokenSet ? [] : ["botToken" as const]), ...(chatId ? [] : ["chatId" as const])]
+  const state = missing.length === 0 ? "on" : missing.length === 2 ? "off" : "incomplete"
+  const domainsLock = lock("MIKUD_PRIVATE_DOMAINS")
+  return {
+    id: uuid(),
+    closedItemDays: 7,
+    dateFormat: "dd/MM/yyyy",
+    timeFormat: "HH:mm",
+    language: storedLanguage(),
+    sessionIdleDays: 30,
+    otpViaTelegram: false,
+    updatedAt: ago(50),
+    telegram: {
+      botToken: { set: tokenSet, readable: true, ...tokenLock },
+      chatId: { value: chatId, ...chatLock },
+      state,
+      missing: state === "off" ? [] : missing,
+    },
+    privateDomains: {
+      value: domainsLock.locked ? ["corp.example", "lab.example"] : ["corp.example"],
+      ...domainsLock,
+    },
+  }
+}
+
 export type MockGoal = { id: string; projectId: string; text: string; createdAt: string; closedAt: string | null }
 
 export type MockState = {
@@ -451,23 +501,7 @@ export function createState(): MockState {
     endedOthers: false,
     agentKeys,
     suppressions,
-    settings: {
-      id: uuid(),
-      closedItemDays: 7,
-      dateFormat: "dd/MM/yyyy",
-      timeFormat: "HH:mm",
-      language: storedLanguage(),
-      sessionIdleDays: 30,
-      otpViaTelegram: false,
-      updatedAt: ago(50),
-      telegram: {
-        botToken: { set: true, readable: true, locked: false, variable: null },
-        chatId: { value: "4242", locked: false, variable: null },
-        state: "on",
-        missing: [],
-      },
-      privateDomains: { value: ["corp.example"], locked: false, variable: null },
-    },
+    settings: mockSettings(),
     previousVisit: ago(14),
   }
 }
