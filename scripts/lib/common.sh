@@ -185,7 +185,7 @@ DEV_COMPOSE_FILE="$REPO_ROOT/docker-compose-dev.yml"
 DEV_DEFAULT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/mikud-dev"
 
 # The developer's .env.dev (or MIKUD_LOCAL_ENV_FILE) is both the service's last env_file and the file Compose
-# interpolates from, so MIKUD_BIND, MIKUD_PORT and MIKUD_PUBLIC_URL set there reach the template. Never printed.
+# interpolates from, so MIKUD_PORT and MIKUD_PUBLIC_URL set there reach the template. Never printed.
 dev_compose() {
   [ -f "$DEV_COMPOSE_FILE" ] || die "docker-compose-dev.yml is missing. Create it with:
   cp docker/docker-compose-dev.example.yml docker-compose-dev.yml"
