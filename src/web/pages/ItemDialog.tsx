@@ -5,7 +5,7 @@
 // the version the typing started on (draft.ts): a change made meanwhile is a conflict, never overwritten.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { type FormEvent, useId, useRef, useState } from "react"
+import { type FormEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react"
 import { Link } from "react-router"
 import { LIMITS } from "../../shared/api.ts"
 import { ITEM_STATUSES, ITEM_TYPES, SEVERITIES, type Severity } from "../../shared/enums.ts"
@@ -17,6 +17,7 @@ import { ITEM_PARAM, useCloseItem, useItemActions, useRefreshItems } from "../sh
 import { Copyable } from "../ui/Copyable.tsx"
 import { confirmDialog } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
+import { Picker } from "../ui/Picker.tsx"
 import { EVERY } from "../ui/refresh.ts"
 import { Banner, Empty, ErrorState, errorReason, Loading } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
@@ -330,15 +331,7 @@ function ItemBody({
         <label className="ui-label" htmlFor="item-title">
           {t("item.titleLabel")}
         </label>
-        <input
-          id="item-title"
-          className="ui-input ui-item-title-input"
-          dir="auto"
-          maxLength={TITLE_MAX}
-          value={title}
-          autoComplete="off"
-          onChange={(event) => onTitle(event.target.value)}
-        />
+        <TitleField value={title} onChange={onTitle} />
         <p className="ui-hint">
           {t("item.createdBy", { actor: t(`actor.${item.createdBy}`) })} <Time value={item.createdAt} mode="full" />
           {item.statusSetBy ? (
@@ -407,26 +400,26 @@ function ItemBody({
           </div>
         ) : null}
         <div className="ui-field">
-          <label className="ui-label" htmlFor={ids.project}>
+          <span className="ui-label" id={ids.project}>
             {t("item.project")}
-          </label>
-          <select
-            id={ids.project}
-            className="ui-select"
+          </span>
+          <Picker
+            variant="field"
+            labelledBy={ids.project}
+            label={t("item.project")}
+            searchLabel={t("picker.searchProjects")}
             value={item.projectId ?? ""}
-            onChange={(event) => {
-              const next = event.target.value || null
+            options={[
+              { value: "", label: t("inbox") },
+              ...(projects.data ?? []).map((entry) => ({ value: entry.id, label: entry.name })),
+            ]}
+            onChange={(value) => {
+              const next = value || null
+              if (next === item.projectId) return
               const name = projects.data?.find((entry) => entry.id === next)?.name ?? null
               void actions.moveTo(item, next, name)
             }}
-          >
-            <option value="">{t("inbox")}</option>
-            {(projects.data ?? []).map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.name}
-              </option>
-            ))}
-          </select>
+          />
         </div>
       </section>
 
@@ -578,5 +571,52 @@ function ItemBody({
         ) : null}
       </section>
     </div>
+  )
+}
+
+/**
+ * A text's direction by its first letter, as dir="auto" decides it on an input. Chromium does not follow a
+ * textarea's current value for dir="auto", so an English title in the Hebrew UI would stand on the right.
+ */
+export function textDirection(text: string): "rtl" | "ltr" | "auto" {
+  const first = /\p{L}/u.exec(text)?.[0]
+  if (!first) return "auto"
+  return /[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}]/u.test(first) ? "rtl" : "ltr"
+}
+
+/**
+ * The title as a field that grows with it, so a long title shows whole on a phone (audit B-2). A title is one
+ * line (the server folds every run of white space into one space): Enter adds no line break, and a pasted break
+ * becomes a space.
+ */
+function TitleField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const fit = () => {
+    const field = ref.current
+    if (!field) return
+    field.style.height = "auto"
+    field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the height follows the text
+  useLayoutEffect(fit, [value])
+  useEffect(() => {
+    window.addEventListener("resize", fit)
+    return () => window.removeEventListener("resize", fit)
+  })
+  return (
+    <textarea
+      ref={ref}
+      id="item-title"
+      className="ui-textarea ui-item-title-input"
+      dir={textDirection(value)}
+      rows={1}
+      maxLength={TITLE_MAX}
+      value={value}
+      autoComplete="off"
+      onChange={(event) => onChange(event.target.value.replace(/[\r\n]+/g, " "))}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.preventDefault()
+      }}
+    />
   )
 }

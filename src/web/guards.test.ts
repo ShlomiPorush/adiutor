@@ -45,6 +45,8 @@ const BUILDERS: Record<string, string> = {
   "shell/Bell.tsx":
     "the Needs attention window anchored under the bell on wide screens; a dialog-builder sheet on phones (NL-19)",
   "ui/Menu.tsx": "the one menu (the account menu), anchored to its button; a layer of ui/layers.ts (MP-7, R4)",
+  "ui/Picker.tsx":
+    "the one picker: a listbox, or the small panel of the Sort menu (ui/SortButton.tsx builds on it), anchored to its button and clamped to the screen; a layer of ui/layers.ts (MP-1, MP-4, MP-5, TB-28, R4)",
 }
 
 /**
@@ -66,6 +68,8 @@ const FLOATING_CSS: Record<string, string> = {
   ".ui-savebar": "the save bar, part of the page",
   ".ui-menu-backdrop": "the click-outside area of a menu",
   ".ui-menu": "a menu, placed beside its button",
+  ".ui-picker-backdrop": "the click-outside area of a picker or the Sort menu",
+  ".ui-picker-panel": "a picker's listbox or the Sort menu, placed beside its button",
 }
 
 const LAYER_PATTERNS: [string, RegExp][] = [
@@ -75,7 +79,11 @@ const LAYER_PATTERNS: [string, RegExp][] = [
   ["showModal()", /\.showModal\s*\(/],
   ["a popover attribute", /\bpopover\s*[=:]/],
   ["a menu role", /role\s*[=:]\s*\{?\s*["']menu(?:item(?:radio|checkbox)?)?["']/],
-  ["a layer frame class", /["'`\s]ui-(?:dialog|toast|attn-win|attn-backdrop|moresheet|menu)(?:[-\s"'`]|$)/m],
+  ["a listbox role", /role\s*[=:]\s*\{?\s*["'](?:listbox|option|combobox)["']/],
+  [
+    "a layer frame class",
+    /["'`\s]ui-(?:dialog|toast|attn-win|attn-backdrop|moresheet|menu|picker-panel|picker-backdrop)(?:[-\s"'`]|$)/m,
+  ],
   ["fixed positioning", /position\s*:\s*["']fixed["']|\.position\s*=\s*["']fixed["']/],
   ["the browser's alert, confirm or prompt", /(?<![\w.$])(?:window\.)?(?:alert|confirm|prompt)\s*\(/],
 ]
@@ -252,6 +260,20 @@ describe("popups come from their shared builders (DS-24)", () => {
     expect(popupViolations(page(`return <dialog open>x</dialog>`))).toHaveLength(1)
     expect(popupViolations(page(`return <div role="menu"><b role="menuitem">x</b></div>`))).toHaveLength(1)
     expect(popupViolations(page(`return <div className="ui-menu-backdrop" />`))).toHaveLength(1)
+    // A drop-down made by hand: its listbox and options, or the picker's panel and backdrop.
+    expect(popupViolations(page(`return <div role="listbox"><b role="option">x</b></div>`))).toHaveLength(1)
+    expect(popupViolations(page(`return <div className="ui-picker-panel">x</div>`))).toHaveLength(1)
+    expect(popupViolations(page(`return <div className="ui-picker-backdrop" />`))).toHaveLength(1)
+    expect(
+      popupViolations(page(`<Picker label="Stage" value="all" defaultValue="all" options={[]} onChange={f} />`)),
+    ).toEqual([])
+    expect(
+      popupViolations(page(`<SortButton name="projects" columns={[]} value={s} defaultValue={s} onChange={f} />`)),
+    ).toEqual([])
+    // The Sort button builds on the picker's panel and needs no place on the list of builders.
+    expect(popupViolations({ "ui/SortButton.tsx": `<PickerPanel kind="dialog" label="Sort">x</PickerPanel>` })).toEqual(
+      [],
+    )
     expect(
       popupViolations(page(`<Menu anchor={b} label="Account" entries={[]} side="top" align="end" onClose={f} />`)),
     ).toEqual([])
@@ -269,6 +291,8 @@ describe("popups come from their shared builders (DS-24)", () => {
     expect(floatingCssViolations(`.ui-new-layer { position: fixed; inset: 0; }`)).toHaveLength(1)
     expect(floatingCssViolations(`.ui-tip { position: absolute; z-index: 40; }`)).toHaveLength(1)
     expect(floatingCssViolations(`.ui-pip { position: absolute; }`)).toEqual([])
+    expect(floatingCssViolations(`.ui-picker-panel { position: fixed; }`)).toEqual([])
+    expect(floatingCssViolations(`.ui-dropdown { position: fixed; }`)).toHaveLength(1)
   })
 })
 
