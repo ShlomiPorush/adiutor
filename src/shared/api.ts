@@ -211,8 +211,9 @@ export const auditFilterSchema = z.object({
     .string()
     .regex(/^[a-z_]{1,30}\.[a-z_]{1,30}$/, "an action code")
     .optional(),
-  projectId: id.optional(),
-  itemId: id.optional(),
+  // Lowercase, as the database writes a uuid: an address may hold one in capitals.
+  projectId: id.transform((value) => value.toLowerCase()).optional(),
+  itemId: id.transform((value) => value.toLowerCase()).optional(),
   q: z
     .string()
     .max(200)

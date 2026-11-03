@@ -4,7 +4,7 @@
 // filters still pages the entity filters (R2); the search matches the stored fields literally and the labels of
 // the request's language, in English and in Hebrew. The data is invented.
 
-import { eq } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { ACTOR_KINDS } from "../../shared/enums.ts"
 import he from "../../shared/locales/he.json"
@@ -141,6 +141,23 @@ describe("activity counts", () => {
         .map((row) => row.action)
         .sort(),
     ).toEqual(["item.create", "item.update", "thread.link"])
+  })
+
+  it("lists rows written for an id in capitals, as an address may name it, under the item and its project", async () => {
+    const { lantern, trellis } = await seed()
+    // PATCH /items/<ID IN CAPITALS> is a valid request; its audit row keeps the id as the request named it.
+    await updateItem(t.ctx, owner, trellis.id.toUpperCase(), await version(trellis.id), { status: "done" })
+    const [written] = await t.ctx.db.select({ entityId: audit.entityId }).from(audit).orderBy(desc(audit.id)).limit(1)
+    expect(written?.entityId).toBe(trellis.id.toUpperCase())
+    const done = (row: { action: string; entityId: string | null; after?: unknown }) =>
+      row.action === "item.update" && row.entityId === trellis.id.toUpperCase()
+    expect((await pageAll({ itemId: trellis.id })).some(done), "under the item").toBe(true)
+    expect((await pageAll({ projectId: lantern.id })).some(done), "under its project").toBe(true)
+    // The project's count holds it too.
+    const counts = await expectCountsMatch({})
+    const lanternCount = counts.projects.find((entry) => entry.projectId === lantern.id)?.count
+    expect(lanternCount).toBe((await pageAll({ projectId: lantern.id })).length)
+    expect(counts.projects.some((entry) => entry.projectId === lantern.id.toUpperCase())).toBe(false)
   })
 
   it("lists an item's rows, its comments and threads included", async () => {

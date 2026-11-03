@@ -57,10 +57,18 @@ export function filtersFromParams(params: URLSearchParams): { filters: PageFilte
 
 const hint = (count: number | undefined) => (count === undefined ? undefined : formatNumber(count))
 
-/** A picker's options, with the chosen value kept (count 0) when the other filters leave it out (no blank pill). */
-function withChosen(options: PickerOption[], chosen: string | undefined, label: (value: string) => string) {
+/**
+ * A picker's options, with the chosen value kept when the other filters leave it out (no blank pill): with a count
+ * of 0 when the counts are in, and with none while they are not (a failed refresh must not claim 0 beside its rows).
+ */
+function withChosen(
+  options: PickerOption[],
+  chosen: string | undefined,
+  label: (value: string) => string,
+  counted: boolean,
+) {
   if (!chosen || options.some((option) => option.value === chosen)) return options
-  return [...options, { value: chosen, label: label(chosen), hint: formatNumber(0) }]
+  return [...options, { value: chosen, label: label(chosen), hint: counted ? formatNumber(0) : undefined }]
 }
 
 export function ActivityPage() {
@@ -245,6 +253,7 @@ function useFilterOptions(
     ],
     filters.agent,
     (label) => label,
+    Boolean(counts),
   )
   const actions = withChosen(
     [
@@ -258,6 +267,7 @@ function useFilterOptions(
     ],
     filters.action,
     (code) => actionLabel(language, code),
+    Boolean(counts),
   )
   // Every project the owner has, then rows of projects deleted since; a count of 0 where none match.
   const projectCount = new Map((counts?.projects ?? []).map((entry) => [entry.projectId, entry.count]))
@@ -276,6 +286,7 @@ function useFilterOptions(
     [{ value: "", label: t("activity.allProjects") }, ...named, ...deleted],
     filters.projectId,
     () => t("activity.deletedProject"),
+    Boolean(counts),
   )
   return { who, agents, actions, projects }
 }

@@ -627,12 +627,13 @@ function auditConditions(scope: AuditScope, omit: readonly AuditFacet[] = []): S
   if (scope.agent && use("agent"))
     where.push(sql`(${audit.actorKind} = 'agent' and ${audit.actorLabel} = ${scope.agent})`)
   if (scope.action && use("action")) where.push(eq(audit.action, scope.action))
+  // An audit row keeps the id as the request named it, which may be in capitals; the filters are lowercase.
   if (scope.projectId && use("projectId"))
     // The project's own rows, and the rows of the items in it now (a comment or a thread is its item's row).
     where.push(
-      sql`((${audit.entityType} = 'project' and ${audit.entityId} = ${scope.projectId}) or (${audit.entityType} = 'item' and ${audit.entityId} in (select ${items.id}::text from ${items} where ${items.projectId} = ${scope.projectId})))`,
+      sql`((${audit.entityType} = 'project' and lower(${audit.entityId}) = ${scope.projectId}) or (${audit.entityType} = 'item' and lower(${audit.entityId}) in (select ${items.id}::text from ${items} where ${items.projectId} = ${scope.projectId})))`,
     )
-  if (scope.itemId) where.push(sql`(${audit.entityType} = 'item' and ${audit.entityId} = ${scope.itemId})`)
+  if (scope.itemId) where.push(sql`(${audit.entityType} = 'item' and lower(${audit.entityId}) = ${scope.itemId})`)
   if (scope.entityType) where.push(eq(audit.entityType, scope.entityType))
   if (scope.entityId) where.push(eq(audit.entityId, scope.entityId))
   if (scope.q) where.push(auditSearch(scope.q, scope.lang))
@@ -705,11 +706,11 @@ export async function auditLog(ctx: Ctx, options: AuditLogOptions = {}): Promise
         .groupBy(audit.action)
       const subject = sql<
         string | null
-      >`coalesce(case when ${audit.entityType} = 'project' then ${audit.entityId} end, ${items.projectId}::text)`
+      >`coalesce(case when ${audit.entityType} = 'project' then lower(${audit.entityId}) end, ${items.projectId}::text)`
       const projectRows = await tx
         .select({ projectId: subject, count })
         .from(audit)
-        .leftJoin(items, sql`${audit.entityType} = 'item' and ${items.id}::text = ${audit.entityId}`)
+        .leftJoin(items, sql`${audit.entityType} = 'item' and ${items.id}::text = lower(${audit.entityId})`)
         .where(and(...auditConditions(scope, ["projectId"])))
         .groupBy(subject)
 

@@ -25,6 +25,7 @@ import { ActivityPage, filtersFromParams } from "./ActivityPage.tsx"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const ITEM = "0b9f3c1e-5a2d-4c8e-9f1a-2b3c4d5e6f70"
+const PROJECT = "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
 const actors: { kind: ActorKind; label: string }[] = [
   { kind: "owner", label: "owner.name" },
   { kind: "agent", label: "agent:codex" },
@@ -115,7 +116,7 @@ async function transport({ method, path }: TransportRequest): Promise<TransportR
     if (failAudit) return { status: 503, body: { error: { code: "unavailable", message: "Down." } } }
     return serve(path)
   }
-  if (path === "/projects") return { status: 200, body: { data: [] } }
+  if (path === "/projects") return { status: 200, body: { data: [{ id: PROJECT, name: "Moss garden" }] } }
   if (path === `/items/${ITEM}`)
     return { status: 200, body: { data: { item: { id: ITEM, title: "Bed 0" }, audit: [], comments: [], threads: [] } } }
   return { status: 404, body: { error: { code: "not_found", message: "Not here." } } }
@@ -329,6 +330,16 @@ describe("the Filters button", () => {
     expect(chosen?.hint).toBe("0")
   })
 
+  it("names a project an address gives in capitals by its name, not as deleted (R3)", async () => {
+    await render(`/activity?projectId=${PROJECT.toUpperCase()}`)
+    expect(lastAudit()).toContain(`projectId=${PROJECT}`)
+    await click(document.querySelector(".ui-filters-toggle"))
+    expect(plain(pill("Project")?.querySelector(".ui-picker-value")?.textContent)).toBe("Moss garden")
+    const labels = (await options("Project")).map((option) => option.label)
+    expect(labels).not.toContain(en.activity.deletedProject)
+    expect(labels.filter((label) => label === "Moss garden")).toHaveLength(1)
+  })
+
   it("names the item a link narrowed the list to, and removes it", async () => {
     await render(`/activity?itemId=${ITEM}`)
     const tag = document.querySelector<HTMLButtonElement>(".ui-fbar-tag")
@@ -402,6 +413,20 @@ describe("paging and stale answers", () => {
     expect(document.querySelector(".ui-list-summary b")).toBeNull()
     expect(rows()).toBe(30)
     expect((await options("Who")).every((option) => option.hint === "")).toBe(true)
+  })
+
+  it("claims no 0 for a chosen value the counts leave out once a refresh failed (R6)", async () => {
+    await render("/activity?action=proposal.reject")
+    await click(document.querySelector(".ui-filters-toggle"))
+    failAudit = true
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["audit"] }).catch(() => {})
+    })
+    await settle()
+    expect(document.querySelector(".ui-stale-note")).not.toBeNull()
+    const chosen = (await options("Action")).find((option) => option.label === en.audit.action.proposal_reject)
+    expect(chosen, "still named").toBeDefined()
+    expect(chosen?.hint).toBe("")
   })
 })
 
