@@ -208,7 +208,7 @@ export function SettingsPage() {
     else if (query.isError)
       body = <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
     else body = <Loading label={t("settings.loading")} />
-  else if (active === "agents") body = <AgentKeysSection />
+  } else if (active === "agents") body = <AgentKeysSection />
   else if (active === "status") body = <StatusSection />
   else body = <SuppressionsSection />
 
