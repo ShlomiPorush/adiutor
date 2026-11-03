@@ -27,6 +27,7 @@ describe("keepRevealed", () => {
     fieldAt = 900
     writes = []
     // The page scrolls as one (content overflow visible): 500px tall, the field 40px tall.
+    content.style.overflowY = "visible"
     page.getBoundingClientRect = () => rect(0, 500)
     field.getBoundingClientRect = () => rect(fieldAt - page.scrollTop, 40)
     page.scrollTo = ((options: ScrollToOptions) => {
