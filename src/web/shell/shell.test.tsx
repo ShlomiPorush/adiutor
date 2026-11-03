@@ -63,6 +63,7 @@ async function render(ui: ReactNode, at = "/"): Promise<void> {
           { path: "/login", element: null },
           { path: "/projects/:projectId", element: null },
           { path: "/settings/:section?", element: null },
+          { path: "/account", element: null },
         ],
       },
     ],
