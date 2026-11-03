@@ -626,10 +626,9 @@
       "sessions": "Browser sessions",
       "telegramBot": "Bot",
       "telegramCodes": "Sign-in codes",
-      "telegramRuntime": "Bot status",
       "privateNetwork": "Private network",
-      "sync": "T3 sync",
-      "suppressed": "Not recreated by the sync"
+      "suppressed": "Not recreated by the sync",
+      "status": "Status"
     },
     "loading": "Loading settings...",
     "failed": "Could not load settings",
@@ -695,7 +694,12 @@
       "tooltip": "An environment variable sets this; change it there",
       "note": "Set by the environment variable {variable}. Change it there and restart Mikud.",
       "refused": "Not saved: an environment variable sets this setting. Change it there and restart Mikud."
-    }
+    },
+    "changed": "Changed",
+    "changedTooltip": "Differs from the default",
+    "resetTo": "Reset to default ({value})",
+    "clear": "Clear",
+    "off": "Off"
   },
   "suppressions": {
     "loading": "Loading suppressions...",
@@ -711,7 +715,21 @@
     "removeTitle": "Remove the suppression of {label}?",
     "removeMessage": "The next sync may create its item or project again.",
     "removed": "Suppression of {label} removed",
-    "removeFailed": "Could not remove the suppression of {label}: {reason}"
+    "removeFailed": "Could not remove the suppression of {label}: {reason}",
+    "removeAll": "Remove all",
+    "removeAllTitle": "Remove all suppressions?",
+    "removeAllMessage": {
+      "one": "Remove 1 suppression? The next sync may create its item or project again.",
+      "other": "Remove {count} suppressions? The next sync may create their items and projects again."
+    },
+    "removedAll": {
+      "one": "1 suppression removed",
+      "other": "{count} suppressions removed"
+    },
+    "removeAllFailed": {
+      "one": "1 suppression could not be removed. Try again in a moment.",
+      "other": "{count} suppressions could not be removed. Try again in a moment."
+    }
   },
   "notFound": {
     "title": "This page does not exist",
@@ -841,7 +859,6 @@
     "endAllTitle": "Sign out everywhere?",
     "endAllMessage": "Every browser, this one included, must sign in again. Do this after restoring a backup or when a device is lost.",
     "endFailed": "Could not sign out the browsers: {reason}",
-    "password": "Change password",
     "passwordHint": "Other browsers are signed out; this one stays signed in.",
     "currentPassword": "Current password",
     "newPassword": "New password",
@@ -855,7 +872,6 @@
     "recoveryHint": "Forgot the password? On the server, this prints a new one once and signs out every browser; two-factor stays. Without the authenticator, the backup codes you saved are the only way in.",
     "until": "signed in until",
     "twoFactor": "Two-factor authentication",
-    "twoFactorHint": "New backup codes replace the ones you saved. A new authenticator replaces the app you use now; set it up right away.",
     "newCodes": "New backup codes",
     "newCodesTitle": "New backup codes",
     "newCodesHint": "Enter your password. The backup codes you saved before stop working.",
@@ -872,7 +888,17 @@
     "endOne": "Sign out",
     "endOneTitle": "Sign out {name}?",
     "endOneMessage": "That session ends at once and has to sign in again.",
-    "endOneDone": "{name} was signed out"
+    "endOneDone": "{name} was signed out",
+    "signedInGroup": "Signed in",
+    "passwordGroup": "Password",
+    "passwordRow": "Sign-in password",
+    "passwordTitle": "Change password",
+    "currentMissing": "Enter your current password.",
+    "codesRow": "Backup codes",
+    "codesHint": "New codes replace the ones you saved; the old ones stop working.",
+    "authenticatorRow": "Authenticator app",
+    "authenticatorHint": "A new authenticator app replaces the current one. Finish setting it up right away.",
+    "recoveryRow": "Reset the password on the server"
   },
   "backupCodes": {
     "hint": "These {count} backup codes let you in without the authenticator app, once each. Mikud shows them only now. Keep them somewhere safe, apart from this device.",
@@ -982,7 +1008,7 @@
     "notSet": "Not set",
     "newValue": "New token",
     "stored": "Set",
-    "setByEnv": "Set by the environment",
+    "setByEnv": "Stored in the environment",
     "unreadable": "Cannot be read (its key was removed): enter it again",
     "replace": "Replace",
     "remove": "Remove",
@@ -993,7 +1019,10 @@
     "otp": "Send sign-in codes to Telegram",
     "otpHint": "At sign-in, after the password, you may ask for a code in your Telegram chat instead of the authenticator app. Default: off.",
     "otpWarning": "Your Telegram chat becomes a way in: whoever reads it and knows your password can sign in.",
-    "otpNeedsTelegram": "Set up the bot token and the chat ID first."
+    "otpLocked": "Sign-in codes in Telegram are not available",
+    "testLocked": "The test message and the bot's details are not available",
+    "needsTelegram": "Telegram is not on yet. To turn it on, set the bot token and the chat ID in Settings → Integrations → Telegram → Bot, then save.",
+    "setUp": "Set up the bot"
   },
   "secretCheck": {
     "domains": "Private domains",

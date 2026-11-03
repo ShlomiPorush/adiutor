@@ -1,10 +1,12 @@
-// Settings, Account, in groups (Signed-in browsers, Change password, Two-factor, Recovery): everything here is Better Auth's own routes through its client, and acts at once (outside the
-// save bar): the signed-in browsers (and a session `mikud connect` left behind) with sign out one of them, sign out
-// the others and sign out everywhere, the password, a new
-// authenticator, new backup codes and the recovery note. Signing out of this browser is in the shell's account menu.
+// Settings, Account, as v3 rows in groups (S-6, FS-8): Signed in, Browsers, Password, Two-factor and Recovery.
+// Everything here is Better Auth's own routes through its client, and acts at once, outside the save bar: the
+// signed-in browsers (and a session `mikud connect` left behind) with Sign out per browser and, at the end of the
+// list's head, Sign out other browsers and Sign out everywhere (S-12); the password changed in a dialog (FS-22, DS-9:
+// it asks before dropping what was typed); new backup codes and a new authenticator, each in a dialog; and the
+// recovery command. Signing out of this browser is in the shell's account menu.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { type FormEvent, useId, useState } from "react"
+import { type FormEvent, useId, useRef, useState } from "react"
 import { useNavigate } from "react-router"
 import { CONNECT_CLIENT_ID, PASSWORD_MAX, PASSWORD_MIN, passwordSchema } from "../../../shared/auth.ts"
 import { AuthCallError, type AuthError, authClient, authData, authFailure, FAILURE_TEXT } from "../../api/auth.ts"
@@ -23,7 +25,7 @@ import { Tag } from "../../ui/tags.tsx"
 import { describeAgent } from "../agent.ts"
 import { RECOVERY_COMMAND } from "../auth/LoginPage.tsx"
 import { BackupCodes, FormError, PasswordField } from "../auth/parts.tsx"
-import { Group } from "./parts.tsx"
+import { Group, Row } from "./parts.tsx"
 import { settingsPath } from "./sections.ts"
 
 /** "Sign out everywhere": asks first, then Better Auth's revokeSessions and on to sign-in. */
@@ -61,7 +63,7 @@ export function AccountSection() {
     queryFn: () => authData(authClient.listSessions()) as Promise<BrowserSession[]>,
     every: EVERY.slow,
   })
-  const [dialog, setDialog] = useState<"codes" | "authenticator" | null>(null)
+  const [dialog, setDialog] = useState<"password" | "codes" | "authenticator" | null>(null)
   const sessions = [...(query.data ?? [])].sort(
     (a, b) => Number(b.id === current) - Number(a.id === current) || time(b.createdAt).localeCompare(time(a.createdAt)),
   )
@@ -102,14 +104,31 @@ export function AccountSection() {
 
   return (
     <>
-      <Group id="settings-browsers" title={t("account.sessions")}>
-        <p className="ui-panel-body ui-hint">{t("account.sessionsHint")}</p>
-        <div className="ui-kv">
-          <span>{t("account.signedInAs")}</span>
-          <bdi className="ui-mono" dir="ltr">
+      <Group id="settings-signed-in" title={t("account.signedInGroup")}>
+        <Row label={t("account.signedInAs")}>
+          <bdi className="ui-mono ui-set-value" dir="ltr">
             {me.data?.actor.label ?? "-"}
           </bdi>
-        </div>
+        </Row>
+      </Group>
+      <Group
+        id="settings-browsers"
+        title={t("account.sessions")}
+        count={query.data ? sessions.length : undefined}
+        intro={t("account.sessionsHint")}
+        extra={
+          <>
+            {sessions.length > 1 ? (
+              <button type="button" className="ui-btn ui-btn-sm ui-btn-danger" onClick={() => void endOthers()}>
+                {t("account.endOthers")}
+              </button>
+            ) : null}
+            <button type="button" className="ui-btn ui-btn-sm ui-btn-danger" onClick={() => void signOutEverywhere()}>
+              {t("account.endAll")}
+            </button>
+          </>
+        }
+      >
         {query.isPending ? <Loading label={t("account.loading")} /> : null}
         {query.isError && !query.data ? (
           <ErrorState title={t("account.failed")} error={query.error} onRetry={() => void query.refetch()} />
@@ -149,39 +168,34 @@ export function AccountSection() {
             </div>
           )
         })}
-        <div className="ui-panel-body ui-account-actions">
-          {sessions.length > 1 ? (
-            <button type="button" className="ui-btn ui-btn-danger" onClick={() => void endOthers()}>
-              {t("account.endOthers")}
-            </button>
-          ) : null}
-          <button type="button" className="ui-btn ui-btn-danger" onClick={() => void signOutEverywhere()}>
-            {t("account.endAll")}
-          </button>
-        </div>
       </Group>
-      <Group id="settings-password" title={t("account.password")}>
-        <PasswordForm />
+      <Group id="settings-password" title={t("account.passwordGroup")}>
+        <Row label={t("account.passwordRow")} hint={t("account.passwordHint")}>
+          <button type="button" className="ui-btn" onClick={() => setDialog("password")}>
+            {t("account.change")}
+          </button>
+        </Row>
       </Group>
       <Group id="settings-two-factor" title={t("account.twoFactor")}>
-        <div className="ui-panel-body ui-account-form">
-          <p className="ui-hint">{t("account.twoFactorHint")}</p>
-          <div className="ui-account-actions">
-            <button type="button" className="ui-btn" onClick={() => setDialog("codes")}>
-              {t("account.newCodes")}
-            </button>
-            <button type="button" className="ui-btn" onClick={() => setDialog("authenticator")}>
-              {t("account.newAuthenticator")}
-            </button>
-          </div>
-        </div>
+        <Row label={t("account.codesRow")} hint={t("account.codesHint")}>
+          <button type="button" className="ui-btn" onClick={() => setDialog("codes")}>
+            {t("account.newCodes")}
+          </button>
+        </Row>
+        <Row label={t("account.authenticatorRow")} hint={t("account.authenticatorHint")}>
+          <button type="button" className="ui-btn" onClick={() => setDialog("authenticator")}>
+            {t("account.newAuthenticator")}
+          </button>
+        </Row>
       </Group>
       <Group id="settings-recovery" title={t("account.recovery")}>
-        <div className="ui-panel-body ui-auth-note">
-          <p className="ui-hint">{t("account.recoveryHint")}</p>
-          <Copyable value={RECOVERY_COMMAND} />
-        </div>
+        <Row label={t("account.recoveryRow")} hint={t("account.recoveryHint")}>
+          <span className="ui-set-command" dir="ltr">
+            <Copyable value={RECOVERY_COMMAND} />
+          </span>
+        </Row>
       </Group>
+      {dialog === "password" ? <PasswordDialog onClose={() => setDialog(null)} /> : null}
       {dialog === "codes" ? <NewCodesDialog onClose={() => setDialog(null)} /> : null}
       {dialog === "authenticator" ? (
         <NewAuthenticatorDialog
@@ -205,28 +219,46 @@ const failureSentence = (t: (key: string, values?: Record<string, string | numbe
       : t(FAILURE_TEXT[failure])
 }
 
-/** Change password: the current one, the new one twice. Better Auth signs out the other browsers; this one stays. */
-function PasswordForm() {
+type PasswordFieldName = "current" | "next" | "repeat"
+
+/**
+ * Change password, in a dialog (S-6): the current one, the new one twice. The page checks what it can before it
+ * sends, naming and focusing the field (SV-1); Better Auth signs out the other browsers and this one stays. A refusal
+ * keeps the dialog open (only the current password is emptied when it was wrong); a change closes it. Its X, Escape,
+ * Back and a pull down ask before dropping what was typed (DS-9).
+ */
+export function PasswordDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
+  const formId = useId()
+  const errorId = useId()
   const [current, setCurrent] = useState("")
   const [next, setNext] = useState("")
   const [repeat, setRepeat] = useState("")
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<{ field: "current" | "next" | "repeat" | null; text: string } | null>(null)
+  const [error, setError] = useState<{ field: PasswordFieldName | null; text: string } | null>(null)
+  const currentRef = useRef<HTMLInputElement>(null)
+  const nextRef = useRef<HTMLInputElement>(null)
+  const repeatRef = useRef<HTMLInputElement>(null)
+  const refs = { current: currentRef, next: nextRef, repeat: repeatRef }
+  const guardedClose = useDiscardGuard(Boolean(current || next || repeat), onClose)
+
+  const refuse = (field: PasswordFieldName | null, text: string) => {
+    setError({ field, text })
+    if (field) refs[field].current?.focus()
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (!current) return setError({ field: "current", text: t("account.wrongCurrent") })
+    if (!current) return refuse("current", t("account.currentMissing"))
     if (!passwordSchema.safeParse(next).success)
-      return setError({
-        field: "next",
-        text:
-          next.length > PASSWORD_MAX
-            ? t("auth.error.passwordLong", { max: PASSWORD_MAX })
-            : t("auth.error.passwordShort", { min: PASSWORD_MIN }),
-      })
-    if (next !== repeat) return setError({ field: "repeat", text: t("auth.error.mismatch") })
+      return refuse(
+        "next",
+        next.length > PASSWORD_MAX
+          ? t("auth.error.passwordLong", { max: PASSWORD_MAX })
+          : t("auth.error.passwordShort", { min: PASSWORD_MIN }),
+      )
+    if (next !== repeat) return refuse("repeat", t("auth.error.mismatch"))
     setBusy(true)
     setError(null)
     try {
@@ -238,51 +270,61 @@ function PasswordForm() {
       if (answer) {
         const wrong = authFailure(answer, "password") === "wrong_password"
         if (wrong) setCurrent("")
-        setError({ field: wrong ? "current" : null, text: failureSentence(t, answer) })
+        refuse(wrong ? "current" : null, failureSentence(t, answer))
         return
       }
-      setCurrent("")
-      setNext("")
-      setRepeat("")
+      guardedClose.dismiss()
+      onClose()
       showToast(t("account.changed"), "success")
       await queryClient.invalidateQueries({ queryKey: qk.account })
     } catch {
-      setError({ field: null, text: t("auth.error.network") })
+      refuse(null, t("auth.error.network"))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <form className="ui-panel-body ui-account-form" onSubmit={submit} noValidate>
-      <p className="ui-hint">{t("account.passwordHint")}</p>
-      <PasswordField
-        label={t("account.currentPassword")}
-        value={current}
-        onChange={setCurrent}
-        autoComplete="current-password"
-        invalid={error?.field === "current"}
-      />
-      <PasswordField
-        label={t("account.newPassword")}
-        hint={t("auth.passwordHint", { min: PASSWORD_MIN })}
-        value={next}
-        onChange={setNext}
-        autoComplete="new-password"
-        invalid={error?.field === "next"}
-      />
-      <PasswordField
-        label={t("account.repeatNewPassword")}
-        value={repeat}
-        onChange={setRepeat}
-        autoComplete="new-password"
-        invalid={error?.field === "repeat"}
-      />
-      {error ? <FormError>{error.text}</FormError> : null}
-      <button type="submit" className="ui-btn" disabled={busy}>
-        {busy ? t("account.changing") : t("account.change")}
-      </button>
-    </form>
+    <Dialog
+      title={t("account.passwordTitle")}
+      size="sm"
+      onClose={() => void guardedClose()}
+      foot={
+        <button type="submit" form={formId} className="ui-btn ui-btn-primary" disabled={busy}>
+          {busy ? t("account.changing") : t("account.change")}
+        </button>
+      }
+    >
+      <form id={formId} className="ui-form-stack" onSubmit={(event) => void submit(event)} noValidate>
+        <p className="ui-hint">{t("account.passwordHint")}</p>
+        <PasswordField
+          label={t("account.currentPassword")}
+          value={current}
+          onChange={setCurrent}
+          autoComplete="current-password"
+          invalid={error?.field === "current"}
+          inputRef={currentRef}
+        />
+        <PasswordField
+          label={t("account.newPassword")}
+          hint={t("auth.passwordHint", { min: PASSWORD_MIN })}
+          value={next}
+          onChange={setNext}
+          autoComplete="new-password"
+          invalid={error?.field === "next"}
+          inputRef={nextRef}
+        />
+        <PasswordField
+          label={t("account.repeatNewPassword")}
+          value={repeat}
+          onChange={setRepeat}
+          autoComplete="new-password"
+          invalid={error?.field === "repeat"}
+          inputRef={repeatRef}
+        />
+        {error ? <FormError id={errorId}>{error.text}</FormError> : null}
+      </form>
+    </Dialog>
   )
 }
 
@@ -306,6 +348,7 @@ function NewCodesDialog({ onClose }: { onClose: () => void }) {
         setError(failureSentence(t, answer))
         return
       }
+      guardedClose.dismiss()
       setPassword("")
       setCodes(data.backupCodes)
     } catch {
@@ -366,6 +409,7 @@ function NewAuthenticatorDialog({ onClose, onDisabled }: { onClose: () => void; 
     setError(null)
     try {
       await authData(authClient.twoFactor.disable({ password }))
+      guardedClose.dismiss()
       onDisabled()
     } catch (failure) {
       setError(failure instanceof AuthCallError ? failureSentence(t, failure.answer) : t("auth.error.network"))

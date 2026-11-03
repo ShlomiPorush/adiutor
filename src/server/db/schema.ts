@@ -14,7 +14,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
-import { SESSION_IDLE_DAYS_DEFAULT, SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
+import { SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 import {
   ACTOR_KINDS,
   AUDIT_SOURCES,
@@ -32,6 +32,7 @@ import {
   SYNC_OUTCOMES,
   TELEGRAM_OUTCOMES,
 } from "../../shared/enums.ts"
+import { SETTINGS_DEFAULTS } from "../../shared/settings.ts"
 
 // Codes are stored as text and checked by the database against the lists in src/shared/enums.ts.
 // Adding a code means a new migration: drizzle-kit generate picks up the changed check.
@@ -306,14 +307,14 @@ export const settings = pgTable(
   "settings",
   {
     id: integer("id").primaryKey().default(1),
-    closedItemDays: integer("closed_item_days").notNull().default(7),
-    dateFormat: text("date_format").notNull().default("dd/MM/yyyy"),
-    timeFormat: text("time_format").notNull().default("HH:mm"),
-    language: text("language", { enum: LANGUAGES }).notNull().default("he"),
+    closedItemDays: integer("closed_item_days").notNull().default(SETTINGS_DEFAULTS.closedItemDays),
+    dateFormat: text("date_format").notNull().default(SETTINGS_DEFAULTS.dateFormat),
+    timeFormat: text("time_format").notNull().default(SETTINGS_DEFAULTS.timeFormat),
+    language: text("language", { enum: LANGUAGES }).notNull().default(SETTINGS_DEFAULTS.language),
     /** Better Auth's sliding session.expiresIn: a browser is signed out after this many days without a refresh. */
-    sessionIdleDays: integer("session_idle_days").notNull().default(SESSION_IDLE_DAYS_DEFAULT),
+    sessionIdleDays: integer("session_idle_days").notNull().default(SETTINGS_DEFAULTS.sessionIdleDays),
     /** Better Auth's two-factor OTP, sent to the owner's Telegram chat: another way in, off by default. */
-    otpViaTelegram: boolean("otp_via_telegram").notNull().default(false),
+    otpViaTelegram: boolean("otp_via_telegram").notNull().default(SETTINGS_DEFAULTS.otpViaTelegram),
     /** Encrypted with MIKUD_SETTINGS_KEYS (settings/crypto.ts); MIKUD_TELEGRAM_BOT_TOKEN overrides it. */
     telegramBotTokenEnc: text("telegram_bot_token_enc"),
     /** MIKUD_TELEGRAM_CHAT_ID overrides it. */

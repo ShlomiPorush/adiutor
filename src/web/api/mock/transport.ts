@@ -462,6 +462,23 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
   if (head === "settings" && method === "PATCH") {
     const before = { ...state.settings }
     const { telegramBotToken, telegramChatId, privateDomains, ...plain } = body
+    // A field the environment sets is refused, as the server does (setting_locked names the variable).
+    const lockedBy = [
+      telegramBotToken !== undefined ? state.settings.telegram.botToken.variable : null,
+      telegramChatId !== undefined ? state.settings.telegram.chatId.variable : null,
+      privateDomains !== undefined ? state.settings.privateDomains.variable : null,
+    ].find((variable) => variable !== null)
+    if (lockedBy)
+      return {
+        status: 409,
+        body: {
+          error: {
+            code: "setting_locked",
+            message: `The environment variable ${lockedBy} sets this. Change it there and restart Mikud.`,
+            details: { variable: lockedBy },
+          },
+        },
+      }
     Object.assign(state.settings, plain, { updatedAt: new Date().toISOString() })
     const tg = state.settings.telegram
     if (telegramBotToken !== undefined) tg.botToken = { ...tg.botToken, set: telegramBotToken !== null, readable: true }

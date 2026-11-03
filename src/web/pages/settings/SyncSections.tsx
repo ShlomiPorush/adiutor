@@ -1,7 +1,9 @@
 // Settings, Sync: Status (the last T3 sync, its outcome and when security data came in; read only, the sync runs on
-// the owner's PC) and Suppressions (what the sync may not recreate, each removable after a question).
+// the owner's PC) as a facts grid (FS-8), and Suppressions (what the sync may not recreate): each removable after a
+// question, and Remove all at the end of the list's head (S-12), which asks first and names the count (DS-20, FW-8).
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useState } from "react"
 import { api, qk } from "../../api/endpoints.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Copyable } from "../../ui/Copyable.tsx"
@@ -11,7 +13,7 @@ import { Empty, ErrorState, errorReason, Loading } from "../../ui/states.tsx"
 import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag } from "../../ui/tags.tsx"
-import { Group } from "./parts.tsx"
+import { Fact, Facts, Group } from "./parts.tsx"
 
 const OUTCOME_TONE = { succeeded: "ok", partial: "warn", failed: "fail" } as const
 
@@ -22,44 +24,51 @@ export function StatusSection() {
   const sync = morning.data?.sync
   const lastT3 = runs.data?.find((run) => run.kind === "t3" && run.outcome)
   return (
-    <Group id="settings-sync" title={t("settings.groupTitles.sync")}>
-      <div className="ui-kv">
-        <span>{t("settings.lastSync")}</span>
-        <span>
-          {sync?.lastSuccessAt ? <Time value={sync.lastSuccessAt} mode="full" /> : sync ? t("sync.never") : "-"}{" "}
+    <Group id="settings-sync" title={t("settings.groupTitles.status")}>
+      <Facts>
+        <Fact label={t("settings.lastSync")}>
+          {sync?.lastSuccessAt ? <Time value={sync.lastSuccessAt} mode="full" /> : sync ? t("sync.never") : "-"}
           {sync?.stale ? <Tag tone="warn">{t("security.stale")}</Tag> : null}
-        </span>
-      </div>
-      <div className="ui-kv">
-        <span>{t("settings.lastOutcome")}</span>
-        <span>
+        </Fact>
+        <Fact label={t("settings.lastOutcome")}>
           {lastT3?.outcome ? (
             <>
-              <Tag tone={OUTCOME_TONE[lastT3.outcome]}>{t(`settings.outcome.${lastT3.outcome}`)}</Tag>{" "}
+              <Tag tone={OUTCOME_TONE[lastT3.outcome]}>{t(`settings.outcome.${lastT3.outcome}`)}</Tag>
               <Time value={lastT3.finishedAt ?? lastT3.startedAt} />
             </>
           ) : (
             "-"
           )}
-        </span>
-      </div>
-      <div className="ui-kv">
-        <span>{t("settings.securityAsOf")}</span>
-        <span>
+        </Fact>
+        <Fact label={t("settings.securityAsOf")}>
           {sync?.securityLastSuccessAt ? (
             <Time value={sync.securityLastSuccessAt} mode="full" />
           ) : (
             t("security.asOfUnknown")
           )}
-        </span>
-      </div>
+        </Fact>
+      </Facts>
     </Group>
   )
 }
 
+/** Removes each suppression in turn; the number that could not be removed. */
+export async function removeEvery(ids: readonly string[], remove: (id: string) => Promise<void>): Promise<number> {
+  let failed = 0
+  for (const id of ids) {
+    try {
+      await remove(id)
+    } catch {
+      failed++
+    }
+  }
+  return failed
+}
+
 export function SuppressionsSection() {
-  const { t, language } = useI18n()
+  const { t, tc, language } = useI18n()
   const queryClient = useQueryClient()
+  const [busy, setBusy] = useState(false)
   const query = usePageQuery({ queryKey: qk.suppressions, queryFn: api.suppressions, every: EVERY.slow })
   const list = query.data ?? []
   const remove = async (id: string, label: string) => {
@@ -78,11 +87,44 @@ export function SuppressionsSection() {
       showToast(t("suppressions.removeFailed", { label, reason: errorReason(language, error) }), "error")
     }
   }
+  const removeAll = async () => {
+    const ids = list.map((entry) => entry.id)
+    const ok = await confirmDialog({
+      title: t("suppressions.removeAllTitle"),
+      message: tc("suppressions.removeAllMessage", ids.length),
+      confirmText: t("suppressions.removeAll"),
+      danger: true,
+    })
+    if (!ok) return
+    setBusy(true)
+    try {
+      const failed = await removeEvery(ids, async (id) => {
+        await api.deleteSuppression(id)
+      })
+      if (failed === 0) showToast(tc("suppressions.removedAll", ids.length), "success")
+      else showToast(tc("suppressions.removeAllFailed", failed), "error")
+    } finally {
+      setBusy(false)
+    }
+    await queryClient.invalidateQueries({ queryKey: qk.suppressions })
+  }
   return (
     <Group
       id="settings-suppressed"
       title={t("settings.groupTitles.suppressed")}
       count={query.data ? list.length : undefined}
+      extra={
+        list.length > 1 ? (
+          <button
+            type="button"
+            className="ui-btn ui-btn-sm ui-btn-danger"
+            disabled={busy}
+            onClick={() => void removeAll()}
+          >
+            {t("suppressions.removeAll")}
+          </button>
+        ) : null
+      }
     >
       {query.isPending ? <Loading label={t("suppressions.loading")} /> : null}
       {query.isError && !query.data ? (

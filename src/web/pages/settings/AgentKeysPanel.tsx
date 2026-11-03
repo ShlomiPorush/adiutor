@@ -1,8 +1,9 @@
-// Settings, Agent access, in two groups (How to connect, Connected agents): the agents connected with `mikud connect`, each with its own key of Better Auth's api-key
-// plugin, through its client. The owner approves every connection in the browser (/connect/device); the key itself
+// Settings, Agent access, in two groups (How to connect, one row per client with its command; Connected agents):
+// the agents connected with `mikud connect`, each with its own key of Better Auth's api-key plugin, through its client. The owner approves every connection in the browser (/connect/device); the key itself
 // never reaches this page. The list shows each key's name, first characters, when it was connected, when it ends and
-// its last request. Disconnect deletes one key, Disconnect all deletes every key (the plugin has no bulk delete, and
-// one list answers at most 100 keys: disconnectAll.ts); both ask first and act at once, outside the save bar.
+// its last request. Disconnect deletes one key, Disconnect all, at the end of the list's head (S-12), deletes every
+// key (the plugin has no bulk delete, and one list answers at most 100 keys: disconnectAll.ts); both ask first and act
+// at once, outside the save bar.
 
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
@@ -18,7 +19,7 @@ import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag } from "../../ui/tags.tsx"
 import { disconnectEvery } from "./disconnectAll.ts"
-import { Group } from "./parts.tsx"
+import { Group, Row } from "./parts.tsx"
 
 const time = (value: Date | string) => (typeof value === "string" ? value : value.toISOString())
 
@@ -95,21 +96,33 @@ export function AgentKeysSection() {
 
   return (
     <>
-      <Group id="settings-connect" title={t("agentKeys.howTitle")}>
-        <div className="ui-panel-body ui-connect-cmds">
-          <p className="ui-hint">{t("agentKeys.howHint")}</p>
-          {(["sync", "claude", "codex"] as const).map((target) => (
-            <div key={target} className="ui-field">
-              <span className="ui-label">{t(`agentKeys.how.${target}`)}</span>
-              <span dir="ltr">
-                <Copyable value={connectCommand(origin, target, target)} />
-              </span>
-            </div>
-          ))}
-          <p className="ui-hint">{t("agentKeys.howOptions", { name: "--name", days: "--days" })}</p>
-        </div>
+      <Group id="settings-connect" title={t("agentKeys.howTitle")} intro={t("agentKeys.howHint")}>
+        {(["sync", "claude", "codex"] as const).map((target) => (
+          <Row key={target} label={t(`agentKeys.how.${target}`)}>
+            <span className="ui-set-command" dir="ltr">
+              <Copyable value={connectCommand(origin, target, target)} />
+            </span>
+          </Row>
+        ))}
+        <p className="ui-set-group-foot">{t("agentKeys.howOptions", { name: "--name", days: "--days" })}</p>
       </Group>
-      <Group id="settings-agent-keys" title={t("agentKeys.listTitle")} count={query.data ? keys.length : undefined}>
+      <Group
+        id="settings-agent-keys"
+        title={t("agentKeys.listTitle")}
+        count={query.data ? keys.length : undefined}
+        extra={
+          keys.length > 1 ? (
+            <button
+              type="button"
+              className="ui-btn ui-btn-sm ui-btn-danger"
+              disabled={busy}
+              onClick={() => void disconnectAll()}
+            >
+              {t("agentKeys.disconnectAll")}
+            </button>
+          ) : null
+        }
+      >
         {query.isPending ? <Loading label={t("agentKeys.loading")} /> : null}
         {query.isError && !query.data ? (
           <ErrorState title={t("agentKeys.failed")} error={query.error} onRetry={() => void query.refetch()} />
@@ -144,13 +157,6 @@ export function AgentKeysSection() {
             </div>
           )
         })}
-        {keys.length > 1 ? (
-          <div className="ui-panel-body ui-account-actions">
-            <button type="button" className="ui-btn ui-btn-danger" disabled={busy} onClick={() => void disconnectAll()}>
-              {t("agentKeys.disconnectAll")}
-            </button>
-          </div>
-        ) : null}
       </Group>
     </>
   )

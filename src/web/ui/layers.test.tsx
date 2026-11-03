@@ -83,6 +83,54 @@ describe("layers under StrictMode", () => {
     await expectGoneAfterUnmount()
   })
 
+  it("the first-field focus never takes the focus from a field already focused inside the dialog", async () => {
+    // The layer moves the focus in the frame after it opens. Typing that started in that frame (a fast typist, a
+    // password manager, Playwright's fill) must keep its field, or the text lands in the first field instead.
+    const back = vi.spyOn(history, "back").mockImplementation(() => {})
+    // The frames are held until the second field has the focus, as when typing starts before the next frame.
+    const frames: FrameRequestCallback[] = []
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    try {
+      await render(
+        <Dialog title="Change password" size="sm" onClose={() => {}}>
+          <input aria-label="Current password" />
+          <input aria-label="New password" />
+        </Dialog>,
+      )
+      const second = document.querySelector<HTMLInputElement>('[aria-label="New password"]')
+      second?.focus()
+      expect(frames.length).toBeGreaterThan(0)
+      await act(async () => {
+        for (const frame of frames.splice(0)) frame(performance.now())
+      })
+      expect(document.activeElement).toBe(second)
+    } finally {
+      raf.mockRestore()
+      back.mockRestore()
+    }
+  })
+
+  it("the first field takes the focus when nothing inside the dialog has it", async () => {
+    const back = vi.spyOn(history, "back").mockImplementation(() => {})
+    try {
+      await render(
+        <Dialog title="Change password" size="sm" onClose={() => {}}>
+          <input aria-label="Current password" />
+          <input aria-label="New password" />
+        </Dialog>,
+      )
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+      })
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Current password")
+    } finally {
+      back.mockRestore()
+    }
+  })
+
   it("a dialog holds exactly one history entry and gives it back once it closes", async () => {
     const push = vi.spyOn(history, "pushState")
     const back = vi.spyOn(history, "back").mockImplementation(() => {})

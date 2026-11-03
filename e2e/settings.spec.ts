@@ -1,8 +1,10 @@
 // Settings against the real server, in the browser auth.spec.ts stored: the sections and their addresses (a deep
 // link, a reload, an unknown section, the browser title), the one draft across sections with Back and Forward and one
-// Discard, a refused field in a hidden section, how agents connect (connect.spec.ts runs it), the password changed and
-// changed back without leaving the page, the browsers list, and the Telegram fields editable when no environment
-// variable sets them. Stores the browser again at the end: a password change replaces this browser's session.
+// Discard, a refused field in a hidden section, how agents connect (connect.spec.ts runs it), Changed and Reset to
+// default, the password changed and changed back in its dialog without leaving the page, the dialog's own checks and
+// its question before it drops what was typed, the browsers list, and Telegram off: its fields editable when no
+// environment variable sets them, the test and the sign-in codes locked areas. Stores the browser again at the end: a
+// password change replaces this browser's session.
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
 import { PASSWORD, storageFile } from "./helpers.ts"
@@ -167,15 +169,37 @@ test("a refused field in a hidden section opens that section, takes the focus an
   await expect(page).toHaveURL(/\/settings\/general$/)
   await expect(idle).toBeFocused()
   await expect(idle).toHaveAttribute("aria-invalid", "true")
-  // In view, inside its scroll area, above the save bar, and nothing on top of it (the picker, the bar, a toast).
+  // In view, inside its scroll area, and nothing on top of it (the picker, the bar, a toast): the field and the note
+  // that says what to fix both end above the save bar and above the refusal's toast, which on a phone sits over the
+  // bar. Polled: the page may still be settling (a smooth scroll from the section change, the toast arriving).
   await expect(idle).toBeInViewport()
-  const place = await idle.evaluate((field) => {
-    const box = field.getBoundingClientRect()
-    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-    const barTop = document.querySelector(".ui-savebar")?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY
-    return { onTop: hit === field || field.contains(hit), aboveBar: box.bottom <= barTop }
-  })
-  expect(place).toEqual({ onTop: true, aboveBar: true })
+  const place = () =>
+    idle.evaluate((field) => {
+      const box = field.getBoundingClientRect()
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+      const note = document.getElementById(field.getAttribute("aria-describedby") ?? "")
+      const end = Math.max(box.bottom, note?.getBoundingClientRect().bottom ?? 0)
+      // Clear of a layer: above it, or beside it (the toast sits in a corner on a wide screen).
+      const clearOf = (selector: string) => {
+        const layer = document.querySelector(selector)?.getBoundingClientRect()
+        if (!layer || layer.height === 0) return true
+        const beside = layer.right <= box.left || layer.left >= box.right
+        return beside || end <= layer.top
+      }
+      return {
+        onTop: hit === field || field.contains(hit),
+        note: Boolean(note),
+        aboveBar: clearOf(".ui-savebar"),
+        aboveToast: clearOf(".ui-toast"),
+      }
+    })
+  const clear = { onTop: true, note: true, aboveBar: true, aboveToast: true }
+  // The refusal's toast is there first, so "clear of the toast" is about a toast that shows.
+  await expect(page.locator(".ui-toast")).toBeVisible()
+  await expect.poll(place, { timeout: 2000 }).toEqual(clear)
+  // And it stays so once the page settled: after the hold that keeps the field in view (REVEAL_FOR_MS, 400ms) ended.
+  await page.waitForTimeout(600)
+  expect(await place()).toEqual(clear)
   // By keyboard: on a phone the refusal's toast sits over the save bar, and a pointer over it holds it (FB-2).
   await bar.getByRole("button", { name: he.savebar.discard }).press("Enter")
   await expect(bar).toHaveCount(0)
@@ -233,48 +257,115 @@ test("Agent access has no manual key: it shows how to connect, with this address
   await expect(panel).toContainText("--name codex --for codex")
 })
 
-test("the password changes and changes back without leaving the page", async () => {
+test("Changed marks a value that differs from its default, and Reset puts the default back in the draft", async () => {
+  await page.goto("/settings/general")
+  const row = page.locator(".ui-set-row", { has: page.getByLabel(he.settings.closedDays, { exact: true }) })
+  const closedDays = row.getByLabel(he.settings.closedDays, { exact: true })
+  const before = await closedDays.inputValue()
+  // Its name holds the default inside direction isolates, so it is found by its place and checked by its text.
+  const reset = row.locator(".ui-set-clear.is-reset")
+  const changedTag = row.locator(".ui-set-pill.is-changed")
+  await closedDays.fill(before === "9" ? "8" : "9")
+  await expect(changedTag).toHaveText(he.settings.changed)
+  await expect(reset).toBeVisible()
+  await expect(reset).toContainText(he.settings.resetTo.split("(")[0]?.trim() ?? "")
+  await expect(reset).toContainText("7")
+  const bar = page.getByRole("region", { name: he.savebar.region })
+  await expect(bar).toBeVisible()
+
+  await reset.click()
+  await expect(closedDays).toHaveValue("7")
+  await expect(changedTag).toHaveCount(0)
+  // Reset changed only the draft: back at the loaded value there is nothing left to save.
+  if (before === "7") await expect(bar).toHaveCount(0)
+  else {
+    await bar.getByRole("button", { name: he.savebar.discard }).click()
+    await expect(bar).toHaveCount(0)
+  }
+})
+
+test("the password changes and changes back in its dialog without leaving the page", async () => {
   await page.goto("/settings/account")
   const panel = page.locator("#account")
-  const fields = [he.account.currentPassword, he.account.newPassword, he.account.repeatNewPassword].map((label) =>
-    panel.getByLabel(label, { exact: true }),
-  )
   const browsers = panel.locator(".ui-item")
+  // Sign out everywhere sits at the end of the browsers' head (S-12).
+  await expect(panel.locator("#settings-browsers .ui-set-group-acts")).toContainText(he.account.endAll)
+  const dialog = page.getByRole("dialog", { name: he.account.passwordTitle })
   const change = async (from: string, to: string) => {
-    const [current, next, repeat] = fields
-    // The browsers list above the form loads after the page, and on a phone it is long: a click made before it
-    // drew lands where the button was, not where it is.
+    // The browsers list above loads after the page, and on a phone it is long. A click made before it drew may land
+    // where the button was rather than where it is; that is the likely cause of an earlier failure here, not a
+    // confirmed one, so the test waits for the list first.
     await expect(browsers.filter({ hasText: he.account.thisBrowser })).toBeVisible()
-    await current?.fill(from)
-    await next?.fill(to)
-    await repeat?.fill(to)
+    await panel.locator("#settings-password").getByRole("button", { name: he.account.change }).click()
+    await expect(dialog).toBeVisible()
+    await dialog.getByLabel(he.account.currentPassword, { exact: true }).fill(from)
+    await dialog.getByLabel(he.account.newPassword, { exact: true }).fill(to)
+    await dialog.getByLabel(he.account.repeatNewPassword, { exact: true }).fill(to)
     const answer = page.waitForResponse(
       (response) => response.url().endsWith("/api/auth/change-password") && response.request().method() === "POST",
     )
-    await panel.getByRole("button", { name: he.account.change }).click()
+    await dialog.getByRole("button", { name: he.account.change }).click()
     // Better Auth's own answer, not the toast that leaves after 4 seconds: then this browser holds its new session.
     expect((await answer).ok()).toBe(true)
-    // A refusal empties only the current password; a change empties all three.
-    for (const field of fields) await expect(field).toHaveValue("")
-    // Better Auth signed out the other browsers: the list, read again, holds this one only, so the form stays put.
+    // A change closes the dialog without asking.
+    await expect(dialog).toHaveCount(0)
+    await expect(page.getByRole("alertdialog")).toHaveCount(0)
+    // Better Auth signed out the other browsers: the list, read again, holds this one only.
     await expect(browsers).toHaveCount(1)
   }
   await change(PASSWORD, `${PASSWORD} again`)
   await change(`${PASSWORD} again`, PASSWORD)
   await expect(page).toHaveURL(/\/settings\/account$/)
   expect(await page.evaluate(async () => (await fetch("/api/v1/session")).status)).toBe(200)
-  // Better Auth signed out the other browsers; this one is the only one listed.
-  await expect(panel.locator(".ui-item")).toHaveCount(1)
-  await expect(panel.locator(".ui-item")).toContainText(he.account.thisBrowser)
+  await expect(browsers).toHaveCount(1)
+  await expect(browsers).toContainText(he.account.thisBrowser)
 })
 
-test("the Telegram fields are editable when no environment variable sets them", async () => {
+test("the password dialog checks its fields first, and asks before it drops what was typed", async () => {
+  await page.goto("/settings/account")
+  const panel = page.locator("#account")
+  await expect(panel.locator(".ui-item").filter({ hasText: he.account.thisBrowser })).toBeVisible()
+  await panel.locator("#settings-password").getByRole("button", { name: he.account.change }).click()
+  const dialog = page.getByRole("dialog", { name: he.account.passwordTitle })
+  await dialog.getByLabel(he.account.currentPassword, { exact: true }).fill("Invented old password")
+  await dialog.getByLabel(he.account.newPassword, { exact: true }).fill("Invented new password")
+  const repeat = dialog.getByLabel(he.account.repeatNewPassword, { exact: true })
+  await repeat.fill("Invented other password")
+  const sent: string[] = []
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/auth/change-password")) sent.push(request.url())
+  })
+  await dialog.getByRole("button", { name: he.account.change }).click()
+  await expect(dialog.getByRole("alert")).toHaveText(he.auth.error.mismatch)
+  await expect(repeat).toBeFocused()
+  await expect(repeat).toHaveAttribute("aria-invalid", "true")
+  expect(sent).toEqual([])
+
+  // Escape asks first; Keep editing keeps what was typed, Discard closes.
+  await page.keyboard.press("Escape")
+  const question = page.getByRole("alertdialog")
+  await expect(question).toContainText(he.unsaved.discardTitle)
+  await question.getByRole("button", { name: he.unsaved.keepEditing }).click()
+  await expect(repeat).toHaveValue("Invented other password")
+  await page.keyboard.press("Escape")
+  await question.getByRole("button", { name: he.unsaved.discard }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page).toHaveURL(/\/settings\/account$/)
+})
+
+test("with Telegram off its fields are editable, and the test and the sign-in codes are locked areas", async () => {
   await page.goto("/settings/telegram")
   const panel = page.locator("#telegram")
   await expect(panel.getByLabel(he.telegramSettings.chatId, { exact: true })).toBeEditable()
   await expect(panel.getByLabel(he.telegramSettings.botToken, { exact: true })).toBeEditable()
   await expect(panel).not.toContainText(he.settings.env.pill)
-  // A switch that needs Telegram says so while Telegram is off.
-  await expect(panel.getByRole("switch")).toBeDisabled()
-  await expect(panel).toContainText(he.telegramSettings.otpNeedsTelegram)
+  // What needs a working bot says what is missing and where it is set, instead of disappearing (FB-1).
+  const locked = panel.locator(".ui-locked")
+  await expect(locked).toHaveCount(2)
+  await expect(locked.nth(0)).toContainText(he.telegramSettings.testLocked)
+  await expect(locked.nth(1)).toContainText(he.telegramSettings.otpLocked)
+  await expect(locked.nth(1)).toContainText(he.telegramSettings.needsTelegram)
+  await expect(panel.getByRole("switch")).toHaveCount(0)
+  await locked.nth(1).getByRole("button", { name: he.telegramSettings.setUp }).click()
+  await expect(panel.getByLabel(he.telegramSettings.botToken, { exact: true })).toBeFocused()
 })

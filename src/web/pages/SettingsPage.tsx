@@ -7,8 +7,13 @@
 // General, Telegram and Secret check share one draft and one save bar above all sections: a change is kept while
 // the owner moves between sections (the unsaved guard keeps moves inside /settings), each section that holds one
 // shows a dot, and a refused field, by the page's own check or by the server, opens its section and takes the
-// focus. Account and Agent access act at once, outside the save bar. A setting the environment sets is locked and
-// names its variable.
+// focus. Account and Agent access act at once, outside the save bar.
+//
+// Each row marks a value that differs from its default (one table, src/shared/settings.ts) as Changed with Reset to
+// default, which changes only the draft; a value put back as it was loaded drops out of the count. A setting the
+// environment sets is locked in place with a neutral tag and its variable; secrets and locked values get no Changed
+// or Reset (FS-3, FS-6). Telegram opens with its Status group; what needs a working bot while Telegram is not on is
+// a locked area that says what is missing (FB-1).
 
 import { useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
@@ -26,6 +31,7 @@ import {
 import { Link, useLocation, useNavigate, useNavigationType, useParams } from "react-router"
 import { SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 import { LANGUAGES } from "../../shared/enums.ts"
+import { CLOSED_ITEM_DAYS_MAX, CLOSED_ITEM_DAYS_MIN, SETTINGS_DEFAULTS } from "../../shared/settings.ts"
 import { ApiError } from "../api/client.ts"
 import { api, qk } from "../api/endpoints.ts"
 import type { DateFormat, Settings, SettingsPatch, TimeFormat } from "../api/types.ts"
@@ -39,19 +45,20 @@ import {
   TIME_FORMATS,
   withFormatPrefs,
 } from "../format/datetime.ts"
+import { formatNumber } from "../format/number.ts"
 import { type Language, useI18n } from "../i18n/i18n.tsx"
 import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { SaveBar } from "../ui/SaveBar.tsx"
-import { ErrorState, errorReason, Loading } from "../ui/states.tsx"
+import { ErrorState, errorReason, Loading, Locked } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { useUnsaved } from "../ui/unsaved.tsx"
 import { AccountSection, useSignOutEverywhere } from "./settings/AccountPanel.tsx"
 import { AgentKeysSection } from "./settings/AgentKeysPanel.tsx"
-import { EnvLock, Group, Row, SwitchRow } from "./settings/parts.tsx"
+import { Fact, Facts, Group, type ResetMark, Row, SwitchRow } from "./settings/parts.tsx"
 import { StatusSection, SuppressionsSection } from "./settings/SyncSections.tsx"
 import {
   changedSections,
@@ -66,8 +73,6 @@ import {
   settingsPath,
 } from "./settings/sections.ts"
 
-export const CLOSED_DAYS_MIN = 1
-export const CLOSED_DAYS_MAX = 365
 const BOT_TOKEN = /^\d{5,}:[A-Za-z0-9_-]{30,}$/
 const CHAT_ID = /^-?\d{1,20}$/
 const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
@@ -87,25 +92,54 @@ type Draft = {
   privateDomains?: string[]
 }
 
-const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
+/** The same domains, in any order: removing one and adding it back is no change (SV-2). */
+const sameList = (a: string[], b: string[]) => {
+  const sorted = (list: string[]) => [...list].sort().join(" ")
+  return sorted(a) === sorted(b)
+}
+
+/**
+ * The number a field holds, as the save sends it (`Number` of the trimmed text), or null when it holds none. "07",
+ * " 7 ", "7.0" and "7e0" are all 7, so none of them is a change against a saved 7 (SV-2), and none is Changed against
+ * a default of 7 (FS-6).
+ */
+export function typedNumber(typed: string): number | null {
+  const text = typed.trim()
+  if (text === "") return null
+  const value = Number(text)
+  return Number.isFinite(value) ? value : null
+}
+
+const sameNumber = (typed: string, saved: number) => typedNumber(typed) === saved
 
 export function changedFields(saved: Settings, draft: Draft): SettingsPatch {
   const patch: SettingsPatch = {}
   if (draft.language !== undefined && draft.language !== saved.language) patch.language = draft.language
   if (draft.dateFormat !== undefined && draft.dateFormat !== saved.dateFormat) patch.dateFormat = draft.dateFormat
   if (draft.timeFormat !== undefined && draft.timeFormat !== saved.timeFormat) patch.timeFormat = draft.timeFormat
-  if (draft.closedItemDays !== undefined && draft.closedItemDays.trim() !== String(saved.closedItemDays))
+  if (draft.closedItemDays !== undefined && !sameNumber(draft.closedItemDays, saved.closedItemDays))
     patch.closedItemDays = Number(draft.closedItemDays.trim())
-  if (draft.sessionIdleDays !== undefined && draft.sessionIdleDays.trim() !== String(saved.sessionIdleDays))
+  if (draft.sessionIdleDays !== undefined && !sameNumber(draft.sessionIdleDays, saved.sessionIdleDays))
     patch.sessionIdleDays = Number(draft.sessionIdleDays.trim())
   if (draft.otpViaTelegram !== undefined && draft.otpViaTelegram !== saved.otpViaTelegram)
     patch.otpViaTelegram = draft.otpViaTelegram
-  if (draft.botToken?.mode === "replace" && draft.botToken.value.trim())
+  // A field the environment sets is left out, also when it became locked after it was edited (the variable was set
+  // and the server restarted): the server would refuse it, and with it the rest of the save.
+  const tokenOpen = !saved.telegram.botToken.locked
+  if (tokenOpen && draft.botToken?.mode === "replace" && draft.botToken.value.trim())
     patch.telegramBotToken = draft.botToken.value.trim()
-  if (draft.botToken?.mode === "remove" && saved.telegram.botToken.set) patch.telegramBotToken = null
-  if (draft.chatId !== undefined && draft.chatId.trim() !== (saved.telegram.chatId.value ?? ""))
+  if (tokenOpen && draft.botToken?.mode === "remove" && saved.telegram.botToken.set) patch.telegramBotToken = null
+  if (
+    !saved.telegram.chatId.locked &&
+    draft.chatId !== undefined &&
+    draft.chatId.trim() !== (saved.telegram.chatId.value ?? "")
+  )
     patch.telegramChatId = draft.chatId.trim() || null
-  if (draft.privateDomains !== undefined && !sameList(draft.privateDomains, saved.privateDomains.value))
+  if (
+    !saved.privateDomains.locked &&
+    draft.privateDomains !== undefined &&
+    !sameList(draft.privateDomains, saved.privateDomains.value)
+  )
     patch.privateDomains = draft.privateDomains
   return patch
 }
@@ -163,7 +197,7 @@ export function SettingsPage() {
         : element
     if (target) {
       target.focus({ preventScroll: true })
-      reveal(target, pageRef.current, contentRef.current, pickerRef.current)
+      keepRevealed(target, pageRef.current, contentRef.current, pickerRef.current)
     }
     form.focused()
   }, [form.focusing, active])
@@ -336,8 +370,25 @@ function useSectionView(
       page.getBoundingClientRect().top +
       page.scrollTop -
       pickerHeight(pickerRef.current)
-    if (page.scrollTop > top) page.scrollTo({ top, behavior: "smooth" })
+    if (page.scrollTop > top) scrollSmoothly(page, top)
   }, [key])
+}
+
+/** When the smooth scroll of the last section change counts as over (a `performance.now()` time). */
+let smoothUntil = 0
+
+/** How long the smooth scroll of a section change counts as running. */
+export const SMOOTH_FOR_MS = 1000
+
+/**
+ * Scrolls a section's area smoothly to `top`, and counts it as running for SMOOTH_FOR_MS. In Chromium a later
+ * instant scroll does not end it: the animation carries on, shifted to wherever that scroll put the area, so
+ * `keepRevealed` must not take its moves for the owner's. `scrollend` cannot say when it is over: the instant scroll
+ * sends one of its own while the animation still runs, and an earlier scroll's can arrive just after the start.
+ */
+export function scrollSmoothly(area: HTMLElement, top: number) {
+  smoothUntil = performance.now() + SMOOTH_FOR_MS
+  area.scrollTo({ top, behavior: "smooth" })
 }
 
 /** How long a restore waits for a section's content to arrive (a list read again after its cache went). */
@@ -405,18 +456,77 @@ function reveal(
   const area = scrollArea(page, content)
   const bounds = area.getBoundingClientRect()
   const top = bounds.top + (area === page ? pickerHeight(picker) : 0) + 8
-  let bottom = bounds.bottom - 8
+  const visibleEnd = bounds.bottom - 8
+  let bottom = visibleEnd
   const box = target.getBoundingClientRect()
   const note = document.getElementById(target.getAttribute("aria-describedby") ?? "")
   const end = Math.max(box.bottom, note?.getBoundingClientRect().bottom ?? 0)
   // What floats over the page there: the save bar, a toast, the phone tab bar.
   for (const layer of document.querySelectorAll<HTMLElement>(".ui-savebar, .ui-toast, .ui-tabbar")) {
     const over = layer.getBoundingClientRect()
-    if (over.height > 0 && over.left < box.right && over.right > box.left && over.top < bottom)
+    // Each layer is weighed against the area itself: one already counted (the save bar) must not hide a taller one
+    // over it (the refusal's toast on a phone).
+    if (over.height > 0 && over.left < box.right && over.right > box.left && over.top < visibleEnd)
       bottom = Math.min(bottom, over.top - 8)
   }
-  if (box.top < top) area.scrollTop -= top - box.top
-  else if (end > bottom) area.scrollTop += Math.min(end - bottom, box.top - top)
+  const by = box.top < top ? box.top - top : end > bottom ? Math.min(end - bottom, box.top - top) : 0
+  if (by !== 0) area.scrollTo({ top: area.scrollTop + by, behavior: "instant" })
+}
+
+/** How long a refused field is held in view while the page settles after its section opens. */
+export const REVEAL_FOR_MS = 400
+
+/**
+ * Brings a refused field and its note into view (`reveal`), then keeps them there for REVEAL_FOR_MS: on a phone a
+ * smooth scroll from the last section change may still be running (`scrollSmoothly`), and the refusal's toast mounts
+ * after the field took the focus, over the save bar. Each frame checks again; it stops once the field loses the focus,
+ * or the owner scrolls, touches, clicks or presses a key. A scroll it saw no input for (a scroll bar dragged off the
+ * main thread, assistive technology) stops it too, as it stops `restoreScroll`: before each write the areas must sit
+ * where the last write left them, unless the content grew or that smooth scroll is still running.
+ */
+export function keepRevealed(
+  target: HTMLElement,
+  page: HTMLElement | null,
+  content: HTMLElement | null,
+  picker: HTMLElement | null,
+) {
+  if (!page || !content) return
+  const until = performance.now() + REVEAL_FOR_MS
+  const owner = ["wheel", "touchstart", "pointerdown"] as const
+  let frame = 0
+  const stop = () => {
+    cancelAnimationFrame(frame)
+    for (const type of owner) {
+      page.removeEventListener(type, stop, true)
+      content.removeEventListener(type, stop, true)
+    }
+    window.removeEventListener("keydown", stop, true)
+  }
+  /** Where the last write left the areas, and how tall they were then. */
+  let wrote: { page: number; content: number; pageHeight: number; contentHeight: number } | null = null
+  const step = () => {
+    if (document.activeElement !== target) return stop()
+    if (wrote) {
+      const moved = Math.abs(page.scrollTop - wrote.page) > 1 || Math.abs(content.scrollTop - wrote.content) > 1
+      const grew = page.scrollHeight > wrote.pageHeight || content.scrollHeight > wrote.contentHeight
+      if (moved && !grew && performance.now() >= smoothUntil) return stop()
+    }
+    reveal(target, page, content, picker)
+    wrote = {
+      page: page.scrollTop,
+      content: content.scrollTop,
+      pageHeight: page.scrollHeight,
+      contentHeight: content.scrollHeight,
+    }
+    if (performance.now() > until) stop()
+    else frame = requestAnimationFrame(step)
+  }
+  for (const type of owner) {
+    page.addEventListener(type, stop, { capture: true, passive: true })
+    content.addEventListener(type, stop, { capture: true, passive: true })
+  }
+  window.addEventListener("keydown", stop, true)
+  step()
 }
 
 type FieldError = { field: DraftField; text: string }
@@ -469,11 +579,11 @@ function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) 
     if (!saved) return
     const outside = (value: number | undefined, min: number, max: number) =>
       value !== undefined && (!Number.isInteger(value) || value < min || value > max)
-    if (outside(patch.closedItemDays, CLOSED_DAYS_MIN, CLOSED_DAYS_MAX))
+    if (outside(patch.closedItemDays, CLOSED_ITEM_DAYS_MIN, CLOSED_ITEM_DAYS_MAX))
       return refuse(
         "closedItemDays",
         t("settings.closedDays"),
-        t("settings.daysInvalid", { min: CLOSED_DAYS_MIN, max: CLOSED_DAYS_MAX }),
+        t("settings.daysInvalid", { min: CLOSED_ITEM_DAYS_MIN, max: CLOSED_ITEM_DAYS_MAX }),
       )
     if (outside(patch.sessionIdleDays, SESSION_IDLE_DAYS_MIN, SESSION_IDLE_DAYS_MAX))
       return refuse(
@@ -543,6 +653,12 @@ function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) 
     /** The refused field that waits for the focus until its section shows. */
     focusing,
     focused: () => setFocusing(null),
+    /** Opens a field's section and brings it into view with the focus (a locked area's button). */
+    focus: (field: DraftField) => {
+      const section = FIELD_SECTION[field]
+      if (section !== active) navigate(settingsPath(section))
+      setFocusing(field)
+    },
     set,
     refuse,
     save,
@@ -569,18 +685,28 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
     closedItemDays: draft.closedItemDays ?? String(saved.closedItemDays),
     sessionIdleDays: draft.sessionIdleDays ?? String(saved.sessionIdleDays),
     otpViaTelegram: draft.otpViaTelegram ?? saved.otpViaTelegram,
-    chatId: draft.chatId ?? saved.telegram.chatId.value ?? "",
-    privateDomains: draft.privateDomains ?? saved.privateDomains.value,
+    // A locked field shows what the environment sets, never an edit made before it was locked.
+    chatId: (saved.telegram.chatId.locked ? undefined : draft.chatId) ?? saved.telegram.chatId.value ?? "",
+    privateDomains: (saved.privateDomains.locked ? undefined : draft.privateDomains) ?? saved.privateDomains.value,
   }
   const example = withFormatPrefs({ dateFormat: current.dateFormat, timeFormat: current.timeFormat }, () =>
     formatTime(new Date(), { seconds: false }),
   )
+  /** Changed and Reset for a value that differs from its default; Reset changes only the draft (R7, FS-6). */
+  const resetTo = (differs: boolean, label: string, change: Partial<Draft>): ResetMark | null =>
+    differs ? { label, onReset: () => set(change) } : null
+  const D = SETTINGS_DEFAULTS
+  const telegramOn = saved.telegram.state === "on"
 
   if (section === "general")
     return (
       <>
         <Group id="settings-formats" title={t("settings.groupTitles.formats")}>
-          <Row label={t("settings.language")} hint={t("settings.languageHint")}>
+          <Row
+            label={t("settings.language")}
+            hint={t("settings.languageHint")}
+            reset={resetTo(current.language !== D.language, languageName(D.language), { language: D.language })}
+          >
             <fieldset id={ids.language} className="ui-seg ui-plain-fieldset">
               <legend className="ui-sr-only">{t("settings.language")}</legend>
               {LANGUAGES.map((code) => (
@@ -591,13 +717,20 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
                   aria-pressed={current.language === code}
                   onClick={() => set({ language: code as Language })}
                 >
-                  {new Intl.DisplayNames([code], { type: "language" }).of(code)}
+                  {languageName(code)}
                 </button>
               ))}
             </fieldset>
             {fieldError("language")}
           </Row>
-          <Row label={t("settings.dateFormat")} hint={t("settings.dateFormatHint")} htmlFor={ids.dateFormat}>
+          <Row
+            label={t("settings.dateFormat")}
+            hint={t("settings.dateFormatHint")}
+            htmlFor={ids.dateFormat}
+            reset={resetTo(current.dateFormat !== D.dateFormat, D.dateFormat.toUpperCase(), {
+              dateFormat: D.dateFormat,
+            })}
+          >
             <select
               id={ids.dateFormat}
               className="ui-select"
@@ -616,7 +749,13 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
             </select>
             {fieldError("dateFormat")}
           </Row>
-          <Row label={t("settings.timeFormat")} hint={t("settings.timeFormatHint")}>
+          <Row
+            label={t("settings.timeFormat")}
+            hint={t("settings.timeFormatHint")}
+            reset={resetTo(current.timeFormat !== D.timeFormat, t(`settings.timeFormats.${timeKey(D.timeFormat)}`), {
+              timeFormat: D.timeFormat,
+            })}
+          >
             <fieldset id={ids.timeFormat} className="ui-seg ui-plain-fieldset">
               <legend className="ui-sr-only">{t("settings.timeFormat")}</legend>
               {TIME_FORMATS.map((format) => (
@@ -628,7 +767,7 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
                   }
                   onClick={() => set({ timeFormat: format })}
                 >
-                  {t(`settings.timeFormats.${format === "HH:mm" ? "h24" : format === "h:mm a" ? "h12" : "browser"}`)}
+                  {t(`settings.timeFormats.${timeKey(format)}`)}
                 </button>
               ))}
             </fieldset>
@@ -638,18 +777,27 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
             {fieldError("timeFormat")}
           </Row>
           <Row label={t("settings.timeZone")} hint={t("settings.timeZoneHint")}>
-            <span className="ui-mono">{APP_TIME_ZONE}</span>
+            <span className="ui-mono ui-set-value" dir="ltr">
+              {APP_TIME_ZONE}
+            </span>
           </Row>
         </Group>
         <Group id="settings-morning" title={t("settings.groupTitles.morning")}>
-          <Row label={t("settings.closedDays")} hint={t("settings.closedDaysHint")} htmlFor={ids.closedItemDays}>
+          <Row
+            label={t("settings.closedDays")}
+            hint={t("settings.closedDaysHint")}
+            htmlFor={ids.closedItemDays}
+            reset={resetTo(typedNumber(current.closedItemDays) !== D.closedItemDays, formatNumber(D.closedItemDays), {
+              closedItemDays: String(D.closedItemDays),
+            })}
+          >
             <input
               id={ids.closedItemDays}
-              className="ui-input ui-input-num"
+              className="ui-input"
               type="number"
               inputMode="numeric"
-              min={CLOSED_DAYS_MIN}
-              max={CLOSED_DAYS_MAX}
+              min={CLOSED_ITEM_DAYS_MIN}
+              max={CLOSED_ITEM_DAYS_MAX}
               value={current.closedItemDays}
               {...invalid("closedItemDays")}
               onChange={(event) => set({ closedItemDays: event.target.value })}
@@ -662,10 +810,17 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
             label={t("settings.session.idleDays")}
             hint={t("settings.session.idleDaysHint")}
             htmlFor={ids.sessionIdleDays}
+            reset={resetTo(
+              typedNumber(current.sessionIdleDays) !== D.sessionIdleDays,
+              formatNumber(D.sessionIdleDays),
+              {
+                sessionIdleDays: String(D.sessionIdleDays),
+              },
+            )}
           >
             <input
               id={ids.sessionIdleDays}
-              className="ui-input ui-input-num"
+              className="ui-input"
               type="number"
               inputMode="numeric"
               min={SESSION_IDLE_DAYS_MIN}
@@ -680,12 +835,23 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
       </>
     )
 
-  if (section === "telegram")
+  if (section === "telegram") {
+    const chatLock = saved.telegram.chatId.locked ? { variable: saved.telegram.chatId.variable } : null
+    const tokenLock = saved.telegram.botToken.locked ? { variable: saved.telegram.botToken.variable } : null
+    // Sign-in codes need a working bot. While Telegram is not on the switch is replaced by a locked area, unless the
+    // codes are on already: then the switch stays, so the owner can turn them off (FB-1, R6).
+    const codesLocked = !telegramOn && !saved.otpViaTelegram
+    const setUp = <TelegramSetUp onClick={() => form.focus("botToken")} />
     return (
       <>
+        <TelegramStatus saved={saved} setUp={setUp} />
         <Group id="settings-telegram-bot" title={t("settings.groupTitles.telegramBot")}>
-          <TelegramState saved={saved} />
-          <Row label={t("telegramSettings.botToken")} hint={t("telegramSettings.botTokenHint")} htmlFor={ids.botToken}>
+          <Row
+            label={t("telegramSettings.botToken")}
+            hint={t("telegramSettings.botTokenHint")}
+            htmlFor={ids.botToken}
+            lock={tokenLock}
+          >
             <BotTokenField
               id={ids.botToken}
               saved={saved.telegram.botToken}
@@ -695,67 +861,73 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
             />
             {fieldError("botToken")}
           </Row>
-          <Row label={t("telegramSettings.chatId")} hint={t("telegramSettings.chatIdHint")} htmlFor={ids.chatId}>
-            {saved.telegram.chatId.locked ? (
-              <>
-                <input
-                  id={ids.chatId}
-                  className="ui-input"
-                  value={current.chatId}
-                  disabled
-                  dir="ltr"
-                  {...invalid("chatId")}
-                />
-                <EnvLock variable={saved.telegram.chatId.variable} />
-              </>
-            ) : (
-              <input
-                id={ids.chatId}
-                className="ui-input"
-                inputMode="numeric"
-                dir="ltr"
-                maxLength={21}
-                placeholder={t("telegramSettings.notSet")}
-                value={current.chatId}
-                {...invalid("chatId")}
-                onChange={(event) => set({ chatId: event.target.value })}
-              />
-            )}
+          <Row
+            label={t("telegramSettings.chatId")}
+            hint={t("telegramSettings.chatIdHint")}
+            htmlFor={ids.chatId}
+            lock={chatLock}
+            onClear={current.chatId.trim() ? () => set({ chatId: "" }) : null}
+          >
+            <input
+              id={ids.chatId}
+              className="ui-input"
+              inputMode="numeric"
+              dir="ltr"
+              maxLength={21}
+              disabled={Boolean(chatLock)}
+              placeholder={chatLock ? t("settings.env.pill") : t("telegramSettings.notSet")}
+              value={current.chatId}
+              {...invalid("chatId")}
+              onChange={(event) => set({ chatId: event.target.value })}
+            />
             {fieldError("chatId")}
           </Row>
         </Group>
         <Group id="settings-telegram-codes" title={t("settings.groupTitles.telegramCodes")}>
-          <SwitchRow
-            id={ids.otpViaTelegram}
-            label={t("telegramSettings.otp")}
-            hint={t("telegramSettings.otpHint")}
-            checked={current.otpViaTelegram}
-            disabled={saved.telegram.state !== "on" && !saved.otpViaTelegram}
-            invalidProps={invalid("otpViaTelegram")}
-            note={
-              form.error?.field === "otpViaTelegram"
-                ? fieldError("otpViaTelegram")
-                : saved.telegram.state !== "on" && !saved.otpViaTelegram
-                  ? t("telegramSettings.otpNeedsTelegram")
+          {codesLocked ? (
+            <div className="ui-set-locked">
+              <Locked title={t("telegramSettings.otpLocked")} action={setUp}>
+                {t("telegramSettings.needsTelegram")}
+              </Locked>
+            </div>
+          ) : (
+            <SwitchRow
+              id={ids.otpViaTelegram}
+              label={t("telegramSettings.otp")}
+              hint={t("telegramSettings.otpHint")}
+              checked={current.otpViaTelegram}
+              invalidProps={invalid("otpViaTelegram")}
+              reset={resetTo(current.otpViaTelegram !== D.otpViaTelegram, t("settings.off"), {
+                otpViaTelegram: D.otpViaTelegram,
+              })}
+              note={
+                form.error?.field === "otpViaTelegram"
+                  ? fieldError("otpViaTelegram")
                   : current.otpViaTelegram
                     ? t("telegramSettings.otpWarning")
                     : undefined
-            }
-            onChange={(otpViaTelegram) => set({ otpViaTelegram })}
-          />
+              }
+              onChange={(otpViaTelegram) => set({ otpViaTelegram })}
+            />
+          )}
         </Group>
-        <TelegramRuntime on={saved.telegram.state === "on"} />
       </>
     )
+  }
 
+  const domainsLock = saved.privateDomains.locked ? { variable: saved.privateDomains.variable } : null
   return (
     <Group id="settings-private-domains" title={t("settings.groupTitles.privateNetwork")}>
-      <Row label={t("secretCheck.domains")} hint={t("secretCheck.domainsHint")} htmlFor={ids.privateDomains}>
+      <Row
+        label={t("secretCheck.domains")}
+        hint={t("secretCheck.domainsHint")}
+        htmlFor={ids.privateDomains}
+        lock={domainsLock}
+      >
         <DomainsField
           id={ids.privateDomains}
           value={current.privateDomains}
-          locked={saved.privateDomains.locked}
-          variable={saved.privateDomains.variable}
+          locked={Boolean(domainsLock)}
           invalidProps={invalid("privateDomains")}
           onChange={(privateDomains) => set({ privateDomains })}
           onInvalid={(text) => form.refuse("privateDomains", t("secretCheck.domains"), text)}
@@ -766,25 +938,110 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
   )
 }
 
-/** Off, incomplete (naming what is missing) or on. */
-function TelegramState({ saved }: { saved: Settings }) {
+/** A language's name in that language (Intl.DisplayNames, never a locale file: RT, the locale traps). */
+const languageName = (code: string) => new Intl.DisplayNames([code], { type: "language" }).of(code) ?? code
+const timeKey = (format: TimeFormat) => (format === "HH:mm" ? "h24" : format === "h:mm a" ? "h12" : "browser")
+
+/** The button of a locked area that needs Telegram: brings the bot token field into view with the focus. */
+function TelegramSetUp({ onClick }: { onClick: () => void }) {
   const { t } = useI18n()
-  const { state, missing } = saved.telegram
-  const tone = state === "on" ? "ok" : state === "incomplete" ? "warn" : "neutral"
   return (
-    <div className="ui-kv">
-      <span>{t("telegramSettings.state")}</span>
-      <span>
-        <Tag tone={tone}>{t(`telegramSettings.states.${state}`)}</Tag>{" "}
-        {state === "incomplete" ? (
-          <span className="ui-hint">
-            {t("telegramSettings.missing", {
-              fields: missing.map((field) => t(`telegramSettings.${field}`)).join(", "),
-            })}
-          </span>
+    <button type="button" className="ui-btn ui-btn-sm" onClick={onClick}>
+      {t("telegramSettings.setUp")}
+    </button>
+  )
+}
+
+const JOB_TONE = { sent: "ok", sending: "info", failed: "fail", unknown: "warn", skipped: "warn" } as const
+
+/**
+ * The Status group that opens Telegram (FS-8): the state, with the test message beside it, and what the running bot
+ * reports. While Telegram is not on, the test and the bot's report are a locked area that says what is missing.
+ */
+function TelegramStatus({ saved, setUp }: { saved: Settings; setUp: ReactNode }) {
+  const { t, language } = useI18n()
+  const { state, missing } = saved.telegram
+  const on = state === "on"
+  const [sendingTest, setSendingTest] = useState(false)
+  const telegram = usePageQuery({ queryKey: qk.telegram, queryFn: api.telegramStatus, every: EVERY.slow, enabled: on })
+  const tone = on ? "ok" : state === "incomplete" ? "warn" : "neutral"
+  const sendTest = async () => {
+    setSendingTest(true)
+    try {
+      const result = await api.telegramTestMessage()
+      if (result.warning) showToast(t("settings.telegramTestSentUnrecorded"), "warning")
+      else showToast(t("settings.telegramTestSent"), "success")
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "telegram_uncertain")
+        showToast(t("settings.telegramTestUncertain"), "warning")
+      else if (error instanceof ApiError && error.code === "telegram_failed")
+        showToast(t("settings.telegramTestRefused"), "error")
+      else showToast(t("settings.telegramTestFailed", { reason: errorReason(language, error) }), "error")
+    } finally {
+      setSendingTest(false)
+    }
+  }
+  const data = telegram.data
+  return (
+    <Group id="settings-telegram-status" title={t("settings.groupTitles.status")}>
+      <Facts>
+        <Fact label={t("telegramSettings.state")}>
+          <Tag tone={tone}>{t(`telegramSettings.states.${state}`)}</Tag>
+          {state === "incomplete" ? (
+            <span className="ui-hint">
+              {t("telegramSettings.missing", {
+                fields: missing.map((field) => t(`telegramSettings.${field}`)).join(", "),
+              })}
+            </span>
+          ) : null}
+          {on ? (
+            <button type="button" className="ui-btn ui-btn-sm" disabled={sendingTest} onClick={() => void sendTest()}>
+              {sendingTest ? t("settings.telegramTestSending") : t("settings.telegramTest")}
+            </button>
+          ) : null}
+        </Fact>
+        {data ? (
+          <>
+            <Fact label={t("settings.bot")}>
+              <Tag tone={data.polling ? "ok" : "warn"}>
+                {data.polling ? t("settings.botPolling") : t("settings.botNotPolling")}
+              </Tag>
+            </Fact>
+            <Fact label={t("settings.lastUpdate")}>
+              {data.lastUpdateAt ? <Time value={data.lastUpdateAt} mode="full" /> : t("settings.noUpdateYet")}
+            </Fact>
+            <Fact label={t("settings.lastMorning")}>
+              {data.lastMorning ? (
+                <>
+                  <Time value={data.lastMorning.at ?? data.lastMorning.localDate} mode="day" />
+                  <Tag tone={JOB_TONE[data.lastMorning.state]}>{t(`settings.job.${data.lastMorning.state}`)}</Tag>
+                </>
+              ) : (
+                t("settings.noMorningYet")
+              )}
+            </Fact>
+          </>
         ) : null}
-      </span>
-    </div>
+      </Facts>
+      {on ? (
+        <>
+          {telegram.isError && !data ? (
+            <ErrorState
+              title={t("settings.telegramFailed")}
+              error={telegram.error}
+              onRetry={() => void telegram.refetch()}
+            />
+          ) : null}
+          <p className="ui-set-group-intro">{t("settings.telegramTestHint")}</p>
+        </>
+      ) : (
+        <div className="ui-set-locked">
+          <Locked title={t("telegramSettings.testLocked")} action={setUp}>
+            {t("telegramSettings.needsTelegram")}
+          </Locked>
+        </div>
+      )}
+    </Group>
   )
 }
 
@@ -803,14 +1060,12 @@ function BotTokenField({
   invalidProps: Record<string, unknown>
 }) {
   const { t } = useI18n()
+  // Set by the environment: stored there, with no buttons; the lock is on the label line (FS-3, FS-6).
   if (saved.locked)
     return (
-      <>
-        <span id={id} tabIndex={-1} className="ui-set-secret">
-          {t("telegramSettings.setByEnv")}
-        </span>
-        <EnvLock variable={saved.variable} />
-      </>
+      <span id={id} tabIndex={-1} className="ui-set-secret">
+        {t("telegramSettings.setByEnv")}
+      </span>
     )
   const input = (
     <input
@@ -876,12 +1131,15 @@ function BotTokenField({
   )
 }
 
-/** Private domains as chips with an Add field (v3 FS-15); read-only when the environment sets them. */
+/**
+ * Private domains as value chips with an Add field (v3 FS-15, S-13): a value chip is mono, square-cornered and
+ * quiet, never the pill of a filter chip. Set by the environment: the chips without their X, and the Add field
+ * disabled in place.
+ */
 function DomainsField({
   id,
   value,
   locked,
-  variable,
   invalidProps,
   onChange,
   onInvalid,
@@ -889,7 +1147,6 @@ function DomainsField({
   id: string
   value: string[]
   locked: boolean
-  variable: string | null
   invalidProps: Record<string, unknown>
   onChange: (next: string[]) => void
   onInvalid: (text: string) => void
@@ -910,14 +1167,14 @@ function DomainsField({
   return (
     <>
       {value.length > 0 ? (
-        <ul className="ui-domain-chips" dir="ltr">
+        <ul className="ui-value-chips" dir="ltr" aria-label={t("secretCheck.domains")}>
           {value.map((domain) => (
-            <li key={domain} className="ui-chip">
-              <span className="ui-mono">{domain}</span>
+            <li key={domain} className="ui-value-chip">
+              <bdi>{domain}</bdi>
               {locked ? null : (
                 <button
                   type="button"
-                  className="ui-chip-x"
+                  className="ui-value-chip-x"
                   title={t("secretCheck.remove")}
                   aria-label={t("secretCheck.removeDomain", { domain })}
                   onClick={() => onChange(value.filter((d) => d !== domain))}
@@ -931,112 +1188,27 @@ function DomainsField({
       ) : (
         <span className="ui-hint">{t("secretCheck.none")}</span>
       )}
-      {locked ? (
-        <EnvLock variable={variable} />
-      ) : (
-        <span className="ui-domain-add">
-          <input
-            id={id}
-            className="ui-input"
-            dir="ltr"
-            maxLength={253}
-            autoCapitalize="off"
-            spellCheck={false}
-            placeholder={t("secretCheck.placeholder")}
-            value={typed}
-            {...invalidProps}
-            onChange={(event) => setTyped(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") add(event)
-            }}
-          />
-          <button type="button" className="ui-btn" onClick={add}>
-            {t("secretCheck.add")}
-          </button>
-        </span>
-      )}
+      <span className="ui-domain-add">
+        <input
+          id={id}
+          className="ui-input"
+          dir="ltr"
+          maxLength={253}
+          autoCapitalize="off"
+          spellCheck={false}
+          disabled={locked}
+          placeholder={locked ? t("settings.env.pill") : t("secretCheck.placeholder")}
+          value={typed}
+          {...invalidProps}
+          onChange={(event) => setTyped(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") add(event)
+          }}
+        />
+        <button type="button" className="ui-btn" disabled={locked} onClick={add}>
+          {t("secretCheck.add")}
+        </button>
+      </span>
     </>
-  )
-}
-
-const JOB_TONE = { sent: "ok", sending: "info", failed: "fail", unknown: "warn", skipped: "warn" } as const
-
-/** What the running bot reports, and the test message, while Telegram is on. */
-function TelegramRuntime({ on }: { on: boolean }) {
-  const { t, language } = useI18n()
-  const [sendingTest, setSendingTest] = useState(false)
-  const telegram = usePageQuery({ queryKey: qk.telegram, queryFn: api.telegramStatus, every: EVERY.slow, enabled: on })
-  const sendTest = async () => {
-    setSendingTest(true)
-    try {
-      const result = await api.telegramTestMessage()
-      if (result.warning) showToast(t("settings.telegramTestSentUnrecorded"), "warning")
-      else showToast(t("settings.telegramTestSent"), "success")
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "telegram_uncertain")
-        showToast(t("settings.telegramTestUncertain"), "warning")
-      else if (error instanceof ApiError && error.code === "telegram_failed")
-        showToast(t("settings.telegramTestRefused"), "error")
-      else showToast(t("settings.telegramTestFailed", { reason: errorReason(language, error) }), "error")
-    } finally {
-      setSendingTest(false)
-    }
-  }
-  if (!on || (!telegram.data && !telegram.isError)) return null
-  return (
-    <Group id="settings-telegram-runtime" title={t("settings.groupTitles.telegramRuntime")}>
-      {telegram.isError && !telegram.data ? (
-        <div className="ui-panel-body">
-          <ErrorState
-            title={t("settings.telegramFailed")}
-            error={telegram.error}
-            onRetry={() => void telegram.refetch()}
-          />
-        </div>
-      ) : null}
-      {telegram.data ? (
-        <>
-          <div className="ui-kv">
-            <span>{t("settings.bot")}</span>
-            <span>
-              <Tag tone={telegram.data.polling ? "ok" : "warn"}>
-                {telegram.data.polling ? t("settings.botPolling") : t("settings.botNotPolling")}
-              </Tag>
-            </span>
-          </div>
-          <div className="ui-kv">
-            <span>{t("settings.lastUpdate")}</span>
-            <span>
-              {telegram.data.lastUpdateAt ? (
-                <Time value={telegram.data.lastUpdateAt} mode="full" />
-              ) : (
-                t("settings.noUpdateYet")
-              )}
-            </span>
-          </div>
-          <div className="ui-kv">
-            <span>{t("settings.lastMorning")}</span>
-            <span>
-              {telegram.data.lastMorning ? (
-                <>
-                  <Time value={telegram.data.lastMorning.at ?? telegram.data.lastMorning.localDate} mode="day" />{" "}
-                  <Tag tone={JOB_TONE[telegram.data.lastMorning.state]}>
-                    {t(`settings.job.${telegram.data.lastMorning.state}`)}
-                  </Tag>
-                </>
-              ) : (
-                t("settings.noMorningYet")
-              )}
-            </span>
-          </div>
-          <div className="ui-panel-body">
-            <p className="ui-hint">{t("settings.telegramTestHint")}</p>
-            <button type="button" className="ui-btn" disabled={sendingTest} onClick={() => void sendTest()}>
-              {sendingTest ? t("settings.telegramTestSending") : t("settings.telegramTest")}
-            </button>
-          </div>
-        </>
-      ) : null}
-    </Group>
   )
 }
