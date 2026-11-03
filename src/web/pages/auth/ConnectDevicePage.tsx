@@ -42,19 +42,6 @@ export function ConnectDevicePage() {
   return <Request userCode={userCode} />
 }
 
-/** Where to disconnect the agent later, with the place as a link to its Settings section (v3 NL-12). */
-function Footnote() {
-  const { t } = useI18n()
-  const [before, after = ""] = t("connect.footnote").split("{where}")
-  return (
-    <>
-      {before}
-      <Link to="/settings/agents">{t("connect.footnoteWhere")}</Link>
-      {after}
-    </>
-  )
-}
-
 /** Without a code in the link: type the one the agent shows. */
 function CodeForm({ onCode }: { onCode: (code: string) => void }) {
   const { t } = useI18n()
@@ -207,7 +194,7 @@ function Request({ userCode }: { userCode: string }) {
       {failure ? <FormError>{t(`connect.failed.${failure}`)}</FormError> : null}
       <p>
         {me.data ? `${t("connect.signedInAs", { user: me.data.actor.label })} ` : ""}
-        <Footnote />
+        {t("connect.footnote")}
       </p>
       <div className="ui-consent-actions">
         <button type="button" className="ui-btn" disabled={busy} onClick={() => void answer(false)}>
