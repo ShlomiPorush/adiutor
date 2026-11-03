@@ -3,7 +3,7 @@
 // button takes the focus, so Enter confirms; a question that protects work starts on its safe
 // answer. Escape, Back, a click outside and a pull down on a phone all cancel.
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useI18n } from "../i18n/i18n.tsx"
 import { Dialog } from "./Dialog.tsx"
 
@@ -23,16 +23,26 @@ export type ConfirmOptions = {
 type Pending = ConfirmOptions & { id: number; resolve: (answer: boolean) => void }
 
 let ask: ((pending: Pending) => void) | null = null
+let drop: ((id: number) => void) | null = null
 let nextId = 1
 
-export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
-  return new Promise((resolve) => {
+/** A question asked, and what takes it away unanswered (as Cancel) when it no longer applies. */
+export type Question = { answer: Promise<boolean>; dismiss: () => void }
+
+export function askQuestion(options: ConfirmOptions): Question {
+  const id = nextId++
+  const answer = new Promise<boolean>((resolve) => {
     if (!ask) {
       resolve(false)
       return
     }
-    ask({ ...options, id: nextId++, resolve })
+    ask({ ...options, id, resolve })
   })
+  return { answer, dismiss: () => drop?.(id) }
+}
+
+export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
+  return askQuestion(options).answer
 }
 
 export function ConfirmHost() {
@@ -47,8 +57,17 @@ export function ConfirmHost() {
         return next
       })
     }
+    // Only the question with this id: a newer one stays.
+    drop = (id) => {
+      setPending((current) => {
+        if (current?.id !== id) return current
+        current.resolve(false)
+        return null
+      })
+    }
     return () => {
       ask = null
+      drop = null
     }
   }, [])
 
@@ -93,20 +112,33 @@ export function ConfirmHost() {
   )
 }
 
-/** Closes a dialog with typed input, asking first when something was typed (v3 DS-9). */
-export function useDiscardGuard(dirty: boolean, close: () => void): () => Promise<void> {
+/**
+ * Closes a dialog with typed input, asking first when something was typed (v3 DS-9). `dismiss` takes away a question
+ * still open for this dialog: a save that succeeds while it is open closes the dialog and the question with it.
+ */
+export function useDiscardGuard(dirty: boolean, close: () => void): (() => Promise<void>) & { dismiss: () => void } {
   const { t } = useI18n()
-  return async () => {
+  const open = useRef<Question | null>(null)
+  const guarded = async () => {
     if (dirty) {
-      const discard = await confirmDialog({
+      const question = askQuestion({
         title: t("unsaved.discardTitle"),
         message: t("unsaved.discardMessage"),
         confirmText: t("unsaved.discard"),
         cancelText: t("unsaved.keepEditing"),
         focusCancel: true,
       })
+      open.current = question
+      const discard = await question.answer
+      if (open.current === question) open.current = null
       if (!discard) return
     }
     close()
   }
+  return Object.assign(guarded, {
+    dismiss: () => {
+      open.current?.dismiss()
+      open.current = null
+    },
+  })
 }

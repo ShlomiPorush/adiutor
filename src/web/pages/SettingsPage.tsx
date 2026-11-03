@@ -98,11 +98,19 @@ const sameList = (a: string[], b: string[]) => {
   return sorted(a) === sorted(b)
 }
 
-/** A typed number against the saved one: "07" or " 7 " is 7, no change (SV-2). */
-const sameNumber = (typed: string, saved: number) => {
+/**
+ * The number a field holds, as the save sends it (`Number` of the trimmed text), or null when it holds none. "07",
+ * " 7 ", "7.0" and "7e0" are all 7, so none of them is a change against a saved 7 (SV-2), and none is Changed against
+ * a default of 7 (FS-6).
+ */
+export function typedNumber(typed: string): number | null {
   const text = typed.trim()
-  return text === String(saved) || (/^\d+$/.test(text) && Number(text) === saved)
+  if (text === "") return null
+  const value = Number(text)
+  return Number.isFinite(value) ? value : null
 }
+
+const sameNumber = (typed: string, saved: number) => typedNumber(typed) === saved
 
 export function changedFields(saved: Settings, draft: Draft): SettingsPatch {
   const patch: SettingsPatch = {}
@@ -115,12 +123,23 @@ export function changedFields(saved: Settings, draft: Draft): SettingsPatch {
     patch.sessionIdleDays = Number(draft.sessionIdleDays.trim())
   if (draft.otpViaTelegram !== undefined && draft.otpViaTelegram !== saved.otpViaTelegram)
     patch.otpViaTelegram = draft.otpViaTelegram
-  if (draft.botToken?.mode === "replace" && draft.botToken.value.trim())
+  // A field the environment sets is left out, also when it became locked after it was edited (the variable was set
+  // and the server restarted): the server would refuse it, and with it the rest of the save.
+  const tokenOpen = !saved.telegram.botToken.locked
+  if (tokenOpen && draft.botToken?.mode === "replace" && draft.botToken.value.trim())
     patch.telegramBotToken = draft.botToken.value.trim()
-  if (draft.botToken?.mode === "remove" && saved.telegram.botToken.set) patch.telegramBotToken = null
-  if (draft.chatId !== undefined && draft.chatId.trim() !== (saved.telegram.chatId.value ?? ""))
+  if (tokenOpen && draft.botToken?.mode === "remove" && saved.telegram.botToken.set) patch.telegramBotToken = null
+  if (
+    !saved.telegram.chatId.locked &&
+    draft.chatId !== undefined &&
+    draft.chatId.trim() !== (saved.telegram.chatId.value ?? "")
+  )
     patch.telegramChatId = draft.chatId.trim() || null
-  if (draft.privateDomains !== undefined && !sameList(draft.privateDomains, saved.privateDomains.value))
+  if (
+    !saved.privateDomains.locked &&
+    draft.privateDomains !== undefined &&
+    !sameList(draft.privateDomains, saved.privateDomains.value)
+  )
     patch.privateDomains = draft.privateDomains
   return patch
 }
@@ -178,7 +197,7 @@ export function SettingsPage() {
         : element
     if (target) {
       target.focus({ preventScroll: true })
-      reveal(target, pageRef.current, contentRef.current, pickerRef.current)
+      keepRevealed(target, pageRef.current, contentRef.current, pickerRef.current)
     }
     form.focused()
   }, [form.focusing, active])
@@ -420,18 +439,64 @@ function reveal(
   const area = scrollArea(page, content)
   const bounds = area.getBoundingClientRect()
   const top = bounds.top + (area === page ? pickerHeight(picker) : 0) + 8
-  let bottom = bounds.bottom - 8
+  const visibleEnd = bounds.bottom - 8
+  let bottom = visibleEnd
   const box = target.getBoundingClientRect()
   const note = document.getElementById(target.getAttribute("aria-describedby") ?? "")
   const end = Math.max(box.bottom, note?.getBoundingClientRect().bottom ?? 0)
   // What floats over the page there: the save bar, a toast, the phone tab bar.
   for (const layer of document.querySelectorAll<HTMLElement>(".ui-savebar, .ui-toast, .ui-tabbar")) {
     const over = layer.getBoundingClientRect()
-    if (over.height > 0 && over.left < box.right && over.right > box.left && over.top < bottom)
+    // Each layer is weighed against the area itself: one already counted (the save bar) must not hide a taller one
+    // over it (the refusal's toast on a phone).
+    if (over.height > 0 && over.left < box.right && over.right > box.left && over.top < visibleEnd)
       bottom = Math.min(bottom, over.top - 8)
   }
-  if (box.top < top) area.scrollTop -= top - box.top
-  else if (end > bottom) area.scrollTop += Math.min(end - bottom, box.top - top)
+  const by = box.top < top ? box.top - top : end > bottom ? Math.min(end - bottom, box.top - top) : 0
+  // An instant scroll: it also ends a smooth scroll still running from the last section change, which would otherwise
+  // carry on from where it was and leave the field short of where this puts it.
+  if (by !== 0) area.scrollTo({ top: area.scrollTop + by, behavior: "instant" })
+}
+
+/** How long a refused field is held in view while the page settles after its section opens. */
+export const REVEAL_FOR_MS = 400
+
+/**
+ * Brings a refused field and its note into view (`reveal`), then keeps them there for REVEAL_FOR_MS: on a phone a
+ * smooth scroll from the last section change may still be running, and the refusal's toast mounts after the field
+ * took the focus, over the save bar. Each frame checks again; it stops once the field loses the focus, or the owner
+ * scrolls, touches, clicks or presses a key.
+ */
+function keepRevealed(
+  target: HTMLElement,
+  page: HTMLElement | null,
+  content: HTMLElement | null,
+  picker: HTMLElement | null,
+) {
+  if (!page || !content) return
+  const until = performance.now() + REVEAL_FOR_MS
+  const owner = ["wheel", "touchstart", "pointerdown"] as const
+  let frame = 0
+  const stop = () => {
+    cancelAnimationFrame(frame)
+    for (const type of owner) {
+      page.removeEventListener(type, stop, true)
+      content.removeEventListener(type, stop, true)
+    }
+    window.removeEventListener("keydown", stop, true)
+  }
+  const step = () => {
+    if (document.activeElement !== target) return stop()
+    reveal(target, page, content, picker)
+    if (performance.now() > until) stop()
+    else frame = requestAnimationFrame(step)
+  }
+  for (const type of owner) {
+    page.addEventListener(type, stop, { capture: true, passive: true })
+    content.addEventListener(type, stop, { capture: true, passive: true })
+  }
+  window.addEventListener("keydown", stop, true)
+  step()
 }
 
 type FieldError = { field: DraftField; text: string }
@@ -590,8 +655,9 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
     closedItemDays: draft.closedItemDays ?? String(saved.closedItemDays),
     sessionIdleDays: draft.sessionIdleDays ?? String(saved.sessionIdleDays),
     otpViaTelegram: draft.otpViaTelegram ?? saved.otpViaTelegram,
-    chatId: draft.chatId ?? saved.telegram.chatId.value ?? "",
-    privateDomains: draft.privateDomains ?? saved.privateDomains.value,
+    // A locked field shows what the environment sets, never an edit made before it was locked.
+    chatId: (saved.telegram.chatId.locked ? undefined : draft.chatId) ?? saved.telegram.chatId.value ?? "",
+    privateDomains: (saved.privateDomains.locked ? undefined : draft.privateDomains) ?? saved.privateDomains.value,
   }
   const example = withFormatPrefs({ dateFormat: current.dateFormat, timeFormat: current.timeFormat }, () =>
     formatTime(new Date(), { seconds: false }),
@@ -600,7 +666,6 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
   const resetTo = (differs: boolean, label: string, change: Partial<Draft>): ResetMark | null =>
     differs ? { label, onReset: () => set(change) } : null
   const D = SETTINGS_DEFAULTS
-  const days = (text: string, fallback: number) => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : fallback)
   const telegramOn = saved.telegram.state === "on"
 
   if (section === "general")
@@ -692,7 +757,7 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
             label={t("settings.closedDays")}
             hint={t("settings.closedDaysHint")}
             htmlFor={ids.closedItemDays}
-            reset={resetTo(days(current.closedItemDays, -1) !== D.closedItemDays, formatNumber(D.closedItemDays), {
+            reset={resetTo(typedNumber(current.closedItemDays) !== D.closedItemDays, formatNumber(D.closedItemDays), {
               closedItemDays: String(D.closedItemDays),
             })}
           >
@@ -715,9 +780,13 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
             label={t("settings.session.idleDays")}
             hint={t("settings.session.idleDaysHint")}
             htmlFor={ids.sessionIdleDays}
-            reset={resetTo(days(current.sessionIdleDays, -1) !== D.sessionIdleDays, formatNumber(D.sessionIdleDays), {
-              sessionIdleDays: String(D.sessionIdleDays),
-            })}
+            reset={resetTo(
+              typedNumber(current.sessionIdleDays) !== D.sessionIdleDays,
+              formatNumber(D.sessionIdleDays),
+              {
+                sessionIdleDays: String(D.sessionIdleDays),
+              },
+            )}
           >
             <input
               id={ids.sessionIdleDays}

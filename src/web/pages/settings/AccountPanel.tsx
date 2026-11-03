@@ -273,6 +273,7 @@ export function PasswordDialog({ onClose }: { onClose: () => void }) {
         refuse(wrong ? "current" : null, failureSentence(t, answer))
         return
       }
+      guardedClose.dismiss()
       onClose()
       showToast(t("account.changed"), "success")
       await queryClient.invalidateQueries({ queryKey: qk.account })
@@ -347,6 +348,7 @@ function NewCodesDialog({ onClose }: { onClose: () => void }) {
         setError(failureSentence(t, answer))
         return
       }
+      guardedClose.dismiss()
       setPassword("")
       setCodes(data.backupCodes)
     } catch {
@@ -407,6 +409,7 @@ function NewAuthenticatorDialog({ onClose, onDisabled }: { onClose: () => void; 
     setError(null)
     try {
       await authData(authClient.twoFactor.disable({ password }))
+      guardedClose.dismiss()
       onDisabled()
     } catch (failure) {
       setError(failure instanceof AuthCallError ? failureSentence(t, failure.answer) : t("auth.error.network"))

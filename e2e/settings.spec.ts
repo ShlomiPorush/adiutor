@@ -169,15 +169,31 @@ test("a refused field in a hidden section opens that section, takes the focus an
   await expect(page).toHaveURL(/\/settings\/general$/)
   await expect(idle).toBeFocused()
   await expect(idle).toHaveAttribute("aria-invalid", "true")
-  // In view, inside its scroll area, above the save bar, and nothing on top of it (the picker, the bar, a toast).
+  // In view, inside its scroll area, and nothing on top of it (the picker, the bar, a toast): the field and the note
+  // that says what to fix both end above the save bar and above the refusal's toast, which on a phone sits over the
+  // bar. Polled: the page may still be settling (a smooth scroll from the section change, the toast arriving).
   await expect(idle).toBeInViewport()
-  const place = await idle.evaluate((field) => {
-    const box = field.getBoundingClientRect()
-    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-    const barTop = document.querySelector(".ui-savebar")?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY
-    return { onTop: hit === field || field.contains(hit), aboveBar: box.bottom <= barTop }
-  })
-  expect(place).toEqual({ onTop: true, aboveBar: true })
+  const place = () =>
+    idle.evaluate((field) => {
+      const box = field.getBoundingClientRect()
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+      const note = document.getElementById(field.getAttribute("aria-describedby") ?? "")
+      const end = Math.max(box.bottom, note?.getBoundingClientRect().bottom ?? 0)
+      // Clear of a layer: above it, or beside it (the toast sits in a corner on a wide screen).
+      const clearOf = (selector: string) => {
+        const layer = document.querySelector(selector)?.getBoundingClientRect()
+        if (!layer || layer.height === 0) return true
+        const beside = layer.right <= box.left || layer.left >= box.right
+        return beside || end <= layer.top
+      }
+      return {
+        onTop: hit === field || field.contains(hit),
+        note: Boolean(note),
+        aboveBar: clearOf(".ui-savebar"),
+        aboveToast: clearOf(".ui-toast"),
+      }
+    })
+  await expect.poll(place, { timeout: 2000 }).toEqual({ onTop: true, note: true, aboveBar: true, aboveToast: true })
   // By keyboard: on a phone the refusal's toast sits over the save bar, and a pointer over it holds it (FB-2).
   await bar.getByRole("button", { name: he.savebar.discard }).press("Enter")
   await expect(bar).toHaveCount(0)

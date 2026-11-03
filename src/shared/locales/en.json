@@ -897,7 +897,7 @@
     "codesRow": "Backup codes",
     "codesHint": "New codes replace the ones you saved; the old ones stop working.",
     "authenticatorRow": "Authenticator app",
-    "authenticatorHint": "A new app replaces the one you use now; set it up right away.",
+    "authenticatorHint": "A new authenticator app replaces the current one. Finish setting it up right away.",
     "recoveryRow": "Reset the password on the server"
   },
   "backupCodes": {
@@ -1019,9 +1019,9 @@
     "otp": "Send sign-in codes to Telegram",
     "otpHint": "At sign-in, after the password, you may ask for a code in your Telegram chat instead of the authenticator app. Default: off.",
     "otpWarning": "Your Telegram chat becomes a way in: whoever reads it and knows your password can sign in.",
-    "otpLocked": "Sign-in codes in Telegram are locked",
-    "testLocked": "The test message and the bot's status are locked",
-    "needsTelegram": "They need Telegram, which is not on yet: set the bot token and your chat ID in Settings → Integrations → Telegram → Bot, then save.",
+    "otpLocked": "Sign-in codes in Telegram are not available",
+    "testLocked": "The test message and the bot's details are not available",
+    "needsTelegram": "Telegram is not on yet. To turn it on, set the bot token and the chat ID in Settings → Integrations → Telegram → Bot, then save.",
     "setUp": "Set up the bot"
   },
   "secretCheck": {

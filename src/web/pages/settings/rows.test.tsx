@@ -19,7 +19,7 @@ import { I18nProvider } from "../../i18n/i18n.tsx"
 import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
 import { UnsavedProvider } from "../../ui/unsaved.tsx"
-import { forgetSettingsVisit, SettingsPage } from "../SettingsPage.tsx"
+import { changedFields, forgetSettingsVisit, SettingsPage, typedNumber } from "../SettingsPage.tsx"
 import { removeEvery } from "./SyncSections.tsx"
 
 /** Better Auth's client as Account and Agent access call it; each test sets the answers it needs. */
@@ -111,6 +111,7 @@ async function transport({ method, path, body }: TransportRequest) {
 }
 
 let mounted: { root: Root; host: HTMLElement } | null = null
+let client: QueryClient | null = null
 
 async function render(path: string): Promise<void> {
   const host = document.createElement("div")
@@ -118,6 +119,7 @@ async function render(path: string): Promise<void> {
   const root = createRoot(host)
   mounted = { root, host }
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client = queryClient
   queryClient.setQueryData(qk.session, { actor: { kind: "owner", label: "owner.name" } })
   const frame = (page: ReactNode) => (
     <UnsavedProvider>
@@ -321,6 +323,29 @@ describe("Changed and Reset to default (FS-6, R7)", () => {
   })
 })
 
+describe("numbers read as the save sends them (F2, SV-2, FS-6)", () => {
+  it("7, 07, 7.0, 7e0 and a 7 with spaces are all 7: no change against a saved 7, and no Changed", async () => {
+    for (const typed of ["7", "07", "7.0", "7e0", " 7 ", "7 "]) expect(typedNumber(typed), typed).toBe(7)
+    expect(typedNumber("")).toBeNull()
+    expect(typedNumber("seven")).toBeNull()
+    for (const typed of ["07", "7.0", "7e0", " 7 "])
+      expect(changedFields(SAVED, { closedItemDays: typed, sessionIdleDays: " 30.0 " }), typed).toEqual({})
+    expect(changedFields(SAVED, { closedItemDays: "7.5" })).toEqual({ closedItemDays: 7.5 })
+
+    await render("/settings/general")
+    // What the number field keeps of each (a browser empties one it cannot read; the draft then holds "").
+    for (const typed of ["7.0", "7e0"]) {
+      await type(closedDays(), typed)
+      expect(closedDays()?.value).toBe(typed)
+      expect(count(), typed).toBeNull()
+      expect(pill(en.settings.closedDays), typed).toBeUndefined()
+      expect(resetOf(en.settings.closedDays), typed).toBeUndefined()
+    }
+    await type(closedDays(), "7.5")
+    expect(pill(en.settings.closedDays)).toBe(en.settings.changed)
+  })
+})
+
 describe("set by the environment (FS-3, FS-6, R6)", () => {
   it("a locked secret is stored in the environment, with no buttons and the variable named", async () => {
     saved.telegram.botToken = { set: true, readable: true, locked: true, variable: "MIKUD_TELEGRAM_BOT_TOKEN" }
@@ -347,6 +372,47 @@ describe("set by the environment (FS-3, FS-6, R6)", () => {
     expect(chat.querySelector(".ui-set-env")?.textContent).toContain("MIKUD_TELEGRAM_CHAT_ID")
     // The label still names the field exactly: the tag sits beside the label, not inside it.
     expect(chat.querySelector("label")?.textContent).toBe(en.telegramSettings.chatId)
+  })
+
+  it("an edit to a field that the environment locks before the save is never sent; the rest saves (F1)", async () => {
+    await render("/settings/telegram")
+    const token = () => row(en.telegramSettings.botToken) as HTMLElement
+    await click(button(en.telegramSettings.replace, token()))
+    await type(token().querySelector("input"), `${"1234567"}:${"A".repeat(35)}`)
+    await type(row(en.telegramSettings.chatId)?.querySelector("input"), "5151")
+    await click(document.querySelector('.ui-set-nav a[href="/settings/secret-check"]'))
+    await click(
+      buttons(document.querySelector("#secret-check") as HTMLElement).find((element) =>
+        plain(element.getAttribute("aria-label"))?.endsWith("lab.example"),
+      ),
+    )
+    await click(document.querySelector('.ui-set-nav a[href="/settings/general"]'))
+    await type(closedDays(), "9")
+    expect(count()).toContain("4")
+
+    // The environment now sets all three (the variables were set and the server restarted); the page reads again.
+    // A new answer, not the same object changed in place: the query compares what it gets with what it holds.
+    saved = structuredClone(saved)
+    saved.telegram.botToken = { set: true, readable: true, locked: true, variable: "MIKUD_TELEGRAM_BOT_TOKEN" }
+    saved.telegram.chatId = { value: "70012345", locked: true, variable: "MIKUD_TELEGRAM_CHAT_ID" }
+    saved.privateDomains = { value: ["corp.example"], locked: true, variable: "MIKUD_PRIVATE_DOMAINS" }
+    await act(async () => {
+      await client?.invalidateQueries({ queryKey: qk.settings })
+    })
+    await settle()
+    expect(count()).toContain("1")
+    expect(
+      Array.from(document.querySelectorAll(".ui-set-nav .ui-set-dot")).map((dot) =>
+        dot.closest("a")?.getAttribute("href"),
+      ),
+    ).toEqual(["/settings/general"])
+
+    await click(button(en.savebar.save))
+    expect(patches).toEqual([{ closedItemDays: 9 }])
+
+    // The locked fields show what the environment sets, not the edits made before.
+    await click(document.querySelector('.ui-set-nav a[href="/settings/telegram"]'))
+    expect(row(en.telegramSettings.chatId)?.querySelector("input")?.value).toBe("70012345")
   })
 
   it("Telegram off: the test message and the sign-in codes are locked areas that lead to the bot token", async () => {
@@ -493,6 +559,27 @@ describe("the password change in a dialog (S-6, FS-22, DS-9)", () => {
     await key("Escape")
     await click(button(en.unsaved.discard, question() as HTMLElement))
     expect(dialog()).toBeNull()
+  })
+
+  it("a change that succeeds while the discard question is open closes the dialog and the question (F3, DS-9)", async () => {
+    let succeed: () => void = () => {}
+    auth.changePassword = () =>
+      new Promise((resolve) => {
+        succeed = () => resolve({ data: { token: "t" }, error: null })
+      })
+    await open()
+    await fill("Invented old password", "Invented new password", "Invented new password")
+    await submit()
+    // The request is on its way; Escape asks before dropping what was typed.
+    await key("Escape")
+    expect(question()?.textContent).toContain(en.unsaved.discardTitle)
+    await act(async () => {
+      succeed()
+    })
+    await settle()
+    expect(dialog()).toBeNull()
+    expect(question()).toBeNull()
+    expect(document.body.textContent).toContain(en.account.changed)
   })
 
   it("Back closes the dialog, asking first when something was typed", async () => {
