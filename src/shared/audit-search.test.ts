@@ -6,6 +6,9 @@ import he from "./locales/he.json"
 
 const locales = { en, he }
 
+/** "Changed": the first word of the Hebrew label of settings.update, which three more labels share. */
+const CHANGED_HE = he.audit.action.settings_update.split(" ")[0] ?? ""
+
 describe("the audit catalogue", () => {
   for (const [name, locale] of Object.entries(locales)) {
     it(`${name} labels every action and entity type, and nothing else`, () => {
@@ -33,14 +36,14 @@ describe("auditCodesMatching", () => {
 
   it("finds the actions and entity types whose Hebrew label holds the text", () => {
     expect(auditCodesMatching("he", he.audit.action.item_create).actions).toEqual(["item.create"])
-    expect(auditCodesMatching("he", "שינה").actions.sort()).toEqual(
+    expect(auditCodesMatching("he", CHANGED_HE).actions.sort()).toEqual(
       ["account.password_change", "item.update", "project.update", "settings.update"].sort(),
     )
     expect(auditCodesMatching("he", he.audit.entity.project).entityTypes).toEqual(["project"])
   })
 
   it("matches only the request's language, and nothing for empty text", () => {
-    expect(auditCodesMatching("en", "שינה")).toEqual({ actions: [], entityTypes: [] })
+    expect(auditCodesMatching("en", CHANGED_HE)).toEqual({ actions: [], entityTypes: [] })
     expect(auditCodesMatching("he", "changed")).toEqual({ actions: [], entityTypes: [] })
     expect(auditCodesMatching("en", "   ")).toEqual({ actions: [], entityTypes: [] })
   })

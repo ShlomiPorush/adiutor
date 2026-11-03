@@ -18,6 +18,9 @@ import { type AuditLogOptions, auditLog } from "./reads.ts"
 
 let t: TestDatabase
 
+/** "Changed": the first word of the Hebrew label of settings.update, which three more labels share. */
+const CHANGED_HE = he.audit.action.settings_update.split(" ")[0] ?? ""
+
 const codex: By = { actor: { kind: "agent", label: "agent:codex" }, source: "mcp" }
 const claude: By = { actor: { kind: "agent", label: "agent:claude" }, source: "api" }
 const sync: By = { actor: { kind: "sync", label: "sync" }, source: "sync" }
@@ -103,7 +106,7 @@ describe("activity counts", () => {
     await expectCountsMatch({ actorKind: "agent" })
     await expectCountsMatch({ agent: "agent:codex" })
     await expectCountsMatch({ q: "the", lang: "en" })
-    await expectCountsMatch({ q: "שינה", lang: "he", actorKind: "owner" })
+    await expectCountsMatch({ q: CHANGED_HE, lang: "he", actorKind: "owner" })
   })
 
   it("counts Who without the agent filter, because a kind choice replaces it (R1)", async () => {
@@ -222,7 +225,7 @@ describe("activity search", () => {
 
   it("matches the action and entity labels of the request's language: Hebrew", async () => {
     await seed()
-    expect((await actions({ q: "שינה", lang: "he" })).sort()).toEqual([
+    expect((await actions({ q: CHANGED_HE, lang: "he" })).sort()).toEqual([
       "item.update",
       "project.update",
       "settings.update",
@@ -231,7 +234,7 @@ describe("activity search", () => {
     const all = await auditLog(t.ctx, {})
     expect(created.length).toBe(all.counts?.actions.find((entry) => entry.action === "item.create")?.count)
     expect(created.every((row) => row.action === "item.create")).toBe(true)
-    expect(await pageAll({ q: "שינה", lang: "en" }), "Hebrew text, English labels").toHaveLength(0)
+    expect(await pageAll({ q: CHANGED_HE, lang: "en" }), "Hebrew text, English labels").toHaveLength(0)
     const projectRows = await pageAll({ q: he.audit.entity.project, lang: "he" })
     expect(projectRows.length).toBeGreaterThan(0)
     expect(projectRows.every((row) => row.entityType === "project")).toBe(true)
