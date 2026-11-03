@@ -191,6 +191,8 @@ const count = () => plain(document.querySelector(".ui-savebar-count")?.textConte
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')
 const question = () => document.querySelector<HTMLElement>('[role="alertdialog"]')
 const closedDays = () => row(en.settings.closedDays)?.querySelector<HTMLInputElement>("input")
+/** Hebrew's name in Hebrew, as the page writes it (Intl.DisplayNames; Hebrew text lives only in he.json). */
+const hebrew = new Intl.DisplayNames(["he"], { type: "language" }).of("he") ?? "he"
 const resetLabel = (value: string) => en.settings.resetTo.replace("{value}", value)
 
 beforeEach(() => {
@@ -234,7 +236,7 @@ describe("Changed and Reset to default (FS-6, R7)", () => {
     expect(resetOf(en.settings.closedDays)).toBeUndefined()
     // English differs from the default, Hebrew: marked at load, with the default's own name.
     expect(pill(en.settings.language)).toBe(en.settings.changed)
-    expect(plain(resetOf(en.settings.language)?.textContent)).toBe(resetLabel("עברית"))
+    expect(plain(resetOf(en.settings.language)?.textContent)).toBe(resetLabel(hebrew))
 
     await type(closedDays(), "9")
     expect(pill(en.settings.closedDays)).toBe(en.settings.changed)
