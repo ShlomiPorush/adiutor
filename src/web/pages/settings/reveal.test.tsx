@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 // A refused field is held in view for REVEAL_FOR_MS (SV-1) without fighting the owner: a scroll it saw no input for
 // (a scroll bar dragged off the main thread, assistive technology) ends the hold while the field keeps the focus;
-// the smooth scroll of the last section change, which Chromium lets run on after an instant scroll, does not.
+// the smooth scroll of the last section change, which Chromium lets run on after an instant scroll, does not
+// while it counts as running (SMOOTH_FOR_MS).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { keepRevealed, REVEAL_FOR_MS, SMOOTH_FOR_MS, scrollSmoothly } from "../SettingsPage.tsx"
@@ -18,7 +19,7 @@ describe("keepRevealed", () => {
   let writes: ScrollToOptions[] = []
 
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance", "setTimeout"] })
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] })
     page = document.createElement("div")
     content = document.createElement("div")
     field = document.createElement("input")
@@ -31,9 +32,10 @@ describe("keepRevealed", () => {
     content.style.overflowY = "visible"
     page.getBoundingClientRect = () => rect(0, 500)
     field.getBoundingClientRect = () => rect(fieldAt - page.scrollTop, 40)
+    // An instant scroll lands at once; a smooth one starts moving on later frames, which a test sets by hand.
     page.scrollTo = ((options: ScrollToOptions) => {
       writes.push(options)
-      page.scrollTop = options.top ?? page.scrollTop
+      if (options.behavior !== "smooth") page.scrollTop = options.top ?? page.scrollTop
     }) as typeof page.scrollTo
     field.focus()
   })
@@ -83,22 +85,17 @@ describe("keepRevealed", () => {
     page.scrollTop = 300
     scrollSmoothly(page, 0)
     expect(writes.at(-1)).toEqual({ top: 0, behavior: "smooth" })
+    frames(50)
     page.scrollTop = 131
     keepRevealed(field, page, content, null)
     expect(page.scrollTop).toBe(448)
-    // The smooth scroll carries on from there, 17px up (seen on a phone in Chromium): not the owner's.
+    // A scrollend (the instant scroll's own) does not end the smooth scroll, which carries on 17px up (seen on a
+    // phone in Chromium): not the owner's move.
+    page.dispatchEvent(new Event("scrollend"))
     page.scrollTop = 431
     frames(20)
     expect(page.scrollTop).toBe(448)
-    // It ends; a move after that, with no input before it, is the owner's.
-    page.dispatchEvent(new Event("scrollend"))
-    page.scrollTop = 200
-    frames(REVEAL_FOR_MS)
-    expect(page.scrollTop).toBe(200)
-  })
-
-  it("counts a smooth scroll as ended after SMOOTH_FOR_MS where the browser sends no scrollend", () => {
-    scrollSmoothly(page, 0)
+    // Once it is over, a move with no input before it is the owner's.
     frames(SMOOTH_FOR_MS)
     keepRevealed(field, page, content, null)
     page.scrollTop = 200

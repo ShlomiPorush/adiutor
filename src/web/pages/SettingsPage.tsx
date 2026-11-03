@@ -374,28 +374,20 @@ function useSectionView(
   }, [key])
 }
 
-/** The smooth scroll a section change started, until it ends; null when none is running. */
-let smoothScroll: { area: HTMLElement } | null = null
+/** When the smooth scroll of the last section change counts as over (a `performance.now()` time). */
+let smoothUntil = 0
 
-/** How long a smooth scroll counts as running where the browser sends no `scrollend`. */
+/** How long the smooth scroll of a section change counts as running. */
 export const SMOOTH_FOR_MS = 1000
 
 /**
- * Scrolls a section's area smoothly to `top` and marks it as running until `scrollend` (or SMOOTH_FOR_MS). A
- * later instant scroll does not end it in Chromium: it carries on from wherever that scroll put the area, and
- * `keepRevealed` must not take that move for the owner's.
+ * Scrolls a section's area smoothly to `top`, and counts it as running for SMOOTH_FOR_MS. In Chromium a later
+ * instant scroll does not end it: the animation carries on, shifted to wherever that scroll put the area, so
+ * `keepRevealed` must not take its moves for the owner's. `scrollend` cannot say when it is over: the instant scroll
+ * sends one of its own while the animation still runs, and an earlier scroll's can arrive just after the start.
  */
 export function scrollSmoothly(area: HTMLElement, top: number) {
-  // Its own mark: the end of an earlier scroll must not clear a later one.
-  const run = { area }
-  smoothScroll = run
-  const done = () => {
-    clearTimeout(timer)
-    area.removeEventListener("scrollend", done)
-    if (smoothScroll === run) smoothScroll = null
-  }
-  area.addEventListener("scrollend", done)
-  const timer = setTimeout(done, SMOOTH_FOR_MS)
+  smoothUntil = performance.now() + SMOOTH_FOR_MS
   area.scrollTo({ top, behavior: "smooth" })
 }
 
@@ -517,7 +509,7 @@ export function keepRevealed(
     if (wrote) {
       const moved = Math.abs(page.scrollTop - wrote.page) > 1 || Math.abs(content.scrollTop - wrote.content) > 1
       const grew = page.scrollHeight > wrote.pageHeight || content.scrollHeight > wrote.contentHeight
-      if (moved && !grew && smoothScroll === null) return stop()
+      if (moved && !grew && performance.now() >= smoothUntil) return stop()
     }
     reveal(target, page, content, picker)
     wrote = {
