@@ -370,8 +370,33 @@ function useSectionView(
       page.getBoundingClientRect().top +
       page.scrollTop -
       pickerHeight(pickerRef.current)
-    if (page.scrollTop > top) page.scrollTo({ top, behavior: "smooth" })
+    if (page.scrollTop > top) scrollSmoothly(page, top)
   }, [key])
+}
+
+/** The smooth scroll a section change started, until it ends; null when none is running. */
+let smoothScroll: { area: HTMLElement } | null = null
+
+/** How long a smooth scroll counts as running where the browser sends no `scrollend`. */
+export const SMOOTH_FOR_MS = 1000
+
+/**
+ * Scrolls a section's area smoothly to `top` and marks it as running until `scrollend` (or SMOOTH_FOR_MS). A
+ * later instant scroll does not end it in Chromium: it carries on from wherever that scroll put the area, and
+ * `keepRevealed` must not take that move for the owner's.
+ */
+export function scrollSmoothly(area: HTMLElement, top: number) {
+  // Its own mark: the end of an earlier scroll must not clear a later one.
+  const run = { area }
+  smoothScroll = run
+  const done = () => {
+    clearTimeout(timer)
+    area.removeEventListener("scrollend", done)
+    if (smoothScroll === run) smoothScroll = null
+  }
+  area.addEventListener("scrollend", done)
+  const timer = setTimeout(done, SMOOTH_FOR_MS)
+  area.scrollTo({ top, behavior: "smooth" })
 }
 
 /** How long a restore waits for a section's content to arrive (a list read again after its cache went). */
@@ -434,7 +459,6 @@ function reveal(
   page: HTMLElement | null,
   content: HTMLElement | null,
   picker: HTMLElement | null,
-  always = false,
 ) {
   if (!page || !content) return
   const area = scrollArea(page, content)
@@ -454,10 +478,7 @@ function reveal(
       bottom = Math.min(bottom, over.top - 8)
   }
   const by = box.top < top ? box.top - top : end > bottom ? Math.min(end - bottom, box.top - top) : 0
-  // An instant scroll: it also ends a smooth scroll still running from the last section change, which would otherwise
-  // carry on from where it was and leave the field short of where this puts it. `always` writes even when the field
-  // is in view, only to end that smooth scroll.
-  if (by !== 0 || always) area.scrollTo({ top: area.scrollTop + by, behavior: "instant" })
+  if (by !== 0) area.scrollTo({ top: area.scrollTop + by, behavior: "instant" })
 }
 
 /** How long a refused field is held in view while the page settles after its section opens. */
@@ -465,11 +486,11 @@ export const REVEAL_FOR_MS = 400
 
 /**
  * Brings a refused field and its note into view (`reveal`), then keeps them there for REVEAL_FOR_MS: on a phone a
- * smooth scroll from the last section change may still be running, and the refusal's toast mounts after the field
- * took the focus, over the save bar. Each frame checks again; it stops once the field loses the focus, or the owner
- * scrolls, touches, clicks or presses a key. A scroll it saw no input for (a scroll bar dragged off the main thread,
- * assistive technology) stops it too, as it stops `restoreScroll`: before each write the areas must sit where the
- * last write left them, unless the content grew. The first write always runs, to end a smooth scroll still running.
+ * smooth scroll from the last section change may still be running (`scrollSmoothly`), and the refusal's toast mounts
+ * after the field took the focus, over the save bar. Each frame checks again; it stops once the field loses the focus,
+ * or the owner scrolls, touches, clicks or presses a key. A scroll it saw no input for (a scroll bar dragged off the
+ * main thread, assistive technology) stops it too, as it stops `restoreScroll`: before each write the areas must sit
+ * where the last write left them, unless the content grew or that smooth scroll is still running.
  */
 export function keepRevealed(
   target: HTMLElement,
@@ -496,9 +517,9 @@ export function keepRevealed(
     if (wrote) {
       const moved = Math.abs(page.scrollTop - wrote.page) > 1 || Math.abs(content.scrollTop - wrote.content) > 1
       const grew = page.scrollHeight > wrote.pageHeight || content.scrollHeight > wrote.contentHeight
-      if (moved && !grew) return stop()
+      if (moved && !grew && smoothScroll === null) return stop()
     }
-    reveal(target, page, content, picker, wrote === null)
+    reveal(target, page, content, picker)
     wrote = {
       page: page.scrollTop,
       content: content.scrollTop,
