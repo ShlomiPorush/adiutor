@@ -6,8 +6,9 @@ docs/private/
 .env.*
 !.env.example
 
-# Machine-local development stack
+# Machine-local development stack, and the password and keys the scripts generate for a stack
 /docker-compose-dev.yml
+stack.env
 
 # Dependencies and build output
 node_modules/

@@ -14,7 +14,7 @@ Run inside WSL with Docker; the host needs nothing else.
 
 ```bash
 cp docker/docker-compose-dev.example.yml docker-compose-dev.yml
-scripts/local.sh start    # http://127.0.0.1:8090/healthz
+scripts/local.sh start    # http://127.0.0.1:8090/healthz; generates its password and keys once
 scripts/verify.sh         # everything CI runs
 ```
 

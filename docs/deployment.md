@@ -135,16 +135,13 @@ Every agent and the reconciler get their own key through `mikud connect`, a comm
 
 The dry run runs on the development stack on your PC with real data. Move its data once, after you approved the dry run (requirements section 9). Production must not run before step 5: the migrations would create empty tables that the restore cannot overwrite.
 
-**Real settings for the dry run.** `docker/dev.env` holds only fake values. Put the real ones in `.env.dev` at the root of the Mikud checkout in WSL; git ignores it, and the development stack reads it after `docker/dev.env`, so its values win:
+**Keys of the development stack.** `scripts/local.sh up` or `start` generates the database password and the keys once into `stack.env` in the stack's data directory (default `~/.local/share/mikud-dev/stack.env`, mode 0600), before PostgreSQL first starts, and never rewrites it. Keep that file with the database: without it the stack refuses to start, because new keys would not open the database. `nuke` deletes both. Keys that an older `.env.dev` already sets keep winning over `stack.env`; leave them there, or move them by hand as whole values with every version listed. Interrupted on its very first start (before any data), a stack can be started over with `nuke` and `start`.
 
-```text
-MIKUD_AUTH_SECRETS=1:<openssl rand -hex 32>
-MIKUD_SETTINGS_KEYS=1:<openssl rand -hex 32>
-```
+**Optional overrides in `.env.dev`.** `docker/dev.env.example` lists them. Without a `.env.dev` at the root of the Mikud checkout in WSL, copy the example there (git ignores it) and restrict it (`chmod 600 .env.dev`). When `.env.dev` exists, never copy over it: add only the lines you need, because keys it holds may be the ones your data is encrypted with. Then enter the Telegram bot token and chat id in Settings, Telegram, and connect the agents with `mikud connect` (section 6).
 
-Then enter the Telegram bot token and chat id in Settings, Telegram, and connect the agents with `mikud connect` (section 6).
+**A reverse proxy in front of the development stack.** Set `MIKUD_PUBLIC_URL` in `.env.dev` to the URL the browser opens through the proxy, and `MIKUD_BIND` to an address that only the proxy reaches (the default `127.0.0.1` suits a proxy on the same machine). Never bind to an address other machines reach without a firewall rule that admits the proxy alone, or requests can bypass the proxy's restrictions; check from another machine that a direct request to the port is refused. Set `MIKUD_TRUSTED_PROXIES` only when the proxy replaces the `X-Forwarded-For` header clients send (section 3).
 
-Restrict it (`chmod 600 .env.dev`). A `docker-compose-dev.yml` copied before this change does not read `.env.dev`: copy `docker/docker-compose-dev.example.yml` again, then `scripts/local.sh up`. `scripts/verify.sh` and `scripts/try-pr.sh` never read `.env.dev`. To check the bot without waiting for 08:00, use Settings, "Send a test morning message": it sends today's message now and does not change the 08:00 send.
+A `docker-compose-dev.yml` copied before these changes is refused: copy `docker/docker-compose-dev.example.yml` again, then `scripts/local.sh start`. `scripts/verify.sh` and `scripts/try-pr.sh` never read `.env.dev`. To check the bot without waiting for 08:00, use Settings, "Send a test morning message": it sends today's message now and does not change the 08:00 send.
 
 1. Pause the reconciler's T3 scheduled task.
 2. Stop the local application, and keep its database running. The local stack is the only consumer of the Telegram bot; two consumers would take each other's updates. In the Mikud checkout in WSL:

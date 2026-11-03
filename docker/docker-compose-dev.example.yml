@@ -2,23 +2,29 @@
 # and use it only through scripts/local.sh. scripts/verify.sh uses this tracked file directly.
 # Relative paths resolve against the repository root (the scripts pass --project-directory).
 # Images are built by the scripts; nothing is built here.
+#
+# The database password and the keys are generated on this machine into <data dir>/stack.env (0600) by the
+# scripts; the repository holds none. The developer's optional .env.dev at the repository root (ignored by git)
+# is read after it, and Compose interpolates from it too: MIKUD_BIND, MIKUD_PORT and MIKUD_PUBLIC_URL for a
+# reverse proxy, the Telegram settings for a dry run (docker/dev.env.example lists them). scripts/verify.sh
+# passes neither .env.dev nor the developer's environment: its values are fixed and its keys new on every run.
 
 services:
   mikud:
     image: mikud:${MIKUD_IMAGE_TAG:-dev}
-    # docker/dev.env holds fake values. An optional .env.dev at the repository root (ignored by git) is read
-    # after it, so real tokens and the Telegram settings for a dry run stay out of git. scripts/verify.sh
-    # sets MIKUD_LOCAL_ENV_FILE=/dev/null, so it never reads .env.dev; try-pr does not use this file.
     env_file:
-      - path: docker/dev.env
-      - path: ${MIKUD_LOCAL_ENV_FILE:-.env.dev}
+      - path: ${MIKUD_STACK_ENV_FILE:?set by the scripts}
+      - path: ${MIKUD_LOCAL_ENV_FILE:?set by the scripts}
         required: false
+    environment:
+      MIKUD_PUBLIC_URL: ${MIKUD_PUBLIC_URL:-http://127.0.0.1:${MIKUD_PORT:-8090}}
     depends_on:
       postgres:
         condition: service_healthy
-    # Loopback only. scripts/verify.sh sets MIKUD_PORT=0 for a free port.
+    # Loopback unless MIKUD_BIND names another address (one only the reverse proxy reaches).
+    # scripts/verify.sh sets MIKUD_PORT=0 for a free port.
     ports:
-      - "127.0.0.1:${MIKUD_PORT:-8090}:8080"
+      - "${MIKUD_BIND:-127.0.0.1}:${MIKUD_PORT:-8090}:8080"
     read_only: true
     tmpfs:
       - /tmp
@@ -29,7 +35,8 @@ services:
 
   postgres:
     image: postgres:18.6-bookworm
-    env_file: docker/dev.env
+    env_file:
+      - path: ${MIKUD_STACK_ENV_FILE:?set by the scripts}
     volumes:
       # PostgreSQL 18 keeps its data in a versioned directory under /var/lib/postgresql.
       - ${MIKUD_DATA_DIR:?MIKUD_DATA_DIR is set by the scripts}/postgres:/var/lib/postgresql

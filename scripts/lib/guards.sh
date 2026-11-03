@@ -68,6 +68,30 @@ if [ -n "$ips" ]; then
   fail=1
 fi
 
+echo "--- Environment files only as examples, with no secret values"
+# The repository holds no value a stack runs on, not even a "fake" or "dev-only" one: stacks generate theirs.
+env_examples=()
+for file in "${files[@]}"; do
+  case "${file##*/}" in
+    .env.example | *.env.example) env_examples+=("$file") ;;
+    *.example) ;;
+    .env | .env.* | *.env)
+      echo "  $file: an environment file; keep only an example (<name>.example) with empty values"
+      fail=1
+      ;;
+  esac
+done
+if [ ${#env_examples[@]} -gt 0 ]; then
+  secret_values="$(search -E \
+    '^[[:space:]]*(export[[:space:]]+)?(DATABASE_URL|POSTGRES_PASSWORD|[A-Z0-9_]*_(SECRET|SECRETS|KEYS|TOKEN))[[:space:]]*=[[:space:]]*[^[:space:]#]' \
+    -- "${env_examples[@]}")"
+  if [ -n "$secret_values" ]; then
+    echo "Example environment files must leave secrets and connection strings empty:"
+    report "a value" <<<"$secret_values"
+    fail=1
+  fi
+fi
+
 echo "--- No build: in the Compose files"
 compose_files=(docker-compose.yml docker/docker-compose-dev.example.yml)
 [ -f docker-compose-dev.yml ] && compose_files+=(docker-compose-dev.yml)
