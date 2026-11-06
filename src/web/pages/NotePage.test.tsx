@@ -25,6 +25,8 @@ import { NotePage } from "./NotePage.tsx"
 const NOTE_ID = "3e1f0a2b-4c5d-4e6f-8a9b-0c1d2e3f4a5b"
 let note: Note
 let requests: { method: string; path: string; body: unknown }[]
+/** When set, a PATCH waits for it: a save that is still on its way. */
+let hold: Promise<void> | null = null
 
 function freshNote(): Note {
   return {
@@ -55,6 +57,7 @@ async function server(request: TransportRequest): Promise<TransportResponse> {
     return { status: 200, body: { data: { note, project: null } } }
   if (path.startsWith(`/notes/${NOTE_ID}/versions`)) return { status: 200, body: { data: [], nextCursor: null } }
   if (path === `/notes/${NOTE_ID}` && request.method === "PATCH") {
+    if (hold) await hold
     const body = request.body as { version: number; body?: string }
     if (body.version !== note.version)
       return {
@@ -148,6 +151,7 @@ beforeEach(() => {
   ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = StandInObserver
   note = freshNote()
   requests = []
+  hold = null
   setTransport(server)
 })
 afterEach(() => {
@@ -181,6 +185,23 @@ describe("the note page", () => {
     )
     expect(note).toMatchObject({ version: 3, body: "Water the ferns on Sunday and Wednesday." })
     expect(document.querySelector(".ui-savebar")).toBeNull()
+  })
+
+  it("keeps the fields read only while a save is on its way, so nothing typed then is lost (R4)", async () => {
+    await render()
+    await click(button("Write"))
+    await type(textarea() as HTMLTextAreaElement, "Saved text")
+    let release!: () => void
+    hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await click(button("Save changes"))
+    expect(textarea()?.readOnly).toBe(true)
+    await act(async () => release())
+    await settle()
+    expect(textarea()?.readOnly).toBe(false)
+    expect(textarea()?.value).toBe("Saved text")
+    expect(note.body).toBe("Saved text")
   })
 
   it("drops the draft on Reload after a conflict and shows the agent's text", async () => {

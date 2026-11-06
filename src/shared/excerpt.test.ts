@@ -16,3 +16,18 @@ describe("plainExcerpt", () => {
     expect(plainExcerpt("Set IMPORT_RETRIES to 3")).toBe("Set IMPORT_RETRIES to 3")
   })
 })
+
+describe("plainExcerpt on hostile bodies (R5)", () => {
+  it("stays fast on the longest bodies of spaces, brackets and dashes", () => {
+    for (const body of [
+      `${" ".repeat(99_999)}x`,
+      "[".repeat(100_000),
+      `| ${"-".repeat(99_990)} |`,
+      `${"#".repeat(50_000)} ${"(".repeat(49_000)}`,
+    ]) {
+      const started = performance.now()
+      plainExcerpt(body)
+      expect(performance.now() - started).toBeLessThan(50)
+    }
+  })
+})

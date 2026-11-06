@@ -6,7 +6,8 @@
 // text and Preview the rendered Markdown. A draft keeps the version the typing started on (draft.ts): a change
 // an agent saved meanwhile answers version_conflict, the draft stays, and the page says so (Reload, or save
 // again over it knowingly: the agent's text stays a version that can be restored). A background refresh never
-// replaces what is typed (SV-6).
+// replaces what is typed (SV-6). While a save is on its way the fields are read only, so nothing typed then is
+// dropped with the saved draft (result review R4).
 //
 // The versions list under the note opens any version in a dialog with its rendered text; Restore makes it the
 // newest version (the server keeps the current one), so it acts at once and offers Undo (FB-16). Delete asks
@@ -302,6 +303,7 @@ function NoteEditor({ noteId }: { noteId: string | null }) {
                   className="ui-input"
                   dir="auto"
                   maxLength={LIMITS.noteTitle}
+                  readOnly={busy}
                   value={shown.title}
                   onChange={(event) => {
                     startDraft()
@@ -314,6 +316,7 @@ function NoteEditor({ noteId }: { noteId: string | null }) {
                 <Picker
                   variant="field"
                   labelledBy="note-project-label"
+                  disabled={busy}
                   label={t("notes.project")}
                   value={shown.projectId}
                   options={projectOptions}
@@ -342,6 +345,7 @@ function NoteEditor({ noteId }: { noteId: string | null }) {
                   className="ui-textarea ui-note-body"
                   dir="auto"
                   maxLength={LIMITS.noteBody}
+                  readOnly={busy}
                   placeholder={t("notes.bodyPlaceholder")}
                   value={shown.body}
                   onChange={(event) => {
