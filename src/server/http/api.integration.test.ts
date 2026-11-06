@@ -457,7 +457,7 @@ describe("notes", () => {
   it("pages by title through notes with the longest titles in Hebrew (R1)", async () => {
     // Built from code points: Hebrew may only appear literally in the Hebrew locale file.
     for (const letter of [0x5d0, 0x5d1]) {
-      const title = String.fromCodePoint(letter).repeat(299) + '"'
+      const title = `${String.fromCodePoint(letter).repeat(299)}"`
       await call("/notes", { method: "POST", token: AGENT, body: { title } })
     }
     const first = await call("/notes?sort=title&limit=1", { token: AGENT })
