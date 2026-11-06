@@ -109,7 +109,10 @@ export async function createNote(ctx: Ctx, by: By, input: CreateNoteInput): Prom
 
 export type NotePatch = { title?: string; body?: string; projectId?: string | null }
 
-/** Writes the next version of a locked note. Returns the note unchanged when nothing differs. */
+/**
+ * Writes the next version of a locked note. An edit that changes nothing returns the note as it is; a restore
+ * always writes its version, so the owner's restore is on record even when the text is already the same.
+ */
 async function writeNext(
   ctx: Ctx,
   tx: Tx,
@@ -119,7 +122,8 @@ async function writeNext(
   action: "note.update" | "note.restore",
   restoredFrom: number | null,
 ): Promise<NoteRow> {
-  if (next.title === before.title && next.body === before.body && next.projectId === before.projectId) return before
+  const same = next.title === before.title && next.body === before.body && next.projectId === before.projectId
+  if (same && action === "note.update") return before
   if (next.projectId && next.projectId !== before.projectId) await holdProject(tx, next.projectId)
   const [row] = await tx
     .update(notes)

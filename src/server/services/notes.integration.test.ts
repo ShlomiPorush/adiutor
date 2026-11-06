@@ -159,6 +159,16 @@ describe("restoring and deleting", () => {
     expect((await getNoteRow(t.ctx.db, note.id)).body).toBe("First")
   })
 
+  it("records a restore even when the text is already the same (R2)", async () => {
+    const note = await createNote(t.ctx, owner, { title: "Plan", body: "A" })
+    await updateNote(t.ctx, owner, note.id, 1, { body: "B" })
+    await updateNote(t.ctx, agent, note.id, 2, { body: "A" })
+    const restored = await restoreNote(t.ctx, owner, note.id, { expectedVersion: 3, fromVersion: 1 })
+    expect(restored).toMatchObject({ version: 4, body: "A", updatedBy: "owner" })
+    expect((await versionsOf(note.id)).at(-1)).toMatchObject({ version: 4, restoredFrom: 1, authorKind: "owner" })
+    expect((await auditRows(note.id)).at(-1)).toMatchObject({ action: "note.restore", actorKind: "owner" })
+  })
+
   it("lets one of a parallel restore and edit win", async () => {
     const note = await createNote(t.ctx, owner, { title: "Plan", body: "First" })
     await updateNote(t.ctx, owner, note.id, 1, { body: "Second" })
