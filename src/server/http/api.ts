@@ -9,6 +9,7 @@ import {
   createNoteBody,
   createProjectBody,
   decideProposalBody,
+  LIMITS,
   linkThreadBody,
   morningQuery,
   proposeStageBody,
@@ -137,7 +138,7 @@ const findNotesQuery = z.object({
   general: bool.optional(),
   createdBy: actorKindSchema.optional(),
   sort: z.enum(NOTE_SORTS).optional(),
-  cursor: z.string().max(500).optional(),
+  cursor: z.string().max(LIMITS.noteCursor).optional(),
   limit,
 })
 const pageQuery = z.object({ cursor: z.string().max(500).optional(), limit })

@@ -159,7 +159,7 @@ export function buildMcpServer(ctx: Ctx, by: By, version: string): McpServer {
       general: z.boolean().optional(),
       createdBy: actorKindSchema.optional(),
       sort: z.enum(NOTE_SORTS).optional(),
-      cursor: z.string().max(500).optional(),
+      cursor: z.string().max(LIMITS.noteCursor).optional(),
       limit: z.number().int().min(1).max(200).optional(),
     },
     true,

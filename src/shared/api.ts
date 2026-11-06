@@ -32,6 +32,8 @@ export const LIMITS = {
   reason: 2_000,
   noteTitle: 300,
   noteBody: 100_000,
+  /** A notes cursor holds a title of up to 300 characters, as JSON in base64url: room for any title. */
+  noteCursor: 4_000,
 } as const
 
 export const createItemBody = z.object({

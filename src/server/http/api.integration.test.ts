@@ -454,6 +454,20 @@ describe("notes", () => {
     expect([other.status, other.json.error.code]).toEqual([400, "validation_failed"])
   })
 
+  it("pages by title through notes with the longest titles in Hebrew (R1)", async () => {
+    // Built from code points: Hebrew may only appear literally in the Hebrew locale file.
+    for (const letter of [0x5d0, 0x5d1]) {
+      const title = String.fromCodePoint(letter).repeat(299) + '"'
+      await call("/notes", { method: "POST", token: AGENT, body: { title } })
+    }
+    const first = await call("/notes?sort=title&limit=1", { token: AGENT })
+    expect(first.json.nextCursor.length).toBeGreaterThan(500)
+    const second = await call(`/notes?sort=title&limit=1&cursor=${first.json.nextCursor}`, { token: AGENT })
+    expect(second.status).toBe(200)
+    expect(second.json.data).toHaveLength(1)
+    expect(second.json.data[0].id).not.toBe(first.json.data[0].id)
+  })
+
   it("refuses a project delete while the project has notes", async () => {
     const project = await call("/projects", { method: "POST", owner: true, body: { name: "Harbor" } })
     await call("/notes", { method: "POST", token: AGENT, body: { title: "Harbor", projectId: project.json.data.id } })
