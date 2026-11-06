@@ -28,7 +28,7 @@ test("writes a new note and saves it to an address of its own", async () => {
   await page.waitForLoadState("networkidle")
   await page.getByRole("link", { name: he.notes.new }).first().click()
   await expect(page).toHaveURL(/\/notes\/new$/)
-  await page.locator("#note-title").fill(`Greenhouse vents ${run}`)
+  await page.locator("#note-title-field").fill(`Greenhouse vents ${run}`)
   await page.locator("#note-body").fill("# Vents\n\nOpen the **north** vents above 24 degrees.")
   await expect(saveBar()).toBeVisible()
   await saveBar().getByRole("button", { name: he.savebar.save }).click()

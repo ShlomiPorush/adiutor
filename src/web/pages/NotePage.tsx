@@ -109,7 +109,7 @@ function NoteEditor({ noteId }: { noteId: string | null }) {
   const save = async () => {
     if (!shown.title.trim()) {
       showToast(t("notes.titleRequired"), "error")
-      document.getElementById("note-title")?.focus()
+      document.getElementById("note-title-field")?.focus()
       return
     }
     setBusy(true)
@@ -299,7 +299,7 @@ function NoteEditor({ noteId }: { noteId: string | null }) {
               <label className="ui-field">
                 <span>{t("notes.titleLabel")}</span>
                 <input
-                  id="note-title"
+                  id="note-title-field"
                   className="ui-input"
                   dir="auto"
                   maxLength={LIMITS.noteTitle}
