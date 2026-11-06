@@ -9,6 +9,7 @@ import QRCode from "qrcode"
 import { type FormEvent, useEffect, useId, useState } from "react"
 import { Navigate, useNavigate, useSearchParams } from "react-router"
 import {
+  authenticatorUri,
   ownerEmail,
   PASSWORD_MAX,
   PASSWORD_MIN,
@@ -259,7 +260,8 @@ export function TotpStep({
         return
       }
       setPassword("")
-      setUri(data.totpURI)
+      // The QR code names the account after the username, not the synthetic e-mail (authenticatorUri).
+      setUri(authenticatorUri(data.totpURI))
       setBackupCodes(data.backupCodes)
     } catch {
       setError(t("auth.error.network"))

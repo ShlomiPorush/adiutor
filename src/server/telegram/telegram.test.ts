@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest"
+import { testBotToken } from "../testing/secrets.ts"
 import { BotApi, type FetchLike, TelegramError } from "./api.ts"
 import { classifyUpdate } from "./bot.ts"
 import { fill, html, oneLine } from "./html.ts"
 
-// A fake token assembled at run time: the guards and push protection scan literal text.
-const TOKEN = `${"1234567"}:${"AAH"}${"x".repeat(32)}`
+// New on every run (src/server/testing/secrets.ts).
+const TOKEN = testBotToken()
 const OWNER_CHAT = "4242"
 
 describe("Telegram HTML", () => {

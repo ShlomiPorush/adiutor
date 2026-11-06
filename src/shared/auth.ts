@@ -30,12 +30,40 @@ export const normalizeUsername = (username: string) => username.toLowerCase()
 
 export const passwordSchema = z.string().min(PASSWORD_MIN).max(PASSWORD_MAX)
 
+const OWNER_EMAIL_DOMAIN = "@mikud.local"
+
 /**
  * The synthetic e-mail Better Auth requires; Mikud never sends mail. The sign-up refuses any other. It is the
- * lowercased username at mikud.local, a valid address for every name isValidUsername allows. Better Auth's two-factor
- * plugin names the authenticator app entry after it: `Mikud:<username>@mikud.local`.
+ * lowercased username at mikud.local, a valid address for every name isValidUsername allows.
  */
-export const ownerEmail = (username: string) => `${username.toLowerCase()}@mikud.local`
+export const ownerEmail = (username: string) => `${username.toLowerCase()}${OWNER_EMAIL_DOMAIN}`
+
+const TOTP_URI_PREFIX = "otpauth://totp/"
+
+/**
+ * The authenticator link the setup page draws as a QR code, with the username as the account name. Better Auth's
+ * two-factor plugin names the account after the e-mail (`Mikud:<username>@mikud.local`) and has no option for it, so
+ * the page drops the synthetic domain from the label (owner's decision, 2026-11-03). Only the label changes: the
+ * query (secret, issuer, digits, period) stays exactly as Better Auth wrote it. Any other shape comes back unchanged.
+ */
+export function authenticatorUri(uri: string): string {
+  if (!uri.startsWith(TOTP_URI_PREFIX)) return uri
+  const queryAt = uri.indexOf("?")
+  const label = uri.slice(TOTP_URI_PREFIX.length, queryAt === -1 ? undefined : queryAt)
+  const query = queryAt === -1 ? "" : uri.slice(queryAt)
+  // Better Auth encodes the issuer and the account each with encodeURIComponent, so the first raw colon parts them.
+  const colon = label.indexOf(":")
+  if (colon === -1) return uri
+  let account: string
+  try {
+    account = decodeURIComponent(label.slice(colon + 1))
+  } catch {
+    return uri
+  }
+  if (!account.endsWith(OWNER_EMAIL_DOMAIN) || account.length === OWNER_EMAIL_DOMAIN.length) return uri
+  const username = account.slice(0, -OWNER_EMAIL_DOMAIN.length)
+  return `${TOTP_URI_PREFIX}${label.slice(0, colon)}:${encodeURIComponent(username)}${query}`
+}
 
 // --- Sign out after this long without Mikud open (Settings): Better Auth's sliding session.expiresIn ---
 

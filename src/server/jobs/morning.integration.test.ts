@@ -10,10 +10,11 @@ import { createProject } from "../services/projects.ts"
 import { BotApi } from "../telegram/api.ts"
 import { StandInBotApi } from "../testing/bot-api.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
+import { testBotToken } from "../testing/secrets.ts"
 import { MorningJob, recoverInterrupted } from "./morning.ts"
 
-// Assembled at run time: the guards and push protection scan literal text.
-const TOKEN = `${"7654321"}:${"AAG"}${"m".repeat(33)}`
+// New on every run (src/server/testing/secrets.ts).
+const TOKEN = testBotToken()
 const CHAT = "4242"
 const PUBLIC_URL = new URL("http://127.0.0.1:8090")
 const HOUR = 60 * 60 * 1000

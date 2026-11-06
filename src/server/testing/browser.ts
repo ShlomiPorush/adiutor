@@ -1,4 +1,5 @@
 import { ownerEmail } from "../../shared/auth.ts"
+import { testPassword } from "./secrets.ts"
 import { secretOf, totp } from "./totp.ts"
 
 // A browser for HTTP integration tests: a cookie jar, the Origin and X-Mikud-Request headers of the Mikud page,
@@ -7,7 +8,8 @@ import { secretOf, totp } from "./totp.ts"
 
 export const TEST_ORIGIN = "http://127.0.0.1:8090"
 export const TEST_USERNAME = "Owner.Name"
-export const TEST_PASSWORD = "correct horse battery staple"
+/** New for every test process (one per test file). */
+export const TEST_PASSWORD = testPassword()
 
 type Fetch = (request: Request) => Response | Promise<Response>
 // biome-ignore lint/suspicious/noExplicitAny: tests read each answer as the shape they expect

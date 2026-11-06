@@ -3,7 +3,7 @@ import { inspect } from "node:util"
 import { type ServerType, serve } from "@hono/node-server"
 import { count, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { ownerEmail } from "../../shared/auth.ts"
+import { authenticatorUri, ownerEmail } from "../../shared/auth.ts"
 import { createApp } from "../app.ts"
 import { TWO_FACTOR_CHALLENGE_S } from "../auth/auth.ts"
 import { resetOwnerPassword } from "../auth/recovery.ts"
@@ -13,12 +13,15 @@ import { TEST_AUTH_SECRET, type TestCore, type TestCoreOptions, testAuthBase, te
 import { StandInBotApi, waitFor } from "../testing/bot-api.ts"
 import { TEST_ORIGIN, TEST_PASSWORD, TEST_USERNAME, TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
+import { testBotToken, testPassword, testSecret } from "../testing/secrets.ts"
 import { totp, wrongTotp } from "../testing/totp.ts"
 
 // Better Auth as Mikud configures it (src/server/auth/auth.ts), over HTTP through the app: its own routes, the
 // documented hooks, and the gaps the owner accepted (G1 to G18 in docs/project-foundation.md, "Security design").
 
 const DAY = 86_400_000
+/** The password a change sets, shared by the change and the sign-in after it. */
+const NEW_PASSWORD = testPassword()
 const HOUR = 3_600_000
 
 let t: TestDatabase
@@ -121,6 +124,8 @@ describe("first run: Better Auth's sign-up", () => {
       const label = decodeURIComponent(uri.slice("otpauth://totp/".length, uri.indexOf("?")))
       expect(label).toContain(email)
       expect(label).not.toMatch(/u-[0-9a-f]+@/)
+      // The setup page draws it with the username as the account name and Better Auth's query as it is.
+      expect(authenticatorUri(uri)).toBe(`otpauth://totp/Mikud:${name.toLowerCase()}${uri.slice(uri.indexOf("?"))}`)
       const secret = new URL(uri).searchParams.get("secret") ?? ""
       expect((await b.verify(totp(secret))).status).toBe(200)
       const again = browser()
@@ -403,7 +408,7 @@ describe("trustDevice is refused on every route whose body accepts it", () => {
   describe("with sign-in codes sent to Telegram (the owner's choice)", () => {
     let botApi: StandInBotApi
     beforeEach(async () => {
-      botApi = await StandInBotApi.start(`${"123456"}:${"A".repeat(35)}`)
+      botApi = await StandInBotApi.start(testBotToken())
       build({ telegramApiUrl: botApi.url })
     })
     afterEach(async () => {
@@ -414,9 +419,8 @@ describe("trustDevice is refused on every route whose body accepts it", () => {
     async function withOtpOn() {
       const b = browser()
       await b.owner()
-      const token = `${"123456"}:${"A".repeat(35)}`
       const saved = await b.call("PATCH", "/api/v1/settings", {
-        body: { telegramBotToken: token, telegramChatId: "4242", otpViaTelegram: true },
+        body: { telegramBotToken: botApi.token, telegramChatId: "4242", otpViaTelegram: true },
       })
       expect(saved.status).toBe(200)
       expect(core.auth.settings.otpViaTelegram).toBe(true)
@@ -540,13 +544,13 @@ describe("password, sessions and sign-out on Better Auth's routes", () => {
     const b = browser()
     await b.signIn(secret)
     const changed = await a.call("POST", "/api/auth/change-password", {
-      body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new password", revokeOtherSessions: true },
+      body: { currentPassword: TEST_PASSWORD, newPassword: NEW_PASSWORD, revokeOtherSessions: true },
     })
     expect(changed.status).toBe(200)
     expect((await v1(a)).status).toBe(200)
     expect((await v1(b)).status).toBe(401)
     expect((await browser().passwordSignIn(TEST_USERNAME, TEST_PASSWORD)).status).toBe(401)
-    expect((await browser().passwordSignIn(TEST_USERNAME, "a brand new password")).json.twoFactorRedirect).toBe(true)
+    expect((await browser().passwordSignIn(TEST_USERNAME, NEW_PASSWORD)).json.twoFactorRedirect).toBe(true)
     expect(await actions()).toContain("account.password_change")
   })
 
@@ -558,7 +562,7 @@ describe("password, sessions and sign-out on Better Auth's routes", () => {
     )
     try {
       const failed = await a.call("POST", "/api/auth/change-password", {
-        body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new password", revokeOtherSessions: true },
+        body: { currentPassword: TEST_PASSWORD, newPassword: NEW_PASSWORD, revokeOtherSessions: true },
       })
       expect(failed.status).toBe(500)
     } finally {
@@ -612,7 +616,7 @@ describe("audit rows from the documented hooks, and their refusals", () => {
 
     await refuseAudit("account.password_change")
     const password = await b.call("POST", "/api/auth/change-password", {
-      body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new password" },
+      body: { currentPassword: TEST_PASSWORD, newPassword: NEW_PASSWORD },
     })
     expect(password.status).toBe(500)
     expect((await browser().passwordSignIn()).json.twoFactorRedirect).toBe(true)
@@ -652,7 +656,7 @@ describe("audit rows from the documented hooks, and their refusals", () => {
     )
     try {
       await b.call("POST", "/api/auth/change-password", {
-        body: { currentPassword: TEST_PASSWORD, newPassword: "a brand new password", revokeOtherSessions: true },
+        body: { currentPassword: TEST_PASSWORD, newPassword: NEW_PASSWORD, revokeOtherSessions: true },
       })
     } finally {
       await t.ctx.db.execute(sql.raw("alter table auth_session drop constraint test_no_session"))
@@ -902,7 +906,7 @@ describe("recovery: the CLI runs Better Auth's documented reset", () => {
 describe("secrets and logging", () => {
   it("still verifies TOTP after rotating to 2:new,1:old", async () => {
     const secret = await browser().owner()
-    const rotated = ["new", "auth", "secret", "for", "tests", "only", "0000000"].join("-")
+    const rotated = testSecret()
     build({
       auth: {
         secrets: [
@@ -940,7 +944,7 @@ describe("secrets and logging", () => {
     }
     const logged = lines.join("\n")
     expect(logged).toContain('"sqlstate":"23514"')
-    expect(logged).not.toMatch(/insert into|params|owner\.name|correct horse/i)
+    expect(logged).not.toMatch(/insert into|params|owner\.name/i)
     expect(inspect(logged)).not.toContain(TEST_PASSWORD)
   })
 })

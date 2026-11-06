@@ -1,3 +1,4 @@
+import { randomBytes, randomInt } from "node:crypto"
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -32,11 +33,14 @@ import { parseEnvFile } from "./env.ts"
 import type { Runner, RunResult } from "./exec.ts"
 
 // `connect` against a stand-in Mikud: the device flow's answers, the key, and the end of the temporary session.
-// Secrets are assembled at run time: the guards scan literal text.
+// The session, the device code and the key are new on every run: nothing in the repository works as one.
 
 const URL_BASE = "https://mikud.example.com"
-const SESSION = ["session", "token", "for", "tests", "0123456789"].join("-")
-const KEY = ["mkd", "KeyForTestsOnly0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"].join("_")
+const SESSION = randomBytes(32).toString("base64url")
+const DEVICE_CODE = randomBytes(32).toString("base64url")
+const LETTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+/** Like Better Auth's api-key plugin makes them: mkd_ and 64 letters. */
+const KEY = `mkd_${Array.from({ length: 64 }, () => LETTERS[randomInt(LETTERS.length)]).join("")}`
 const temps: string[] = []
 
 afterEach(() => {
@@ -74,7 +78,7 @@ function standIn(options: { polls?: Reply[]; create?: Reply; revoke?: Reply | "n
       return json({
         status: 200,
         body: {
-          device_code: "device-code-for-tests",
+          device_code: DEVICE_CODE,
           user_code: "ABCDEFGH",
           verification_uri: `${URL_BASE}/connect/device`,
           verification_uri_complete: `${URL_BASE}/connect/device?user_code=ABCDEFGH`,

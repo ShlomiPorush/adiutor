@@ -1,6 +1,6 @@
 // RFC 6238 codes for the end-to-end tests, from the self-written implementation the server tests use too.
 import { totp } from "../src/server/testing/totp.ts"
-import { loadState, saveState } from "./helpers.ts"
+import { loadState, saveState } from "./state.ts"
 
 export { totp }
 

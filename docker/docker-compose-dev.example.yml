@@ -5,7 +5,7 @@
 #
 # The database password and the keys are generated on this machine into <data dir>/stack.env (0600) by the
 # scripts; the repository holds none. The developer's optional .env.dev at the repository root (ignored by git)
-# is read after it, and Compose interpolates from it too: MIKUD_BIND, MIKUD_PORT and MIKUD_PUBLIC_URL for a
+# is read after it, and Compose interpolates from it too: MIKUD_PORT and MIKUD_PUBLIC_URL for a
 # reverse proxy, the Telegram settings for a dry run (docker/dev.env.example lists them). scripts/verify.sh
 # passes neither .env.dev nor the developer's environment: its values are fixed and its keys new on every run.
 
@@ -21,10 +21,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # Loopback unless MIKUD_BIND names another address (one only the reverse proxy reaches).
-    # scripts/verify.sh sets MIKUD_PORT=0 for a free port.
+    # Published on every interface, for a reverse proxy. scripts/verify.sh sets MIKUD_PORT=0 for a free port.
     ports:
-      - "${MIKUD_BIND:-127.0.0.1}:${MIKUD_PORT:-8090}:8080"
+      - "${MIKUD_PORT:-8090}:8080"
     read_only: true
     tmpfs:
       - /tmp
