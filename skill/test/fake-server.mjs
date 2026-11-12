@@ -201,7 +201,8 @@ export async function startFakeServer() {
         body,
         writes: s.writes.length,
       }
-      if (req.method === "GET" && url.pathname === "/api/v1/notes") return send(200, { data: echo, nextCursor: "page-2" })
+      if (req.method === "GET" && url.pathname === "/api/v1/notes")
+        return send(200, { data: echo, nextCursor: "page-2" })
       return send(write ? 201 : 200, { data: echo })
     }
     send(404, { error: { code: "not_found", message: "No such route." } })

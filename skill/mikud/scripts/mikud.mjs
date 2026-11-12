@@ -907,7 +907,7 @@ function unknownFail(warnings, pend) {
  * of a redeem): it is removed with what it may have left.
  */
 function settle(ctx, conn, pend) {
-  if (!pend || pend.phase !== "creating_key") return { pend, warnings: [] }
+  if (pend?.phase !== "creating_key") return { pend, warnings: [] }
   return { pend: null, orphan: pend, warnings: removeAttempt(ctx, pend, conn) }
 }
 
