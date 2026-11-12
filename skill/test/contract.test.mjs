@@ -247,7 +247,9 @@ for (const impl of impls) {
     })
 
     // Started from PowerShell 7, a child Windows PowerShell inherits PS7's module path and cannot load Get-Acl.
-    it("connects when started from PowerShell 7 (its PSModulePath inherited)", { skip: !win && "Windows only" }, async () => {
+    it("connects when started from PowerShell 7 (its PSModulePath inherited)", {
+      skip: !win && "Windows only",
+    }, async () => {
       const pwshModules = [
         path.join(os.homedir(), "Documents", "PowerShell", "Modules"),
         "C:\\Program Files\\PowerShell\\Modules",
