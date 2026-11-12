@@ -86,7 +86,7 @@ $ConnectionFields = @(@('v', 'n'), @('origin', 's'), @('key', 's'), @('keyName',
 $PendingFields = @(
   @('v', 'n'), @('attemptId', 's'), @('origin', 's'), @('deviceCode', 's'), @('userCode', 's'), @('link', 's'),
   @('interval', 'n'), @('nextPollAt', 'n'), @('codeExpiresAt', 'n'), @('days', 'n'), @('keyName', 's'), @('phase', 's'),
-  @('pollInFlight', 'n'), @('uncertain', 'n'), @('sessionOpen', 'n'), @('keySaved', 'n')
+  @('pollInFlight', 'n'), @('uncertain', 'n'), @('sessionOpen', 'n'), @('keySaved', 'n'), @('noKey', 'n')
 )
 $LeftFields = @(@('origin', 's'), @('keyName', 's'), @('expiresAt', 's'), @('reason', 's'), @('at', 's'))
 # Reasons whose key end date came from Mikud: the entry drops by itself once that date has passed.
@@ -714,8 +714,10 @@ function Move-Over([string]$from, [string]$to) {
   }
 }
 
-# Writes a file in one step: a temporary file made private before anything is written, then renamed over.
+# Writes a file in one step: a temporary file made private before anything is written, then renamed over. Only by the
+# holder of the lock. A temporary file a stopped command left behind is removed by the next holder (Clear-Leftovers).
 function Write-Private($ctx, [string]$file, [string]$text) {
+  Assert-Mine $ctx
   [void](Protect-Home $ctx $true)
   $tmp = "$file.$(Hex 6).tmp"
   $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
@@ -742,6 +744,7 @@ function Write-Private($ctx, [string]$file, [string]$text) {
       $bytes = $Utf8.GetBytes($text)
       $fs.Write($bytes, 0, $bytes.Length)
       $fs.Flush($true)
+      Invoke-Hook 'written'
     } finally { if ($fs) { $fs.Dispose() } }
   } catch {
     Remove-Path $tmp
@@ -753,6 +756,7 @@ function Write-Private($ctx, [string]$file, [string]$text) {
 }
 
 function Remove-PrivateFile($ctx, [string]$file) {
+  Assert-Mine $ctx
   try {
     $attr = Get-LinkAttributes $file
     if ($null -eq $attr) { return }
@@ -781,22 +785,25 @@ function Read-Pending($ctx) {
 
 function Write-Connection($ctx, $rec) { Write-Private $ctx $ctx.connection ((Format-Line $ConnectionFields $rec) + "`n") }
 
-# Writes the attempt only while it is still the one this run started from.
-function Write-PendingIf($ctx, $rec, $attemptId) {
-  $current = Read-Pending $ctx
-  if ($null -ne $attemptId) {
-    $currentId = $null
-    if ($current) { $currentId = $current.attemptId }
-    if ($currentId -cne $attemptId) { throw [MikudChanged]::new() }
-  }
-  Write-Private $ctx $ctx.pending ((Format-Line $PendingFields $rec) + "`n")
-}
-
 function Copy-Rec($rec, [hashtable]$changes) {
   $next = @{}
   foreach ($k in $rec.Keys) { $next[$k] = $rec[$k] }
   if ($changes) { foreach ($k in $changes.Keys) { $next[$k] = $changes[$k] } }
   $next
+}
+
+# Two records (or two absent ones) are the same, field by field as they are stored.
+function Test-SameRec($fields, $a, $b) {
+  if ($null -eq $a -or $null -eq $b) { return ($null -eq $a) -and ($null -eq $b) }
+  (Format-Line $fields $a) -ceq (Format-Line $fields $b)
+}
+
+# Writes the attempt only while the file is exactly as this command last read or wrote it ($seen; $null: no attempt).
+# Answers what was written, the $seen of the next save.
+function Save-Pending($ctx, $rec, $seen) {
+  if (-not (Test-SameRec $PendingFields (Read-Pending $ctx) $seen)) { throw [MikudChanged]::new() }
+  Write-Private $ctx $ctx.pending ((Format-Line $PendingFields $rec) + "`n")
+  Copy-Rec $rec $null
 }
 
 # The left record: what the command left on Mikud, with non-secret fields only.
@@ -864,9 +871,22 @@ function Get-LeftMessage($e) {
   "On $($e.origin): the key `"$($e.keyName)`" $why but still works until $until; delete it in Settings, Agent access, if nothing uses it."
 }
 
-function Get-PublicLeft($entries) {
+# An entry for the key of the current connection: a run stopped after recording that key as replaced or disconnected
+# and before changing the connection. It is never reported, and the next holder of the lock removes it.
+function Test-Stale($e, $conn) {
+  $null -ne $conn -and ($e.reason -ceq 'replaced' -or $e.reason -ceq 'disconnected') -and $e.origin -ceq $conn.origin -and $e.keyName -ceq $conn.keyName
+}
+
+function Update-Left($ctx, $conn) {
+  $entries = Read-Left $ctx
+  $kept = @($entries | Where-Object { -not (Test-Stale $_ $conn) })
+  if ($kept.Count -ne $entries.Count) { Write-Left $ctx $kept }
+}
+
+function Get-PublicLeft($entries, $conn) {
   $out = New-Object System.Collections.Generic.List[object]
   foreach ($e in (Select-Current $entries)) {
+    if (Test-Stale $e $conn) { continue }
     $o = New-Object-Ordered
     foreach ($f in $LeftFields) { $o[$f[0]] = $e[$f[0]] }
     $o['message'] = Get-LeftMessage $e
@@ -876,10 +896,13 @@ function Get-PublicLeft($entries) {
 }
 
 function Get-LeftNow($ctx) {
-  try { return , (Get-PublicLeft (Read-Left $ctx)) } catch { return , (New-Object System.Collections.Generic.List[object]) }
+  $conn = $null
+  try { $conn = Read-Connection $ctx } catch {}
+  try { return , (Get-PublicLeft (Read-Left $ctx) $conn) } catch { return , (New-Object System.Collections.Generic.List[object]) }
 }
 
-# The lock: a folder created atomically (renamed into place with its owner file), released by its token only.
+# The lock: a file created exclusively, naming its holder (token, host, process id and that process's start time).
+# Taken only from a holder that is certainly gone, and released by its token only.
 
 # The start time of a process as the system reports it, the same in every version; '' when it cannot be read.
 function Get-StartTime([long]$id) {
@@ -904,17 +927,16 @@ function Test-Running([long]$id) {
   try { return -not [Diagnostics.Process]::GetProcessById([int]$id).HasExited } catch { return $false }
 }
 
-function Read-Owner([string]$lock) {
-  try { $attr = Get-LinkAttributes $lock } catch { return @{ unreadable = $true } }
+# The holder a lock file names: $null when there is none, @{ unreadable } when it cannot be told.
+function Read-Lock([string]$file) {
+  try { $attr = Get-LinkAttributes $file } catch { return @{ unreadable = $true } }
   if ($null -eq $attr) { return $null }
-  if (($attr -band [IO.FileAttributes]::ReparsePoint) -or -not ($attr -band [IO.FileAttributes]::Directory)) {
-    Fail-Insecure "$lock must be a plain folder, not a link."
-  }
+  if ($attr -band [IO.FileAttributes]::ReparsePoint) { Fail-Insecure "$file must be a plain file, not a link." }
   try {
-    $held = (ConvertFrom-JsonText (Read-SharedText ([IO.Path]::Combine($lock, 'owner')))).value
+    $held = (ConvertFrom-JsonText (Read-SharedText $file)).value
     if ($held -is [Collections.IDictionary] -and (Get-Str $held 'token')) { return $held }
   } catch {
-    if (-not (Test-Exists $lock)) { return $null }
+    if (-not (Test-Exists $file)) { return $null }
   }
   @{ unreadable = $true }
 }
@@ -946,6 +968,9 @@ function ConvertTo-PlainString($value) {
   [string]$value
 }
 
+# The token of the lock this command holds; '' when it holds none.
+$script:LockToken = ''
+
 function Enter-Lock($ctx) {
   [void](Protect-Home $ctx $true)
   $token = Hex 16
@@ -953,43 +978,37 @@ function Enter-Lock($ctx) {
     ',"start":' + (Format-JsonString (Get-StartTime $PID)) + "}`n"
   $deadline = [DateTime]::UtcNow.AddMilliseconds($LockWaitMs)
   while ($true) {
-    # Only into an empty place: a rename could otherwise replace an empty folder, an undecidable lock.
-    if (-not (Test-Exists $ctx.lock)) {
-      $fresh = "$($ctx.lock).$(Hex 6).new"
-      try {
-        [void][IO.Directory]::CreateDirectory($fresh)
-        $fs = [IO.File]::Open([IO.Path]::Combine($fresh, 'owner'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
-        try { $bytes = $Utf8.GetBytes($owner); $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
-      } catch {
-        Remove-Path $fresh
+    $fs = $null
+    try {
+      $fs = [IO.File]::Open($ctx.lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    } catch {
+      # Windows refuses for a moment to create a file whose name is still being deleted (a lock just released).
+      if (-not (Test-Exists $ctx.lock) -and (-not $IsWin -or [DateTime]::UtcNow -gt $deadline)) {
         Fail 'cannot_save' "Cannot create a lock in $($ctx.dir). Allow this agent to write there."
       }
-      $taken = $false
-      try {
-        [IO.Directory]::Move($fresh, $ctx.lock)
-        $taken = $true
-      } catch {
-        Remove-Path $fresh
-        $base = $_.Exception.GetBaseException()
-        if (-not ($base -is [IO.IOException] -or $base -is [UnauthorizedAccessException])) {
-          Fail 'cannot_save' "Cannot create a lock in $($ctx.dir). Allow this agent to write there."
-        }
-      }
-      if ($taken) {
-        Invoke-Hook 'locked'
-        return $token
-      }
     }
-    $held = Read-Owner $ctx.lock
+    if ($fs) {
+      try { $bytes = $Utf8.GetBytes($owner); $fs.Write($bytes, 0, $bytes.Length) }
+      catch {
+        $fs.Dispose()
+        Remove-Path $ctx.lock
+        Fail 'cannot_save' "Cannot create a lock in $($ctx.dir). Allow this agent to write there."
+      }
+      $fs.Dispose()
+      $script:LockToken = $token
+      Invoke-Hook 'locked'
+      Clear-Leftovers $ctx
+      return $token
+    }
+    $held = Read-Lock $ctx.lock
     $state = Get-Verdict $held
     if ($state -ceq 'gone') {
       Invoke-Hook 'break-observed'
-      Remove-DeadLock $ctx $held
-      continue
+      if (Remove-LockIf $ctx (Get-Str $held 'token')) { continue }
     }
     if ([DateTime]::UtcNow -gt $deadline) {
       if ($state -ceq 'unknown') {
-        Fail 'busy' "Another mikud command may hold the lock $($ctx.lock), and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that folder by hand and run the command again."
+        Fail 'busy' "Another mikud command may hold the lock $($ctx.lock), and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again."
       }
       Fail 'busy' 'Another mikud command is using the connection. Nothing was sent; run it again.'
     }
@@ -997,43 +1016,54 @@ function Enter-Lock($ctx) {
   }
 }
 
-# Removes the lock of a holder that is certainly gone. Moving it away is atomic, so of two that try only one moves
-# it; if what was moved is not that lock (another command had just taken a fresh one), it goes back.
-function Remove-DeadLock($ctx, $held) {
+# Removes the lock that $token names. Moving it away is atomic, so of two that try only one moves it; if what was
+# moved is another lock (a command had just taken a fresh one), it is put back with a move that never replaces (as a
+# hard link would), which fails when a newer lock is there already. The command whose lock was lost finds out before
+# its next request or change (Assert-Mine).
+function Remove-LockIf($ctx, [string]$token) {
   $moved = "$($ctx.lock).$(Hex 6).dead"
-  try { [IO.Directory]::Move($ctx.lock, $moved) } catch { return }
-  Invoke-Hook 'break-moved'
-  $got = Read-Owner $moved
-  if ($null -ne $got -and -not (Test-Unreadable $got) -and (Get-Str $got 'token') -ceq (Get-Str $held 'token')) {
-    Remove-Path $moved
-    return
-  }
-  try { [IO.Directory]::Move($moved, $ctx.lock) } catch { Remove-Path $moved }
-}
-
-function Test-Mine($ctx, [string]$token) {
-  $held = Read-Owner $ctx.lock
-  $null -ne $held -and -not (Test-Unreadable $held) -and (Get-Str $held 'token') -ceq $token
-}
-
-function Exit-Lock($ctx, [string]$token) {
-  if (-not (Test-Mine $ctx $token)) { return }
-  $old = "$($ctx.lock).$(Hex 6).old"
-  for ($i = 0; $i -lt 20; $i++) {
-    try {
-      [IO.Directory]::Move($ctx.lock, $old)
-      Remove-Path $old
-      return
-    } catch {
-      if (-not $IsWin) { return }
+  # On Windows an open handle (an antivirus scan) can refuse the move for a moment.
+  for ($i = 0; ; $i++) {
+    try { [IO.File]::Move($ctx.lock, $moved); break }
+    catch {
+      if (-not $IsWin -or -not (Test-Exists $ctx.lock) -or $i -ge 20) { return $true }
       Start-Sleep -Milliseconds 50
     }
   }
+  Invoke-Hook 'break-moved'
+  $got = $null
+  try { $got = Read-Lock $moved } catch {}
+  if ($null -ne $got -and -not (Test-Unreadable $got) -and (Get-Str $got 'token') -ceq $token) {
+    Remove-Path $moved
+    return $true
+  }
+  try { [IO.File]::Move($moved, $ctx.lock) } catch { Remove-Path $moved }
+  $false
 }
 
-# Before a request that spends a one-time secret: the lock must still be this command's, or nothing is sent.
-function Assert-Mine($ctx, [string]$token) {
-  if (-not (Test-Mine $ctx $token)) { Fail 'busy' 'Another mikud command took over the connection. Run it again.' }
+function Test-Mine($ctx) {
+  if (-not $script:LockToken) { return $false }
+  try { $held = Read-Lock $ctx.lock } catch { return $false }
+  $null -ne $held -and -not (Test-Unreadable $held) -and (Get-Str $held 'token') -ceq $script:LockToken
+}
+
+function Exit-Lock($ctx, [string]$token) {
+  if ($token -and $token -ceq $script:LockToken -and (Test-Mine $ctx)) { [void](Remove-LockIf $ctx $token) }
+  $script:LockToken = ''
+}
+
+# Before a request that spends a one-time secret, and before every change to a file: the lock must be this command's.
+function Assert-Mine($ctx) {
+  if (-not (Test-Mine $ctx)) { Fail 'busy' 'Another mikud command took over the connection. Run it again.' }
+}
+
+# A temporary file of Write-Private. Every one is written under the lock, so the holder finds only those a stopped
+# command left behind; they may hold a secret.
+function Clear-Leftovers($ctx) {
+  Assert-Mine $ctx
+  foreach ($f in [IO.Directory]::GetFiles($ctx.dir)) {
+    if ([IO.Path]::GetFileName($f) -cmatch '^(?:connection|pending|left)\.[0-9a-f]{12}\.tmp\z') { try { [IO.File]::Delete($f) } catch {} }
+  }
 }
 
 # Requests: plain HTTP/1.1 over one new connection per request, never HttpClient, which may send a request again by
@@ -1157,15 +1187,22 @@ function Invoke-Request([string]$origin, [string]$method, [string]$target, $body
     try { $tcp.Close() } catch {}
   }
   $all = $raw.ToArray()
-  $split = Find-Bytes $all ([byte[]](13, 10, 13, 10)) 0
-  $status = 0
-  $lines = @()
-  if ($split -gt 0) {
-    $lines = [Text.Encoding]::ASCII.GetString($all, 0, $split) -split "`r`n"
-    if ($lines[0] -cmatch '^HTTP/1\.[01] ([0-9]{3})') { $status = [int]$Matches[1] }
+  # Interim answers (1xx, such as 103 Early Hints) come before the final one and are skipped (RFC 9110, section 15.2);
+  # 101 would switch protocols, which this request never asks for.
+  $from = 0
+  while ($true) {
+    $split = Find-Bytes $all ([byte[]](13, 10, 13, 10)) $from
+    $status = 0
+    $lines = @()
+    if ($split -gt $from) {
+      $lines = [Text.Encoding]::ASCII.GetString($all, $from, $split - $from) -split "`r`n"
+      if ($lines[0] -cmatch '^HTTP/1\.[01] ([0-9]{3})') { $status = [int]$Matches[1] }
+    }
+    if ($status -lt 100 -or $status -ge 200 -or $status -eq 101) { break }
+    $from = $split + 4
   }
   # The answer started and broke off (or never came): Mikud got the request and may have acted on it.
-  if ($status -eq 0) { throw (New-Fail 'unreachable' "Cannot reach $origin (UND_ERR_SOCKET)." @{ sent = $true }) }
+  if ($status -lt 200) { throw (New-Fail 'unreachable' "Cannot reach $origin (UND_ERR_SOCKET)." @{ sent = $true }) }
   if ($status -ge 300 -and $status -lt 400) {
     throw (New-Fail 'unreachable' "$origin answered with a redirect ($status), which the command does not follow. Check Mikud's address." @{ sent = $true })
   }
@@ -1244,21 +1281,23 @@ function Test-KeySaved($pend, $conn) { [bool]$pend.keySaved -or ($null -ne $conn
 function Get-AttemptWarnings($pend, $conn) {
   $warnings = @()
   if ($pend.phase -ceq 'creating_key') {
-    # The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts.
-    if (-not (Test-KeySaved $pend $conn)) { $warnings += 'key_unknown' }
+    # The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts. A create
+    # that Mikud refused, or that was never sent, made no key.
+    if (-not (Test-KeySaved $pend $conn) -and -not $pend.noKey) { $warnings += 'key_unknown' }
     if ($pend.sessionOpen) { $warnings += 'session_unknown' }
   } elseif ($pend.pollInFlight -or $pend.uncertain -or $pend.sessionOpen) { $warnings += 'session_unknown' }
   , $warnings
 }
 
-# Removes an attempt, after writing what it may have left on Mikud. Under the lock.
-function Remove-Attempt($ctx, $pend, $conn) {
+# Removes an attempt, after writing what it may have left on Mikud. Under the lock; the file is removed only while it
+# is exactly as this command last read or wrote it ($seen).
+function Remove-Attempt($ctx, $pend, $conn, $seen) {
+  if ($null -eq $seen) { $seen = $pend }
   $warnings = Get-AttemptWarnings $pend $conn
   if ($warnings.Count) {
     Add-Left $ctx @($warnings | ForEach-Object { @{ origin = $pend.origin; keyName = $pend.keyName; reason = $_ } })
   }
-  $latest = Read-Pending $ctx
-  if ($null -ne $latest -and $latest.attemptId -ceq $pend.attemptId) { Remove-PrivateFile $ctx $ctx.pending }
+  if (Test-SameRec $PendingFields (Read-Pending $ctx) $seen) { Remove-PrivateFile $ctx $ctx.pending }
   , $warnings
 }
 
@@ -1275,7 +1314,7 @@ function New-UnknownFail($warnings, $pend) {
 # of a redeem): it is removed with what it may have left.
 function Resolve-Orphan($ctx, $conn, $pend) {
   if ($null -eq $pend -or $pend.phase -cne 'creating_key') { return @{ pend = $pend; orphan = $null; warnings = @() } }
-  $warnings = Remove-Attempt $ctx $pend $conn
+  $warnings = Remove-Attempt $ctx $pend $conn $null
   @{ pend = $null; orphan = $pend; warnings = $warnings }
 }
 
@@ -1286,6 +1325,7 @@ function Invoke-Connect($ctx, $opts) {
   try {
     $result = $null
     $conn = Read-Connection $ctx
+    Update-Left $ctx $conn
     $found = Read-Pending $ctx
     $pend = (Resolve-Orphan $ctx $conn $found).pend
     if ($opts.url) { $origin = Get-Origin $opts.url }
@@ -1314,7 +1354,7 @@ function Invoke-Connect($ctx, $opts) {
       if ([Uri]::TryCreate($link, [UriKind]::Absolute, [ref]$lu) -and ($lu.Scheme -ceq 'http' -or $lu.Scheme -ceq 'https')) { $linkOrigin = "$($lu.Scheme)://$($lu.Authority)" }
       if ($linkOrigin -cne $origin) { Fail 'unexpected_answer' "Mikud's approval link is not on $origin. Nothing was stored." }
       # A pending attempt is replaced only now, once the new code exists; its link stops being used.
-      if ($pend) { [void](Remove-Attempt $ctx $pend $conn) }
+      if ($pend) { [void](Remove-Attempt $ctx $pend $conn $null) }
       $t = Now
       $interval = [Math]::Max(1, [Math]::Floor((Get-Num $d 'interval')))
       if ((Get-Num $d 'interval') -eq 0) { $interval = 5 }
@@ -1323,9 +1363,11 @@ function Invoke-Connect($ctx, $opts) {
       $next = @{
         v = 1; attemptId = (Hex 8); origin = $origin; deviceCode = $deviceCode; userCode = $userCode; link = $link
         interval = $interval; nextPollAt = $t + $interval; codeExpiresAt = $t + [Math]::Max(1, $expiresIn); days = $days
-        keyName = (Get-KeyName); phase = 'polling'; pollInFlight = 0; uncertain = 0; sessionOpen = 0; keySaved = 0
+        keyName = (Get-KeyName); phase = 'polling'; pollInFlight = 0; uncertain = 0; sessionOpen = 0; keySaved = 0; noKey = 0
       }
-      Write-PendingIf $ctx $next $null
+      # Only into the state this command read: no attempt, and the connection it decided on.
+      if (-not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $conn)) { throw [MikudChanged]::new() }
+      [void](Save-Pending $ctx $next $null)
       $result = Get-PendingAnswer $next
     }
   } finally { Exit-Lock $ctx $token }
@@ -1347,7 +1389,7 @@ function Invoke-Wait($ctx, $opts) {
     $step = $null
     try {
       $token = Enter-Lock $ctx
-      try { $step = Invoke-WaitStep $ctx $origin $state $token } finally { Exit-Lock $ctx $token }
+      try { $step = Invoke-WaitStep $ctx $origin $state } finally { Exit-Lock $ctx $token }
     } catch [MikudChanged] { continue }
     if ($step.ContainsKey('done')) {
       $step.done['left'] = Get-LeftNow $ctx
@@ -1365,8 +1407,9 @@ function Invoke-Wait($ctx, $opts) {
 }
 
 # One look at the attempt under the lock: an answer, the seconds until the next poll, or one poll.
-function Invoke-WaitStep($ctx, [string]$origin, $state, [string]$token) {
+function Invoke-WaitStep($ctx, [string]$origin, $state) {
   $conn = Read-Connection $ctx
+  Update-Left $ctx $conn
   $settled = Resolve-Orphan $ctx $conn (Read-Pending $ctx)
   $pend = $settled.pend
   if ($settled.orphan -and $settled.orphan.origin -ceq $origin) {
@@ -1382,9 +1425,11 @@ function Invoke-WaitStep($ctx, [string]$origin, $state, [string]$token) {
   # Replaced meanwhile (connect --replace): the new attempt has its own link and code.
   if ($state.attemptId -and $pend.attemptId -cne $state.attemptId) { return @{ done = (Get-PendingAnswer $pend) } }
   $state.attemptId = $pend.attemptId
+  # Every save is conditional on the attempt exactly as this command last read or wrote it.
+  $seen = Copy-Rec $pend $null
   $t = Now
   if ($pend.codeExpiresAt -le $t) {
-    $warnings = Remove-Attempt $ctx $pend $conn
+    $warnings = Remove-Attempt $ctx $pend $conn $null
     if ($warnings.Count) { throw (New-UnknownFail $warnings $pend) }
     Fail 'expired' "The code expired before it was approved. Run: mikud connect --url $origin"
   }
@@ -1392,8 +1437,8 @@ function Invoke-WaitStep($ctx, [string]$origin, $state, [string]$token) {
   # A mark left set: the run before this one sent a poll and never recorded its answer.
   if ($pend.pollInFlight) { $pend.uncertain = 1 }
   $pend.pollInFlight = 1
-  Write-PendingIf $ctx $pend $pend.attemptId
-  Assert-Mine $ctx $token
+  $seen = Save-Pending $ctx $pend $seen
+  Assert-Mine $ctx
   Invoke-Hook 'poll'
   try {
     $pollBody = ConvertTo-JsonText ([ordered]@{ grant_type = $DeviceGrant; device_code = $pend.deviceCode; client_id = $ClientId })
@@ -1404,24 +1449,24 @@ function Invoke-WaitStep($ctx, [string]$origin, $state, [string]$token) {
       $pend.pollInFlight = 0
       if ($e.Extra['sent'] -ne $false) { $pend.uncertain = 1 }
       $pend.nextPollAt = (Now) + $pend.interval
-      Write-PendingIf $ctx $pend $pend.attemptId
+      $seen = Save-Pending $ctx $pend $seen
     }
     throw $e
   }
   $sessionToken = ''
   if ($r.status -eq 200) { $sessionToken = Get-Str $r.json 'access_token' }
-  if ($sessionToken) { return @{ done = (Invoke-Redeem $ctx $pend $sessionToken) } }
+  if ($sessionToken) { return @{ done = (Invoke-Redeem $ctx $seen $conn $sessionToken) } }
   $err = Get-Str $r.json 'error'
   $pend.pollInFlight = 0
   if ($err -ceq 'authorization_pending' -or $err -ceq 'slow_down' -or $r.status -eq 429) {
     # RFC 8628: 5 seconds longer from now on; a rate-limited poll is the same request to slow down.
     if ($err -ceq 'slow_down' -or $r.status -eq 429) { $pend.interval += 5 }
     $pend.nextPollAt = (Now) + $pend.interval
-    Write-PendingIf $ctx $pend $pend.attemptId
+    $seen = Save-Pending $ctx $pend $seen
     return @{ wait = $pend.interval }
   }
   if ($err -ceq 'access_denied' -or $err -ceq 'expired_token' -or $err -ceq 'invalid_grant') {
-    $warnings = Remove-Attempt $ctx $pend $conn
+    $warnings = Remove-Attempt $ctx $pend $conn $seen
     if ($warnings.Count) { throw (New-UnknownFail $warnings $pend) }
     if ($err -ceq 'access_denied') { Fail 'denied' 'The owner did not approve the connection. Nothing was created.' }
     Fail 'expired' "The code is no longer valid. Run: mikud connect --url $origin"
@@ -1429,11 +1474,12 @@ function Invoke-WaitStep($ctx, [string]$origin, $state, [string]$token) {
   # A failure after the server may have started: a session may exist.
   if ($r.status -ge 500 -or $r.status -eq 200) { $pend.uncertain = 1 }
   $pend.nextPollAt = (Now) + $pend.interval
-  Write-PendingIf $ctx $pend $pend.attemptId
+  $seen = Save-Pending $ctx $pend $seen
   throw (New-HttpFail $r 'Waiting for the approval')
 }
 
-# Ends the approval's session with its own token. True only when Mikud confirmed it.
+# Ends the approval's session with its own token. True only when Mikud confirmed it. Sent even after the lock was
+# lost: no other command knows this token, and a session left open is the worse outcome.
 function Stop-Session([string]$origin, [string]$sessionToken) {
   try {
     $r = Invoke-Request $origin 'POST' '/api/auth/revoke-session' (ConvertTo-JsonText ([ordered]@{ token = $sessionToken })) $sessionToken $true ''
@@ -1442,104 +1488,96 @@ function Stop-Session([string]$origin, [string]$sessionToken) {
 }
 
 # The approved code gave a session token: record that a key is being created, create it, save the connection, end
-# the session, remove the attempt. In this order in every version, all under the lock.
-function Invoke-Redeem($ctx, $pend, [string]$sessionToken) {
-  $id = $pend.attemptId
+# the session, remove the attempt. In this order in every version, all under the lock. $seen is the attempt as last
+# written, $conn the connection as read at the start of this step.
+function Invoke-Redeem($ctx, $seen, $conn, [string]$sessionToken) {
+  $id = $seen.attemptId
+  $att = @{ pend = (Copy-Rec $seen @{ phase = 'creating_key'; sessionOpen = 1; pollInFlight = 0 }); conn = $conn; seen = $seen }
   try {
-    Write-PendingIf $ctx (Copy-Rec $pend @{ phase = 'creating_key'; sessionOpen = 1; pollInFlight = 0 }) $id
+    $att.seen = Save-Pending $ctx $att.pend $seen
   } catch {
     $e = $_.Exception
     # Nothing is sent before this mark is written: the session ends at once.
-    [void](Stop-Session $pend.origin $sessionToken)
+    [void](Stop-Session $seen.origin $sessionToken)
     if ($e -is [MikudChanged]) { Fail 'cannot_save' 'The connection changed while this command ran. Run: mikud status' }
     throw $e
   }
   Invoke-Hook 'token'
-  $conn = $null
+  $saved = $null
   $failure = $null
-  try { $conn = Invoke-CreateAndSave $ctx $pend $sessionToken } catch { $failure = $_.Exception }
-  $ended = Stop-Session $pend.origin $sessionToken
-  if ($ended) {
-    try {
-      $latest = Read-Pending $ctx
-      if ($null -ne $latest -and $latest.attemptId -ceq $id) { Write-PendingIf $ctx (Copy-Rec $latest @{ sessionOpen = 0 }) $id }
-    } catch {}
-  }
+  try { $saved = Invoke-CreateAndSave $ctx $att $sessionToken } catch { $failure = $_.Exception }
+  $ended = Stop-Session $seen.origin $sessionToken
+  # A step from here that fails keeps the attempt, and with it what the attempt may have left on Mikud; it never
+  # replaces the answer.
+  try { if ($ended) { $att.seen = Save-Pending $ctx (Copy-Rec $att.seen @{ sessionOpen = 0 }) $att.seen } } catch {}
   Invoke-Hook 'revoked'
-  $last = Read-Pending $ctx
-  if ($null -ne $last -and $last.attemptId -ceq $id) {
-    # A connection that cannot be read now counts as not saved: the key is then reported, never lost.
-    $saved = $null
-    try { $saved = Read-Connection $ctx } catch {}
-    [void](Remove-Attempt $ctx $last $saved)
-  } elseif (-not $ended) { Add-Left $ctx @(@{ origin = $pend.origin; keyName = $pend.keyName; reason = 'session_unknown' }) }
+  try {
+    $last = Read-Pending $ctx
+    if ($null -ne $last -and $last.attemptId -ceq $id) {
+      # A connection that cannot be read now counts as not saved: the key is then reported, never lost.
+      $now = $null
+      try { $now = Read-Connection $ctx } catch {}
+      [void](Remove-Attempt $ctx $last $now $null)
+    } elseif (-not $ended) { Add-Left $ctx @(@{ origin = $seen.origin; keyName = $seen.keyName; reason = 'session_unknown' }) }
+  } catch {}
   Invoke-Hook 'done'
   if ($failure) {
     if (-not $ended -and $failure -is [MikudFail]) { $failure.Text += " $SessionText" }
     throw $failure
   }
-  $answer = Get-ConnectedAnswer $conn
+  $answer = Get-ConnectedAnswer $saved
   if (-not $ended) {
     $answer['warning'] = 'Could not confirm that the approval''s temporary session ended. End the session "mikud connect (agent approval)" on the Account page in Mikud.'
   }
   $answer
 }
 
-function Invoke-CreateAndSave($ctx, $pend, [string]$sessionToken) {
-  $origin = $pend.origin
-  $name = $pend.keyName
+function Invoke-CreateAndSave($ctx, $att, [string]$sessionToken) {
+  $origin = $att.pend.origin
+  $name = $att.pend.keyName
   $unknown = New-Fail 'key_unknown' "Mikud's answer to creating the key was lost, so a key named `"$name`" may exist on ${origin}: delete it in Settings, Agent access. Then run: mikud connect --url $origin" $null
-  $create = ConvertTo-JsonText ([ordered]@{ name = $name; expiresIn = [long]($pend.days * 86400) })
+  # Mikud refused the key, or the request never left: no key exists, and the attempt records it (no key_unknown).
+  $noKey = {
+    param($fail)
+    try { $att.seen = Save-Pending $ctx (Copy-Rec $att.seen @{ noKey = 1 }) $att.seen } catch {}
+    $fail
+  }
+  Assert-Mine $ctx
+  $create = ConvertTo-JsonText ([ordered]@{ name = $name; expiresIn = [long]($att.pend.days * 86400) })
   try {
     $r = Invoke-Request $origin 'POST' '/api/auth/api-key/create' $create $sessionToken $true ''
   } catch {
     $e = $_.Exception
     if ($e -is [MikudFail] -and $e.Code -ceq 'unreachable' -and $e.Extra['sent'] -ne $false) { throw $unknown }
-    throw $e
+    throw (& $noKey $e)
   }
   Invoke-Hook 'key'
   if ($r.status -ge 500) { throw $unknown }
-  if ($r.status -ne 200) { throw (New-HttpFail $r 'Creating the key') }
+  if ($r.status -ne 200) { throw (& $noKey (New-HttpFail $r 'Creating the key')) }
   $key = Get-Str $r.json 'key'
   $expiresAt = Get-Str $r.json 'expiresAt'
   if ($key -cnotmatch $Secret -or $expiresAt -cnotmatch $Plain -or $null -eq (Get-DateMs $expiresAt)) { throw $unknown }
-  $notSaved = {
-    param($fail)
-    try { Add-Left $ctx @(@{ origin = $origin; keyName = $name; expiresAt = $expiresAt; reason = 'not_saved' }) }
-    catch { $fail.Text += " The key `"$name`" on $origin works until ${expiresAt}: delete it in Settings, Agent access." }
-    $fail
-  }
-  # Saved only while the attempt is still this run's: a parallel disconnect or --replace wins.
-  $current = Read-Pending $ctx
-  if ($null -eq $current -or $current.attemptId -cne $pend.attemptId) {
-    throw (& $notSaved (New-Fail 'cannot_save' 'Another mikud command disconnected or started a new connection while this one waited, so the new key was not saved. Run: mikud status' $null))
-  }
-  $old = $null
+  # From here the key exists with a known name and end date: any failure records it before the answer.
   try {
-    $old = Read-Connection $ctx
+    # Saved only while both files are as this command read them: a parallel disconnect or --replace wins.
+    if (-not (Test-SameRec $PendingFields (Read-Pending $ctx) $att.seen) -or -not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $att.conn)) {
+      Fail 'cannot_save' 'Another mikud command disconnected or started a new connection while this one waited, so the new key was not saved. Run: mikud status'
+    }
+    $old = $att.conn
     # The key being replaced stays on Mikud: recorded before the connection that names it is replaced.
     if ($old -and $old.keyName -cne $name) {
       Add-Left $ctx @(@{ origin = $old.origin; keyName = $old.keyName; expiresAt = $old.expiresAt; reason = 'replaced' })
+      Invoke-Hook 'recorded'
     }
     Write-Connection $ctx @{ v = 1; origin = $origin; key = $key; keyName = $name; expiresAt = $expiresAt }
   } catch {
-    $e = $_.Exception
-    if ($old -and $old.keyName -cne $name) {
-      try {
-        $kept = Read-Connection $ctx
-        if ($kept -and $kept.keyName -ceq $old.keyName) {
-          $entries = Read-Left $ctx
-          Write-Left $ctx @($entries | Where-Object { -not ($_.keyName -ceq $old.keyName -and $_.origin -ceq $old.origin -and $_.reason -ceq 'replaced') })
-        }
-      } catch {}
-    }
-    if (-not ($e -is [MikudFail])) { $e = New-Fail 'cannot_save' "Cannot save the connection in $($ctx.dir)." $null }
-    throw (& $notSaved $e)
+    $fail = $_.Exception
+    if (-not ($fail -is [MikudFail])) { $fail = New-Fail 'cannot_save' "Cannot save the connection in $($ctx.dir)." $null }
+    try { Add-Left $ctx @(@{ origin = $origin; keyName = $name; expiresAt = $expiresAt; reason = 'not_saved' }) }
+    catch { $fail.Text += " The key `"$name`" on $origin works until ${expiresAt}: delete it in Settings, Agent access." }
+    throw $fail
   }
-  try {
-    $latest = Read-Pending $ctx
-    if ($null -ne $latest -and $latest.attemptId -ceq $pend.attemptId) { Write-PendingIf $ctx (Copy-Rec $latest @{ keySaved = 1 }) $pend.attemptId }
-  } catch {}
+  try { $att.seen = Save-Pending $ctx (Copy-Rec $att.seen @{ keySaved = 1 }) $att.seen } catch {}
   Invoke-Hook 'saved'
   @{ origin = $origin; keyName = $name; expiresAt = $expiresAt }
 }
@@ -1568,7 +1606,14 @@ function Get-Status($ctx) {
     if ($warnings.Count) { $p['warnings'] = $warnings }
     $out['pending'] = $p
   }
-  $out['left'] = Get-PublicLeft (Read-Left $ctx)
+  $entries = Read-Left $ctx
+  if (@($entries | Where-Object { Test-Stale $_ $conn }).Count) {
+    try {
+      $token = Enter-Lock $ctx
+      try { Update-Left $ctx (Read-Connection $ctx) } finally { Exit-Lock $ctx $token }
+    } catch {}
+  }
+  $out['left'] = Get-PublicLeft $entries $conn
   $out
 }
 
@@ -1583,12 +1628,15 @@ function Invoke-Disconnect($ctx) {
   try {
     $result = New-Object-Ordered
     $conn = Read-Connection $ctx
+    Update-Left $ctx $conn
     $pend = Read-Pending $ctx
-    if ($pend) { [void](Remove-Attempt $ctx $pend $conn) }
+    if ($pend) { [void](Remove-Attempt $ctx $pend $conn $null) }
     if (-not $conn) { $result['status'] = 'not_connected' }
     else {
       # The key stays on Mikud (a key cannot delete itself): recorded before the connection is removed.
       Add-Left $ctx @(@{ origin = $conn.origin; keyName = $conn.keyName; expiresAt = $conn.expiresAt; reason = 'disconnected' })
+      Invoke-Hook 'recorded'
+      if (-not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $conn)) { throw [MikudChanged]::new() }
       Remove-PrivateFile $ctx $ctx.connection
       $result['status'] = 'disconnected'
       $result['origin'] = $conn.origin
@@ -1650,7 +1698,7 @@ function Clear-Connection($ctx, $conn) {
     $token = Enter-Lock $ctx
     try {
       $saved = Read-Connection $ctx
-      if ($saved -and $saved.key -ceq $conn.key) { Remove-PrivateFile $ctx $ctx.connection }
+      if (Test-SameRec $ConnectionFields $saved $conn) { Remove-PrivateFile $ctx $ctx.connection }
     } finally { Exit-Lock $ctx $token }
   } catch {}
 }
@@ -1718,6 +1766,8 @@ function Invoke-Main([string[]]$argv) {
     if ($command -ceq 'patch') { return Invoke-Api $ctx 'PATCH' $opts }
   } catch {
     $e = $_.Exception
+    # The files changed under a lock this command no longer held: nothing more was done.
+    if ($e -is [MikudChanged]) { $e = New-Fail 'busy' 'Another mikud command changed the connection meanwhile. Run: mikud status' $null }
     # What the command left on Mikud travels with every answer about the connection.
     if ($e -is [MikudFail] -and @('connect', 'disconnect', 'status') -ccontains $command) { $e.Extra['left'] = Get-LeftNow $ctx }
     throw $e

@@ -1,7 +1,7 @@
 ---
 
 name: mikud
-description: Keep the owner's Mikud board current from top-level T3 threads - start the thread's work item, leave a summary and set its status at the end, capture ideas for later, and keep notes of decisions and findings. Use it at the start and the end of every top-level T3 thread, and whenever the owner asks to note an idea, remember something or write a decision down.
+description: Mikud, the owner's board of work items and notes. Use it when the owner asks for Mikud - to note an idea, remember something, write a decision down, or connect Mikud - and at the start and the end of a top-level T3 thread when your instructions say to keep Mikud current.
 ---
 
 # mikud
@@ -177,6 +177,6 @@ Continue the work, mention it once in your reply, and do not retry in a loop.
 - `insecure_credentials`: the connection's folder or a file in it can be opened by others, or is a link; tell the
   owner the fix it gives.
 - `busy`: another mikud command is using the connection. Nothing was sent; run it again. When the message names a lock
-  folder to remove by hand, tell the owner.
+  file to remove by hand, tell the owner.
 - `session_unknown` or `key_unknown` while connecting: tell the owner the message (an approval session to end on the
   Account page, or a key to delete in Settings, Agent access), then connect again if the owner wants to.

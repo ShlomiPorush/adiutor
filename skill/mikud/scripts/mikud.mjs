@@ -85,6 +85,7 @@ const PENDING_FIELDS = [
   ["uncertain", "n"],
   ["sessionOpen", "n"],
   ["keySaved", "n"],
+  ["noKey", "n"],
 ]
 const LEFT_FIELDS = [
   ["origin", "s"],
@@ -478,8 +479,12 @@ function renameOver(from, to) {
   }
 }
 
-/** Writes a file in one step: a temporary file made private before anything is written, then renamed over. */
+/**
+ * Writes a file in one step: a temporary file made private before anything is written, then renamed over. Only by the
+ * holder of the lock. A temporary file a stopped command left behind is removed by the next holder (`sweep`).
+ */
 function writePrivate(ctx, file, text) {
+  assertMine(ctx)
   secureHome(ctx, true)
   const tmp = `${file}.${hex(6)}.tmp`
   let fd
@@ -500,6 +505,7 @@ function writePrivate(ctx, file, text) {
       hook("temp")
       fs.writeSync(fd, text)
       fs.fsyncSync(fd)
+      hook("written")
     } finally {
       if (fd !== undefined) fs.closeSync(fd)
     }
@@ -513,6 +519,7 @@ function writePrivate(ctx, file, text) {
 }
 
 function removeFile(ctx, file) {
+  assertMine(ctx)
   try {
     fs.rmSync(file, { force: true })
   } catch {
@@ -540,11 +547,17 @@ function readPending(ctx) {
 
 const writeConnection = (ctx, rec) => writePrivate(ctx, ctx.connection, `${serialize(CONNECTION_FIELDS, rec)}\n`)
 
-/** Writes the attempt only while it is still the one this run started from. */
-function writePendingIf(ctx, rec, attemptId) {
-  const current = readPending(ctx)
-  if (attemptId !== null && current?.attemptId !== attemptId) throw new Changed()
+/** Two records (or two absent ones) are the same, field by field as they are stored. */
+const same = (fields, a, b) => (a && b ? serialize(fields, a) === serialize(fields, b) : !a && !b)
+
+/**
+ * Writes the attempt only while the file is exactly as this command last read or wrote it (`seen`; null: no attempt).
+ * Answers what was written, the `seen` of the next save.
+ */
+function savePending(ctx, rec, seen) {
+  if (!same(PENDING_FIELDS, readPending(ctx), seen)) throw new Changed()
   writePrivate(ctx, ctx.pending, `${serialize(PENDING_FIELDS, rec)}\n`)
+  return { ...rec }
 }
 
 /* The left record: what the command left on Mikud, with non-secret fields only. */
@@ -594,17 +607,46 @@ function leftMessage(e) {
   return `On ${e.origin}: the key "${e.keyName}" ${why} but still works until ${e.expiresAt || "it ends"}; delete it in Settings, Agent access, if nothing uses it.`
 }
 
-const publicLeft = (entries) => current(entries).map((e) => ({ ...e, message: leftMessage(e) }))
+/**
+ * An entry for the key of the current connection: a run stopped after recording that key as replaced or disconnected
+ * and before changing the connection. It is never reported, and the next holder of the lock removes it.
+ */
+const stale = (e, conn) =>
+  Boolean(conn) &&
+  ["replaced", "disconnected"].includes(e.reason) &&
+  e.origin === conn.origin &&
+  e.keyName === conn.keyName
+
+function pruneLeft(ctx, conn) {
+  const entries = readLeft(ctx)
+  if (entries.some((e) => stale(e, conn)))
+    writeLeft(
+      ctx,
+      entries.filter((e) => !stale(e, conn)),
+    )
+}
+
+const publicLeft = (entries, conn) =>
+  current(entries)
+    .filter((e) => !stale(e, conn))
+    .map((e) => ({ ...e, message: leftMessage(e) }))
 
 function leftNow(ctx) {
   try {
-    return publicLeft(readLeft(ctx))
+    let conn = null
+    try {
+      conn = readConnection(ctx)
+    } catch {}
+    return publicLeft(readLeft(ctx), conn)
   } catch {
     return []
   }
 }
 
-/* The lock: a folder created atomically (renamed into place with its owner file), released by its token only. */
+/*
+ * The lock: a file created exclusively, naming its holder (token, host, process id and that process's start time).
+ * Taken only from a holder that is certainly gone, and released by its token only.
+ */
 
 /** The start time of a process as the system reports it, the same in every version; "" when it cannot be read. */
 function startOf(pid) {
@@ -627,16 +669,6 @@ function startOf(pid) {
   }
 }
 
-/** Whether a path exists, a link included. */
-function exists(target) {
-  try {
-    fs.lstatSync(target)
-    return true
-  } catch (e) {
-    return e.code !== "ENOENT"
-  }
-}
-
 function running(pid) {
   try {
     process.kill(pid, 0)
@@ -646,20 +678,20 @@ function running(pid) {
   }
 }
 
-function readOwner(lock) {
-  let st
+/** The holder a lock file names: null when there is none, { unreadable } when it cannot be told. */
+function readLock(file) {
+  let text
   try {
-    st = fs.lstatSync(lock)
+    if (fs.lstatSync(file).isSymbolicLink()) throw insecure(`${file} must be a plain file, not a link.`)
+    text = fs.readFileSync(file, "utf8")
   } catch (e) {
+    if (e instanceof Fail) throw e
     return e.code === "ENOENT" ? null : { unreadable: true }
   }
-  if (st.isSymbolicLink() || !st.isDirectory()) throw insecure(`${lock} must be a plain folder, not a link.`)
   try {
-    const held = JSON.parse(fs.readFileSync(path.join(lock, "owner"), "utf8"))
-    if (typeof held?.token === "string" && held.token) return held
-  } catch {
-    if (!fs.existsSync(lock)) return null
-  }
+    const owner = JSON.parse(text)
+    if (typeof owner?.token === "string" && owner.token) return owner
+  } catch {}
   return { unreadable: true }
 }
 
@@ -676,44 +708,48 @@ function verdict(held) {
   return start === String(held.start) ? "alive" : "gone"
 }
 
+/** The token of the lock this command holds; "" when it holds none. */
+let heldToken = ""
+
 async function acquire(ctx) {
   secureHome(ctx, true)
   const token = hex(16)
   const owner = `${JSON.stringify({ token, host: host(), pid: process.pid, start: startOf(process.pid) })}\n`
   const deadline = Date.now() + LOCK_WAIT_MS
   for (;;) {
-    // Only into an empty place: POSIX would also let the rename replace an empty folder, an undecidable lock.
-    if (!exists(ctx.lock)) {
-      const fresh = `${ctx.lock}.${hex(6)}.new`
+    let fd
+    try {
+      fd = fs.openSync(ctx.lock, "wx", 0o600)
+    } catch (e) {
+      // Windows refuses for a moment to create a file whose name is still being deleted (a lock just released).
+      const deleting = win && ["EPERM", "EACCES"].includes(e.code) && Date.now() < deadline
+      if (e.code !== "EEXIST" && !deleting)
+        throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}. Allow this agent to write there.`)
+    }
+    if (fd !== undefined) {
       try {
-        fs.mkdirSync(fresh)
-        fs.writeFileSync(path.join(fresh, "owner"), owner, { flag: "wx" })
+        fs.writeSync(fd, owner)
       } catch {
-        rm(fresh)
+        fs.closeSync(fd)
+        rm(ctx.lock)
         throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}. Allow this agent to write there.`)
       }
-      try {
-        fs.renameSync(fresh, ctx.lock)
-        hook("locked")
-        return token
-      } catch (e) {
-        rm(fresh)
-        if (!["EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"].includes(e.code))
-          throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}. Allow this agent to write there.`)
-      }
+      fs.closeSync(fd)
+      heldToken = token
+      hook("locked")
+      return
     }
-    const held = readOwner(ctx.lock)
-    const state = verdict(held)
+    const holder = readLock(ctx.lock)
+    const state = verdict(holder)
     if (state === "gone") {
       hook("break-observed")
-      breakLock(ctx, held)
-      continue
+      if (removeLockIf(ctx, holder.token)) continue
     }
     if (Date.now() > deadline) {
       if (state === "unknown")
         throw new Fail(
           "busy",
-          `Another mikud command may hold the lock ${ctx.lock}, and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that folder by hand and run the command again.`,
+          `Another mikud command may hold the lock ${ctx.lock}, and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again.`,
         )
       throw new Fail("busy", "Another mikud command is using the connection. Nothing was sent; run it again.")
     }
@@ -722,57 +758,79 @@ async function acquire(ctx) {
 }
 
 /**
- * Removes the lock of a holder that is certainly gone. Moving it away is atomic, so of two that try only one moves
- * it; if what was moved is not that lock (another command had just taken a fresh one), it goes back.
+ * Removes the lock that `token` names. Moving it away is atomic, so of two that try only one moves it; if what was
+ * moved is another lock (a command had just taken a fresh one), it is linked back, which fails when a newer lock is
+ * there already. The command whose lock was lost finds out before its next request or change (assertMine).
  */
-function breakLock(ctx, held) {
+function removeLockIf(ctx, token) {
   const moved = `${ctx.lock}.${hex(6)}.dead`
-  try {
-    fs.renameSync(ctx.lock, moved)
-  } catch {
-    return
-  }
-  hook("break-moved")
-  const got = readOwner(moved)
-  if (got && !got.unreadable && got.token === held.token) return rm(moved)
-  try {
-    fs.renameSync(moved, ctx.lock)
-  } catch {
-    rm(moved)
-  }
-}
-
-const mine = (ctx, token) => {
-  const held = readOwner(ctx.lock)
-  return Boolean(held && !held.unreadable && held.token === token)
-}
-
-function release(ctx, token) {
-  if (!mine(ctx, token)) return
-  const old = `${ctx.lock}.${hex(6)}.old`
-  for (let i = 0; i < 20; i++) {
+  // On Windows an open handle (an antivirus scan) can refuse the move for a moment.
+  for (let i = 0; ; i++) {
     try {
-      fs.renameSync(ctx.lock, old)
-      return rm(old)
-    } catch {
-      if (!win) return
+      fs.renameSync(ctx.lock, moved)
+      break
+    } catch (e) {
+      if (!win || e.code === "ENOENT" || i >= 20) return true
       pause(50)
     }
   }
+  hook("break-moved")
+  let got = null
+  try {
+    got = readLock(moved)
+  } catch {}
+  if (got?.token === token) {
+    rm(moved)
+    return true
+  }
+  try {
+    fs.linkSync(moved, ctx.lock)
+  } catch {}
+  rm(moved)
+  return false
 }
 
-async function withLock(ctx, fn) {
-  const token = await acquire(ctx)
+const mine = (ctx) => {
+  if (!heldToken) return false
   try {
-    return await fn(token)
-  } finally {
-    release(ctx, token)
+    return readLock(ctx.lock)?.token === heldToken
+  } catch {
+    return false
   }
 }
 
-/** Before a request that spends a one-time secret: the lock must still be this command's, or nothing is sent. */
-function assertMine(ctx, token) {
-  if (!mine(ctx, token)) throw new Fail("busy", "Another mikud command took over the connection. Run it again.")
+function release(ctx) {
+  if (mine(ctx)) removeLockIf(ctx, heldToken)
+  heldToken = ""
+}
+
+/** Before a request that spends a one-time secret, and before every change to a file: the lock must be this command's. */
+function assertMine(ctx) {
+  if (!mine(ctx)) throw new Fail("busy", "Another mikud command took over the connection. Run it again.")
+}
+
+// A temporary file of writePrivate. Every one is written under the lock, so the holder finds only those a stopped
+// command left behind; they may hold a secret.
+const LEFTOVER = /^(?:connection|pending|left)\.[0-9a-f]{12}\.tmp$/
+
+function sweep(ctx) {
+  assertMine(ctx)
+  for (const name of fs.readdirSync(ctx.dir))
+    if (LEFTOVER.test(name)) {
+      try {
+        fs.unlinkSync(path.join(ctx.dir, name))
+      } catch {}
+    }
+}
+
+async function withLock(ctx, fn) {
+  await acquire(ctx)
+  try {
+    sweep(ctx)
+    return await fn()
+  } finally {
+    release(ctx)
+  }
 }
 
 /* Requests */
@@ -886,22 +944,26 @@ const keySaved = (pend, conn) => Boolean(pend.keySaved || conn?.keyName === pend
 function attemptWarnings(pend, conn) {
   const warnings = []
   if (pend.phase === "creating_key") {
-    // The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts.
-    if (!keySaved(pend, conn)) warnings.push("key_unknown")
+    // The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts. A create
+    // that Mikud refused, or that was never sent, made no key.
+    if (!keySaved(pend, conn) && !pend.noKey) warnings.push("key_unknown")
     if (pend.sessionOpen) warnings.push("session_unknown")
   } else if (pend.pollInFlight || pend.uncertain || pend.sessionOpen) warnings.push("session_unknown")
   return warnings
 }
 
-/** Removes an attempt, after writing what it may have left on Mikud. Under the lock. */
-function removeAttempt(ctx, pend, conn) {
+/**
+ * Removes an attempt, after writing what it may have left on Mikud. Under the lock; the file is removed only while it
+ * is exactly as this command last read or wrote it (`seen`).
+ */
+function removeAttempt(ctx, pend, conn, seen = pend) {
   const warnings = attemptWarnings(pend, conn)
   if (warnings.length)
     addLeft(
       ctx,
       warnings.map((reason) => ({ origin: pend.origin, keyName: pend.keyName, reason })),
     )
-  if (readPending(ctx)?.attemptId === pend.attemptId) removeFile(ctx, ctx.pending)
+  if (same(PENDING_FIELDS, readPending(ctx), seen)) removeFile(ctx, ctx.pending)
   return warnings
 }
 
@@ -932,6 +994,7 @@ async function connect(ctx, opts) {
   secureHome(ctx, true)
   const result = await withLock(ctx, async () => {
     const conn = readConnection(ctx)
+    pruneLeft(ctx, conn)
     const found = readPending(ctx)
     const { pend } = settle(ctx, conn, found)
     const origin = opts.url ? originOf(opts.url) : conn?.origin || found?.origin
@@ -986,8 +1049,11 @@ async function connect(ctx, opts) {
       uncertain: 0,
       sessionOpen: 0,
       keySaved: 0,
+      noKey: 0,
     }
-    writePendingIf(ctx, next, null)
+    // Only into the state this command read: no attempt, and the connection it decided on.
+    if (!same(CONNECTION_FIELDS, readConnection(ctx), conn)) throw new Changed()
+    savePending(ctx, next, null)
     return pendingAnswer(next)
   })
   print({ ...result, left: leftNow(ctx) })
@@ -1004,7 +1070,7 @@ async function waitForApproval(ctx, opts) {
   for (;;) {
     let step
     try {
-      step = await withLock(ctx, (token) => waitStep(ctx, origin, state, token))
+      step = await withLock(ctx, () => waitStep(ctx, origin, state))
     } catch (e) {
       if (e instanceof Changed) continue
       throw e
@@ -1017,8 +1083,9 @@ async function waitForApproval(ctx, opts) {
 }
 
 /** One look at the attempt under the lock: an answer, the seconds until the next poll, or one poll. */
-async function waitStep(ctx, origin, state, token) {
+async function waitStep(ctx, origin, state) {
   const conn = readConnection(ctx)
+  pruneLeft(ctx, conn)
   const settled = settle(ctx, conn, readPending(ctx))
   const pend = settled.pend
   if (settled.orphan?.origin === origin) {
@@ -1034,6 +1101,11 @@ async function waitStep(ctx, origin, state, token) {
   // Replaced meanwhile (connect --replace): the new attempt has its own link and code.
   if (state.attemptId && pend.attemptId !== state.attemptId) return { done: pendingAnswer(pend) }
   state.attemptId = pend.attemptId
+  // Every save is conditional on the attempt exactly as this command last read or wrote it.
+  let seen = { ...pend }
+  const save = () => {
+    seen = savePending(ctx, pend, seen)
+  }
   const t = now()
   if (pend.codeExpiresAt <= t) {
     const warnings = removeAttempt(ctx, pend, conn)
@@ -1044,8 +1116,8 @@ async function waitStep(ctx, origin, state, token) {
   // A mark left set: the run before this one sent a poll and never recorded its answer.
   if (pend.pollInFlight) pend.uncertain = 1
   pend.pollInFlight = 1
-  writePendingIf(ctx, pend, pend.attemptId)
-  assertMine(ctx, token)
+  save()
+  assertMine(ctx)
   hook("poll")
   let r
   try {
@@ -1058,23 +1130,23 @@ async function waitStep(ctx, origin, state, token) {
       pend.pollInFlight = 0
       if (e.extra.sent !== false) pend.uncertain = 1
       pend.nextPollAt = now() + pend.interval
-      writePendingIf(ctx, pend, pend.attemptId)
+      save()
     }
     throw e
   }
   const sessionToken = r.status === 200 ? str(r.json?.access_token) : ""
-  if (sessionToken) return { done: await redeem(ctx, pend, sessionToken) }
+  if (sessionToken) return { done: await redeem(ctx, seen, conn, sessionToken) }
   const error = str(r.json?.error)
   pend.pollInFlight = 0
   if (error === "authorization_pending" || error === "slow_down" || r.status === 429) {
     // RFC 8628: 5 seconds longer from now on; a rate-limited poll is the same request to slow down.
     if (error === "slow_down" || r.status === 429) pend.interval += 5
     pend.nextPollAt = now() + pend.interval
-    writePendingIf(ctx, pend, pend.attemptId)
+    save()
     return { wait: pend.interval }
   }
   if (["access_denied", "expired_token", "invalid_grant"].includes(error)) {
-    const warnings = removeAttempt(ctx, pend, conn)
+    const warnings = removeAttempt(ctx, pend, conn, seen)
     if (warnings.length) throw unknownFail(warnings, pend)
     if (error === "access_denied")
       throw new Fail("denied", "The owner did not approve the connection. Nothing was created.")
@@ -1083,11 +1155,14 @@ async function waitStep(ctx, origin, state, token) {
   // A failure after the server may have started: a session may exist.
   if (r.status >= 500 || r.status === 200) pend.uncertain = 1
   pend.nextPollAt = now() + pend.interval
-  writePendingIf(ctx, pend, pend.attemptId)
+  save()
   throw httpFail(r, "Waiting for the approval")
 }
 
-/** Ends the approval's session with its own token. True only when Mikud confirmed it. */
+/**
+ * Ends the approval's session with its own token. True only when Mikud confirmed it. Sent even after the lock was
+ * lost: no other command knows this token, and a session left open is the worse outcome.
+ */
 async function endSession(origin, sessionToken) {
   try {
     const r = await request(origin, "POST", `${origin}/api/auth/revoke-session`, {
@@ -1103,15 +1178,17 @@ async function endSession(origin, sessionToken) {
 
 /**
  * The approved code gave a session token: record that a key is being created, create it, save the connection, end
- * the session, remove the attempt. In this order in every version, all under the lock.
+ * the session, remove the attempt. In this order in every version, all under the lock. `seen` is the attempt as last
+ * written, `conn` the connection as read at the start of this step.
  */
-async function redeem(ctx, pend, sessionToken) {
-  const id = pend.attemptId
+async function redeem(ctx, seen, conn, sessionToken) {
+  const id = seen.attemptId
+  const att = { pend: { ...seen, phase: "creating_key", sessionOpen: 1, pollInFlight: 0 }, conn, seen }
   try {
-    writePendingIf(ctx, { ...pend, phase: "creating_key", sessionOpen: 1, pollInFlight: 0 }, id)
+    att.seen = savePending(ctx, att.pend, seen)
   } catch (e) {
     // Nothing is sent before this mark is written: the session ends at once.
-    await endSession(pend.origin, sessionToken)
+    await endSession(seen.origin, sessionToken)
     if (e instanceof Changed)
       throw new Fail("cannot_save", "The connection changed while this command ran. Run: mikud status")
     throw e
@@ -1119,27 +1196,28 @@ async function redeem(ctx, pend, sessionToken) {
   hook("token")
   let outcome
   try {
-    outcome = { conn: await createAndSave(ctx, pend, sessionToken) }
+    outcome = { conn: await createAndSave(ctx, att, sessionToken) }
   } catch (e) {
     outcome = { fail: e }
   }
-  const ended = await endSession(pend.origin, sessionToken)
-  if (ended) {
-    try {
-      const latest = readPending(ctx)
-      if (latest?.attemptId === id) writePendingIf(ctx, { ...latest, sessionOpen: 0 }, id)
-    } catch {}
-  }
+  const ended = await endSession(seen.origin, sessionToken)
+  // A step from here that fails keeps the attempt, and with it what the attempt may have left on Mikud; it never
+  // replaces the answer.
+  try {
+    if (ended) att.seen = savePending(ctx, { ...att.seen, sessionOpen: 0 }, att.seen)
+  } catch {}
   hook("revoked")
-  const last = readPending(ctx)
-  if (last?.attemptId === id) {
-    // A connection that cannot be read now counts as not saved: the key is then reported, never lost.
-    let saved = null
-    try {
-      saved = readConnection(ctx)
-    } catch {}
-    removeAttempt(ctx, last, saved)
-  } else if (!ended) addLeft(ctx, [{ origin: pend.origin, keyName: pend.keyName, reason: "session_unknown" }])
+  try {
+    const last = readPending(ctx)
+    if (last?.attemptId === id) {
+      // A connection that cannot be read now counts as not saved: the key is then reported, never lost.
+      let saved = null
+      try {
+        saved = readConnection(ctx)
+      } catch {}
+      removeAttempt(ctx, last, saved)
+    } else if (!ended) addLeft(ctx, [{ origin: seen.origin, keyName: seen.keyName, reason: "session_unknown" }])
+  } catch {}
   hook("done")
   if (outcome.fail) {
     if (!ended && outcome.fail instanceof Fail) outcome.fail.message += ` ${SESSION_TEXT}`
@@ -1155,71 +1233,64 @@ async function redeem(ctx, pend, sessionToken) {
   }
 }
 
-async function createAndSave(ctx, pend, sessionToken) {
-  const { origin, keyName: name } = pend
+async function createAndSave(ctx, att, sessionToken) {
+  const { origin, keyName: name, days } = att.pend
   const unknown = () =>
     new Fail(
       "key_unknown",
       `Mikud's answer to creating the key was lost, so a key named "${name}" may exist on ${origin}: delete it in Settings, Agent access. Then run: mikud connect --url ${origin}`,
     )
+  // Mikud refused the key, or the request never left: no key exists, and the attempt records it (no key_unknown).
+  const noKey = (fail) => {
+    try {
+      att.seen = savePending(ctx, { ...att.seen, noKey: 1 }, att.seen)
+    } catch {}
+    return fail
+  }
+  assertMine(ctx)
   let r
   try {
     r = await request(origin, "POST", `${origin}/api/auth/api-key/create`, {
-      json: { name, expiresIn: pend.days * 86_400 },
+      json: { name, expiresIn: days * 86_400 },
       bearer: sessionToken,
       connect: true,
     })
   } catch (e) {
     if (e.code === "unreachable" && e.extra.sent !== false) throw unknown()
-    throw e
+    throw noKey(e)
   }
   hook("key")
   if (r.status >= 500) throw unknown()
-  if (r.status !== 200) throw httpFail(r, "Creating the key")
+  if (r.status !== 200) throw noKey(httpFail(r, "Creating the key"))
   const key = str(r.json?.key)
   const expiresAt = str(r.json?.expiresAt)
   if (!SECRET.test(key) || !PLAIN.test(expiresAt) || Number.isNaN(Date.parse(expiresAt))) throw unknown()
-  const notSaved = (fail) => {
+  // From here the key exists with a known name and end date: any failure records it before the answer.
+  try {
+    // Saved only while both files are as this command read them: a parallel disconnect or --replace wins.
+    if (!same(PENDING_FIELDS, readPending(ctx), att.seen) || !same(CONNECTION_FIELDS, readConnection(ctx), att.conn))
+      throw new Fail(
+        "cannot_save",
+        "Another mikud command disconnected or started a new connection while this one waited, so the new key was not saved. Run: mikud status",
+      )
+    const old = att.conn
+    // The key being replaced stays on Mikud: recorded before the connection that names it is replaced.
+    if (old && old.keyName !== name) {
+      addLeft(ctx, [{ origin: old.origin, keyName: old.keyName, expiresAt: old.expiresAt, reason: "replaced" }])
+      hook("recorded")
+    }
+    writeConnection(ctx, { v: 1, origin, key, keyName: name, expiresAt })
+  } catch (e) {
+    const fail = e instanceof Fail ? e : new Fail("cannot_save", `Cannot save the connection in ${ctx.dir}.`)
     try {
       addLeft(ctx, [{ origin, keyName: name, expiresAt, reason: "not_saved" }])
     } catch {
       fail.message += ` The key "${name}" on ${origin} works until ${expiresAt}: delete it in Settings, Agent access.`
     }
-    return fail
-  }
-  // Saved only while the attempt is still this run's: a parallel disconnect or --replace wins.
-  if (readPending(ctx)?.attemptId !== pend.attemptId)
-    throw notSaved(
-      new Fail(
-        "cannot_save",
-        "Another mikud command disconnected or started a new connection while this one waited, so the new key was not saved. Run: mikud status",
-      ),
-    )
-  let old
-  try {
-    old = readConnection(ctx)
-    // The key being replaced stays on Mikud: recorded before the connection that names it is replaced.
-    if (old && old.keyName !== name)
-      addLeft(ctx, [{ origin: old.origin, keyName: old.keyName, expiresAt: old.expiresAt, reason: "replaced" }])
-    writeConnection(ctx, { v: 1, origin, key, keyName: name, expiresAt })
-  } catch (e) {
-    if (old && old.keyName !== name) {
-      try {
-        const kept = readConnection(ctx)
-        if (kept?.keyName === old.keyName)
-          writeLeft(
-            ctx,
-            readLeft(ctx).filter(
-              (x) => !(x.keyName === old.keyName && x.origin === old.origin && x.reason === "replaced"),
-            ),
-          )
-      } catch {}
-    }
-    throw notSaved(e instanceof Fail ? e : new Fail("cannot_save", `Cannot save the connection in ${ctx.dir}.`))
+    throw fail
   }
   try {
-    const latest = readPending(ctx)
-    if (latest?.attemptId === pend.attemptId) writePendingIf(ctx, { ...latest, keySaved: 1 }, pend.attemptId)
+    att.seen = savePending(ctx, { ...att.seen, keySaved: 1 }, att.seen)
   } catch {}
   hook("saved")
   return { origin, keyName: name, expiresAt }
@@ -1227,7 +1298,7 @@ async function createAndSave(ctx, pend, sessionToken) {
 
 /* The other commands */
 
-function status(ctx) {
+async function status(ctx) {
   const conn = readConnection(ctx)
   const pend = readPending(ctx)
   const out = { status: conn ? "connected" : "not_connected" }
@@ -1244,7 +1315,13 @@ function status(ctx) {
       ...(warnings.length ? { warnings } : {}),
     }
   }
-  out.left = publicLeft(readLeft(ctx))
+  const entries = readLeft(ctx)
+  if (entries.some((e) => stale(e, conn))) {
+    try {
+      await withLock(ctx, async () => pruneLeft(ctx, readConnection(ctx)))
+    } catch {}
+  }
+  out.left = publicLeft(entries, conn)
   return out
 }
 
@@ -1252,11 +1329,14 @@ async function disconnect(ctx) {
   if (!secureHome(ctx, false)) return print({ status: "not_connected", left: [] })
   const result = await withLock(ctx, async () => {
     const conn = readConnection(ctx)
+    pruneLeft(ctx, conn)
     const pend = readPending(ctx)
     if (pend) removeAttempt(ctx, pend, conn)
     if (!conn) return { status: "not_connected" }
     // The key stays on Mikud (a key cannot delete itself): recorded before the connection is removed.
     addLeft(ctx, [{ origin: conn.origin, keyName: conn.keyName, expiresAt: conn.expiresAt, reason: "disconnected" }])
+    hook("recorded")
+    if (!same(CONNECTION_FIELDS, readConnection(ctx), conn)) throw new Changed()
     removeFile(ctx, ctx.connection)
     return {
       status: "disconnected",
@@ -1328,7 +1408,7 @@ async function forget(ctx, conn) {
   try {
     await withLock(ctx, async () => {
       const saved = readConnection(ctx)
-      if (saved && saved.key === conn.key) removeFile(ctx, ctx.connection)
+      if (same(CONNECTION_FIELDS, saved, conn)) removeFile(ctx, ctx.connection)
     })
   } catch {}
 }
@@ -1394,14 +1474,19 @@ async function main() {
         secureHome(ctx, true)
         await withLock(ctx, async () => writeLeft(ctx, []))
       }
-      return print(status(ctx))
+      return print(await status(ctx))
     }
     if (command === "connect") return opts.wait ? await waitForApproval(ctx, opts) : await connect(ctx, opts)
     if (command === "disconnect") return await disconnect(ctx)
     if (command === "get") return await api(ctx, "GET", opts)
     if (command === "post") return await api(ctx, "POST", opts)
     if (command === "patch") return await api(ctx, "PATCH", opts)
-  } catch (e) {
+  } catch (err) {
+    // The files changed under a lock this command no longer held: nothing more was done.
+    const e =
+      err instanceof Changed
+        ? new Fail("busy", "Another mikud command changed the connection meanwhile. Run: mikud status")
+        : err
     // What the command left on Mikud travels with every answer about the connection.
     if (e instanceof Fail && ["connect", "disconnect", "status"].includes(command)) e.extra.left = leftNow(ctx)
     throw e

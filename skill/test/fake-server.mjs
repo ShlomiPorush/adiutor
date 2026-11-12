@@ -47,6 +47,8 @@ export async function startFakeServer() {
     apiStatus: null, // the next /api/v1 answer's status, after the write landed
     apiError: null, // {status, code, message} answered by every /api/v1 call
     apiDelayMs: 0, // a write lands and is answered only after this
+    earlyHints: false, // /device/token and /api-key/create answer 103 Early Hints before their answer
+    keyError: null, // {status, code}: /api-key/create refuses, and creates nothing
   }
 
   const server = http.createServer(async (req, res) => {
@@ -58,11 +60,15 @@ export async function startFakeServer() {
     try {
       body = raw ? JSON.parse(raw) : null
     } catch {}
+    // One request per connection, as the PowerShell version asks: no client reuses a connection the test closed.
     const send = (status, value, headers = {}) => {
-      res.writeHead(status, { "content-type": "application/json", ...headers })
+      res.writeHead(status, { "content-type": "application/json", connection: "close", ...headers })
       res.end(value === undefined ? "" : JSON.stringify(value))
     }
     const cut = () => req.socket.destroy()
+    const hints = () => {
+      if (s.earlyHints) res.writeEarlyHints({ link: "</connect/device>; rel=preload; as=document" })
+    }
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? ""
     s.requests.push({
       method: req.method,
@@ -97,6 +103,7 @@ export async function startFakeServer() {
         g.arrive()
         await g.opened
       }
+      hints()
       if (body?.grant_type !== DEVICE_GRANT || body?.client_id !== "mikud-connect")
         return send(400, { error: "invalid_request" })
       const d = s.devices.get(body.device_code)
@@ -129,7 +136,9 @@ export async function startFakeServer() {
         g.arrive()
         await g.opened
       }
+      hints()
       if (!s.sessions.get(bearer)?.alive) return send(401, { code: "UNAUTHORIZED" })
+      if (s.keyError) return send(s.keyError.status, { code: s.keyError.code })
       const name = String(body?.name ?? "")
       const expiresIn = Number(body?.expiresIn)
       if (name.length < 1 || name.length > 32) return send(400, { code: "INVALID_NAME_LENGTH" })
@@ -264,6 +273,8 @@ export async function startFakeServer() {
       apiStatus: null,
       apiError: null,
       apiDelayMs: 0,
+      earlyHints: false,
+      keyError: null,
     })
     for (const g of Object.values(s.gates)) g?.open()
     s.gates = {}

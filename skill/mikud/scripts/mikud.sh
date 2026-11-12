@@ -16,6 +16,12 @@
 set -u
 set -f
 umask 077
+# Every name below may hold a secret. One that the caller exported would keep its export when assigned, and so reach
+# the environment of curl, awk and every other program this script starts: unset drops the export.
+unset TOKEN BODY QQ qq_s JF JV JK jg_line jg_rest RP_TEXT rr_row rv_rest rv_v sz_v SER cl_dc cs_key ca_set rq_out
+for _p in C_ K_ V_ W_ Y_ LN_; do unset "${_p}key"; done
+for _p in P_ X_ R_ L_ Q_ RA_ O_ N_ SN_ NK_; do unset "${_p}deviceCode"; done
+unset _p
 
 CLIENT_ID=mikud-connect
 DEVICE_GRANT=urn:ietf:params:oauth:grant-type:device_code
@@ -48,7 +54,7 @@ CLOCK_OFFSET=$(whole "${MIKUD_TEST_CLOCK_OFFSET:-}" 0)
 TIMEOUT_S="$((TIMEOUT_MS / 1000)).$(printf '%03d' $((TIMEOUT_MS % 1000)))"
 
 CONN_FIELDS="v:n origin:s key:s keyName:s expiresAt:s"
-PEND_FIELDS="v:n attemptId:s origin:s deviceCode:s userCode:s link:s interval:n nextPollAt:n codeExpiresAt:n days:n keyName:s phase:s pollInFlight:n uncertain:n sessionOpen:n keySaved:n"
+PEND_FIELDS="v:n attemptId:s origin:s deviceCode:s userCode:s link:s interval:n nextPollAt:n codeExpiresAt:n days:n keyName:s phase:s pollInFlight:n uncertain:n sessionOpen:n keySaved:n noKey:n"
 LEFT_FIELDS="origin:s keyName:s expiresAt:s reason:s at:s"
 OWNER_FIELDS="token:s host:s pid:n start:s"
 
@@ -299,6 +305,8 @@ function iso(t,   s, z, era, doe, yoe, y, doy, mp, d, m) {
 function dated(r) { return r == "replaced" || r == "disconnected" || r == "not_saved" }
 function known(r) { return dated(r) || r == "key_unknown" || r == "session_unknown" }
 function live(x, r) { return !dated(r) || x == "" || ms(x) > now * 1000 }
+# An entry for the key of the current connection (o, k): a run stopped between recording it and changing the connection.
+function stale() { return o != "" && ($4 == "replaced" || $4 == "disconnected") && $1 == o && $2 == k }
 function message(o, k, x, r) {
   if (r == "session_unknown") return "On " o ": " st
   if (r == "key_unknown") return "On " o ": a key named \"" k "\" may exist; delete it in Settings, Agent access."
@@ -325,7 +333,7 @@ mode == "left-add" {
   n++; O[n] = $1; K[n] = $2; X[n] = $3; R[n] = $4; A[n] = at
   next
 }
-mode == "left-drop" { if ($0 != "" && !($1 == o && $2 == k && $4 == "replaced")) print; next }
+mode == "left-drop" { if ($0 != "" && !stale()) print; next }
 mode == "left-write" {
   if ($0 == "") next
   split("origin keyName expiresAt reason at", names, " ")
@@ -334,7 +342,7 @@ mode == "left-write" {
   next
 }
 mode == "left-public" {
-  if ($0 == "" || !live($3, $4)) next
+  if ($0 == "" || !live($3, $4) || stale()) next
   list = list (list == "" ? "" : ",") "{\"origin\":\"" jesc($1) "\",\"keyName\":\"" jesc($2) "\",\"expiresAt\":\"" jesc($3) "\",\"reason\":\"" jesc($4) "\",\"at\":\"" jesc($5) "\",\"message\":\"" jesc(message($1, $2, $3, $4)) "\"}"
   next
 }
@@ -745,8 +753,10 @@ rename_over() {
   TMPFILE=""
 }
 
-# write_private FILE TEXT: a temporary file made private before anything is written, then renamed over.
+# write_private FILE TEXT: a temporary file made private before anything is written, then renamed over. Only by the
+# holder of the lock. A temporary file a stopped command left behind is removed by the next holder (sweep).
 write_private() {
+  assert_mine || return
   secure_home 1 || return
   TMPFILE="$1.$(rand 6).tmp"
   if ! (
@@ -770,10 +780,12 @@ write_private() {
     raise cannot_save "Cannot write in $DIR. Allow this agent to write there."
     return
   fi
+  hook WRITTEN
   rename_over "$TMPFILE" "$1"
 }
 
 remove_file() {
+  assert_mine || return
   if ! rm -f -- "$1" 2>/dev/null; then
     raise cannot_save "Cannot remove $1. Allow this agent to write in $DIR."
     return
@@ -873,16 +885,29 @@ write_connection() {
   write_private "$CONNECTION" "$SER$NL"
 }
 
-# write_pending_if PREFIX ATTEMPTID: writes the attempt only while it is still the one this run started from; raises
-# "changed" otherwise (the caller answers from the new state).
-write_pending_if() {
+# rec_same A B FIELDS: the records A and B (Afound, Bfound and each field) are the same, or both absent.
+rec_same() {
+  eval "rs_a=\${${1}found:-0} rs_b=\${${2}found:-0}"
+  [ "$rs_a" = "$rs_b" ] || return 1
+  [ "$rs_a" = 1 ] || return 0
+  for rs_f in $3; do
+    eval "[ \"\${$1${rs_f%:*}}\" = \"\${$2${rs_f%:*}}\" ]" || return 1
+  done
+}
+
+# save_pending PREFIX SEEN: writes the attempt PREFIX only while the file is exactly as this command last read or
+# wrote it (SEEN; SEENfound=0: no attempt), and SEEN is then what was written. Raises "changed" otherwise (the caller
+# answers from the new state).
+save_pending() {
   read_pending X_ || return
-  if [ -n "$2" ] && { [ "$X_found" != 1 ] || [ "$X_attemptId" != "$2" ]; }; then
+  if ! rec_same X_ "$2" "$PEND_FIELDS"; then
     raise changed "The attempt changed."
     return
   fi
   serialize "$PEND_FIELDS" "$1" || return
-  write_private "$PENDING" "$SER$NL"
+  write_private "$PENDING" "$SER$NL" || return
+  rec_copy "$1" "$2" "$PEND_FIELDS"
+  eval "${2}found=1"
 }
 
 # The left record: what the command left on Mikud, with non-secret fields only. LEFT holds its rows.
@@ -919,14 +944,29 @@ add_left() {
   write_left "$al_rows"
 }
 
-left_public() { printf '%s\n' "$1" | util left-public -v now="$(now)" -v st="$SESSION_TEXT"; }
+# left_public ROWS [ORIGIN KEYNAME]: the entries to report; never one for the key of the connection ORIGIN KEYNAME.
+left_public() { printf '%s\n' "$1" | util left-public -v now="$(now)" -v st="$SESSION_TEXT" -v o="${2:-}" -v k="${3:-}"; }
+
+# prune_left: an entry for the key of the current connection (C_) is a run stopped after recording that key as
+# replaced or disconnected and before changing the connection: removed, under the lock.
+prune_left() {
+  [ "$C_found" = 1 ] || return 0
+  read_left || return
+  pl_rows=$(printf '%s\n' "$LEFT" | util left-drop -v o="$C_origin" -v k="$C_keyName")
+  [ "$pl_rows" = "$LEFT" ] || write_left "$pl_rows"
+}
 
 # What the command left on Mikud, for an answer; [] when it cannot be read. Runs in a subshell: $(left_now).
 left_now() {
-  if read_left; then left_public "$LEFT"; else printf '[]'; fi
+  if read_left; then
+    if ! read_connection LN_ || [ "$LN_found" != 1 ]; then LN_origin="" LN_keyName=""; fi
+    LN_key=""
+    left_public "$LEFT" "$LN_origin" "$LN_keyName"
+  else printf '[]'; fi
 }
 
-# The lock: a folder created atomically (renamed into place with its owner file), released by its token only.
+# The lock: a file created exclusively, naming its holder (token, host, process id and that process's start time).
+# Taken only from a holder that is certainly gone, and released by its token only.
 
 # start_of PID: START, the start time of a process as the system reports it, the same in every version; "" when it
 # cannot be read.
@@ -956,17 +996,17 @@ running() {
   fi
 }
 
-# read_owner LOCK: OW_STATE free, unreadable or held (with OW_token, OW_host, OW_pid and OW_start).
+# read_owner FILE: OW_STATE free, unreadable or held (with OW_token, OW_host, OW_pid and OW_start).
 read_owner() {
   OW_STATE=free
   rec_clear OW_ "$OWNER_FIELDS"
   if [ ! -e "$1" ] && [ ! -L "$1" ]; then return 0; fi
-  if [ -L "$1" ] || [ ! -d "$1" ]; then
-    insecure "$1 must be a plain folder, not a link."
+  if [ -L "$1" ]; then
+    insecure "$1 must be a plain file, not a link."
     return
   fi
   OW_STATE=unreadable
-  if ! ro_text=$(cat -- "$1/owner" 2>/dev/null); then
+  if ! ro_text=$(cat -- "$1" 2>/dev/null); then
     if [ ! -e "$1" ] && [ ! -L "$1" ]; then OW_STATE=free; fi
     return 0
   fi
@@ -1007,11 +1047,11 @@ verdict() {
   if [ "$START" = "$OW_start" ]; then VERDICT=alive; else VERDICT=gone; fi
 }
 
-# mine: the lock is this command's (its owner file names this command's token).
+# mine: the lock is this command's (it names this command's token).
 mine() {
   [ -n "$LOCKTOKEN" ] || return 1
   mn_line=""
-  IFS= read -r mn_line 2>/dev/null <"$LOCK/owner" || [ -n "$mn_line" ] || return 1
+  IFS= read -r mn_line 2>/dev/null <"$LOCK" || [ -n "$mn_line" ] || return 1
   case $mn_line in "{\"token\":\"$LOCKTOKEN\","*) return 0 ;; esac
   return 1
 }
@@ -1023,40 +1063,29 @@ acquire() {
   aq_owner="{\"token\":\"$aq_token\",\"host\":\"$(esc "$HOST")\",\"pid\":$$,\"start\":\"$(esc "$START")\"}"
   aq_deadline=$(($(date +%s) + (LOCK_WAIT_MS + 999) / 1000))
   while :; do
-    # Only into an empty place: mv would move the new folder into an existing one.
-    if [ ! -e "$LOCK" ] && [ ! -L "$LOCK" ]; then
-      aq_fresh="$LOCK.$(rand 6).new"
-      if ! mkdir -- "$aq_fresh" 2>/dev/null || ! (
-        set -C
-        printf '%s\n' "$aq_owner" >"$aq_fresh/owner"
-      ) 2>/dev/null; then
-        rm -rf -- "$aq_fresh"
-        raise cannot_save "Cannot create a lock in $DIR. Allow this agent to write there."
-        return
-      fi
-      if mv -f -- "$aq_fresh" "$LOCK" 2>/dev/null; then
-        LOCKTOKEN=$aq_token
-        if mine; then
-          hook LOCKED
-          return 0
-        fi
-        # Another command took the place first, and the new folder went inside its lock.
-        LOCKTOKEN=""
-        rm -rf -- "${LOCK:?}/${aq_fresh##*/}"
-      else
-        rm -rf -- "$aq_fresh"
-      fi
+    # noclobber: created only when no file has the name (O_EXCL).
+    if (
+      set -C
+      printf '%s\n' "$aq_owner" >"$LOCK"
+    ) 2>/dev/null; then
+      LOCKTOKEN=$aq_token
+      hook LOCKED
+      sweep || return
+      return 0
+    fi
+    if [ ! -e "$LOCK" ] && [ ! -L "$LOCK" ] && [ ! -w "$DIR" ]; then
+      raise cannot_save "Cannot create a lock in $DIR. Allow this agent to write there."
+      return
     fi
     read_owner "$LOCK" || return
     verdict
     if [ "$VERDICT" = gone ]; then
       hook BREAK_OBSERVED
-      break_lock
-      continue
+      if remove_lock_if "$OW_token"; then continue; fi
     fi
     if [ "$(date +%s)" -gt "$aq_deadline" ]; then
       if [ "$VERDICT" = unknown ]; then
-        raise busy "Another mikud command may hold the lock $LOCK, and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that folder by hand and run the command again."
+        raise busy "Another mikud command may hold the lock $LOCK, and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again."
         return
       fi
       raise busy "Another mikud command is using the connection. Nothing was sent; run it again."
@@ -1071,30 +1100,28 @@ acquire() {
   done
 }
 
-# Removes the lock of a holder that is certainly gone. Moving it away is atomic, so of two that try only one moves
-# it; if what was moved is not that lock (another command had just taken a fresh one), it goes back.
-break_lock() {
-  bl_token=$OW_token
-  bl_moved="$LOCK.$(rand 6).dead"
-  mv -f -- "$LOCK" "$bl_moved" 2>/dev/null || return 0
+# remove_lock_if TOKEN: removes the lock that TOKEN names. Moving it away is atomic, so of two that try only one moves
+# it; if what was moved is another lock (a command had just taken a fresh one), it is linked back, which fails when a
+# newer lock is there already (ln never replaces). The command whose lock was lost finds out before its next request
+# or change (assert_mine).
+remove_lock_if() {
+  rl_token=$1
+  rl_moved="$LOCK.$(rand 6).dead"
+  mv -f -- "$LOCK" "$rl_moved" 2>/dev/null || return 0
   hook BREAK_MOVED
-  if read_owner "$bl_moved" && [ "$OW_STATE" = held ] && [ "$OW_token" = "$bl_token" ]; then
-    rm -rf -- "$bl_moved"
+  rl_got=""
+  if read_owner "$rl_moved" && [ "$OW_STATE" = held ]; then rl_got=$OW_token; fi
+  if [ -n "$rl_got" ] && [ "$rl_got" = "$rl_token" ]; then
+    rm -f -- "$rl_moved"
     return 0
   fi
-  if [ ! -e "$LOCK" ] && [ ! -L "$LOCK" ] && mv -f -- "$bl_moved" "$LOCK" 2>/dev/null; then
-    [ ! -e "$LOCK/${bl_moved##*/}" ] || rm -rf -- "${LOCK:?}/${bl_moved##*/}"
-  else
-    rm -rf -- "$bl_moved"
-  fi
-  return 0
+  [ -d "$LOCK" ] || ln -- "$rl_moved" "$LOCK" 2>/dev/null || :
+  rm -f -- "$rl_moved"
+  return 1
 }
 
 release() {
-  if mine; then
-    rl_old="$LOCK.$(rand 6).old"
-    if mv -f -- "$LOCK" "$rl_old" 2>/dev/null; then rm -rf -- "$rl_old"; fi
-  fi
+  if mine; then remove_lock_if "$LOCKTOKEN" || :; fi
   LOCKTOKEN=""
 }
 
@@ -1107,10 +1134,27 @@ with_lock() {
   return $wl_rc
 }
 
-# Before a request that spends a one-time secret: the lock must still be this command's, or nothing is sent.
+# Before a request that spends a one-time secret, and before every change to a file: the lock must be this command's.
 assert_mine() {
   mine && return 0
   raise busy "Another mikud command took over the connection. Run it again."
+}
+
+# sweep: removes the temporary files of write_private that a stopped command left behind (they may hold a secret).
+# Every one is written under the lock, so the holder finds only those.
+sweep() {
+  assert_mine || return
+  set +f
+  for sw_f in "$DIR"/*.tmp; do
+    sw_n=${sw_f##*/}
+    sw_h=${sw_n#*.}
+    sw_h=${sw_h%.tmp}
+    case ${sw_n%%.*} in connection | pending | left) ;; *) continue ;; esac
+    case $sw_h in "" | *[!0123456789abcdef]*) continue ;; esac
+    [ ${#sw_h} -eq 12 ] || continue
+    rm -f -- "$sw_f"
+  done
+  set -f
 }
 
 # Requests
@@ -1229,21 +1273,24 @@ ckn() { if [ "$C_found" = 1 ]; then printf '%s' "$C_keyName"; fi; }
 # attempt_warnings PREFIX CONNKEYNAME: WARN, what may be left on Mikud if this attempt were removed now; nothing for a
 # completed connect.
 attempt_warnings() {
-  eval "aw_ph=\$${1}phase aw_pf=\$${1}pollInFlight aw_un=\$${1}uncertain aw_so=\$${1}sessionOpen aw_ks=\$${1}keySaved aw_kn=\$${1}keyName"
+  eval "aw_ph=\$${1}phase aw_pf=\$${1}pollInFlight aw_un=\$${1}uncertain aw_so=\$${1}sessionOpen aw_ks=\$${1}keySaved aw_kn=\$${1}keyName aw_nk=\$${1}noKey"
   WARN=""
   if [ "$aw_ph" = creating_key ]; then
-    # The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts.
-    if [ "$aw_ks" = 0 ] && { [ -z "$2" ] || [ "$2" != "$aw_kn" ]; }; then WARN=key_unknown; fi
+    # The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts. A create
+    # that Mikud refused, or that was never sent, made no key.
+    if [ "$aw_ks" = 0 ] && [ "$aw_nk" = 0 ] && { [ -z "$2" ] || [ "$2" != "$aw_kn" ]; }; then WARN=key_unknown; fi
     [ "$aw_so" = 0 ] || WARN="${WARN:+$WARN }session_unknown"
   elif [ "$aw_pf" != 0 ] || [ "$aw_un" != 0 ] || [ "$aw_so" != 0 ]; then
     WARN=session_unknown
   fi
 }
 
-# remove_attempt PREFIX CONNKEYNAME: removes an attempt, after writing what it may have left on Mikud. Under the lock.
+# remove_attempt PREFIX CONNKEYNAME [SEEN]: removes an attempt, after writing what it may have left on Mikud. Under the
+# lock; the file is removed only while it is exactly as this command last read or wrote it (SEEN, PREFIX by default).
 # WARN says what that was.
 remove_attempt() {
   rec_copy "$1" RA_ "$PEND_FIELDS"
+  ra_seen=${3:-$1}
   attempt_warnings RA_ "$2"
   ra_warn=$WARN
   if [ -n "$ra_warn" ]; then
@@ -1252,7 +1299,7 @@ remove_attempt() {
     add_left "$ra_rows" || return
   fi
   read_pending X_ || return
-  if [ "$X_found" = 1 ] && [ "$X_attemptId" = "$RA_attemptId" ]; then remove_file "$PENDING" || return; fi
+  if rec_same X_ "$ra_seen" "$PEND_FIELDS"; then remove_file "$PENDING" || return; fi
   WARN=$ra_warn
 }
 
@@ -1303,8 +1350,16 @@ cmd_connect() {
   printf '{%s,"left":%s}\n' "$RESULT" "$(left_now)"
 }
 
+# expect_connection: the connection is still exactly C_, as this command read it under the lock; raises "changed".
+expect_connection() {
+  read_connection Y_ || return
+  rec_same Y_ C_ "$CONN_FIELDS" && return 0
+  raise changed "The connection changed."
+}
+
 connect_locked() {
   read_connection C_ || return
+  prune_left || return
   read_pending P_ || return
   cl_found=$P_found cl_found_origin=$P_origin
   settle || return
@@ -1364,8 +1419,11 @@ connect_locked() {
   int_of "$JV" 600
   N_v=1 N_attemptId=$(rand 8) N_origin=$cl_origin N_deviceCode=$cl_dc N_userCode=$cl_uc N_link=$cl_link
   N_interval=$cl_interval N_nextPollAt=$((cl_t + cl_interval)) N_codeExpiresAt=$((cl_t + INT)) N_days=$DAYS
-  N_keyName=$(key_name) N_phase=polling N_pollInFlight=0 N_uncertain=0 N_sessionOpen=0 N_keySaved=0
-  write_pending_if N_ "" || return
+  N_keyName=$(key_name) N_phase=polling N_pollInFlight=0 N_uncertain=0 N_sessionOpen=0 N_keySaved=0 N_noKey=0
+  # Only into the state this command read: no attempt, and the connection it decided on.
+  expect_connection || return
+  SN_found=0
+  save_pending N_ SN_ || return
   pending_answer N_
 }
 
@@ -1401,10 +1459,11 @@ cmd_wait() {
 }
 
 # wait_step: one look at the attempt under the lock: an answer (DONE), the seconds until the next poll (STEP_WAIT), or
-# one poll.
+# one poll. Every save is conditional on the attempt exactly as this command last read or wrote it (SN_).
 wait_step() {
   DONE="" STEP_WAIT=0
   read_connection C_ || return
+  prune_left || return
   read_pending P_ || return
   settle || return
   if [ "$O_found" = 1 ] && [ "$O_origin" = "$WORG" ]; then
@@ -1439,6 +1498,8 @@ wait_step() {
     return 0
   fi
   STATE_ID=$P_attemptId
+  rec_copy P_ SN_ "$PEND_FIELDS"
+  SN_found=1
   ws_t=$(now)
   if [ "$P_codeExpiresAt" -le "$ws_t" ]; then
     remove_attempt P_ "$(ckn)" || return
@@ -1460,23 +1521,25 @@ wait_step() {
   # A mark left set: the run before this one sent a poll and never recorded its answer.
   [ "$P_pollInFlight" = 0 ] || P_uncertain=1
   P_pollInFlight=1
-  write_pending_if P_ "$P_attemptId" || return
+  save_pending P_ SN_ || return
   assert_mine || return
   hook POLL
   qq "{\"grant_type\":\"$DEVICE_GRANT\",\"device_code\":\"$P_deviceCode\",\"client_id\":\"$CLIENT_ID\"}"
   if ! request "$WORG" POST /api/auth/device/token "$UA
 header = \"Content-Type: application/json\"
 data-binary = \"$QQ\""; then
+    QQ=""
     if [ "$E_CODE" = unreachable ]; then
       err_save S
       P_pollInFlight=0
       [ "$E_SENT" = no ] || P_uncertain=1
       P_nextPollAt=$(($(now) + P_interval))
-      write_pending_if P_ "$P_attemptId" || return
+      save_pending P_ SN_ || return
       err_restore S
     fi
     return 1
   fi
+  QQ=""
   parse_answer
   TOKEN=""
   if [ "$STATUS" = 200 ]; then
@@ -1488,7 +1551,7 @@ data-binary = \"$QQ\""; then
       # A session may exist, but this token cannot be sent safely: never used, and reported like a lost answer.
       TOKEN=""
       P_pollInFlight=0 P_uncertain=1 P_nextPollAt=$(($(now) + P_interval))
-      write_pending_if P_ "$P_attemptId" || return
+      save_pending P_ SN_ || return
       raise unexpected_answer "Mikud answered the approval with a token this command cannot use. $SESSION_TEXT"
       return
     fi
@@ -1506,13 +1569,13 @@ data-binary = \"$QQ\""; then
     # RFC 8628: 5 seconds longer from now on; a rate-limited poll is the same request to slow down.
     if [ "$ws_err" = slow_down ] || [ "$STATUS" = 429 ]; then P_interval=$((P_interval + 5)); fi
     P_nextPollAt=$(($(now) + P_interval))
-    write_pending_if P_ "$P_attemptId" || return
+    save_pending P_ SN_ || return
     STEP_WAIT=$P_interval
     return 0
   fi
   case $ws_err in
     access_denied | expired_token | invalid_grant)
-      remove_attempt P_ "$(ckn)" || return
+      remove_attempt P_ "$(ckn)" SN_ || return
       if [ -n "$WARN" ]; then
         unknown_fail "$WARN" P_
         return
@@ -1528,11 +1591,12 @@ data-binary = \"$QQ\""; then
   # A failure after the server may have started: a session may exist.
   if [ "$STATUS" -ge 500 ] || [ "$STATUS" = 200 ]; then P_uncertain=1; fi
   P_nextPollAt=$(($(now) + P_interval))
-  write_pending_if P_ "$P_attemptId" || return
+  save_pending P_ SN_ || return
   http_fail "Waiting for the approval"
 }
 
-# end_session ORIGIN: ends the approval's session with its own token. ENDED 1 only when Mikud confirmed it.
+# end_session ORIGIN: ends the approval's session with its own token. ENDED 1 only when Mikud confirmed it. Sent even
+# after the lock was lost: no other command knows this token, and a session left open is the worse outcome.
 end_session() {
   ENDED=0
   qq "{\"token\":\"$TOKEN\"}"
@@ -1544,19 +1608,21 @@ data-binary = \"$QQ\""; then
     jget status
     if [ "$STATUS" = 200 ] && [ "$JK" = t ]; then ENDED=1; fi
   fi
+  QQ="" BODY="" JF=""
   return 0
 }
 
 # redeem: the approved code gave a session token (TOKEN): record that a key is being created, create it, save the
-# connection, end the session, remove the attempt. In this order in every version, all under the lock. RESULT.
+# connection, end the session, remove the attempt. In this order in every version, all under the lock. SN_ is the
+# attempt as last written, C_ the connection as read at the start of this step. RESULT.
 redeem() {
-  rd_id=$P_attemptId
-  rec_copy P_ R_ "$PEND_FIELDS"
-  R_phase=creating_key R_sessionOpen=1 R_pollInFlight=0
-  if ! write_pending_if R_ "$rd_id"; then
+  rd_id=$P_attemptId rd_origin=$P_origin rd_name=$P_keyName
+  rec_copy SN_ R_ "$PEND_FIELDS"
+  R_found=1 R_phase=creating_key R_sessionOpen=1 R_pollInFlight=0
+  if ! save_pending R_ SN_; then
     # Nothing is sent before this mark is written: the session ends at once.
     err_save F
-    end_session "$P_origin"
+    end_session "$rd_origin"
     if [ "$F_code" = changed ]; then
       raise cannot_save "The connection changed while this command ran. Run: mikud status"
       return
@@ -1570,21 +1636,26 @@ redeem() {
     rd_ok=0
     err_save F
   fi
-  end_session "$P_origin"
+  end_session "$rd_origin"
   rd_ended=$ENDED
-  if [ "$rd_ended" = 1 ] && read_pending L_ && [ "$L_found" = 1 ] && [ "$L_attemptId" = "$rd_id" ]; then
-    L_sessionOpen=0
-    write_pending_if L_ "$rd_id" || :
+  # A step from here that fails keeps the attempt, and with it what the attempt may have left on Mikud; it never
+  # replaces the answer.
+  if [ "$rd_ended" = 1 ]; then
+    rec_copy SN_ L_ "$PEND_FIELDS"
+    L_found=1 L_sessionOpen=0
+    save_pending L_ SN_ || :
   fi
   hook REVOKED
-  read_pending L_ || return
-  if [ "$L_found" = 1 ] && [ "$L_attemptId" = "$rd_id" ]; then
-    # A connection that cannot be read now counts as not saved: the key is then reported, never lost.
-    rd_saved=""
-    if read_connection K_ && [ "$K_found" = 1 ]; then rd_saved=$K_keyName; fi
-    remove_attempt L_ "$rd_saved" || return
-  elif [ "$rd_ended" != 1 ]; then
-    add_left "$P_origin$TAB$P_keyName$TAB${TAB}session_unknown" || return
+  if read_pending L_; then
+    if [ "$L_found" = 1 ] && [ "$L_attemptId" = "$rd_id" ]; then
+      # A connection that cannot be read now counts as not saved: the key is then reported, never lost.
+      rd_saved=""
+      if read_connection K_ && [ "$K_found" = 1 ]; then rd_saved=$K_keyName; fi
+      K_key=""
+      remove_attempt L_ "$rd_saved" || :
+    elif [ "$rd_ended" != 1 ]; then
+      add_left "$rd_origin$TAB$rd_name$TAB${TAB}session_unknown" || :
+    fi
   fi
   hook DONE
   if [ "$rd_ok" = 0 ]; then
@@ -1610,22 +1681,38 @@ not_saved() {
   return 1
 }
 
+# no_key: with the failure in E_*, records that Mikud refused the key or the request never left, so no key exists
+# (no key_unknown follows).
+no_key() {
+  err_save H
+  rec_copy SN_ NK_ "$PEND_FIELDS"
+  NK_found=1 NK_noKey=1
+  save_pending NK_ SN_ || :
+  err_restore H
+  return 1
+}
+
 key_unknown_fail() {
   raise key_unknown "Mikud's answer to creating the key was lost, so a key named \"$cs_n\" may exist on $cs_o: delete it in Settings, Agent access. Then run: mikud connect --url $cs_o"
 }
 
 # create_and_save: CS_origin, CS_keyName and CS_expiresAt of the saved connection.
 create_and_save() {
-  cs_o=$P_origin cs_n=$P_keyName cs_x=""
+  cs_o=$R_origin cs_n=$R_keyName cs_x=""
   if ! plain_ok "$cs_n"; then
     insecure "$PENDING is damaged. Delete it and connect again."
     return
   fi
+  assert_mine || return
   if ! request "$cs_o" POST /api/auth/api-key/create "$UA
 header = \"Authorization: Bearer $TOKEN\"
-$(json_settings "{\"name\":\"$cs_n\",\"expiresIn\":$((P_days * 86400))}")"; then
-    if [ "$E_CODE" = unreachable ] && [ "$E_SENT" != no ]; then key_unknown_fail; fi
-    return 1
+$(json_settings "{\"name\":\"$cs_n\",\"expiresIn\":$((R_days * 86400))}")"; then
+    if [ "$E_CODE" = unreachable ] && [ "$E_SENT" != no ]; then
+      key_unknown_fail
+      return
+    fi
+    no_key
+    return
   fi
   hook KEY
   if [ "$STATUS" -ge 500 ]; then
@@ -1634,6 +1721,7 @@ $(json_settings "{\"name\":\"$cs_n\",\"expiresIn\":$((P_days * 86400))}")"; then
   fi
   if [ "$STATUS" != 200 ]; then
     http_fail "Creating the key"
+    no_key
     return
   fi
   parse_answer
@@ -1641,42 +1729,43 @@ $(json_settings "{\"name\":\"$cs_n\",\"expiresIn\":$((P_days * 86400))}")"; then
   cs_key=$JV
   jstr expiresAt
   cs_x=$JV
+  BODY="" JF="" JV=""
   if ! secret_ok "$cs_key" || ! plain_ok "$cs_x" || [ "$(util ms -v s="$cs_x" </dev/null)" = -1 ]; then
+    cs_key=""
     key_unknown_fail
     return
   fi
-  # Saved only while the attempt is still this run's: a parallel disconnect or --replace wins.
-  read_pending Q_ || return
-  if [ "$Q_found" != 1 ] || [ "$Q_attemptId" != "$P_attemptId" ]; then
+  # From here the key exists with a known name and end date: any failure records it before the answer.
+  # Saved only while both files are as this command read them: a parallel disconnect or --replace wins.
+  if ! read_pending Q_ || ! read_connection V_; then
+    cs_key="" V_key=""
+    not_saved
+    return
+  fi
+  if ! rec_same Q_ SN_ "$PEND_FIELDS" || ! rec_same V_ C_ "$CONN_FIELDS"; then
+    cs_key="" V_key=""
     raise cannot_save "Another mikud command disconnected or started a new connection while this one waited, so the new key was not saved. Run: mikud status"
     not_saved
     return
   fi
-  if ! read_connection V_; then
-    not_saved
-    return
-  fi
-  cs_old=0
-  if [ "$V_found" = 1 ] && [ "$V_keyName" != "$cs_n" ]; then cs_old=1; fi
+  V_key=""
   W_v=1 W_origin=$cs_o W_key=$cs_key W_keyName=$cs_n W_expiresAt=$cs_x
+  cs_key=""
   # The key being replaced stays on Mikud: recorded before the connection that names it is replaced.
-  if { [ "$cs_old" = 0 ] || add_left "$V_origin$TAB$V_keyName$TAB$V_expiresAt${TAB}replaced"; } && write_connection W_; then
+  cs_ok=1
+  if [ "$C_found" = 1 ] && [ "$C_keyName" != "$cs_n" ]; then
+    if add_left "$C_origin$TAB$C_keyName$TAB$C_expiresAt${TAB}replaced"; then hook RECORDED; else cs_ok=0; fi
+  fi
+  if [ "$cs_ok" = 1 ] && write_connection W_; then
     W_key=""
   else
     W_key=""
-    err_save G
-    if [ "$cs_old" = 1 ] && read_connection K_ && [ "$K_found" = 1 ] && [ "$K_keyName" = "$V_keyName" ] && read_left; then
-      write_left "$(printf '%s\n' "$LEFT" | util left-drop -v o="$V_origin" -v k="$V_keyName")" || :
-    fi
-    err_restore G
     not_saved
     return
   fi
-  cs_key=""
-  if read_pending Q_ && [ "$Q_found" = 1 ] && [ "$Q_attemptId" = "$P_attemptId" ]; then
-    Q_keySaved=1
-    write_pending_if Q_ "$P_attemptId" || :
-  fi
+  rec_copy SN_ Q_ "$PEND_FIELDS"
+  Q_found=1 Q_keySaved=1
+  save_pending Q_ SN_ || :
   hook SAVED
   CS_origin=$cs_o CS_keyName=$cs_n CS_expiresAt=$cs_x
 }
@@ -1715,7 +1804,21 @@ cmd_status() {
     fi
   fi
   read_left || return
-  printf '{%s,"left":%s}\n' "$st_out" "$(left_public "$LEFT")"
+  st_o="" st_k=""
+  if [ "$C_found" = 1 ]; then st_o=$C_origin st_k=$C_keyName; fi
+  # An entry for the live key (a run stopped mid-way) is removed under the lock; reported or not, it is never shown.
+  if [ -n "$st_o" ] && [ "$(printf '%s\n' "$LEFT" | util left-drop -v o="$st_o" -v k="$st_k")" != "$LEFT" ]; then
+    st_left=$LEFT
+    with_lock status_prune_locked || :
+    LEFT=$st_left
+  fi
+  C_key=""
+  printf '{%s,"left":%s}\n' "$st_out" "$(left_public "$LEFT" "$st_o" "$st_k")"
+}
+
+status_prune_locked() {
+  read_connection C_ || return
+  prune_left
 }
 
 cmd_disconnect() {
@@ -1730,6 +1833,7 @@ cmd_disconnect() {
 
 disconnect_locked() {
   read_connection C_ || return
+  prune_left || return
   read_pending P_ || return
   if [ "$P_found" = 1 ]; then remove_attempt P_ "$(ckn)" || return; fi
   if [ "$C_found" != 1 ]; then
@@ -1738,6 +1842,8 @@ disconnect_locked() {
   fi
   # The key stays on Mikud (a key cannot delete itself): recorded before the connection is removed.
   add_left "$C_origin$TAB$C_keyName$TAB$C_expiresAt${TAB}disconnected" || return
+  hook RECORDED
+  expect_connection || return
   remove_file "$CONNECTION" || return
   RESULT="\"status\":\"disconnected\",\"origin\":\"$(esc "$C_origin")\",\"keyName\":\"$(esc "$C_keyName")\",\"expiresAt\":\"$(esc "$C_expiresAt")\""
   RESULT="$RESULT,\"message\":\"$(esc "Forgot the connection on this computer. The key \"$C_keyName\" still works on $C_origin until $C_expiresAt: delete it in Settings, Agent access, if nothing uses it.")\""
@@ -1841,7 +1947,7 @@ label_of() {
 # A key Mikud no longer accepts is forgotten, while it is still the saved one.
 forget_locked() {
   read_connection K_ || return
-  if [ "$K_found" = 1 ] && [ "$K_key" = "$C_key" ]; then remove_file "$CONNECTION"; fi
+  if rec_same K_ C_ "$CONN_FIELDS"; then remove_file "$CONNECTION"; fi
 }
 
 cmd_api() {
@@ -1916,6 +2022,8 @@ run_command() {
 }
 
 run_command && exit 0
+# The files changed under a lock this command no longer held: nothing more was done.
+if [ "$E_CODE" = changed ]; then E_CODE=busy E_MSG="Another mikud command changed the connection meanwhile. Run: mikud status"; fi
 # What the command left on Mikud travels with every answer about the connection.
 case $COMMAND in
   connect | disconnect | status) print_error 1 ;;

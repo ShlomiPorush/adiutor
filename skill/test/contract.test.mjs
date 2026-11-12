@@ -69,15 +69,15 @@ function baseEnv(home, extra) {
   return { ...env, MIKUD_SKILL_HOME: home, MIKUD_WAIT_SECONDS: "8", MIKUD_TEST_NODE_CALLED: nodeCalled, ...extra }
 }
 
-/** Runs one command; resolves with its exit code, its parsed answer and its raw output. */
-function run(impl, home, args, env = {}) {
+/** Runs one command; resolves with its exit code, its parsed answer and its raw output. `first`: folders first on PATH. */
+function run(impl, home, args, env = {}, first = []) {
   const [cmd, base] = command(impl)
   const extra = { ...env }
   if (impl !== "node") {
     extra.MIKUD_NO_NODE = "1"
-    const dirs = [standin, ...(impl === "sh" && fs.existsSync(curlWrap) ? [curlWrap] : [])]
+    const dirs = [...first, standin, ...(impl === "sh" && fs.existsSync(curlWrap) ? [curlWrap] : [])]
     extra.PATH = [...dirs, process.env.PATH].join(path.delimiter)
-  }
+  } else if (first.length) extra.PATH = [...first, process.env.PATH].join(path.delimiter)
   const child = spawn(cmd, [...base, ...args], { env: baseEnv(home, extra), stdio: ["ignore", "pipe", "pipe"] })
   let out = ""
   let err = ""
@@ -162,7 +162,7 @@ for (const impl of impls) {
       fs.rmSync(curlArgs, { force: true })
     })
     const fresh = () => path.join(root, `${impl}-${++n}`, "home")
-    const r = (home, args, env) => run(impl, home, args, env)
+    const r = (home, args, env, first) => run(impl, home, args, env, first)
 
     async function connected(home, srv = server, args = []) {
       const c = await r(home, ["connect", "--url", srv.origin, ...args])
@@ -440,6 +440,82 @@ for (const impl of impls) {
       fs.rmdirSync(path.join(home, "connection"))
     })
 
+    it("a pending file that cannot be read after the key was made: the key is still recorded and reported", async () => {
+      for (const leftBlocked of [false, true]) {
+        server.reset()
+        const home = fresh()
+        await r(home, ["connect", "--url", server.origin])
+        server.approve()
+        const hold = path.join(root, `${impl}-damaged-${n}`)
+        const p = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_KEY: hold })
+        await reached(hold)
+        fs.writeFileSync(path.join(home, "pending"), "{damaged")
+        // The left record cannot be written either: then the answer itself names the key.
+        if (leftBlocked) fs.mkdirSync(path.join(home, "left"))
+        go(hold)
+        const w = await p
+        assert.equal(w.json?.error, "insecure_credentials", w.all)
+        assert.match(w.json.message, /pending is damaged/, "the first failure is the answer")
+        assert.equal(server.aliveSessions(), 0, "the session was ended")
+        const [[, key]] = server.aliveKeys()
+        if (leftBlocked) {
+          assert.ok(w.json.message.includes(key.name) && w.json.message.includes(key.expiresAt), w.all)
+        } else {
+          assert.deepEqual(
+            w.json.left.map((e) => [e.reason, e.origin, e.keyName, e.expiresAt]),
+            [["not_saved", server.origin, key.name, key.expiresAt]],
+          )
+        }
+        noSecrets(server, w)
+      }
+    })
+
+    it("a create Mikud refused: no key_unknown, and the session ended", async () => {
+      const home = fresh()
+      await r(home, ["connect", "--url", server.origin])
+      server.approve()
+      server.keyError = { status: 400, code: "INVALID_NAME_LENGTH" }
+      const w = await r(home, ["connect", "--wait", "--url", server.origin])
+      assert.equal(w.json?.error, "http_400", w.all)
+      assert.equal(server.keys.size, 0)
+      assert.equal(server.aliveSessions(), 0)
+      assert.deepEqual(w.json.left ?? [], [])
+      const s = await r(home, ["status"])
+      assert.equal(s.json.pending, undefined, s.all)
+      assert.deepEqual(s.json.left, [])
+    })
+
+    it("a create that never left: no key_unknown, only the session that could not be ended", async () => {
+      const lone = await startFakeServer()
+      try {
+        const home = fresh()
+        await r(home, ["connect", "--url", lone.origin])
+        lone.approve()
+        const hold = path.join(root, `${impl}-unsent-${n}`)
+        const p = r(home, ["connect", "--wait", "--url", lone.origin], { MIKUD_TEST_HOLD_TOKEN: hold })
+        await reached(hold)
+        // Mikud stops listening: the create and the revoke never reach it.
+        await lone.close()
+        go(hold)
+        const w = await p
+        assert.equal(w.json?.error, "unreachable", w.all)
+        assert.equal(lone.counts.keyCreate, 0)
+        assert.deepEqual(leftReasons(w.json), ["session_unknown"], w.all)
+      } finally {
+        await lone.close()
+      }
+    })
+
+    it("an interim 103 answer before the real one: connects normally", async () => {
+      const home = fresh()
+      server.earlyHints = true
+      const w = await connected(home)
+      assert.equal(w.json.warning, undefined, w.all)
+      assert.deepEqual(w.json.left, [])
+      assert.equal(server.aliveKeys().length, 1)
+      assert.equal(server.aliveSessions(), 0)
+    })
+
     // --- Concurrency ---
 
     it("two --wait at once: one key, one revoke", async () => {
@@ -497,73 +573,153 @@ for (const impl of impls) {
       const home = fresh()
       await r(home, ["connect", "--url", server.origin])
       const lock = path.join(home, "lock")
-      fs.mkdirSync(lock)
       // This test's own process is alive, but it started at another time than the lock says.
       const owner = { token: "reused", host: host(), pid: process.pid, start: "not-its-start-time" }
-      fs.writeFileSync(path.join(lock, "owner"), `${JSON.stringify(owner)}\n`)
+      fs.writeFileSync(lock, `${JSON.stringify(owner)}\n`)
       const s = await r(home, ["connect"])
       assert.equal(s.json?.status, "pending", s.all)
       assert.equal(fs.existsSync(lock), false)
     })
 
-    it("never breaks a lock it cannot decide about, and names the folder to remove by hand", async () => {
+    it("never breaks a lock it cannot decide about, and names the file to remove by hand", async () => {
       const home = fresh()
       await r(home, ["connect", "--url", server.origin])
       const lock = path.join(home, "lock")
-      fs.mkdirSync(lock)
       const owner = { token: "elsewhere", host: "another-host.invalid", pid: 1, start: "1" }
-      fs.writeFileSync(path.join(lock, "owner"), `${JSON.stringify(owner)}\n`)
+      fs.writeFileSync(lock, `${JSON.stringify(owner)}\n`)
       const a = await r(home, ["connect"], { MIKUD_TEST_LOCK_WAIT_MS: "1000" })
       assert.equal(a.json?.error, "busy", a.all)
       assert.ok(a.json.message.includes(lock), a.json.message)
-      assert.equal(fs.existsSync(path.join(lock, "owner")), true)
-      // An owner file that cannot be read is undecidable too.
-      fs.rmSync(path.join(lock, "owner"))
+      assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).token, "elsewhere")
+      // A lock that names no holder (its holder stopped before writing it) is undecidable too.
+      fs.writeFileSync(lock, "")
       const b = await r(home, ["connect"], { MIKUD_TEST_LOCK_WAIT_MS: "1000" })
       assert.equal(b.json?.error, "busy", b.all)
       assert.equal(fs.existsSync(lock), true)
-      fs.rmSync(lock, { recursive: true })
+      fs.rmSync(lock)
       assert.equal((await r(home, ["connect"])).json?.status, "pending")
     })
 
-    it("releases the lock by its token only", async () => {
+    it("releases the lock by its token only, and changes nothing once the lock is not its own", async () => {
       const home = fresh()
       const hold = path.join(root, `${impl}-token-${n}`)
       const holder = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: hold })
       await reached(hold)
       // As if another command had wrongly broken it and taken a lock of its own.
-      const owner = path.join(home, "lock", "owner")
+      const lock = path.join(home, "lock")
       const theirs = { token: "theirs", host: host(), pid: process.pid, start: "x" }
-      fs.writeFileSync(owner, `${JSON.stringify(theirs)}\n`)
+      fs.writeFileSync(lock, `${JSON.stringify(theirs)}\n`)
       go(hold)
-      assert.equal((await holder).json?.status, "pending")
-      assert.equal(JSON.parse(fs.readFileSync(owner, "utf8")).token, "theirs")
-      fs.rmSync(path.join(home, "lock"), { recursive: true })
+      const x = await holder
+      assert.equal(x.json?.error, "busy", x.all)
+      assert.equal(server.counts.deviceCode, 0, "nothing was sent")
+      assert.equal(fs.existsSync(path.join(home, "pending")), false)
+      assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).token, "theirs")
+      fs.rmSync(lock)
     })
 
-    it("refuses a save after its lock was broken and the attempt changed", async () => {
+    it("two that see the same dead lock never take a fresh one from a live holder", async () => {
+      const home = fresh()
+      const h = (name) => path.join(root, `${impl}-race-${name}-${n}`)
+      // A holder that died: its lock stays behind.
+      const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("dead") })
+      await reached(h("dead"))
+      await kill(dead)
+      // B and C both see that dead lock.
+      const b = r(home, ["connect", "--url", server.origin], {
+        MIKUD_TEST_HOLD_BREAK_OBSERVED: h("b-seen"),
+        MIKUD_TEST_HOLD_LOCKED: h("b-locked"),
+      })
+      const c = r(home, ["connect", "--url", server.origin], {
+        MIKUD_TEST_HOLD_BREAK_OBSERVED: h("c-seen"),
+        MIKUD_TEST_HOLD_BREAK_MOVED: h("c-moved"),
+      })
+      await Promise.all([reached(h("b-seen")), reached(h("c-seen"))])
+      // B breaks it and takes a fresh lock; C then moves B's fresh lock away, taking it for the dead one.
+      go(h("b-seen"))
+      await reached(h("b-locked"))
+      go(h("c-seen"))
+      await reached(h("c-moved"))
+      // D takes the free place meanwhile, so C cannot put B's lock back.
+      const d = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("d-locked") })
+      await reached(h("d-locked"))
+      go(h("c-moved"))
+      // B lost its lock: it sends nothing and changes nothing.
+      go(h("b-locked"))
+      const bx = await b
+      assert.equal(bx.json?.error, "busy", bx.all)
+      assert.equal(server.counts.deviceCode, 0, bx.all)
+      go(h("d-locked"))
+      const dx = await d
+      assert.equal(dx.json?.status, "pending", dx.all)
+      const cx = await c
+      assert.equal(cx.json?.status, "pending", cx.all)
+      assert.equal(cx.json.code, dx.json.code)
+      assert.equal(server.counts.deviceCode, 1)
+      assert.deepEqual(
+        filesUnder(home).map(([f]) => f),
+        ["pending"],
+      )
+    })
+
+    it("a fresh lock moved away by mistake goes back to its holder", async () => {
+      const home = fresh()
+      const lock = path.join(home, "lock")
+      const h = (name) => path.join(root, `${impl}-back-${name}-${n}`)
+      const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("dead") })
+      await reached(h("dead"))
+      await kill(dead)
+      const b = r(home, ["connect", "--url", server.origin], {
+        MIKUD_TEST_HOLD_BREAK_OBSERVED: h("b-seen"),
+        MIKUD_TEST_HOLD_LOCKED: h("b-locked"),
+      })
+      const c = r(home, ["connect", "--url", server.origin], {
+        MIKUD_TEST_HOLD_BREAK_OBSERVED: h("c-seen"),
+        MIKUD_TEST_HOLD_BREAK_MOVED: h("c-moved"),
+      })
+      await Promise.all([reached(h("b-seen")), reached(h("c-seen"))])
+      go(h("b-seen"))
+      await reached(h("b-locked"))
+      go(h("c-seen"))
+      await reached(h("c-moved"))
+      assert.equal(fs.existsSync(lock), false, "C moved B's lock away")
+      go(h("c-moved"))
+      for (let i = 0; i < 200 && !fs.existsSync(lock); i++) await sleep(50)
+      // C put it back, so B still holds it and goes on.
+      go(h("b-locked"))
+      const bx = await b
+      assert.equal(bx.json?.status, "pending", bx.all)
+      const cx = await c
+      assert.equal(cx.json?.code, bx.json.code, cx.all)
+      assert.equal(server.counts.deviceCode, 1)
+      assert.deepEqual(
+        filesUnder(home).map(([f]) => f),
+        ["pending"],
+      )
+    })
+
+    it("a run whose lock was lost saves nothing, still ends the session, and names the key it made", async () => {
       const home = fresh()
       await r(home, ["connect", "--url", server.origin])
       server.approve()
       const hold = path.join(root, `${impl}-broken-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_TOKEN: hold })
+      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_KEY: hold })
       await reached(hold)
-      // A wrongly broken lock: another command replaces the attempt meanwhile.
-      fs.rmSync(path.join(home, "lock"), { recursive: true })
+      // The lock removed by hand, and another command replaces the attempt meanwhile.
+      fs.rmSync(path.join(home, "lock"))
       const b = await r(home, ["connect", "--replace"])
       assert.equal(b.json?.status, "pending", b.all)
       go(hold)
       const w = await a
       assert.equal(w.json?.error, "cannot_save", w.all)
-      assert.equal(server.aliveSessions(), 0, "the session was still ended")
       const [[, key]] = server.aliveKeys()
+      assert.ok(w.json.message.includes(key.name) && w.json.message.includes(key.expiresAt), w.all)
+      assert.equal(server.aliveSessions(), 0, "the session was still ended")
       const s = await r(home, ["status"])
       assert.equal(s.json.status, "not_connected")
       assert.equal(s.json.pending.code, b.json.code)
-      assert.ok(
-        s.json.left.some((e) => e.reason === "not_saved" && e.keyName === key.name),
-        s.all,
-      )
+      // The command that took over found the attempt half done and recorded what it may have left.
+      assert.deepEqual(leftReasons(s.json), ["key_unknown", "session_unknown"], s.all)
     })
 
     // --- Interrupted runs ---
@@ -716,6 +872,58 @@ for (const impl of impls) {
         assert.deepEqual(leftReasons(x.json), ["session_unknown"])
       })
     }
+
+    it("a disconnect stopped between its record and the change: the live key is never reported as left", async () => {
+      const home = fresh()
+      const w = await connected(home)
+      const hold = path.join(root, `${impl}-recorded-${n}`)
+      const d = r(home, ["disconnect"], { MIKUD_TEST_HOLD_RECORDED: hold })
+      await reached(hold)
+      await kill(d)
+      const s = await r(home, ["status"])
+      assert.equal(s.json.status, "connected", s.all)
+      assert.equal(s.json.keyName, w.json.keyName)
+      assert.deepEqual(s.json.left, [])
+      // Removed from the record too, under the lock.
+      const left = path.join(home, "left")
+      assert.ok(!fs.existsSync(left) || !fs.readFileSync(left, "utf8").includes(w.json.keyName))
+      const again = await r(home, ["disconnect"])
+      assert.deepEqual(leftReasons(again.json), ["disconnected"], again.all)
+    })
+
+    it("a replace stopped between its record and the change: the live key is never reported as left", async () => {
+      const home = fresh()
+      const first = await connected(home)
+      await r(home, ["connect", "--replace"])
+      server.approve()
+      const hold = path.join(root, `${impl}-replace-recorded-${n}`)
+      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_RECORDED: hold })
+      await reached(hold)
+      await kill(a)
+      const s = await r(home, ["status"])
+      assert.equal(s.json.keyName, first.json.keyName, s.all)
+      assert.deepEqual(s.json.left, [])
+      assert.deepEqual(s.json.pending.warnings, ["key_unknown", "session_unknown"])
+    })
+
+    it("a run stopped after writing a temporary file: the next holder of the lock removes it", async () => {
+      const home = fresh()
+      const hold = path.join(root, `${impl}-written-${n}`)
+      const a = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_WRITTEN: hold })
+      await reached(hold)
+      await kill(a)
+      const [first] = server.secrets().deviceCodes
+      const tmp = fs.readdirSync(home).filter((f) => f.endsWith(".tmp"))
+      assert.equal(tmp.length, 1)
+      assert.ok(fs.readFileSync(path.join(home, tmp[0]), "utf8").includes(first), "the scenario: a secret left behind")
+      const c = await r(home, ["connect", "--url", server.origin])
+      assert.equal(c.json?.status, "pending", c.all)
+      assert.deepEqual(
+        filesUnder(home).map(([f]) => f),
+        ["pending"],
+      )
+      assert.ok(!fs.readFileSync(path.join(home, "pending"), "utf8").includes(first))
+    })
 
     // --- Writes whose answer was lost ---
 
@@ -1022,6 +1230,74 @@ for (const impl of impls) {
       })
     }
 
+    it("never hands a secret to another program's environment, even under names the caller exported", async () => {
+      // Names the versions use for a secret; an exported one would keep its export when assigned.
+      const names = [
+        "TOKEN",
+        "BODY",
+        "QQ",
+        "qq_s",
+        "JF",
+        "JV",
+        "jg_line",
+        "jg_rest",
+        "RP_TEXT",
+        "rr_row",
+        "rv_rest",
+        "rv_v",
+        "sz_v",
+        "SER",
+        "cl_dc",
+        "cs_key",
+        "ca_set",
+        "rq_out",
+        "C_key",
+        "K_key",
+        "V_key",
+        "W_key",
+        "LN_key",
+        "P_deviceCode",
+        "R_deviceCode",
+        "SN_deviceCode",
+        "token",
+        "sessionToken",
+      ]
+      const exported = Object.fromEntries(names.map((k) => [k, ""]))
+      // The sh version's programs, wrapped to record their environment.
+      const rec = path.join(root, `${impl}-env-${n}`)
+      const wrap = path.join(root, `${impl}-envwrap-${n}`)
+      const wrapped = []
+      if (!win) {
+        fs.mkdirSync(wrap)
+        for (const prog of ["curl", "awk", "cat", "od"]) {
+          let real = ""
+          try {
+            real = execFileSync("sh", ["-c", `command -v ${prog}`], { encoding: "utf8" }).trim()
+          } catch {}
+          if (!real) continue
+          fs.writeFileSync(path.join(wrap, prog), `#!/bin/sh\nenv >> "${rec}"\nexec "${real}" "$@"\n`, { mode: 0o755 })
+          wrapped.push(prog)
+        }
+      }
+      const home = fresh()
+      const run2 = (args) => r(home, args, exported, wrapped.length ? [wrap] : [])
+      const c = await run2(["connect", "--url", server.origin])
+      assert.equal(c.json?.status, "pending", c.all)
+      server.approve()
+      const w = await run2(["connect", "--wait", "--url", server.origin])
+      assert.equal(w.json?.status, "connected", w.all)
+      const g = await run2(["get", "items"])
+      assert.equal(g.json?.status, 200, g.all)
+      noSecrets(server, c, w, g)
+      if (impl === "sh" && wrapped.includes("curl")) {
+        const envs = fs.readFileSync(rec, "utf8")
+        assert.ok(envs.includes("PATH="), "the wrappers recorded the environment")
+        const { deviceCodes, sessions, keys } = server.secrets()
+        for (const secret of [...deviceCodes, ...sessions, ...keys])
+          assert.ok(!envs.includes(secret), "a secret in a child's environment")
+      }
+    })
+
     it("never writes in the skill's folder", async () => {
       const before = filesUnder(scripts)
       const home = fresh()
@@ -1033,35 +1309,37 @@ for (const impl of impls) {
   })
 }
 
-// Two versions on one computer share one connection, one attempt and one lock.
-const [first, second] = impls
-const together = second ? describe : describe.skip
-together(`mikud (${first ?? "one"} and ${second ?? "another"} together)`, () => {
-  let server
-  before(async () => {
-    server = await startFakeServer()
-  })
-  after(() => server?.close())
-
-  it("finish each other's attempt, with its days and key name", async () => {
-    const home = path.join(root, "together", "home")
-    const c = await run(first, home, ["connect", "--url", server.origin, "--days", "7"], {
-      MIKUD_AGENT_NAME: "first-version",
+// Two versions on one computer share one connection, one attempt and one lock: every ordered pair of them.
+const pairs = impls.flatMap((a) => impls.filter((b) => b !== a).map((b) => [a, b]))
+if (!pairs.length) describe.skip("mikud (two versions together): only one version runs here", () => {})
+for (const [first, second] of pairs) {
+  describe(`mikud (${first} and ${second} together)`, () => {
+    let server
+    before(async () => {
+      server = await startFakeServer()
     })
-    assert.equal(c.json?.status, "pending", c.all)
-    assert.equal((await run(second, home, ["connect"])).json.code, c.json.code)
-    server.approve()
-    const w = await run(second, home, ["connect", "--wait", "--url", server.origin])
-    assert.equal(w.json?.status, "connected", w.all)
-    assert.match(w.json.keyName, /^skill:first-version:[0-9a-f]{8}$/)
-    assert.equal(server.aliveKeys()[0][1].expiresIn, 7 * DAY)
-    assert.equal((await run(first, home, ["get", "items"])).json?.status, 200)
-    const all = await Promise.all(
-      Array.from({ length: 4 }, (_, i) => run(i % 2 ? second : first, home, ["connect", "--replace"])),
-    )
-    for (const x of all) assert.ok(x.json?.status === "pending" || x.json?.error === "busy", x.all)
+    after(() => server?.close())
+
+    it("finish each other's attempt, with its days and key name", async () => {
+      const home = path.join(root, `together-${first}-${second}`, "home")
+      const c = await run(first, home, ["connect", "--url", server.origin, "--days", "7"], {
+        MIKUD_AGENT_NAME: "first-version",
+      })
+      assert.equal(c.json?.status, "pending", c.all)
+      assert.equal((await run(second, home, ["connect"])).json.code, c.json.code)
+      server.approve()
+      const w = await run(second, home, ["connect", "--wait", "--url", server.origin])
+      assert.equal(w.json?.status, "connected", w.all)
+      assert.match(w.json.keyName, /^skill:first-version:[0-9a-f]{8}$/)
+      assert.equal(server.aliveKeys()[0][1].expiresIn, 7 * DAY)
+      assert.equal((await run(first, home, ["get", "items"])).json?.status, 200)
+      const all = await Promise.all(
+        Array.from({ length: 4 }, (_, i) => run(i % 2 ? second : first, home, ["connect", "--replace"])),
+      )
+      for (const x of all) assert.ok(x.json?.status === "pending" || x.json?.error === "busy", x.all)
+    })
   })
-})
+}
 
 // The launcher picks a version (Node 20+ when there is one) and passes the arguments on as they are.
 const shell = win
