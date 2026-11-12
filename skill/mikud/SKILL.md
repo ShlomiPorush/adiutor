@@ -1,4 +1,5 @@
 ---
+
 name: mikud
 description: Keep the owner's Mikud board current from top-level T3 threads - start the thread's work item, leave a summary and set its status at the end, capture ideas for later, and keep notes of decisions and findings. Use it at the start and the end of every top-level T3 thread, and whenever the owner asks to note an idea, remember something or write a decision down.
 ---
@@ -72,23 +73,23 @@ done, run `mikud status --clear-left`.
 
 ## The calls
 
-| MCP tool | Command | Body or query |
-|---|---|---|
-| `mikud_start_thread` | `post 'threads/start'` | `{"threadId", "parentThreadId" (null for a top-level thread), "title", "projectId"?, "t3ProjectId"?, "itemId"?}` |
-| `mikud_find_items` | `get 'items?q=<text>&projectId=<id>&status=todo,in_progress&limit=50'` | also `inbox=true`, `type`, `threadId`, `includeClosed=true` |
-| `mikud_get_item` | `get 'items/<id>'` | the item, its project, threads, comments and history |
-| `mikud_create_item` | `post 'items'` | `{"type", "title", "body"?, "status"?, "severity"?, "projectId"?, "goalId"?}` |
-| `mikud_update_item` | `patch 'items/<id>'` | `{"version", "status"?, "title"?, "body"?, "type"?, "severity"?, "projectId"?, "goalId"?}` |
-| `mikud_comment` | `post 'items/<id>/comments'` | `{"text", "threadId"?}` |
-| `mikud_capture` | `post 'capture'` | `{"text", "projectId"?}` |
-| `mikud_link_thread` | `post 'items/<id>/threads'` | `{"threadId", "parentThreadId", "t3ProjectId"?, "title"?}` |
-| `mikud_list_projects` | `get 'projects'` | every project with its id, stage, goal and open items |
-| `mikud_update_project` | `patch 'projects/<id>'` | `{"whereWeAre"?, "goal"?}` |
-| `mikud_propose_stage` | `post 'projects/<id>/stage-proposals'` | `{"stage", "reason"}` |
-| `mikud_find_notes` | `get 'notes?q=<text>&projectId=<id>'` | also `general=true`, `createdBy`, `sort=updated\|title`, `cursor`, `limit` |
-| `mikud_get_note` | `get 'notes/<id>'` | the note with its whole body and version |
-| `mikud_create_note` | `post 'notes'` | `{"title", "body"?, "projectId"?}` |
-| `mikud_update_note` | `patch 'notes/<id>'` | `{"version", "title"?, "body"?, "projectId"?}` |
+| MCP tool               | Command                                                                | Body or query                                                                                                    |
+| ---------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `mikud_start_thread`   | `post 'threads/start'`                                                 | `{"threadId", "parentThreadId" (null for a top-level thread), "title", "projectId"?, "t3ProjectId"?, "itemId"?}` |
+| `mikud_find_items`     | `get 'items?q=<text>&projectId=<id>&status=todo,in_progress&limit=50'` | also `inbox=true`, `type`, `threadId`, `includeClosed=true`                                                      |
+| `mikud_get_item`       | `get 'items/<id>'`                                                     | the item, its project, threads, comments and history                                                             |
+| `mikud_create_item`    | `post 'items'`                                                         | `{"type", "title", "body"?, "status"?, "severity"?, "projectId"?, "goalId"?}`                                    |
+| `mikud_update_item`    | `patch 'items/<id>'`                                                   | `{"version", "status"?, "title"?, "body"?, "type"?, "severity"?, "projectId"?, "goalId"?}`                       |
+| `mikud_comment`        | `post 'items/<id>/comments'`                                           | `{"text", "threadId"?}`                                                                                          |
+| `mikud_capture`        | `post 'capture'`                                                       | `{"text", "projectId"?}`                                                                                         |
+| `mikud_link_thread`    | `post 'items/<id>/threads'`                                            | `{"threadId", "parentThreadId", "t3ProjectId"?, "title"?}`                                                       |
+| `mikud_list_projects`  | `get 'projects'`                                                       | every project with its id, stage, goal and open items                                                            |
+| `mikud_update_project` | `patch 'projects/<id>'`                                                | `{"whereWeAre"?, "goal"?}`                                                                                       |
+| `mikud_propose_stage`  | `post 'projects/<id>/stage-proposals'`                                 | `{"stage", "reason"}`                                                                                            |
+| `mikud_find_notes`     | `get 'notes?q=<text>&projectId=<id>'`                                  | also `general=true`, `createdBy`, `sort=updated\|title`, `cursor`, `limit`                                       |
+| `mikud_get_note`       | `get 'notes/<id>'`                                                     | the note with its whole body and version                                                                         |
+| `mikud_create_note`    | `post 'notes'`                                                         | `{"title", "body"?, "projectId"?}`                                                                               |
+| `mikud_update_note`    | `patch 'notes/<id>'`                                                   | `{"version", "title"?, "body"?, "projectId"?}`                                                                   |
 
 Write a body with `--json-file <file>` (or `--json '<body>'` in a POSIX shell); a file avoids quoting trouble. Quote
 the path. Ids are lower-case UUIDs. Percent-encode spaces, Hebrew and other characters in query values, and the

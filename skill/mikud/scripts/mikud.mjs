@@ -611,6 +611,16 @@ function startOf(pid) {
   }
 }
 
+/** Whether a path exists, a link included. */
+function exists(target) {
+  try {
+    fs.lstatSync(target)
+    return true
+  } catch (e) {
+    return e.code !== "ENOENT"
+  }
+}
+
 function running(pid) {
   try {
     process.kill(pid, 0)
@@ -656,22 +666,25 @@ async function acquire(ctx) {
   const owner = `${JSON.stringify({ token, host: host(), pid: process.pid, start: startOf(process.pid) })}\n`
   const deadline = Date.now() + LOCK_WAIT_MS
   for (;;) {
-    const fresh = `${ctx.lock}.${hex(6)}.new`
-    try {
-      fs.mkdirSync(fresh)
-      fs.writeFileSync(path.join(fresh, "owner"), owner, { flag: "wx" })
-    } catch {
-      rm(fresh)
-      throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}. Allow this agent to write there.`)
-    }
-    try {
-      fs.renameSync(fresh, ctx.lock)
-      hook("locked")
-      return token
-    } catch (e) {
-      rm(fresh)
-      if (!["EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"].includes(e.code))
+    // Only into an empty place: POSIX would also let the rename replace an empty folder, an undecidable lock.
+    if (!exists(ctx.lock)) {
+      const fresh = `${ctx.lock}.${hex(6)}.new`
+      try {
+        fs.mkdirSync(fresh)
+        fs.writeFileSync(path.join(fresh, "owner"), owner, { flag: "wx" })
+      } catch {
+        rm(fresh)
         throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}. Allow this agent to write there.`)
+      }
+      try {
+        fs.renameSync(fresh, ctx.lock)
+        hook("locked")
+        return token
+      } catch (e) {
+        rm(fresh)
+        if (!["EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"].includes(e.code))
+          throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}. Allow this agent to write there.`)
+      }
     }
     const held = readOwner(ctx.lock)
     const state = verdict(held)
@@ -998,7 +1011,7 @@ async function waitStep(ctx, origin, state, token) {
   }
   if (!pend || pend.origin !== origin) {
     // Another command finished this attempt (a parallel --wait), or it was never made here.
-    if (conn && conn.origin === origin && (state.attemptId || !pend)) return { done: connectedAnswer(conn) }
+    if (conn?.origin === origin && (state.attemptId || !pend)) return { done: connectedAnswer(conn) }
     if (state.attemptId) throw new Fail("not_connected", `The connection to ${origin} was cancelled meanwhile.`)
     throw new Fail("not_connected", `No connection to ${origin} is being made. Run: mikud connect --url ${origin}`)
   }
