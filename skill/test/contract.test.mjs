@@ -246,6 +246,23 @@ for (const impl of impls) {
       assert.equal(already.code, 1)
     })
 
+    // Started from PowerShell 7, a child Windows PowerShell inherits PS7's module path and cannot load Get-Acl.
+    it("connects when started from PowerShell 7 (its PSModulePath inherited)", { skip: !win && "Windows only" }, async () => {
+      const pwshModules = [
+        path.join(os.homedir(), "Documents", "PowerShell", "Modules"),
+        "C:\\Program Files\\PowerShell\\Modules",
+        "C:\\Program Files\\PowerShell\\7\\Modules",
+      ].join(";")
+      const home = fresh()
+      const c = await r(home, ["connect", "--url", server.origin], { PSModulePath: pwshModules })
+      assert.equal(c.json?.status, "pending", c.all)
+      server.approve()
+      const w = await r(home, ["connect", "--wait", "--url", server.origin], { PSModulePath: pwshModules })
+      assert.equal(w.json?.status, "connected", w.all)
+      const s = await r(home, ["status"], { PSModulePath: pwshModules })
+      assert.equal(s.json?.status, "connected", s.all)
+    })
+
     it("names the key after MIKUD_AGENT_NAME, cut to 32 characters, and keeps --days", async () => {
       const home = fresh()
       const c = await r(home, ["connect", "--url", server.origin, "--days", "7"], {
