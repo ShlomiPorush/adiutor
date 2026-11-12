@@ -20,7 +20,8 @@
     "test:integration": "vitest run --config config/vitest.integration.config.ts",
     "lint": "biome ci .",
     "db:generate": "drizzle-kit generate --config config/drizzle.config.ts",
-    "test:e2e": "playwright test --config config/playwright.config.ts"
+    "test:e2e": "playwright test --config config/playwright.config.ts",
+    "test:skill": "node --test skill/test/contract.test.mjs"
   },
   "dependencies": {
     "@better-auth/api-key": "1.7.15",

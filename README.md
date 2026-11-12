@@ -6,6 +6,7 @@ Mikud (Hebrew for "focus") is a planned personal system that shows one person wh
 
 - Requirements: [docs/requirements.md](docs/requirements.md)
 - Foundation plan and status: [docs/project-foundation.md](docs/project-foundation.md)
+- The agent skill, which agents load to keep Mikud current: [skill/mikud/SKILL.md](skill/mikud/SKILL.md)
 - Changes: [CHANGELOG.md](CHANGELOG.md)
 
 ## Development
