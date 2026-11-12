@@ -133,14 +133,30 @@ node -e '
   fail=1
 }
 
+echo "--- The agent skill is plain ASCII English"
+# Agents read skill/ as instructions: no Hebrew, no bidirectional controls, no look-alike characters.
+skill_files=()
+for file in "${files[@]}"; do
+  [[ "$file" == skill/* ]] && skill_files+=("$file")
+done
+if [ ${#skill_files[@]} -gt 0 ]; then
+  non_ascii="$(search -P '[^\x{0009}\x{000A}\x{000D}\x{0020}-\x{007E}]' -- "${skill_files[@]}")"
+  if [ -n "$non_ascii" ]; then
+    echo "Files under skill/ must hold printable ASCII only:"
+    report "a character outside ASCII" <<<"$non_ascii"
+    fail=1
+  fi
+fi
+
 echo "--- Shell scripts"
 scripts=()
 for file in "${files[@]}"; do
-  [[ "$file" == scripts/*.sh ]] && scripts+=("$file")
+  [[ "$file" == scripts/*.sh || "$file" == skill/mikud/scripts/mikud || "$file" == skill/mikud/scripts/*.sh ]] &&
+    scripts+=("$file")
 done
 shellcheck -x "${scripts[@]}" || fail=1
 shfmt -d -i 2 -ci "${scripts[@]}" || {
-  echo "Run: shfmt -w -i 2 -ci scripts"
+  echo "Run: shfmt -w -i 2 -ci scripts skill/mikud/scripts"
   fail=1
 }
 while read -r mode _ _ path; do
@@ -149,7 +165,7 @@ while read -r mode _ _ path; do
     echo "$path is not executable: git update-index --chmod=+x $path"
     fail=1
   }
-done < <(git ls-files -s 'scripts/*.sh')
+done < <(git ls-files -s 'scripts/*.sh' skill/mikud/scripts/mikud skill/mikud/scripts/mikud.mjs 'skill/mikud/scripts/*.sh')
 
 echo "--- Release script: refusals and resume paths against a local remote"
 bash scripts/test-release.sh || fail=1

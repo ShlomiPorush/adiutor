@@ -8,6 +8,9 @@ TOOLCHAIN_IMAGE="mikud-toolchain:local"
 # Browsers for the end-to-end tests; the tag must match @playwright/test in package.json.
 PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v1.64.1-noble"
 export PLAYWRIGHT_IMAGE
+# The oldest Node the agent skill's mikud.mjs supports: its contract tests also run there.
+SKILL_NODE_IMAGE="node:20.20.2-bookworm-slim"
+export SKILL_NODE_IMAGE
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mikud"
 
 die() {

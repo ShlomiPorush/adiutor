@@ -15,7 +15,8 @@ usage() {
   cat <<'EOF'
 Usage: scripts/verify.sh [options]
 
-  (no options)      Full sweep: guards, lint, types, unit tests, build, integration tests against a
+  (no options)      Full sweep: guards, lint, types, unit tests, the agent skill's contract tests (also on
+                    Node 20), build, integration tests against a
                     disposable PostgreSQL, then the image with health, user and hardening checks, then the
                     end-to-end tests of the web UI against that container.
   --changed [BASE]  Guards only when every change since BASE (default origin/main) is documentation;
@@ -69,6 +70,12 @@ run_checks() {
   in_toolchain "pnpm lint"
   info "Types, unit tests and build"
   in_toolchain "pnpm typecheck && pnpm test && pnpm build"
+  info "Agent skill: contract tests (node and sh versions)"
+  in_toolchain "pnpm test:skill" || die "the agent skill's contract tests failed"
+  info "Agent skill: the node version on Node 20 ($SKILL_NODE_IMAGE)"
+  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e MIKUD_IMPLS=node \
+    -v "$REPO_ROOT:/repo" -w /repo "$SKILL_NODE_IMAGE" node --test skill/test/contract.test.mjs ||
+    die "the agent skill's contract tests failed on Node 20"
   info "Web UI build: local assets only, no mock API"
   in_toolchain "bash scripts/lib/web-dist-check.sh" || die "the web UI build loads an external asset or holds the mock API"
   info "Database schema matches its migrations"

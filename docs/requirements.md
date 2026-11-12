@@ -89,6 +89,7 @@ The inbox count is visible on the home screen and links to the inbox.
 ## 7. Agents and T3
 
 - **Primary mechanism: an agent instruction** in the owner's shared agent configuration. At thread start: find or create the item, link the T3 thread, set `in_progress`. At the end: a summary comment and the right status.
+- Agents use Mikud through the `mikud` skill, which holds that instruction and works through the MCP tools when a session has them, or otherwise through its own command with an agent key the owner approved in the browser. The shared agent configuration installs the skill for Claude Code and Codex, and one always-on line tells agents to load it at the start of every top-level T3 thread.
 - **Safety net: a daily reconciler.** A T3 scheduled task on the owner's PC runs before the morning message. It first runs the `overview` collector, then reads T3 threads, creates items for top-level threads that have none, and fixes status mismatches: running → `in_progress`, waiting for the owner → `waiting_on_you`, settled → `done`.
 - The reconciler never overrides the owner: it does not change an item whose status the owner set after the thread's last activity, never recreates an item or project the owner deleted, and decides from all threads linked to an item together.
 - The schedule is bound to one dedicated thread in a T3 project whose default thread mode is `local`, because fresh scheduled threads in a git project try to create worktrees.
@@ -110,7 +111,7 @@ There is one launch and no partial use.
 1. Everything in this document is built and verified, except section 10 (Notes), which the launch does not wait for.
 2. Dry run on real data, on the development stack on the owner's PC: every project is seeded with drafts (a stage proposal, goal, "where we are") written by an agent from T3 threads and the repositories; one real Telegram morning message is sent; the overview is shown at desktop and phone sizes.
 3. The owner reviews and approves or corrects.
-4. Only after approval: the owner deploys to production, the agent instruction goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.
+4. Only after approval: the owner deploys to production, the always-on line that loads the `mikud` skill goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.
 
 ## 10. Notes
 
@@ -125,6 +126,6 @@ Notes are where the owner and his agents keep information worth finding again: d
 - UI: a Notes page in the sidebar with search and filters (project; written by the owner or by an agent), a project's notes on its project page, and a Markdown editor with a preview that is correct in Hebrew (RTL) and English (LTR). Notes created or changed by agents appear in Agent updates on the Overview.
 - Telegram: the bot files text in the inbox as an item, as in section 5, and its answer carries a button that moves the text into a new general note. When the owner does not press it, the item stays in the inbox and nothing is lost. Pressing it closes the inbox item as `not_relevant` with a comment that links the note (owner's decision, 2026-11-06); the bot never deletes an item.
 - Search runs in PostgreSQL, with no extra service.
-- The agent instruction says when an agent writes a note and when it files an item.
+- The agent instruction (the `mikud` skill) says when an agent writes a note and when it files an item.
 - Not in the first version: files and images (Mikud keeps its state only in PostgreSQL and has no volume), tags, and links between notes.
 - Considered and not adopted (2026-11-03): running AFFiNE next to Mikud, or taking its code. Its server is under the AFFiNE Enterprise Edition license with no per-file boundary to the MPL 2.0 parts, its documents are CRDT updates written in the browser (outside the services layer, the audit and the secret check), and its right-to-left support has open issues. Ideas only, as with Kanzo.

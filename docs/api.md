@@ -92,6 +92,13 @@ An agent or the sync gets its key in the browser: Better Auth's core `deviceAuth
 
 **Gap G10, accepted by the owner (2026-11-02)** (foundation plan): `bearer()` adds a `set-auth-token` header to every answer that sets the session cookie (sign-in), holding the signed cookie value and readable by page script; sent back as the cookie, it is the owner's session on every route. The Content-Security-Policy (`script-src 'self'`) is what keeps other scripts out of the page.
 
+**The agent skill is a second client of the same flow** (`skill/mikud/scripts/mikud.mjs`, with `mikud.ps1` and `mikud.sh`; [SKILL.md](../skill/mikud/SKILL.md)). Same client id, the same `User-Agent: mikud-connect` on every request of the flow, the same routes in the same order, and no server change. It differs only in how it waits and where the key goes:
+
+- `mikud connect` asks for a code and answers at once with the link and the code; `mikud connect --wait --url <origin>` polls for up to 90 seconds and is run again until the owner answered. The attempt (device code, interval, next poll, the key's name and days) is kept between runs in `~/.mikud/pending`, readable by the computer user only.
+- Once the poll answers with the session token, the command holds it in memory only: it records that a key is being created, sends `/api-key/create` (name `skill:<computer>:<8 hex digits>`, 90 days unless `--days`), saves the key in `~/.mikud/connection`, and sends `/revoke-session` in a `finally`. Every change to those files and every poll runs under one lock.
+- A lost answer or a stopped run is never guessed away: a key that may exist (`key_unknown`), an approval session that may not have ended (`session_unknown`), and keys it replaced or forgot are written to `~/.mikud/left` and reported by `status`, `connect` and `disconnect`. An agent key cannot delete itself, so the owner deletes those keys in Settings, Agent access, and ends a session on the Account page.
+- After that the command calls only the fifteen `/api/v1` routes that the MCP tools use, with the key as `Authorization: Bearer` and `X-Mikud-Agent` from `--as`; it follows no redirect and calls no other address.
+
 Name and days come from the command, not from the approval page (gap G-A). A signed-in owner session can still call `/api-key/create` itself: the UI has no button for it.
 
 ### First run
