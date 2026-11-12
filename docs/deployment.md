@@ -133,6 +133,8 @@ Every agent and the reconciler get their own key through `mikud connect`, a comm
 
 ## 7. Move from the dry run to production (once)
 
+**Not needed for the first launch.** The first launch starts production with a new, empty database (requirements section 9, owner's decision of 2026-11-12), so skip the numbered move below; it stays for moving a development database to production later. The notes on the development stack apply either way.
+
 The dry run runs on the development stack on your PC with real data. Move its data once, after you approved the dry run (requirements section 9). Production must not run before step 5: the migrations would create empty tables that the restore cannot overwrite.
 
 **Keys of the development stack.** `scripts/local.sh up` or `start` generates the database password and the keys once into `stack.env` in the stack's data directory (default `~/.local/share/mikud-dev/stack.env`, mode 0600), before PostgreSQL first starts, and never rewrites it. Keep that file with the database: without it the stack refuses to start, because new keys would not open the database. `nuke` deletes both. Keys that an older `.env.dev` already sets keep winning over `stack.env`; leave them there, or move them by hand as whole values with every version listed. Interrupted on its very first start (before any data), a stack can be started over with `nuke` and `start`.
