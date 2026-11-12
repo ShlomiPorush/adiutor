@@ -1022,7 +1022,7 @@ async function waitStep(ctx, origin, state, token) {
   if (pend.codeExpiresAt <= t) {
     const warnings = removeAttempt(ctx, pend, conn)
     if (warnings.length) throw unknownFail(warnings, pend)
-    throw new Fail("expired", "The code expired before it was approved. Run: mikud connect")
+    throw new Fail("expired", `The code expired before it was approved. Run: mikud connect --url ${origin}`)
   }
   if (pend.nextPollAt > t) return { wait: pend.nextPollAt - t }
   // A mark left set: the run before this one sent a poll and never recorded its answer.
@@ -1062,7 +1062,7 @@ async function waitStep(ctx, origin, state, token) {
     if (warnings.length) throw unknownFail(warnings, pend)
     if (error === "access_denied")
       throw new Fail("denied", "The owner did not approve the connection. Nothing was created.")
-    throw new Fail("expired", "The code is no longer valid. Run: mikud connect")
+    throw new Fail("expired", `The code is no longer valid. Run: mikud connect --url ${origin}`)
   }
   // A failure after the server may have started: a session may exist.
   if (r.status >= 500 || r.status === 200) pend.uncertain = 1
@@ -1116,8 +1116,14 @@ async function redeem(ctx, pend, sessionToken) {
   }
   hook("revoked")
   const last = readPending(ctx)
-  if (last?.attemptId === id) removeAttempt(ctx, last, readConnection(ctx))
-  else if (!ended) addLeft(ctx, [{ origin: pend.origin, keyName: pend.keyName, reason: "session_unknown" }])
+  if (last?.attemptId === id) {
+    // A connection that cannot be read now counts as not saved: the key is then reported, never lost.
+    let saved = null
+    try {
+      saved = readConnection(ctx)
+    } catch {}
+    removeAttempt(ctx, last, saved)
+  } else if (!ended) addLeft(ctx, [{ origin: pend.origin, keyName: pend.keyName, reason: "session_unknown" }])
   hook("done")
   if (outcome.fail) {
     if (!ended && outcome.fail instanceof Fail) outcome.fail.message += ` ${SESSION_TEXT}`
@@ -1138,7 +1144,7 @@ async function createAndSave(ctx, pend, sessionToken) {
   const unknown = () =>
     new Fail(
       "key_unknown",
-      `Mikud's answer to creating the key was lost, so a key named "${name}" may exist on ${origin}: delete it in Settings, Agent access. Then run: mikud connect`,
+      `Mikud's answer to creating the key was lost, so a key named "${name}" may exist on ${origin}: delete it in Settings, Agent access. Then run: mikud connect --url ${origin}`,
     )
   let r
   try {
@@ -1345,7 +1351,15 @@ async function api(ctx, method, opts) {
     )
   }
   if (method !== "GET" && [502, 503, 504].includes(r.status)) throw unknown(r.status)
-  if (r.status >= 200 && r.status < 300) return print({ status: r.status, data: r.json })
+  if (r.status >= 200 && r.status < 300) {
+    // Mikud answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
+    const answer = r.json
+    if (answer && typeof answer === "object" && !Array.isArray(answer) && "data" in answer) {
+      const { status: _ignored, ...fields } = answer
+      return print({ status: r.status, ...fields })
+    }
+    return print({ status: r.status, data: answer })
+  }
   throw httpFail(r, `${method} ${target.split("?")[0]}`)
 }
 

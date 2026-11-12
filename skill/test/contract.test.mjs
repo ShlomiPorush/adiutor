@@ -814,6 +814,7 @@ for (const impl of impls) {
         assert.equal(x.json?.status, 200, `${p}: ${x.all}`)
         assert.equal(x.json.data.path, pathname)
         assert.equal(x.json.data.query, query)
+        assert.equal(x.json.nextCursor, pathname === "/api/v1/notes" ? "page-2" : undefined)
       }
       for (const [cmd, p] of [
         ["post", "threads/start"],

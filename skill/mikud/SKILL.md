@@ -32,8 +32,9 @@ tool `t3_thread_list`. Take your `parentThreadId` from T3 as well (`orchestrator
 - If `scripts/mikud` is not executable: `sh <this skill's folder>/scripts/mikud <command>`
 
 It uses Node 20+ when installed, otherwise PowerShell on Windows or sh and curl elsewhere. Every answer is one line
-of JSON on stdout. A call answers `{"status": <http>, "data": ...}`. On failure the exit code is 1 and the answer is
-`{"error": "<code>", "message": "..."}`: tell the owner the message as it is.
+of JSON on stdout. A call answers `{"status": <http>, "data": ...}` with Mikud's answer in `data` (a page of notes
+also has `nextCursor`). On failure the exit code is 1 and the answer is `{"error": "<code>", "message": "..."}`: tell
+the owner the message as it is.
 
 Add `--as <name>` to `get`, `post` and `patch` (or set `MIKUD_AGENT_LABEL`) to name yourself in Mikud's activity log,
 for example `--as claude` or `--as codex`: letters, digits, spaces and `._:-`, up to 60 characters.

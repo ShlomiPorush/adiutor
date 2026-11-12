@@ -192,14 +192,17 @@ export async function startFakeServer() {
         s.apiStatus = null
         return send(status, { error: { code: "bad_gateway", message: "The proxy did not get an answer." } })
       }
-      return send(write ? 201 : 200, {
+      // Mikud's envelope: {data}, and a page of notes with its cursor.
+      const echo = {
         method: req.method,
         path: url.pathname,
         query: url.search,
         agent: req.headers["x-mikud-agent"] ?? null,
         body,
         writes: s.writes.length,
-      })
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/notes") return send(200, { data: echo, nextCursor: "page-2" })
+      return send(write ? 201 : 200, { data: echo })
     }
     send(404, { error: { code: "not_found", message: "No such route." } })
   })
