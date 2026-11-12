@@ -1,6 +1,6 @@
 # Agent instruction (proposal)
 
-Status: **proposal awaiting the owner.** It is not in the shared agent configuration. The owner adds it after the dry run (requirements section 9). The tool names and parameters match the MCP server (see `docs/api.md`).
+Status: **proposal awaiting the owner.** It is not in the shared agent configuration. The owner adds it after the launch checks (requirements section 9). The tool names and parameters match the MCP server (see `docs/api.md`).
 
 The section "Instruction text" is what goes into the shared agent configuration. The section "Connecting to Mikud" is set up once per machine.
 
