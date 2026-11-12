@@ -120,9 +120,7 @@ test("the skill's command connects through the approval page, then writes as its
     const body = (await r.json()) as { data: { action: string; actorLabel: string }[] }
     return body.data.map((e) => `${e.actorLabel} ${e.action}`).sort()
   }, `agent:${label}`)
-  expect(actions).toEqual(
-    expect.arrayContaining([`agent:${label} comment.create`, `agent:${label} note.create`]),
-  )
+  expect(actions).toEqual(expect.arrayContaining([`agent:${label} comment.create`, `agent:${label} note.create`]))
   expect(actions.some((a) => a.startsWith(`agent:${label} item.`))).toBe(true)
 
   // Forget the connection here, then disconnect its key in Settings, Agent access.

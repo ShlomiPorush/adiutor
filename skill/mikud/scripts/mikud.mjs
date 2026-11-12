@@ -181,7 +181,10 @@ function originOf(raw) {
   try {
     url = new URL(String(raw))
   } catch {
-    throw new Fail("no_url", "That is not an address. Ask the owner for Mikud's address, for example https://mikud.example.com.")
+    throw new Fail(
+      "no_url",
+      "That is not an address. Ask the owner for Mikud's address, for example https://mikud.example.com.",
+    )
   }
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1"
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
@@ -297,7 +300,13 @@ function currentSid() {
 }
 
 function powershell(script) {
-  const exe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+  const exe = path.join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  )
   return execFileSync(
     exe,
     [
@@ -389,7 +398,10 @@ function readBackWindows(ctx, file) {
   const saved = path.join(ctx.dir, `.acl-${hex(4)}`)
   try {
     execFileSync(system32("icacls.exe"), [file, "/save", saved, "/Q"], { stdio: "ignore", windowsHide: true })
-    const text = fs.readFileSync(saved).toString("utf16le").replace(/^\uFEFF/, "")
+    const text = fs
+      .readFileSync(saved)
+      .toString("utf16le")
+      .replace(/^\uFEFF/, "")
     const sddl = text.split(/\r?\n/)[1] ?? ""
     const problem = aclProblem(sddl, currentSid(), false, false)
     if (problem) throw insecure(`Could not make ${file} private (${problem}).`)
@@ -496,7 +508,8 @@ function readConnection(ctx) {
   const text = readPrivate(ctx, ctx.connection)
   if (text === null) return null
   const rec = parseLine(CONNECTION_FIELDS, text.trim(), ctx.connection)
-  if (!rec.origin || !rec.key || !rec.keyName) throw insecure(`${ctx.connection} is damaged. Delete it and connect again.`)
+  if (!rec.origin || !rec.key || !rec.keyName)
+    throw insecure(`${ctx.connection} is damaged. Delete it and connect again.`)
   return rec
 }
 
@@ -801,7 +814,7 @@ function httpFail(r, what) {
   const inner = body?.error && typeof body.error === "object" ? body.error : null
   const detail =
     str(inner?.message) || str(inner?.code) || str(body?.message) || str(body?.error_description) || str(body?.error)
-  return new Fail("http_" + r.status, `${what} failed (${r.status}${detail ? `: ${detail}` : ""}).`, {
+  return new Fail(`http_${r.status}`, `${what} failed (${r.status}${detail ? `: ${detail}` : ""}).`, {
     status: r.status,
     body,
   })
@@ -838,7 +851,7 @@ const connectedAnswer = (conn) => ({
 })
 
 /** The key name was saved as the connection: the attempt finished creating its key. */
-const keySaved = (pend, conn) => Boolean(pend.keySaved || (conn && conn.keyName === pend.keyName))
+const keySaved = (pend, conn) => Boolean(pend.keySaved || conn?.keyName === pend.keyName)
 
 /** What may be left on Mikud if this attempt were removed now; nothing for a completed connect. */
 function attemptWarnings(pend, conn) {
@@ -854,7 +867,11 @@ function attemptWarnings(pend, conn) {
 /** Removes an attempt, after writing what it may have left on Mikud. Under the lock. */
 function removeAttempt(ctx, pend, conn) {
   const warnings = attemptWarnings(pend, conn)
-  if (warnings.length) addLeft(ctx, warnings.map((reason) => ({ origin: pend.origin, keyName: pend.keyName, reason })))
+  if (warnings.length)
+    addLeft(
+      ctx,
+      warnings.map((reason) => ({ origin: pend.origin, keyName: pend.keyName, reason })),
+    )
   if (readPending(ctx)?.attemptId === pend.attemptId) removeFile(ctx, ctx.pending)
   return warnings
 }
@@ -890,7 +907,10 @@ async function connect(ctx, opts) {
     const { pend } = settle(ctx, conn, found)
     const origin = opts.url ? originOf(opts.url) : conn?.origin || found?.origin
     if (!origin)
-      throw new Fail("no_url", "No Mikud address is known. Ask the owner for it, then run: mikud connect --url <address>")
+      throw new Fail(
+        "no_url",
+        "No Mikud address is known. Ask the owner for it, then run: mikud connect --url <address>",
+      )
     // The open code again, unless asked for a new one (--replace: the link did not work for the owner).
     if (pend && !opts.replace && pend.origin === origin && pend.phase === "polling" && pend.codeExpiresAt > now())
       return pendingAnswer(pend)
@@ -948,8 +968,7 @@ async function waitForApproval(ctx, opts) {
   let origin = opts.url ? originOf(opts.url) : ""
   if (!origin) {
     origin = readPending(ctx)?.origin ?? ""
-    if (!origin)
-      throw new Fail("not_connected", "No connection is being made. Run: mikud connect --url <address>")
+    if (!origin) throw new Fail("not_connected", "No connection is being made. Run: mikud connect --url <address>")
   }
   const until = Date.now() + WAIT_SECONDS * 1000
   const state = { attemptId: null }
@@ -975,7 +994,7 @@ async function waitStep(ctx, origin, state, token) {
   const pend = settled.pend
   if (settled.orphan?.origin === origin) {
     if (settled.warnings.length) throw unknownFail(settled.warnings, settled.orphan)
-    if (conn && conn.keyName === settled.orphan.keyName) return { done: connectedAnswer(conn) }
+    if (conn?.keyName === settled.orphan.keyName) return { done: connectedAnswer(conn) }
   }
   if (!pend || pend.origin !== origin) {
     // Another command finished this attempt (a parallel --wait), or it was never made here.
@@ -1028,7 +1047,8 @@ async function waitStep(ctx, origin, state, token) {
   if (["access_denied", "expired_token", "invalid_grant"].includes(error)) {
     const warnings = removeAttempt(ctx, pend, conn)
     if (warnings.length) throw unknownFail(warnings, pend)
-    if (error === "access_denied") throw new Fail("denied", "The owner did not approve the connection. Nothing was created.")
+    if (error === "access_denied")
+      throw new Fail("denied", "The owner did not approve the connection. Nothing was created.")
     throw new Fail("expired", "The code is no longer valid. Run: mikud connect")
   }
   // A failure after the server may have started: a session may exist.
@@ -1063,7 +1083,8 @@ async function redeem(ctx, pend, sessionToken) {
   } catch (e) {
     // Nothing is sent before this mark is written: the session ends at once.
     await endSession(pend.origin, sessionToken)
-    if (e instanceof Changed) throw new Fail("cannot_save", "The connection changed while this command ran. Run: mikud status")
+    if (e instanceof Changed)
+      throw new Fail("cannot_save", "The connection changed while this command ran. Run: mikud status")
     throw e
   }
   hook("token")
@@ -1153,7 +1174,9 @@ async function createAndSave(ctx, pend, sessionToken) {
         if (kept?.keyName === old.keyName)
           writeLeft(
             ctx,
-            readLeft(ctx).filter((x) => !(x.keyName === old.keyName && x.origin === old.origin && x.reason === "replaced")),
+            readLeft(ctx).filter(
+              (x) => !(x.keyName === old.keyName && x.origin === old.origin && x.reason === "replaced"),
+            ),
           )
       } catch {}
     }
@@ -1247,7 +1270,8 @@ function bodyOf(method, opts) {
       throw new Fail("bad_json", `Cannot read ${opts.jsonFile}.`)
     }
   }
-  if (text === undefined) throw new Fail("bad_json", `${method.toLowerCase()} needs a body: --json '<body>' or --json-file <file>.`)
+  if (text === undefined)
+    throw new Fail("bad_json", `${method.toLowerCase()} needs a body: --json '<body>' or --json-file <file>.`)
   try {
     JSON.parse(text)
   } catch {

@@ -100,7 +100,8 @@ export async function startFakeServer() {
       if (body?.grant_type !== DEVICE_GRANT || body?.client_id !== "mikud-connect")
         return send(400, { error: "invalid_request" })
       const d = s.devices.get(body.device_code)
-      if (!d || d.state === "used") return send(400, { error: "invalid_grant", error_description: "Invalid device code" })
+      if (!d || d.state === "used")
+        return send(400, { error: "invalid_grant", error_description: "Invalid device code" })
       if (d.expiresAt <= Date.now()) return send(400, { error: "expired_token" })
       if (s.slowDownOnce) {
         s.slowDownOnce = false

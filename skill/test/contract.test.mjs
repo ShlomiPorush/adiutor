@@ -140,7 +140,7 @@ const leftReasons = (answer) => (answer.left ?? []).map((e) => e.reason).sort()
 after(() => fs.rmSync(root, { recursive: true, force: true }))
 
 for (const impl of requested.filter((i) => !present(i)))
-  describe(`mikud (${impl})`, { skip: `${FILES[impl]} does not exist yet` }, () => {})
+  describe.skip(`mikud (${impl}): ${FILES[impl]} does not exist yet`, () => {})
 
 for (const impl of impls) {
   describe(`mikud (${impl})`, () => {
@@ -234,10 +234,12 @@ for (const impl of impls) {
         ["connection"],
       )
       const { deviceCodes, sessions } = server.secrets()
-      for (const [, text] of files) for (const secret of [...deviceCodes, ...sessions]) assert.ok(!text.includes(secret))
+      for (const [, text] of files)
+        for (const secret of [...deviceCodes, ...sessions]) assert.ok(!text.includes(secret))
       if (impl === "sh" && fs.existsSync(curlArgs)) {
         const argv = fs.readFileSync(curlArgs, "utf8")
-        for (const secret of [...deviceCodes, ...sessions, keys[0][0]]) assert.ok(!argv.includes(secret), "a secret in curl's argv")
+        for (const secret of [...deviceCodes, ...sessions, keys[0][0]])
+          assert.ok(!argv.includes(secret), "a secret in curl's argv")
       }
       const already = await r(home, ["connect"])
       assert.equal(already.json.error, "already_connected", already.all)
@@ -413,7 +415,9 @@ for (const impl of impls) {
       assert.ok(["cannot_save", "insecure_credentials"].includes(w.json?.error), w.all)
       assert.equal(server.aliveSessions(), 0, "the session was ended")
       const [[, key]] = server.aliveKeys()
-      assert.ok(w.json.left.some((e) => e.reason === "not_saved" && e.keyName === key.name && e.expiresAt === key.expiresAt))
+      assert.ok(
+        w.json.left.some((e) => e.reason === "not_saved" && e.keyName === key.name && e.expiresAt === key.expiresAt),
+      )
       fs.rmdirSync(path.join(home, "connection"))
     })
 
@@ -537,7 +541,10 @@ for (const impl of impls) {
       const s = await r(home, ["status"])
       assert.equal(s.json.status, "not_connected")
       assert.equal(s.json.pending.code, b.json.code)
-      assert.ok(s.json.left.some((e) => e.reason === "not_saved" && e.keyName === key.name), s.all)
+      assert.ok(
+        s.json.left.some((e) => e.reason === "not_saved" && e.keyName === key.name),
+        s.all,
+      )
     })
 
     // --- Interrupted runs ---
@@ -793,7 +800,12 @@ for (const impl of impls) {
       assert.equal(server.requests.length, 0)
       await connected(home)
       const good = [
-        ["get", "items?q=login&status=todo,in_progress&limit=20", "/api/v1/items", "?q=login&status=todo,in_progress&limit=20"],
+        [
+          "get",
+          "items?q=login&status=todo,in_progress&limit=20",
+          "/api/v1/items",
+          "?q=login&status=todo,in_progress&limit=20",
+        ],
         ["get", `/notes?projectId=${id}&cursor=abc%3D%3D`, "/api/v1/notes", `?projectId=${id}&cursor=abc%3D%3D`],
         ["get", `projects`, "/api/v1/projects", ""],
       ]
@@ -842,7 +854,10 @@ for (const impl of impls) {
       assert.equal((await r(home, ["post", "capture", "--json", "{nope"])).json?.error, "bad_json")
       assert.equal((await r(home, ["post", "capture"])).json?.error, "bad_json")
       assert.equal((await r(home, ["get", "items", "--json", "{}"])).json?.error, "bad_json")
-      assert.equal((await r(home, ["post", "capture", "--json-file", path.join(root, "missing.json")])).json?.error, "bad_json")
+      assert.equal(
+        (await r(home, ["post", "capture", "--json-file", path.join(root, "missing.json")])).json?.error,
+        "bad_json",
+      )
     })
 
     // --- Where requests go ---
@@ -909,7 +924,11 @@ for (const impl of impls) {
       assert.equal(fs.statSync(file).size, 0)
       if (win) {
         const acl = execFileSync("icacls", [file], { encoding: "utf8" })
-        const entries = acl.replace(file, "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l.includes(":("))
+        const entries = acl
+          .replace(file, "")
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => l.includes(":("))
         assert.equal(entries.length, 1, acl)
         assert.ok(!entries[0].includes("(I)"), acl)
       } else assert.equal(fs.statSync(file).mode & 0o777, 0o600)
@@ -961,7 +980,9 @@ for (const impl of impls) {
         assert.ok(!s.all.includes(server.aliveKeys()[0][0]))
       })
 
-      it("refuses a file owned by another user", { skip: process.getuid?.() !== 0 && "needs root to chown" }, async () => {
+      it("refuses a file owned by another user", {
+        skip: process.getuid?.() !== 0 && "needs root to chown",
+      }, async () => {
         const home = fresh()
         await connected(home)
         fs.chownSync(path.join(home, "connection"), 4242, 4242)
@@ -994,7 +1015,8 @@ for (const impl of impls) {
 
 // Two versions on one computer share one connection, one attempt and one lock.
 const [first, second] = impls
-describe(`mikud (${first ?? "one"} and ${second ?? "another"} together)`, { skip: !second && "only one version" }, () => {
+const together = second ? describe : describe.skip
+together(`mikud (${first ?? "one"} and ${second ?? "another"} together)`, () => {
   let server
   before(async () => {
     server = await startFakeServer()
@@ -1025,7 +1047,8 @@ describe(`mikud (${first ?? "one"} and ${second ?? "another"} together)`, { skip
 const shell = win
   ? ["C:\\Program Files\\Git\\bin\\sh.exe", "C:\\Program Files\\Git\\usr\\bin\\sh.exe"].find((f) => fs.existsSync(f))
   : "sh"
-describe("mikud launcher", { skip: !shell && "no sh on this computer" }, () => {
+const launcher = shell ? describe : describe.skip
+launcher("mikud launcher", () => {
   let server
   before(async () => {
     server = await startFakeServer()
@@ -1056,9 +1079,13 @@ describe("mikud launcher", { skip: !shell && "no sh on this computer" }, () => {
   const recorded = path.join(root, "node-recorded")
   fs.mkdirSync(recorder, { recursive: true })
   const realNode = process.execPath.replace(/\\/g, "/")
-  fs.writeFileSync(path.join(recorder, "node"), `#!/bin/sh\necho "$*" >> "${recorded.replace(/\\/g, "/")}"\nexec "${realNode}" "$@"\n`, {
-    mode: 0o755,
-  })
+  fs.writeFileSync(
+    path.join(recorder, "node"),
+    `#!/bin/sh\necho "$*" >> "${recorded.replace(/\\/g, "/")}"\nexec "${realNode}" "$@"\n`,
+    {
+      mode: 0o755,
+    },
+  )
   const withRecorder = (extra = {}) => ({ PATH: [recorder, process.env.PATH].join(path.delimiter), ...extra })
 
   it("runs mikud.mjs with Node 20+, and keeps a query with & as it is", async () => {
@@ -1074,7 +1101,9 @@ describe("mikud launcher", { skip: !shell && "no sh on this computer" }, () => {
     assert.match(fs.readFileSync(recorded, "utf8"), /mikud\.mjs/)
   })
 
-  it("hands over to mikud.sh with MIKUD_NO_NODE=1, never to node", { skip: !present("sh") && "mikud.sh does not exist yet" }, async () => {
+  it("hands over to mikud.sh with MIKUD_NO_NODE=1, never to node", {
+    skip: !present("sh") && "mikud.sh does not exist yet",
+  }, async () => {
     fs.rmSync(nodeCalled, { force: true })
     const s = await launch(path.join(root, "launcher-sh", "home"), ["status"], {
       MIKUD_NO_NODE: "1",
@@ -1084,7 +1113,9 @@ describe("mikud launcher", { skip: !shell && "no sh on this computer" }, () => {
     assert.equal(fs.existsSync(nodeCalled), false)
   })
 
-  it("hands over to mikud.sh when Node is older than 20", { skip: !present("sh") && "mikud.sh does not exist yet" }, async () => {
+  it("hands over to mikud.sh when Node is older than 20", {
+    skip: !present("sh") && "mikud.sh does not exist yet",
+  }, async () => {
     fs.rmSync(nodeCalled, { force: true })
     const s = await launch(path.join(root, "launcher-old", "home"), ["status"], {
       PATH: [standin, process.env.PATH].join(path.delimiter),
