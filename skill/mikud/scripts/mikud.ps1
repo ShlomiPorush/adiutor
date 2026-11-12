@@ -435,6 +435,7 @@ function Get-Ctx {
     pending = [IO.Path]::Combine($dir, 'pending')
     left = [IO.Path]::Combine($dir, 'left')
     lock = [IO.Path]::Combine($dir, 'lock')
+    breaker = [IO.Path]::Combine($dir, 'lock.break')
   }
 }
 
@@ -902,7 +903,8 @@ function Get-LeftNow($ctx) {
 }
 
 # The lock: a file created exclusively, naming its holder (token, host, process id and that process's start time).
-# Taken only from a holder that is certainly gone, and released by its token only.
+# Taken from a holder only when it is certainly gone, under lock.break (Remove-DeadLock), and released by its token
+# only.
 
 # The start time of a process as the system reports it, the same in every version; '' when it cannot be read.
 function Get-StartTime([long]$id) {
@@ -1002,43 +1004,60 @@ function Enter-Lock($ctx) {
     }
     $held = Read-Lock $ctx.lock
     $state = Get-Verdict $held
+    if ([DateTime]::UtcNow -gt $deadline) { Fail-LockBusy $ctx $state }
     if ($state -ceq 'gone') {
       Invoke-Hook 'break-observed'
-      if (Remove-LockIf $ctx (Get-Str $held 'token')) { continue }
-    }
-    if ([DateTime]::UtcNow -gt $deadline) {
-      if ($state -ceq 'unknown') {
-        Fail 'busy' "Another mikud command may hold the lock $($ctx.lock), and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again."
-      }
-      Fail 'busy' 'Another mikud command is using the connection. Nothing was sent; run it again.'
+      if (Remove-DeadLock $ctx (Get-Str $held 'token') $owner) { continue }
     }
     if ($state -ceq 'free') { Start-Sleep -Milliseconds 50 } else { Start-Sleep -Milliseconds (100 + (Get-Random -Maximum 200)) }
   }
 }
 
-# Removes the lock that $token names. Moving it away is atomic, so of two that try only one moves it; if what was
-# moved is another lock (a command had just taken a fresh one), it is put back with a move that never replaces (as a
-# hard link would), which fails when a newer lock is there already. The command whose lock was lost finds out before
-# its next request or change (Assert-Mine).
-function Remove-LockIf($ctx, [string]$token) {
-  $moved = "$($ctx.lock).$(Hex 6).dead"
-  # On Windows an open handle (an antivirus scan) can refuse the move for a moment.
+# The answer once the wait for the lock ended; $state is the verdict on the lock as last read.
+function Fail-LockBusy($ctx, [string]$state) {
+  $byHand = 'Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again.'
+  if (Test-Exists $ctx.breaker) {
+    Fail 'busy' "Another mikud command may be removing a lock, or it stopped while doing so and left $($ctx.breaker). $byHand"
+  }
+  if ($state -ceq 'unknown') {
+    Fail 'busy' "Another mikud command may hold the lock $($ctx.lock), and this command cannot tell whether it still runs. $byHand"
+  }
+  if ($state -ceq 'gone') {
+    Fail 'busy' "The lock $($ctx.lock) was left by a mikud command that has ended, and this command cannot remove it. $byHand"
+  }
+  Fail 'busy' 'Another mikud command is using the connection. Nothing was sent; run it again.'
+}
+
+# Removes a file; $true when it is gone (also when it was gone already), $false when it could not be removed.
+function Remove-Gone([string]$file) {
+  # On Windows an open handle (an antivirus scan) can refuse the delete for a moment.
   for ($i = 0; ; $i++) {
-    try { [IO.File]::Move($ctx.lock, $moved); break }
+    try { [IO.File]::Delete($file); return $true }
     catch {
-      if (-not $IsWin -or -not (Test-Exists $ctx.lock) -or $i -ge 20) { return $true }
+      if (-not (Test-Exists $file)) { return $true }
+      if (-not $IsWin -or $i -ge 20) { return $false }
       Start-Sleep -Milliseconds 50
     }
   }
-  Invoke-Hook 'break-moved'
-  $got = $null
-  try { $got = Read-Lock $moved } catch {}
-  if ($null -ne $got -and -not (Test-Unreadable $got) -and (Get-Str $got 'token') -ceq $token) {
-    Remove-Path $moved
-    return $true
-  }
-  try { [IO.File]::Move($moved, $ctx.lock) } catch { Remove-Path $moved }
-  $false
+}
+
+# Removes the lock of the holder $token names, which is certainly gone. Only the holder of lock.break (created
+# exclusively, naming its holder) removes a lock it does not hold, and only while that lock still names the same dead
+# holder: a lock taken meanwhile is never touched. $true when the lock is gone or now names another holder (try again
+# at once); $false when another command is breaking it or it could not be removed. Nobody else ever removes a
+# lock.break: one left behind is named in busy for the owner to remove by hand.
+function Remove-DeadLock($ctx, [string]$token, [string]$owner) {
+  try {
+    $fs = [IO.File]::Open($ctx.breaker, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+  } catch { return $false }
+  try {
+    try { $bytes = $Utf8.GetBytes($owner); $fs.Write($bytes, 0, $bytes.Length) } catch {}
+    $fs.Dispose()
+    Invoke-Hook 'break-held'
+    $held = Read-Lock $ctx.lock
+    if ($null -eq $held -or (Test-Unreadable $held) -or (Get-Str $held 'token') -cne $token -or (Get-Verdict $held) -cne 'gone') { return $true }
+    return (Remove-Gone $ctx.lock)
+  } finally { [void](Remove-Gone $ctx.breaker) }
 }
 
 function Test-Mine($ctx) {
@@ -1048,7 +1067,7 @@ function Test-Mine($ctx) {
 }
 
 function Exit-Lock($ctx, [string]$token) {
-  if ($token -and $token -ceq $script:LockToken -and (Test-Mine $ctx)) { [void](Remove-LockIf $ctx $token) }
+  if ($token -and $token -ceq $script:LockToken -and (Test-Mine $ctx)) { [void](Remove-Gone $ctx.lock) }
   $script:LockToken = ''
 }
 

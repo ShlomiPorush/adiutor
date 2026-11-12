@@ -16,11 +16,30 @@
 set -u
 set -f
 umask 077
-# Every name below may hold a secret. One that the caller exported would keep its export when assigned, and so reach
-# the environment of curl, awk and every other program this script starts: unset drops the export.
-unset TOKEN BODY QQ qq_s JF JV JK jg_line jg_rest RP_TEXT rr_row rv_rest rv_v sz_v SER cl_dc cs_key ca_set rq_out
-for _p in C_ K_ V_ W_ Y_ LN_; do unset "${_p}key"; done
-for _p in P_ X_ R_ L_ Q_ RA_ O_ N_ SN_ NK_; do unset "${_p}deviceCode"; done
+# Every name this script assigns is unset here, before anything else runs: one that the caller exported would keep its
+# export when assigned, and so reach the environment of curl, awk and every other program this script starts, a secret
+# among them. The contract test fails when a name the script assigns is missing here.
+unset BODY BODYTEXT BREAKER CF_FOUND CLIENT_ID COMMAND CONNECTION CS_expiresAt CS_keyName CS_origin DAYS DEVICE_GRANT
+unset DIR DONE ENDED E_BODY E_CODE E_MSG E_SENT E_STATUS HOME_FOUND HOST HOST_LOWER INT JF JK JSON_OK JV LABEL LEFT
+unset LEFT_FILE LN_keyName LN_origin LOCK LOCKTOKEN L_found L_sessionOpen MYUID NK_found NK_noKey N_attemptId
+unset N_codeExpiresAt N_days N_interval N_keyName N_keySaved N_link N_nextPollAt N_noKey N_origin N_phase
+unset N_pollInFlight N_sessionOpen N_uncertain N_userCode N_v OPT_AS OPT_AS_SET OPT_CLEAR OPT_DAYS OPT_DAYS_SET
+unset OPT_JSON OPT_JSONFILE OPT_JSONFILE_SET OPT_JSON_SET OPT_REPLACE OPT_URL OPT_WAIT ORIGIN OS OW_STATE OW_pid
+unset O_found PENDING POS1 POS_COUNT P_found P_interval P_nextPollAt P_pollInFlight P_uncertain QQ Q_found Q_keySaved
+unset RESULT RP_FOUND RP_TEXT R_found R_phase R_pollInFlight R_sessionOpen SECURED SER SETTLE_WARN SN_found START
+unset STATE_ID STATUS STEP_WAIT ST_MODE ST_UID TARGET TMPFILE TOKEN UA UP UP_extra UP_host UP_origin UP_scheme VERDICT
+unset WARN WORG W_expiresAt W_keyName W_origin W_v _n al_now al_rows ap_hasq ap_ok ap_part ap_query ap_rest ap_tail
+unset ap_v aq_deadline aq_owner aq_r aq_token aw_kn aw_ks aw_nk aw_pf aw_ph aw_so aw_un bl_rc bl_token bo_set ca_lost
+unset ca_set ca_then cl_dc cl_found cl_found_origin cl_interval cl_link cl_origin cl_t cl_uc cl_ucok cs_key cs_n cs_o
+unset cs_ok cs_x cw_until hf_body hf_detail hf_p hk_at hk_i io_abs io_int jg_line jg_rest js_q json_mode kn_raw
+unset lb_hand lo_ok mn_line pa pa_c pa_l pa_o pa_x pe_left pe_out pl_rows qq_s ra_rows ra_seen ra_w ra_warn rc_found
+unset rc_k rc_n rc_o rcl_f rcp_f rd_ended rd_id rd_name rd_ok rd_origin rd_saved rl_rows ro_pid ro_row ro_text rp_d
+unset rp_found rp_i rp_o rp_p rq_out rq_rc rq_why rr_row rs_a rs_b rs_f rv_f rv_rest rv_v so_ls so_stat st_finished
+unset st_k st_left st_o st_out st_w st_x sw_f sw_h sw_n sz_f sz_k sz_sep sz_v uf_k uf_o uf_s up_auth up_host up_port
+unset up_r up_s up_tail util_mode wl_rc wl_text ws_err ws_rc ws_t
+# Names made from a prefix (eval): the secret fields of every record, and every kept failure.
+for _p in C_ K_ L_ LN_ N_ NK_ O_ OW_ P_ Q_ R_ RA_ SN_ V_ W_ X_ Y_; do unset "${_p}key" "${_p}deviceCode"; done
+for _p in S F H; do unset "${_p}_code" "${_p}_msg" "${_p}_status" "${_p}_body" "${_p}_sent"; done
 unset _p
 
 CLIENT_ID=mikud-connect
@@ -571,6 +590,7 @@ CONNECTION="$DIR/connection"
 PENDING="$DIR/pending"
 LEFT_FILE="$DIR/left"
 LOCK="$DIR/lock"
+BREAKER="$DIR/lock.break"
 
 # Addresses
 
@@ -966,7 +986,7 @@ left_now() {
 }
 
 # The lock: a file created exclusively, naming its holder (token, host, process id and that process's start time).
-# Taken only from a holder that is certainly gone, and released by its token only.
+# Taken from a holder only when it is certainly gone, under lock.break (break_lock), and released by its token only.
 
 # start_of PID: START, the start time of a process as the system reports it, the same in every version; "" when it
 # cannot be read.
@@ -1079,17 +1099,17 @@ acquire() {
     fi
     read_owner "$LOCK" || return
     verdict
+    if [ "$(date +%s)" -gt "$aq_deadline" ]; then
+      lock_busy
+      return
+    fi
     if [ "$VERDICT" = gone ]; then
       hook BREAK_OBSERVED
-      if remove_lock_if "$OW_token"; then continue; fi
-    fi
-    if [ "$(date +%s)" -gt "$aq_deadline" ]; then
-      if [ "$VERDICT" = unknown ]; then
-        raise busy "Another mikud command may hold the lock $LOCK, and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again."
-        return
-      fi
-      raise busy "Another mikud command is using the connection. Nothing was sent; run it again."
-      return
+      break_lock "$OW_token"
+      case $? in
+        0) continue ;;
+        2) return 1 ;;
+      esac
     fi
     if [ "$VERDICT" = free ]; then
       nap 0.05
@@ -1100,28 +1120,47 @@ acquire() {
   done
 }
 
-# remove_lock_if TOKEN: removes the lock that TOKEN names. Moving it away is atomic, so of two that try only one moves
-# it; if what was moved is another lock (a command had just taken a fresh one), it is linked back, which fails when a
-# newer lock is there already (ln never replaces). The command whose lock was lost finds out before its next request
-# or change (assert_mine).
-remove_lock_if() {
-  rl_token=$1
-  rl_moved="$LOCK.$(rand 6).dead"
-  mv -f -- "$LOCK" "$rl_moved" 2>/dev/null || return 0
-  hook BREAK_MOVED
-  rl_got=""
-  if read_owner "$rl_moved" && [ "$OW_STATE" = held ]; then rl_got=$OW_token; fi
-  if [ -n "$rl_got" ] && [ "$rl_got" = "$rl_token" ]; then
-    rm -f -- "$rl_moved"
-    return 0
+# lock_busy: the answer once the wait for the lock ended; VERDICT is the verdict on the lock as last read.
+lock_busy() {
+  lb_hand="Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again."
+  if [ -e "$BREAKER" ] || [ -L "$BREAKER" ]; then
+    raise busy "Another mikud command may be removing a lock, or it stopped while doing so and left $BREAKER. $lb_hand"
+  elif [ "$VERDICT" = unknown ]; then
+    raise busy "Another mikud command may hold the lock $LOCK, and this command cannot tell whether it still runs. $lb_hand"
+  elif [ "$VERDICT" = gone ]; then
+    raise busy "The lock $LOCK was left by a mikud command that has ended, and this command cannot remove it. $lb_hand"
+  else
+    raise busy "Another mikud command is using the connection. Nothing was sent; run it again."
   fi
-  [ -d "$LOCK" ] || ln -- "$rl_moved" "$LOCK" 2>/dev/null || :
-  rm -f -- "$rl_moved"
-  return 1
+}
+
+# break_lock TOKEN: removes the lock of the holder TOKEN names, which is certainly gone. Only the holder of lock.break
+# (created exclusively, naming its holder) removes a lock it does not hold, and only while that lock still names the
+# same dead holder: a lock taken meanwhile is never touched. 0 when the lock is gone or now names another holder (try
+# again at once); 1 when another command is breaking it or it could not be removed; 2 on a failure (raised). Nobody
+# else ever removes a lock.break: one left behind is named in busy for the owner to remove by hand.
+break_lock() {
+  bl_token=$1
+  if ! (
+    set -C
+    printf '%s\n' "$aq_owner" >"$BREAKER"
+  ) 2>/dev/null; then
+    return 1
+  fi
+  hook BREAK_HELD
+  bl_rc=0
+  if ! read_owner "$LOCK"; then
+    bl_rc=2
+  elif [ "$OW_STATE" = held ] && [ "$OW_token" = "$bl_token" ]; then
+    verdict
+    if [ "$VERDICT" = gone ] && ! rm -f -- "$LOCK" 2>/dev/null; then bl_rc=1; fi
+  fi
+  rm -f -- "$BREAKER" 2>/dev/null || :
+  return $bl_rc
 }
 
 release() {
-  if mine; then remove_lock_if "$LOCKTOKEN" || :; fi
+  if mine; then rm -f -- "$LOCK" 2>/dev/null || :; fi
   LOCKTOKEN=""
 }
 

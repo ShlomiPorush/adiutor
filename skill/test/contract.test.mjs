@@ -618,43 +618,50 @@ for (const impl of impls) {
       fs.rmSync(lock)
     })
 
-    it("two that see the same dead lock never take a fresh one from a live holder", async () => {
+    it("of two that saw the same dead lock, the second never removes the fresh lock the first took", async () => {
       const home = fresh()
+      const lock = path.join(home, "lock")
       const h = (name) => path.join(root, `${impl}-race-${name}-${n}`)
       // A holder that died: its lock stays behind.
       const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("dead") })
       await reached(h("dead"))
       await kill(dead)
-      // B and C both see that dead lock.
+      // B and C both see that dead lock. (BREAK_MOVED: the same point in the break of 1de3555, which moved the lock
+      // aside; this test shows that break's failure.)
       const b = r(home, ["connect", "--url", server.origin], {
         MIKUD_TEST_HOLD_BREAK_OBSERVED: h("b-seen"),
-        MIKUD_TEST_HOLD_LOCKED: h("b-locked"),
+        MIKUD_TEST_HOLD_TEMP: h("b-temp"),
       })
       const c = r(home, ["connect", "--url", server.origin], {
         MIKUD_TEST_HOLD_BREAK_OBSERVED: h("c-seen"),
-        MIKUD_TEST_HOLD_BREAK_MOVED: h("c-moved"),
+        MIKUD_TEST_HOLD_BREAK_HELD: h("c-held"),
+        MIKUD_TEST_HOLD_BREAK_MOVED: h("c-held"),
       })
       await Promise.all([reached(h("b-seen")), reached(h("c-seen"))])
-      // B breaks it and takes a fresh lock; C then moves B's fresh lock away, taking it for the dead one.
+      // B breaks it, takes a fresh lock, asks for a code and stops right before it saves the attempt.
       go(h("b-seen"))
-      await reached(h("b-locked"))
+      await reached(h("b-temp"))
+      const freshLock = fs.readFileSync(lock, "utf8")
+      // C now breaks what it saw, and stops there; D comes meanwhile and must find the lock taken.
       go(h("c-seen"))
-      await reached(h("c-moved"))
-      // D takes the free place meanwhile, so C cannot put B's lock back.
+      await reached(h("c-held"))
       const d = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("d-locked") })
-      await reached(h("d-locked"))
-      go(h("c-moved"))
-      // B lost its lock: it sends nothing and changes nothing.
-      go(h("b-locked"))
+      const dLocked = `${h("d-locked")}.reached`
+      for (let i = 0; i < 60 && !fs.existsSync(dLocked); i++) await sleep(50)
+      assert.equal(fs.existsSync(dLocked), false, "D took the lock while B held it")
+      go(h("c-held"))
+      await sleep(1000)
+      assert.equal(fs.existsSync(dLocked), false, "D took the lock while B held it")
+      assert.equal(fs.readFileSync(lock, "utf8"), freshLock, "B's fresh lock was removed")
+      go(h("b-temp"))
       const bx = await b
-      assert.equal(bx.json?.error, "busy", bx.all)
-      assert.equal(server.counts.deviceCode, 0, bx.all)
+      assert.equal(bx.json?.status, "pending", bx.all)
+      await reached(h("d-locked"))
       go(h("d-locked"))
-      const dx = await d
-      assert.equal(dx.json?.status, "pending", dx.all)
-      const cx = await c
-      assert.equal(cx.json?.status, "pending", cx.all)
-      assert.equal(cx.json.code, dx.json.code)
+      const [cx, dx] = await Promise.all([c, d])
+      // Nothing was written from a stale look: one code, the one B saved, and no lock or lock.break left.
+      assert.equal(cx.json?.code, bx.json.code, cx.all)
+      assert.equal(dx.json?.code, bx.json.code, dx.all)
       assert.equal(server.counts.deviceCode, 1)
       assert.deepEqual(
         filesUnder(home).map(([f]) => f),
@@ -662,40 +669,76 @@ for (const impl of impls) {
       )
     })
 
-    it("a fresh lock moved away by mistake goes back to its holder", async () => {
+    it("a lock.break left behind: busy names it after the wait, and no command removes it", async () => {
       const home = fresh()
       const lock = path.join(home, "lock")
-      const h = (name) => path.join(root, `${impl}-back-${name}-${n}`)
-      const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("dead") })
-      await reached(h("dead"))
+      const breaker = path.join(home, "lock.break")
+      const hold = path.join(root, `${impl}-breaker-${n}`)
+      const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: hold })
+      await reached(hold)
       await kill(dead)
-      const b = r(home, ["connect", "--url", server.origin], {
-        MIKUD_TEST_HOLD_BREAK_OBSERVED: h("b-seen"),
-        MIKUD_TEST_HOLD_LOCKED: h("b-locked"),
-      })
-      const c = r(home, ["connect", "--url", server.origin], {
-        MIKUD_TEST_HOLD_BREAK_OBSERVED: h("c-seen"),
-        MIKUD_TEST_HOLD_BREAK_MOVED: h("c-moved"),
-      })
-      await Promise.all([reached(h("b-seen")), reached(h("c-seen"))])
-      go(h("b-seen"))
-      await reached(h("b-locked"))
-      go(h("c-seen"))
-      await reached(h("c-moved"))
-      assert.equal(fs.existsSync(lock), false, "C moved B's lock away")
-      go(h("c-moved"))
-      for (let i = 0; i < 200 && !fs.existsSync(lock); i++) await sleep(50)
-      // C put it back, so B still holds it and goes on.
-      go(h("b-locked"))
-      const bx = await b
-      assert.equal(bx.json?.status, "pending", bx.all)
-      const cx = await c
-      assert.equal(cx.json?.code, bx.json.code, cx.all)
-      assert.equal(server.counts.deviceCode, 1)
+      // A command that stopped while it broke that lock.
+      fs.copyFileSync(lock, breaker)
+      const deadLock = fs.readFileSync(lock, "utf8")
+      const a = await r(home, ["connect", "--url", server.origin], { MIKUD_TEST_LOCK_WAIT_MS: "1000" })
+      assert.equal(a.json?.error, "busy", a.all)
+      assert.ok(a.json.message.includes(breaker), a.json.message)
+      assert.equal(server.counts.deviceCode, 0)
+      assert.equal(fs.readFileSync(breaker, "utf8"), deadLock)
+      assert.equal(fs.readFileSync(lock, "utf8"), deadLock)
+      // Removed by hand: the dead lock is broken again.
+      fs.rmSync(breaker)
+      const b = await r(home, ["connect", "--url", server.origin])
+      assert.equal(b.json?.status, "pending", b.all)
       assert.deepEqual(
         filesUnder(home).map(([f]) => f),
         ["pending"],
       )
+    })
+
+    it("a dead lock that cannot be removed: busy within the wait, naming it", {
+      skip: !win && process.getuid?.() === 0 && "root removes files in a read-only folder",
+    }, async () => {
+      const home = fresh()
+      const lock = path.join(home, "lock")
+      const h = (name) => path.join(root, `${impl}-stuck-${name}-${n}`)
+      const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("dead") })
+      await reached(h("dead"))
+      await kill(dead)
+      let p
+      let holder
+      if (win) {
+        // Another program (a backup, an antivirus) holds the dead lock open without delete sharing.
+        const script = `$f = [IO.File]::Open('${lock}', 'Open', 'Read', 'Read'); [IO.File]::WriteAllText('${h("open")}.reached', 'x'); while (-not [IO.File]::Exists('${h("open")}.go')) { Start-Sleep -Milliseconds 50 }; $f.Dispose()`
+        holder = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: "ignore" })
+        await reached(h("open"))
+        p = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_LOCK_WAIT_MS: "1500" })
+      } else {
+        // The folder made read-only once the command checked it: the dead lock can be neither removed nor broken.
+        p = r(home, ["connect", "--url", server.origin], {
+          MIKUD_TEST_LOCK_WAIT_MS: "1500",
+          MIKUD_TEST_HOLD_BREAK_OBSERVED: h("seen"),
+        })
+        await reached(h("seen"))
+        fs.chmodSync(home, 0o500)
+        go(h("seen"))
+      }
+      const started = Date.now()
+      const a = await Promise.race([p, sleep(30_000).then(() => null)])
+      if (win) {
+        go(h("open"))
+        await new Promise((resolve) => (holder.exitCode === null ? holder.on("close", resolve) : resolve()))
+      } else fs.chmodSync(home, 0o700)
+      if (!a) {
+        await kill(p)
+        assert.fail("the command kept trying to remove the lock past its wait")
+      }
+      assert.ok(Date.now() - started < 20_000, "busy came long after the wait")
+      assert.equal(a.json?.error, "busy", a.all)
+      assert.ok(a.json.message.includes(lock), a.json.message)
+      assert.equal(server.counts.deviceCode, 0)
+      assert.equal(fs.existsSync(lock), true)
+      assert.equal(fs.existsSync(path.join(home, "lock.break")), false)
     })
 
     it("a run whose lock was lost saves nothing, still ends the session, and names the key it made", async () => {
@@ -1241,6 +1284,8 @@ for (const impl of impls) {
         "JV",
         "jg_line",
         "jg_rest",
+        "rc_k",
+        "rp_d",
         "RP_TEXT",
         "rr_row",
         "rv_rest",
@@ -1308,6 +1353,66 @@ for (const impl of impls) {
     })
   })
 }
+
+// The sh version unsets every name it assigns before anything else runs: a name the caller exported keeps its export
+// when assigned, and would hand its value (a key, a device code) to curl, awk and every other program the script
+// starts. Read from the script itself, so a name added later cannot be forgotten.
+describe("mikud.sh unsets every name it assigns", () => {
+  const file = path.join(scripts, "mikud.sh")
+  // Assigned and never unset, each only as a prefix of one command, with a constant value.
+  const SAFE = new Map([
+    ["IFS", /^\s*IFS= read /],
+    ["LC_ALL", /^\s*LC_ALL=C awk /],
+  ])
+
+  it("every plain, read, for and eval assignment, and every secret field of a prefix", {
+    skip: !fs.existsSync(file),
+  }, () => {
+    const text = fs.readFileSync(file, "utf8")
+    const end = text.indexOf("\nunset _p\n") + "\nunset _p\n".length
+    assert.ok(end > 20, "the start-up unset ends with: unset _p")
+    const head = text.slice(0, end)
+    const unset = new Set()
+    for (const m of head.matchAll(/^unset ([^\n]+)$/gm)) for (const w of m[1].split(" ")) unset.add(w)
+    for (const m of head.matchAll(/^for _p in ([^;\n]+); do unset ((?:"\$\{_p\}\w+" ?)+); done$/gm))
+      for (const prefix of m[1].trim().split(" "))
+        for (const s of m[2].matchAll(/\$\{_p\}(\w+)/g)) unset.add(prefix + s[1])
+
+    // The code: no awk program (a multi-line single-quoted value), no comment.
+    const lines = text
+      .replace(/^[A-Za-z_]\w*='\n[\s\S]*?\n\}'$/gm, "")
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .map((l) => l.replace(/\s#\s.*$/, "").replace(/\s-[ov] \w+=/g, " "))
+    const assigned = new Set()
+    const prefixes = new Set()
+    const slots = new Set()
+    for (const l of lines) {
+      for (const m of l.matchAll(/(?:^|[\s;&|()!{`"])([A-Za-z_]\w*)=/g)) assigned.add(m[1])
+      for (const m of l.matchAll(/\bread\s+(?:-\w+\s+)*((?:[A-Za-z_]\w*\s*)+)/g))
+        for (const name of m[1].trim().split(/\s+/)) assigned.add(name)
+      for (const m of l.matchAll(/\bfor\s+([A-Za-z_]\w*)\s+in\b/g)) assigned.add(m[1])
+      // Record prefixes (read_record, rec_copy and the like assign <PREFIX><field> through eval) and failure slots.
+      for (const m of l.matchAll(/(?<=\s)([A-Z]{1,3}_)(?=[\s;)]|$)/g)) prefixes.add(m[1])
+      for (const m of l.matchAll(/\berr_(?:save|restore) (\w+)/g)) slots.add(m[1])
+    }
+    // The reader sees assignments inside eval and plain ones alike.
+    for (const name of ["rc_k", "rp_d", "TOKEN", "BODY", "aq_owner"]) assert.ok(assigned.has(name), name)
+    assert.ok(prefixes.has("C_") && prefixes.has("P_") && slots.size > 0)
+
+    const missing = [...assigned].filter((name) => !unset.has(name) && !SAFE.has(name)).sort()
+    assert.deepEqual(missing, [], "assigned in mikud.sh but not unset at start-up")
+    for (const p of prefixes)
+      for (const field of ["key", "deviceCode"])
+        assert.ok(unset.has(p + field), `${p + field} is not unset at start-up`)
+    for (const s of slots)
+      for (const part of ["code", "msg", "status", "body", "sent"])
+        assert.ok(unset.has(`${s}_${part}`), `${s}_${part} is not unset at start-up`)
+    for (const [name, use] of SAFE)
+      for (const l of lines.filter((x) => x.includes(`${name}=`)))
+        assert.match(l, use, `${name} is assigned other than as the safe prefix`)
+  })
+})
 
 // Two versions on one computer share one connection, one attempt and one lock: every ordered pair of them.
 const pairs = impls.flatMap((a) => impls.filter((b) => b !== a).map((b) => [a, b]))

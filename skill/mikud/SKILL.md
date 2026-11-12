@@ -177,6 +177,6 @@ Continue the work, mention it once in your reply, and do not retry in a loop.
 - `insecure_credentials`: the connection's folder or a file in it can be opened by others, or is a link; tell the
   owner the fix it gives.
 - `busy`: another mikud command is using the connection. Nothing was sent; run it again. When the message names a lock
-  file to remove by hand, tell the owner.
+  file to remove by hand (`lock` or `lock.break`), tell the owner.
 - `session_unknown` or `key_unknown` while connecting: tell the owner the message (an approval session to end on the
   Account page, or a key to delete in Settings, Agent access), then connect again if the owner wants to.

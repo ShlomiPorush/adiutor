@@ -206,6 +206,7 @@ function context() {
     pending: path.join(dir, "pending"),
     left: path.join(dir, "left"),
     lock: path.join(dir, "lock"),
+    breaker: path.join(dir, "lock.break"),
   }
 }
 
@@ -645,7 +646,7 @@ function leftNow(ctx) {
 
 /*
  * The lock: a file created exclusively, naming its holder (token, host, process id and that process's start time).
- * Taken only from a holder that is certainly gone, and released by its token only.
+ * Taken from a holder only when it is certainly gone, under `lock.break` (breakLock), and released by its token only.
  */
 
 /** The start time of a process as the system reports it, the same in every version; "" when it cannot be read. */
@@ -741,53 +742,86 @@ async function acquire(ctx) {
     }
     const holder = readLock(ctx.lock)
     const state = verdict(holder)
+    if (Date.now() > deadline) throw lockBusy(ctx, state)
     if (state === "gone") {
       hook("break-observed")
-      if (removeLockIf(ctx, holder.token)) continue
-    }
-    if (Date.now() > deadline) {
-      if (state === "unknown")
-        throw new Fail(
-          "busy",
-          `Another mikud command may hold the lock ${ctx.lock}, and this command cannot tell whether it still runs. Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again.`,
-        )
-      throw new Fail("busy", "Another mikud command is using the connection. Nothing was sent; run it again.")
+      if (breakLock(ctx, holder.token, owner)) continue
     }
     await sleep(state === "free" ? 50 : 100 + Math.random() * 200)
   }
 }
 
-/**
- * Removes the lock that `token` names. Moving it away is atomic, so of two that try only one moves it; if what was
- * moved is another lock (a command had just taken a fresh one), it is linked back, which fails when a newer lock is
- * there already. The command whose lock was lost finds out before its next request or change (assertMine).
- */
-function removeLockIf(ctx, token) {
-  const moved = `${ctx.lock}.${hex(6)}.dead`
-  // On Windows an open handle (an antivirus scan) can refuse the move for a moment.
+/** The answer once the wait for the lock ended; `state` is the verdict on the lock as last read. */
+function lockBusy(ctx, state) {
+  const byHand =
+    "Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again."
+  if (fs.existsSync(ctx.breaker) || isLink(ctx.breaker))
+    return new Fail(
+      "busy",
+      `Another mikud command may be removing a lock, or it stopped while doing so and left ${ctx.breaker}. ${byHand}`,
+    )
+  if (state === "unknown")
+    return new Fail(
+      "busy",
+      `Another mikud command may hold the lock ${ctx.lock}, and this command cannot tell whether it still runs. ${byHand}`,
+    )
+  if (state === "gone")
+    return new Fail(
+      "busy",
+      `The lock ${ctx.lock} was left by a mikud command that has ended, and this command cannot remove it. ${byHand}`,
+    )
+  return new Fail("busy", "Another mikud command is using the connection. Nothing was sent; run it again.")
+}
+
+const isLink = (file) => {
+  try {
+    return fs.lstatSync(file).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+/** Removes a file; true when it is gone (also when it was gone already), false when it could not be removed. */
+function unlinkGone(file) {
+  // On Windows an open handle (an antivirus scan) can refuse the delete for a moment.
   for (let i = 0; ; i++) {
     try {
-      fs.renameSync(ctx.lock, moved)
-      break
+      fs.unlinkSync(file)
+      return true
     } catch (e) {
-      if (!win || e.code === "ENOENT" || i >= 20) return true
+      if (e.code === "ENOENT") return true
+      if (!win || i >= 20) return false
       pause(50)
     }
   }
-  hook("break-moved")
-  let got = null
+}
+
+/**
+ * Removes the lock of the holder `token` names, which is certainly gone. Only the holder of `lock.break` (created
+ * exclusively, naming its holder) removes a lock it does not hold, and only while that lock still names the same dead
+ * holder: a lock taken meanwhile is never touched. True when the lock is gone or now names another holder (try again
+ * at once); false when another command is breaking it or it could not be removed. Nobody else ever removes a
+ * `lock.break`: one left behind is named in `busy` for the owner to remove by hand.
+ */
+function breakLock(ctx, token, owner) {
+  let fd
   try {
-    got = readLock(moved)
-  } catch {}
-  if (got?.token === token) {
-    rm(moved)
-    return true
+    fd = fs.openSync(ctx.breaker, "wx", 0o600)
+  } catch {
+    return false
   }
   try {
-    fs.linkSync(moved, ctx.lock)
-  } catch {}
-  rm(moved)
-  return false
+    try {
+      fs.writeSync(fd, owner)
+    } catch {}
+    fs.closeSync(fd)
+    hook("break-held")
+    const held = readLock(ctx.lock)
+    if (held?.token !== token || verdict(held) !== "gone") return true
+    return unlinkGone(ctx.lock)
+  } finally {
+    unlinkGone(ctx.breaker)
+  }
 }
 
 const mine = (ctx) => {
@@ -800,7 +834,7 @@ const mine = (ctx) => {
 }
 
 function release(ctx) {
-  if (mine(ctx)) removeLockIf(ctx, heldToken)
+  if (mine(ctx)) unlinkGone(ctx.lock)
   heldToken = ""
 }
 
