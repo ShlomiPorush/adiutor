@@ -318,8 +318,24 @@ function powershell(script) {
       "-EncodedCommand",
       Buffer.from(script, "utf16le").toString("base64"),
     ],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 60_000, windowsHide: true },
+    {
+      encoding: "utf8",
+      env: windowsPowerShellEnv(),
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 60_000,
+      windowsHide: true,
+    },
   )
+}
+
+/**
+ * The environment without PSModulePath: started from PowerShell 7, Windows PowerShell would inherit its module path and
+ * fail to load the module Get-Acl is in. Without it, Windows PowerShell builds its own.
+ */
+function windowsPowerShellEnv() {
+  const env = { ...process.env }
+  for (const k of Object.keys(env)) if (k.toLowerCase() === "psmodulepath") delete env[k]
+  return env
 }
 
 const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`
