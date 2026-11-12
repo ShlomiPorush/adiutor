@@ -1,6 +1,6 @@
 # Agent instruction (proposal)
 
-Status: **proposal awaiting the owner.** It is not in the shared agent configuration. The owner adds it after the dry run (requirements section 9).
+Status: **proposal awaiting the owner.** It is not in the shared agent configuration. The owner adds it after the launch checks (requirements section 9).
 
 Agents use Mikud through the `mikud` skill ([skill/mikud/SKILL.md](../skill/mikud/SKILL.md)): when, how and what to write in Mikud, the rules (top-level T3 threads only, thread start, end of work, quick capture, notes, never secrets, deletes or stage changes) and every call, each MCP tool next to its command. The skill uses the `mikud` MCP tools when a session has them, and otherwise its own `mikud` command, never both for one action. The shared agent configuration installs the skill for Claude Code and Codex from `skill/mikud` (its `skills.manifest.json`).
 

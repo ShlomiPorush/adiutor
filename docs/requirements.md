@@ -109,9 +109,9 @@ The inbox count is visible on the home screen and links to the inbox.
 There is one launch and no partial use.
 
 1. Everything in this document is built and verified, except section 10 (Notes), which the launch does not wait for.
-2. Dry run on real data, on the development stack on the owner's PC: every project is seeded with drafts (a stage proposal, goal, "where we are") written by an agent from T3 threads and the repositories; one real Telegram morning message is sent; the overview is shown at desktop and phone sizes.
+2. The owner deploys production with a new, empty database (owner's decision, 2026-11-12; it replaces a dry run on the development stack and the move of its data). The launch checks run there on real data: every project is seeded with drafts (a stage proposal, goal, "where we are") written by an agent from T3 threads and the repositories; one real Telegram morning message is sent; the overview is shown at desktop and phone sizes.
 3. The owner reviews and approves or corrects.
-4. Only after approval: the owner deploys to production, the always-on line that loads the `mikud` skill goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.
+4. Only after approval: the always-on line that loads the `mikud` skill goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.
 
 ## 10. Notes
 
