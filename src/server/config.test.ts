@@ -31,7 +31,6 @@ describe("loadConfig", () => {
     expect(config.publicUrl.origin).toBe("https://adiutor.example.com")
     expect(config.authSecrets).toEqual([{ version: 1, value: authSecret }])
     expect(config.settingsKeys).toEqual([{ version: 1, value: settingsKey }])
-    expect(config.legacyAuthSecret).toBeUndefined()
     expect(config.trustedProxies).toEqual([])
     expect(config.telegramApiUrl).toBe("https://api.telegram.org")
     expect(config.overrides).toEqual({})
@@ -63,18 +62,25 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...valid, ADIUTOR_AUTH_SECRETS: `1:${twoByte}` }).authSecrets).toHaveLength(1)
   })
 
-  it("keeps the settings key apart from every auth secret, the legacy one too", () => {
+  it("keeps the settings key apart from every auth secret", () => {
+    const older = testSecret()
     expect(refusal({ ...valid, ADIUTOR_SETTINGS_KEYS: `1:${authSecret}` })).toContain(
       "ADIUTOR_SETTINGS_KEYS must differ from every auth secret",
     )
-    const legacy = testSecret()
-    expect(loadConfig({ ...valid, ADIUTOR_AUTH_SECRET: legacy }).legacyAuthSecret).toBe(legacy)
-    expect(refusal({ ...valid, ADIUTOR_AUTH_SECRET: legacy, ADIUTOR_SETTINGS_KEYS: `1:${legacy}` })).toContain(
-      "must differ from every auth secret",
+    expect(
+      refusal({ ...valid, ADIUTOR_AUTH_SECRETS: `2:${authSecret},1:${older}`, ADIUTOR_SETTINGS_KEYS: `1:${older}` }),
+    ).toContain("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
+  })
+
+  it.each([
+    ["a value", testSecret()],
+    ["an empty value", ""],
+  ])("refuses the removed ADIUTOR_AUTH_SECRET with %s, never printing it", (_, value) => {
+    const message = refusal({ ...valid, ADIUTOR_AUTH_SECRET: value })
+    expect(message).toContain(
+      "ADIUTOR_AUTH_SECRET is no longer used: remove it; ADIUTOR_AUTH_SECRETS holds the auth keys",
     )
-    expect(refusal({ ...valid, ADIUTOR_AUTH_SECRET: "short" })).toContain(
-      "ADIUTOR_AUTH_SECRET must be at least 32 bytes",
-    )
+    if (value) expect(message).not.toContain(value)
   })
 
   it("refuses the variables Better Auth would read on its own", () => {
