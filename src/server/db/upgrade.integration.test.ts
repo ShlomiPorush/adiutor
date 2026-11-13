@@ -262,7 +262,7 @@ describe("upgrading to the readable synthetic e-mail", () => {
         expect(await owners(db)).toEqual([{ email: hexEmail(name), username: name }])
         expect(await applied(db)).toBe(READABLE_EMAIL)
 
-        // docs/deployment.md, Upgrade: rename the owner, then upgrade.
+        // The repair an owner of that historical install makes by hand: rename the owner, then upgrade.
         await db.db.execute(
           sql`update auth_user set username = 'alice', display_username = 'alice', email = 'alice@adiutor.local'`,
         )

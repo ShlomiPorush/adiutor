@@ -85,5 +85,5 @@ export const AGENT_KEY_DAYS_MAX = 365
 
 /** The one client id the device plugin accepts (validateClient); the CLI also sends it as its User-Agent. */
 export const CONNECT_CLIENT_ID = "adiutor-connect"
-/** The page where the owner approves a `adiutor connect` request (the plugin's verificationUri). */
+/** The page where the owner approves an `adiutor connect` request (the plugin's verificationUri). */
 export const CONNECT_DEVICE_PATH = "/connect/device"
