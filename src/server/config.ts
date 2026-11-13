@@ -8,8 +8,6 @@ export type ServerConfig = {
    * data, the others only decrypt. Each at least MIN_SECRET_BYTES bytes.
    */
   authSecrets: VersionedKey[]
-  /** ADIUTOR_AUTH_SECRET, optional: Better Auth's legacy `secret`, which decrypts data from before `secrets`. */
-  legacyAuthSecret: string | undefined
   /** ADIUTOR_SETTINGS_KEYS ("2:new,1:old"): encrypts the secrets stored in Settings. Never an auth secret. */
   settingsKeys: VersionedKey[]
   /** ADIUTOR_TRUSTED_PROXIES: the proxy addresses or CIDR ranges in front of Adiutor (Traefik), comma-separated. */
@@ -113,6 +111,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   for (const name of Object.keys(env).sort())
     if (FOREIGN_AUTH_VARIABLES.test(name) && env[name] !== undefined)
       problems.push(`${name} is set: Better Auth would read it on its own; Adiutor uses ADIUTOR_AUTH_SECRETS only`)
+  // Better Auth's single legacy `secret`, removed before the first release: a value left behind must not look as if it
+  // still does something. Refused even when empty, and never printed.
+  if (env.ADIUTOR_AUTH_SECRET !== undefined)
+    problems.push("ADIUTOR_AUTH_SECRET is no longer used: remove it; ADIUTOR_AUTH_SECRETS holds the auth keys")
 
   const databaseUrl = required("DATABASE_URL")
   const publicUrlText = required("ADIUTOR_PUBLIC_URL")
@@ -120,10 +122,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const settingsKeysText = required("ADIUTOR_SETTINGS_KEYS")
   const authSecrets = authSecretsText ? parseKeys("ADIUTOR_AUTH_SECRETS", authSecretsText, problems) : []
   const settingsKeys = settingsKeysText ? parseKeys("ADIUTOR_SETTINGS_KEYS", settingsKeysText, problems) : []
-  const legacyAuthSecret = env.ADIUTOR_AUTH_SECRET || undefined
-  if (legacyAuthSecret && Buffer.byteLength(legacyAuthSecret, "utf8") < MIN_SECRET_BYTES)
-    problems.push(`ADIUTOR_AUTH_SECRET must be at least ${MIN_SECRET_BYTES} bytes`)
-  const authValues = new Set([...authSecrets.map((k) => k.value), ...(legacyAuthSecret ? [legacyAuthSecret] : [])])
+  const authValues = new Set(authSecrets.map((k) => k.value))
   if (settingsKeys.some((k) => authValues.has(k.value)))
     problems.push("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
 
@@ -159,7 +158,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     port,
     databaseUrl,
     authSecrets,
-    legacyAuthSecret,
     settingsKeys,
     trustedProxies,
     publicUrl,

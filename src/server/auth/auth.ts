@@ -143,8 +143,6 @@ export type AuthOptions = AuthSettings & {
   ctx: Ctx
   /** ADIUTOR_AUTH_SECRETS: Better Auth's versioned `secrets`. */
   secrets: VersionedKey[]
-  /** ADIUTOR_AUTH_SECRET: Better Auth's legacy `secret`, which decrypts data from before `secrets`. */
-  legacySecret?: string
   publicUrl: URL
   /** ADIUTOR_TRUSTED_PROXIES: the proxies whose X-Forwarded-For hop Better Auth skips. */
   trustedProxies: string[]
@@ -287,7 +285,6 @@ export function createAuth(options: AuthOptions) {
   return betterAuth({
     appName: "Adiutor",
     secrets: options.secrets.map((k) => ({ version: k.version, value: k.value })),
-    ...(options.legacySecret ? { secret: options.legacySecret } : {}),
     basePath: "/api/auth",
     baseURL: publicUrl.origin,
     trustedOrigins: [publicUrl.origin],

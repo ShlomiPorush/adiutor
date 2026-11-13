@@ -79,7 +79,6 @@ POSTGRES_PASSWORD=$password
 POSTGRES_DB=adiutor
 DATABASE_URL=postgres://adiutor:$password@postgres:5432/adiutor
 ADIUTOR_AUTH_SECRETS=1:$(random_hex)
-ADIUTOR_AUTH_SECRET=$(random_hex)
 ADIUTOR_SETTINGS_KEYS=1:$(random_hex)
 ADIUTOR_PUBLIC_URL=http://127.0.0.1:$PORT
 EOF

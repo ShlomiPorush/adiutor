@@ -49,7 +49,6 @@ const auth = new AuthHolder(
   {
     ctx,
     secrets: config.authSecrets,
-    legacySecret: config.legacyAuthSecret,
     publicUrl: config.publicUrl,
     trustedProxies: config.trustedProxies,
     sendOtp: (code) => telegram.sendSignInCode(code),

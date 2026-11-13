@@ -32,7 +32,6 @@ try {
   const result = await resetOwnerPassword({
     ctx,
     secrets: config.authSecrets,
-    legacySecret: config.legacyAuthSecret,
     publicUrl: config.publicUrl,
     trustedProxies: config.trustedProxies,
     sessionIdleDays: (await getSettings(ctx.db)).sessionIdleDays,
