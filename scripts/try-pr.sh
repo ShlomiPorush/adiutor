@@ -57,15 +57,6 @@ save_state() {
   } >"$STATE_FILE"
 }
 
-# The PostgreSQL image of the development template, so both stacks follow the same pinned version.
-postgres_image() {
-  local image
-  image="$(sed -nE 's/^[[:space:]]*image:[[:space:]]*(postgres:[^[:space:]]+).*$/\1/p' \
-    "$REPO_ROOT/docker/docker-compose-dev.example.yml" | head -1)"
-  [ -n "$image" ] || die "cannot read the PostgreSQL image from docker/docker-compose-dev.example.yml"
-  echo "$image"
-}
-
 write_env() {
   local password
   password="$(random_hex)"
@@ -123,10 +114,10 @@ services:
       - ALL
 
   postgres:
-    image: $(postgres_image)
+    image: $TEST_POSTGRES_IMAGE
     env_file: pr.env
     volumes:
-      - ./postgres:/var/lib/postgresql
+      - ./postgres:$TEST_POSTGRES_DATA
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"\$\$POSTGRES_USER\" -d \"\$\$POSTGRES_DB\""]
       interval: 5s

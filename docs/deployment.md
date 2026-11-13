@@ -19,7 +19,7 @@ These notes are for the owner, who deploys production himself. Agents never depl
    openssl rand -hex 24
    ```
 
-2. Adiutor needs PostgreSQL 17 or newer: every connection sets `transaction_timeout`, which older servers refuse, and the "new since your last visit" boundary relies on it. On your PostgreSQL server, as a superuser, create a role and a database that only Adiutor uses:
+2. Adiutor needs PostgreSQL 16 or newer. On your PostgreSQL server, as a superuser, create a role and a database that only Adiutor uses:
 
    ```sql
    CREATE ROLE adiutor LOGIN PASSWORD '<database password>';
@@ -150,6 +150,8 @@ Every agent and the reconciler get their own key through `adiutor connect`, a co
 
 **Not needed for the first launch.** The first launch starts production with a new, empty database (requirements section 9, owner's decision of 2026-11-12), so skip the numbered move below; it stays for moving a development database to production later. The notes on the development stack apply either way.
 
+**Not into PostgreSQL 16.** The development database is PostgreSQL 18, and a PostgreSQL 18 dump is not downward compatible: its restore starts with `SET transaction_timeout`, which PostgreSQL 16 refuses. The move below works only into a production server of PostgreSQL 18 or newer. On PostgreSQL 16 the supported first launch is a new, empty database.
+
 The dry run runs on the development stack on your PC with real data. Move its data once, after you approved the dry run (requirements section 9). Production must not run before step 5: the migrations would create empty tables that the restore cannot overwrite.
 
 **Keys of the development stack.** `scripts/local.sh up` or `start` generates the database password and the keys once into `stack.env` in the stack's data directory (default `~/.local/share/adiutor-dev/stack.env`, mode 0600), before PostgreSQL first starts, and never rewrites it. Keep that file with the database: without it the stack refuses to start, because new keys would not open the database. `nuke` deletes both. Keys that an older `.env.dev` already sets keep winning over `stack.env`; leave them there, or move them by hand as whole values with every version listed. Interrupted on its very first start (before any data), a stack can be started over with `nuke` and `start`.
@@ -176,7 +178,7 @@ A `docker-compose-dev.yml` copied before these changes is refused: copy `docker/
    ```
 
 4. Create the production database (step 1) and write `.env` (step 2) if you have not yet. The database must be empty: if production already started once, drop and create it again.
-5. Restore the dump into it from a machine that reaches the production PostgreSQL. Use `pg_restore` from PostgreSQL 18 or newer, because the development database is PostgreSQL 18; a production server older than 18 may refuse parts of the dump, so check its version first.
+5. Restore the dump into it from a machine that reaches the production PostgreSQL. Use `pg_restore` from PostgreSQL 18 or newer, because the development database is PostgreSQL 18. The production server must be PostgreSQL 18 or newer too (see above): check its version first.
 
    ```bash
    read -rs PGPASSWORD && export PGPASSWORD   # the production role's password; stays out of the history

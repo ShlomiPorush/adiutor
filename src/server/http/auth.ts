@@ -1,21 +1,15 @@
 import type { Context } from "hono"
-import { getCookie, setCookie } from "hono/cookie"
 import { createMiddleware } from "hono/factory"
 import type { AuthHolder } from "../auth/auth.ts"
 import { AppError, forbidden } from "../errors.ts"
-import { ensureBrowser } from "../services/account.ts"
 import type { Actor, By, Ctx } from "../services/context.ts"
 
-/** Names the browser for "new since your last visit". Not a credential: it never authenticates. */
-export const BROWSER_COOKIE = "adiutor_browser"
-/** Browsers cap cookie lifetimes at 400 days. */
-export const BROWSER_COOKIE_MAX_AGE = 400 * 24 * 60 * 60
 export const REQUEST_HEADER = "x-adiutor-request"
 export const AGENT_LABEL_HEADER = "x-adiutor-agent"
 
 export type Auth =
   | { actor: Actor; via: "token"; keyId: string }
-  | { actor: Actor; via: "session"; sessionId: string; browserId: string; expiresAt: Date }
+  | { actor: Actor; via: "session"; sessionId: string; expiresAt: Date }
 export type Env = { Variables: { auth: Auth } }
 
 export type AuthDeps = {
@@ -123,21 +117,11 @@ export function authenticate(deps: AuthDeps, options: { allowSession: boolean })
     if (found.user.twoFactorEnabled !== true)
       throw new AppError("totp_required", "Set up two-factor authentication to use Adiutor.")
     if (!SAFE_METHODS.has(c.req.method)) checkBrowserRequest(c, deps.config.publicUrl)
-    const browser = await ensureBrowser(deps.ctx, getCookie(c, BROWSER_COOKIE))
-    if (browser.created)
-      setCookie(c, BROWSER_COOKIE, browser.id, {
-        httpOnly: true,
-        sameSite: "Lax",
-        secure: deps.config.publicUrl.protocol === "https:",
-        path: "/",
-        maxAge: BROWSER_COOKIE_MAX_AGE,
-      })
     const user = found.user as { username?: string | null; name: string }
     c.set("auth", {
       actor: { kind: "owner", label: user.username ?? user.name },
       via: "session",
       sessionId: found.session.id,
-      browserId: browser.id,
       expiresAt: new Date(found.session.expiresAt),
     })
     return next()

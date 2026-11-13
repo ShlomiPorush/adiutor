@@ -11,6 +11,12 @@ export PLAYWRIGHT_IMAGE
 # The oldest Node the agent skill's adiutor.mjs supports: its contract tests also run there.
 SKILL_NODE_IMAGE="node:20.20.2-bookworm-slim"
 export SKILL_NODE_IMAGE
+# The PostgreSQL of the verification and pull-request stacks: the major version production runs, the oldest
+# Adiutor supports. This image keeps its data in /var/lib/postgresql/data. The development stack keeps its own.
+TEST_POSTGRES_IMAGE="postgres:16.16-bookworm"
+TEST_POSTGRES_DATA="/var/lib/postgresql/data"
+TEST_POSTGRES_MAJOR=16
+export TEST_POSTGRES_IMAGE TEST_POSTGRES_DATA TEST_POSTGRES_MAJOR
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/adiutor"
 
 die() {
@@ -197,7 +203,8 @@ dev_compose() {
   local data_dir="${ADIUTOR_DATA_DIR:-$DEV_DEFAULT_DATA_DIR}"
   local local_env="${ADIUTOR_LOCAL_ENV_FILE:-$REPO_ROOT/.env.dev}" interpolation=/dev/null
   [ -f "$local_env" ] && interpolation="$local_env"
-  env -u COMPOSE_ENV_FILES ADIUTOR_DATA_DIR="$data_dir" ADIUTOR_IMAGE_TAG=dev ADIUTOR_STACK_ENV_FILE="$data_dir/stack.env" \
+  env -u COMPOSE_ENV_FILES -u ADIUTOR_POSTGRES_IMAGE -u ADIUTOR_POSTGRES_DATA \
+    ADIUTOR_DATA_DIR="$data_dir" ADIUTOR_IMAGE_TAG=dev ADIUTOR_STACK_ENV_FILE="$data_dir/stack.env" \
     ADIUTOR_LOCAL_ENV_FILE="$local_env" \
     docker compose --env-file "$interpolation" -p "$DEV_PROJECT" --project-directory "$REPO_ROOT" -f "$DEV_COMPOSE_FILE" "$@"
 }

@@ -33,12 +33,13 @@ services:
       - ALL
 
   postgres:
-    image: postgres:18.6-bookworm
+    # scripts/verify.sh runs production's PostgreSQL 16 instead (TEST_POSTGRES_IMAGE in scripts/lib/common.sh).
+    image: ${ADIUTOR_POSTGRES_IMAGE:-postgres:18.6-bookworm}
     env_file:
       - path: ${ADIUTOR_STACK_ENV_FILE:?set by the scripts}
     volumes:
-      # PostgreSQL 18 keeps its data in a versioned directory under /var/lib/postgresql.
-      - ${ADIUTOR_DATA_DIR:?ADIUTOR_DATA_DIR is set by the scripts}/postgres:/var/lib/postgresql
+      # PostgreSQL 18 keeps its data in a versioned directory under /var/lib/postgresql, 16 in its data/.
+      - ${ADIUTOR_DATA_DIR:?ADIUTOR_DATA_DIR is set by the scripts}/postgres:${ADIUTOR_POSTGRES_DATA:-/var/lib/postgresql}
     healthcheck:
       test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s

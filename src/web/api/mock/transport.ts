@@ -489,7 +489,6 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     return ok({
       actor: { kind: "owner", label: "owner" },
       via: "session",
-      browserId: state.browserId,
       expiresAt: state.sessions[0]?.expiresAt ?? null,
     })
   if (head === "morning") return ok(morning())

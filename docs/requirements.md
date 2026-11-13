@@ -64,7 +64,7 @@ The parts, in reading order:
 
 1. **Waiting on you**: items in `waiting_on_you` and pending stage proposals.
 2. **Security**: one line per project, not a list of alerts (see section 6).
-3. **New since your last visit**: items created or changed since the previous visit, marked unread.
+3. **New since your last visit**: items created or changed since the previous visit, marked unread. The last visit is the owner's, across browsers and devices: what he saw on the phone is not new on the desktop (owner's decision, 2026-11-13). An open overview keeps its list until it is opened again.
 4. **Agent updates**: comments and status changes by agents since the last visit, folded by project.
 5. **Projects**: for every project with open items: stage, near goal with progress, "where we are", open Issues count.
 

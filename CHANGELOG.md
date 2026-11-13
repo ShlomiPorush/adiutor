@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- **Runs on PostgreSQL 16**: 0.1.0 stopped at its first query on PostgreSQL 16 (`unrecognized configuration parameter "transaction_timeout"`). Each connection now limits every statement to 15 seconds and an idle transaction to 15 seconds, both known to PostgreSQL 16; Adiutor needs PostgreSQL 16 or newer. The verification and pull-request stacks run PostgreSQL 16.
+
+### Changed
+
+- **New since your last visit is the owner's, across browsers and devices**: a visit on the phone counts on the desktop the next time the overview opens, and an open overview keeps its list. Adiutor no longer sets its `adiutor_browser` cookie, and `GET /api/v1/session` no longer answers `browserId`. Existing visits keep their times.
+
 ## [0.1.0] - 2026-11-13
 
 ### Added

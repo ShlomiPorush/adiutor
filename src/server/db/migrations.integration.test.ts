@@ -4,7 +4,7 @@ import { getTableName, is } from "drizzle-orm"
 import { PgTable } from "drizzle-orm/pg-core"
 import postgres from "postgres"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { createDatabase, type Database, TRANSACTION_TIMEOUT_MS } from "./client.ts"
+import { createDatabase, type Database, IDLE_IN_TRANSACTION_TIMEOUT_MS, STATEMENT_TIMEOUT_MS } from "./client.ts"
 import * as schema from "./schema.ts"
 
 // The migrations in drizzle/ against a real PostgreSQL. ADIUTOR_TEST_DATABASE_URL is a role that may create
@@ -45,11 +45,14 @@ describe("migrations", () => {
     expect(await database.ping()).toBe(true)
   })
 
-  it("bound every transaction of the app pool (the visit boundary relies on it)", async () => {
-    const [row] = await database.db.execute<{ tx: string; idle: string }>(
-      "select current_setting('transaction_timeout') as tx, current_setting('idle_in_transaction_session_timeout') as idle",
+  it("bound each statement and idle time in a transaction of the app pool (the visit boundary relies on it)", async () => {
+    const [row] = await database.db.execute<{ statement: string; idle: string }>(
+      "select current_setting('statement_timeout') as statement, current_setting('idle_in_transaction_session_timeout') as idle",
     )
-    expect(row).toEqual({ tx: `${TRANSACTION_TIMEOUT_MS / 1000}s`, idle: "15s" })
+    expect(row).toEqual({
+      statement: `${STATEMENT_TIMEOUT_MS / 1000}s`,
+      idle: `${IDLE_IN_TRANSACTION_TIMEOUT_MS / 1000}s`,
+    })
   })
 
   it("create every table of the schema", async () => {
@@ -60,7 +63,7 @@ describe("migrations", () => {
     const rows = await sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public' order by table_name`
     expect(rows.map((r) => r.table_name)).toEqual(expected)
-    expect(expected).toHaveLength(25)
+    expect(expected).toHaveLength(24)
   })
 
   it("enforce the unique keys the services rely on", async () => {

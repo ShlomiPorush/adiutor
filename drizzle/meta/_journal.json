@@ -78,6 +78,20 @@
       "when": 1793974416642,
       "tag": "0010_notes",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794579124085,
+      "tag": "0011_visits-per-account",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794579125533,
+      "tag": "0012_drop-devices",
+      "breakpoints": true
     }
   ]
 }

@@ -4,7 +4,7 @@ import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { jobRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
-import { getSettings, lastVisitAnyDevice } from "../services/admin.ts"
+import { FIRST_VISIT_WINDOW_MS, getSettings, lastVisit } from "../services/admin.ts"
 import { type By, type Ctx, requireOwner, writeAudit } from "../services/context.ts"
 import { morning } from "../services/reads.ts"
 import { TelegramError } from "../telegram/api.ts"
@@ -151,12 +151,15 @@ export type MorningRead = {
 }
 
 /**
- * The message's content: the morning read model since the owner's last visit on any device, or since the
- * last morning message when that is later (24 hours back when there is neither).
+ * The message's content: the morning read model since the owner's last visit in any browser, or since the
+ * last morning message when that is later. 24 hours back only when there is neither.
  */
 export async function morningSummary(ctx: Ctx): Promise<MorningRead> {
-  const times = [await lastVisitAnyDevice(ctx), await lastMessageBoundary(ctx)].filter((d): d is Date => d !== null)
-  const since = times.length > 0 ? new Date(Math.max(...times.map((d) => d.getTime()))) : undefined
+  const times = [await lastVisit(ctx), await lastMessageBoundary(ctx)].filter((d): d is Date => d !== null)
+  const since =
+    times.length > 0
+      ? new Date(Math.max(...times.map((d) => d.getTime())))
+      : new Date(ctx.clock().getTime() - FIRST_VISIT_WINDOW_MS)
   const view = await morning(ctx, { since })
   return {
     summary: { waiting: view.waiting, newCount: view.new.length, security: view.security, sync: view.sync },

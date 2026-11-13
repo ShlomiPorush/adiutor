@@ -8,25 +8,29 @@ export type Db = PostgresJsDatabase<typeof schema>
 /*
  * "New since your last visit" compares write times (taken inside the write's transaction) with the time of
  * a visit. A write that started before a read and committed after it is not in that read, yet its time is
- * before the read's. The invariant that keeps it from being hidden:
+ * before the read's. What keeps such a write from being hidden:
  *
- * 1. No transaction of the app pool lives longer than TRANSACTION_TIMEOUT_MS: PostgreSQL ends it
- *    (`transaction_timeout`, PostgreSQL 17 or newer; an idle open transaction ends sooner).
+ * 1. The app's transactions are short: a few statements each. Every statement of the app pool ends after
+ *    STATEMENT_TIMEOUT_MS (`statement_timeout`), and a transaction left idle ends after
+ *    IDLE_IN_TRANSACTION_TIMEOUT_MS (`idle_in_transaction_session_timeout`).
  * 2. A visit is recorded VISIT_SAFETY_MARGIN_MS before the start of the read it marks as seen. The margin
- *    is larger than the transaction bound, so every write the read did not see has a later time than the
- *    visit.
+ *    is larger than any transaction of the app takes in practice, so a write the read did not see has a
+ *    later time than the visit.
  * 3. The morning message counts "new" the same way: its job_runs row stores, as `covers_until`, the start
  *    of its read minus VISIT_SAFETY_MARGIN_MS, and the next message counts from there.
  *
- * Items written in the margin may show as new twice; none is ever hidden.
+ * The bound is practical, not hard: PostgreSQL 16 has no timeout for a whole transaction
+ * (`transaction_timeout` is PostgreSQL 17 or newer), so a transaction of many statements could in theory run
+ * longer than the margin. A write that commits more than the margin after it took its time could then show
+ * as not new. Items written in the margin may show as new twice.
  */
-export const TRANSACTION_TIMEOUT_MS = 30_000
+export const STATEMENT_TIMEOUT_MS = 15_000
 export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 15_000
 export const VISIT_SAFETY_MARGIN_MS = 60_000
 
-/** The settings every connection of the app pool starts with (see the invariant above). */
+/** The settings every connection of the app pool starts with (see above). PostgreSQL 16 knows each of them. */
 export const POOL_CONNECTION_SETTINGS = {
-  transaction_timeout: TRANSACTION_TIMEOUT_MS,
+  statement_timeout: STATEMENT_TIMEOUT_MS,
   idle_in_transaction_session_timeout: IDLE_IN_TRANSACTION_TIMEOUT_MS,
 }
 
@@ -50,7 +54,7 @@ export function createDatabase(url: string): Database {
   return {
     db,
     async migrate(migrationsFolder) {
-      // A connection of its own, without the pool's transaction bound: a migration may take longer.
+      // A connection of its own, without the pool's time limits: a migration may take longer.
       const once = postgres(url, { max: 1, onnotice: () => {} })
       try {
         await migrate(drizzle(once), { migrationsFolder })
