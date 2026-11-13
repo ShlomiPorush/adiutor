@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { request as httpRequest } from "node:http"
-import type { AddressInfo } from "node:net"
+import { type AddressInfo, connect } from "node:net"
 import { type ServerType, serve } from "@hono/node-server"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { createApp } from "../app.ts"
@@ -8,8 +8,8 @@ import { testCore } from "../testing/app.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { RateLimiter } from "./auth.ts"
 
-// Request paths that routers and adapters have parsed differently from the application: every one must still meet
-// the authentication of /api/v1 and /mcp, or be refused before the app sees it.
+// Requests that routers, adapters and middleware have handled differently from the application: every one must still
+// meet the authentication of /api/v1 and /mcp, or be refused before the app sees it, at a bounded cost.
 
 let t: TestDatabase
 let app: ReturnType<typeof createApp>
@@ -101,5 +101,52 @@ describe("a raw backslash in the request path (GHSA-jpvv-r467-5p4w)", () => {
       expect(JSON.parse(res.body).error.code).toBe("unauthorized")
     }
     expect(reached).toBe(2)
+  })
+})
+
+/** A chunked POST whose body is `chunks` transfer chunks of one byte each, written at once on a raw socket. */
+function tinyChunkPost(path: string, chunks: number): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1")
+    let raw = ""
+    socket.setEncoding("utf8")
+    socket.on("data", (data: string) => {
+      raw += data
+    })
+    socket.on("end", () => {
+      const [head = "", body = ""] = raw.split("\r\n\r\n")
+      resolve({ status: Number(head.split(" ")[1]), body })
+    })
+    socket.on("error", reject)
+    socket.write(
+      `POST ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\n` +
+        "Transfer-Encoding: chunked\r\n\r\n",
+    )
+    socket.write(Buffer.from(`${"1\r\nx\r\n".repeat(chunks)}0\r\n\r\n`))
+  })
+}
+
+describe("a body sent in many tiny transfer chunks (GHSA-39q9-qp46-w8xg)", () => {
+  it("is read within the body limit at a bounded memory cost, then refused by the authentication", async () => {
+    // bodyLimit() reads the body before the authentication runs. Before the fix it kept one object per transfer
+    // chunk: 500,000 one-byte chunks grew the heap by about 140 MB (hono 4.13.17); since the fix about 25 MB, the
+    // short-lived garbage of reading it, whatever the number of chunks.
+    const before = process.memoryUsage().heapUsed
+    let peak = before
+    const sample = setInterval(() => {
+      peak = Math.max(peak, process.memoryUsage().heapUsed)
+    }, 2)
+    let res: { status: number; body: string }
+    try {
+      res = await tinyChunkPost("/api/v1/sync/t3", 500_000)
+    } finally {
+      clearInterval(sample)
+    }
+    peak = Math.max(peak, process.memoryUsage().heapUsed)
+    expect(res.status).toBe(401)
+    expect(JSON.parse(res.body).error.code).toBe("unauthorized")
+    expect(peak - before).toBeLessThan(64 * 1024 * 1024)
+    // The listener still serves.
+    expect((await rawGet("/healthz")).status).toBe(200)
   })
 })
