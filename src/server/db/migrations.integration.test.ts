@@ -33,6 +33,9 @@ afterAll(async () => {
   await admin.end()
 })
 
+/** An `ON DELETE RESTRICT` refusal: PostgreSQL 16, which production runs, reports foreign_key_violation (18: 23001). */
+const RESTRICT_VIOLATION = "23503"
+
 /** Runs a statement that must fail with the given PostgreSQL error code. */
 async function refused(code: string, run: () => Promise<unknown>) {
   await expect(run()).rejects.toMatchObject({ code })
@@ -111,7 +114,7 @@ describe("migrations", () => {
     const [item] = await sql`
       insert into items (project_id, type, status, title, status_set_by, created_by)
       values (${project?.id}, 'task', 'todo', 'Keep me', 'owner', 'owner') returning id`
-    await refused("23001", () => sql`delete from projects where id = ${project?.id}`)
+    await refused(RESTRICT_VIOLATION, () => sql`delete from projects where id = ${project?.id}`)
     await sql`insert into item_threads (item_id, thread_id) values (${item?.id}, 'thread-2')`
     await sql`delete from items where id = ${item?.id}`
     const links = await sql`select 1 from item_threads where thread_id = 'thread-2'`
@@ -125,7 +128,7 @@ describe("migrations", () => {
       values (${project?.id}, 'Keep me', 'owner', 'owner') returning id`
     await sql`insert into note_versions (note_id, version, title, body, project_id, author_kind)
       values (${note?.id}, 1, 'Keep me', '', ${project?.id}, 'owner')`
-    await refused("23001", () => sql`delete from projects where id = ${project?.id}`)
+    await refused(RESTRICT_VIOLATION, () => sql`delete from projects where id = ${project?.id}`)
     await refused(
       "23505",
       () => sql`insert into note_versions (note_id, version, title, body, author_kind)
