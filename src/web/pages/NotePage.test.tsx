@@ -147,7 +147,7 @@ const textarea = () => document.querySelector<HTMLTextAreaElement>("#note-body")
 const patches = () => requests.filter((r) => r.method === "PATCH").map((r) => r.body as { version: number })
 
 beforeEach(() => {
-  localStorage.setItem("mikud.language", "en")
+  localStorage.setItem("adiutor.language", "en")
   ;(globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = StandInObserver
   note = freshNote()
   requests = []

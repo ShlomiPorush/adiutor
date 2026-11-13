@@ -6,7 +6,7 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-const STATE_FILE = join(tmpdir(), "mikud-e2e-auth.json")
+const STATE_FILE = join(tmpdir(), "adiutor-e2e-auth.json")
 
 type State = { password?: string; secret?: string; lastStep?: number; backupCodes?: string[]; usedCodes?: number }
 
@@ -23,7 +23,7 @@ export function saveState(patch: State): void {
 }
 
 /** Where a project keeps its signed-in browser (cookies) for the next spec file. */
-export const storageFile = (project: string) => join(tmpdir(), `mikud-e2e-${project}.json`)
+export const storageFile = (project: string) => join(tmpdir(), `adiutor-e2e-${project}.json`)
 
 /** Forgets the state of an earlier run (global setup). */
 export function resetState(): void {

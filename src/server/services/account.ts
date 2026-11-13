@@ -2,7 +2,7 @@ import { count, eq } from "drizzle-orm"
 import { authUser, devices } from "../db/schema.ts"
 import type { Ctx } from "./context.ts"
 
-// The owner account is Better Auth's (src/server/auth/auth.ts). Mikud only reads whether it exists, and keeps its
+// The owner account is Better Auth's (src/server/auth/auth.ts). Adiutor only reads whether it exists, and keeps its
 // own browser identity for "new since your last visit".
 
 export async function hasOwner(ctx: Ctx): Promise<boolean> {
@@ -10,7 +10,7 @@ export async function hasOwner(ctx: Ctx): Promise<boolean> {
   return (row?.n ?? 0) > 0
 }
 
-// --- Browser identity (the mikud_browser cookie): "new since your last visit" per browser, never a credential ---
+// --- Browser identity (the adiutor_browser cookie): "new since your last visit" per browser, never a credential ---
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 

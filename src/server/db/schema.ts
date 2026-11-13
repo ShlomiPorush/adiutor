@@ -341,7 +341,7 @@ export const telegramUpdates = pgTable(
   () => [check("telegram_updates_outcome_check", oneOf("outcome", TELEGRAM_OUTCOMES))],
 )
 
-// A browser's identity for "new since your last visit", named by the mikud_browser cookie. Never a credential:
+// A browser's identity for "new since your last visit", named by the adiutor_browser cookie. Never a credential:
 // signing in is Better Auth's (auth_session). Rows from before sign-in existed were paired browsers; their
 // visits stay with them, and revoked_at is set only on those that were ended then.
 export const devices = pgTable("devices", {
@@ -376,11 +376,11 @@ export const settings = pgTable(
     sessionIdleDays: integer("session_idle_days").notNull().default(SETTINGS_DEFAULTS.sessionIdleDays),
     /** Better Auth's two-factor OTP, sent to the owner's Telegram chat: another way in, off by default. */
     otpViaTelegram: boolean("otp_via_telegram").notNull().default(SETTINGS_DEFAULTS.otpViaTelegram),
-    /** Encrypted with MIKUD_SETTINGS_KEYS (settings/crypto.ts); MIKUD_TELEGRAM_BOT_TOKEN overrides it. */
+    /** Encrypted with ADIUTOR_SETTINGS_KEYS (settings/crypto.ts); ADIUTOR_TELEGRAM_BOT_TOKEN overrides it. */
     telegramBotTokenEnc: text("telegram_bot_token_enc"),
-    /** MIKUD_TELEGRAM_CHAT_ID overrides it. */
+    /** ADIUTOR_TELEGRAM_CHAT_ID overrides it. */
     telegramChatId: text("telegram_chat_id"),
-    /** MIKUD_PRIVATE_DOMAINS overrides it. */
+    /** ADIUTOR_PRIVATE_DOMAINS overrides it. */
     privateDomains: text("private_domains").array().notNull().default(sql`'{}'::text[]`),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
@@ -513,7 +513,7 @@ export const authRateLimit = pgTable("auth_rate_limit", {
 
 /**
  * Agent keys of the @better-auth/api-key plugin (model `apikey`). `key` is the SHA-256 hash of the key, `start` its
- * first characters for display. Mikud does not use the plugin's limits, refills, permissions or metadata.
+ * first characters for display. Adiutor does not use the plugin's limits, refills, permissions or metadata.
  */
 export const authApiKey = pgTable(
   "auth_api_key",
@@ -551,7 +551,7 @@ export const authApiKey = pgTable(
 )
 
 /**
- * Device codes of Better Auth's core deviceAuthorization plugin (model `deviceCode`): one row per `mikud connect`
+ * Device codes of Better Auth's core deviceAuthorization plugin (model `deviceCode`): one row per `adiutor connect`
  * request, from `/device/code` until the CLI collects its answer, denies it or the code expires. Its two unique
  * indexes are the plugin's own (`deviceCode` and `userCode`).
  */

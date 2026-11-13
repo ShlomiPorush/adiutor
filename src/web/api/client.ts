@@ -42,7 +42,7 @@ export class ApiError extends Error {
 export const fetchTransport: Transport = async ({ method, path, body }) => {
   const headers: Record<string, string> = { Accept: "application/json" }
   // Every state-changing request carries the custom header; the browser adds Origin itself.
-  if (method !== "GET") headers["X-Mikud-Request"] = "1"
+  if (method !== "GET") headers["X-Adiutor-Request"] = "1"
   if (body !== undefined) headers["Content-Type"] = "application/json"
   const response = await fetch(path.startsWith("/api/") ? path : `${API_BASE}${path}`, {
     method,
@@ -67,8 +67,8 @@ let transport: Transport | Promise<Transport> = fetchTransport
 let unauthorizedHandler: ((error: ApiError) => void) | null = null
 
 // Development and screenshot builds may swap in the typed mock API. In the production build
-// __MIKUD_MOCK__ is the literal false, so this branch and the mock module are dropped.
-if (typeof __MIKUD_MOCK__ !== "undefined" && __MIKUD_MOCK__) {
+// __ADIUTOR_MOCK__ is the literal false, so this branch and the mock module are dropped.
+if (typeof __ADIUTOR_MOCK__ !== "undefined" && __ADIUTOR_MOCK__) {
   transport = import("./mock/transport.ts").then((module) => module.mockTransport)
 }
 

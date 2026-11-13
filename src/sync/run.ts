@@ -66,7 +66,7 @@ function describeResult(name: string, result: PostResult): string {
  */
 export async function runSync(options: RunOptions, deps: Deps): Promise<number> {
   let fileVars: Record<string, string> = {}
-  let say = (line: string) => deps.out(redactor([deps.env.MIKUD_AGENT_TOKEN])(line))
+  let say = (line: string) => deps.out(redactor([deps.env.ADIUTOR_AGENT_TOKEN])(line))
 
   if (options.envFile) {
     try {
@@ -76,7 +76,7 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
       say(`config: cannot read the env file: ${code ?? (error as Error).message}`)
       return EXIT_USAGE
     }
-    say = (line) => deps.out(redactor([deps.env.MIKUD_AGENT_TOKEN, fileVars.MIKUD_AGENT_TOKEN])(line))
+    say = (line) => deps.out(redactor([deps.env.ADIUTOR_AGENT_TOKEN, fileVars.ADIUTOR_AGENT_TOKEN])(line))
   }
 
   let config: SyncConfig
@@ -91,7 +91,7 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
   const overviewDir = options.overviewDir ?? config.overviewDir
   let snapshot: Snapshot | undefined
   if (!overviewDir) {
-    say("overview: no folder (set MIKUD_OVERVIEW_DIR or pass --overview); security is not sent")
+    say("overview: no folder (set ADIUTOR_OVERVIEW_DIR or pass --overview); security is not sent")
   } else {
     if (options.collect) {
       const result = await deps.runner(deps.nodePath, ["src/cli.mjs", "collect"], {

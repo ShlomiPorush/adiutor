@@ -1,6 +1,6 @@
 // The Better Auth client: sign-up, sign-in, two-factor, the password, the browser sessions, the agent keys and the
 // agent approvals (device authorization), all
-// on Better Auth's own routes under /api/auth. Mikud adds nothing to these requests: Better Auth checks the origin
+// on Better Auth's own routes under /api/auth. Adiutor adds nothing to these requests: Better Auth checks the origin
 // itself. Its useSession is the only thing that extends a session (deferSessionRefresh on the server): it refreshes
 // when the page opens, comes back to the front or online, or another tab changes the session. Never call
 // getSession or useSession().refetch from background polling, and keep sessionOptions.refetchInterval at 0.
@@ -11,7 +11,7 @@ import { createAuthClient } from "better-auth/react"
 
 /** Development and screenshot builds answer /api/auth from the mock; the production build drops this branch. */
 const mockFetch =
-  typeof __MIKUD_MOCK__ !== "undefined" && __MIKUD_MOCK__
+  typeof __ADIUTOR_MOCK__ !== "undefined" && __ADIUTOR_MOCK__
     ? async (input: RequestInfo | URL, init?: RequestInit) =>
         (await import("./mock/auth.ts")).mockAuthFetch(input, init)
     : undefined

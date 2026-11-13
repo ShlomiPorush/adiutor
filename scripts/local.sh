@@ -7,22 +7,22 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 PROJECT="$DEV_PROJECT"
-export MIKUD_DATA_DIR="${MIKUD_DATA_DIR:-$DEV_DEFAULT_DATA_DIR}"
-SERVICES=(mikud postgres)
+export ADIUTOR_DATA_DIR="${ADIUTOR_DATA_DIR:-$DEV_DEFAULT_DATA_DIR}"
+SERVICES=(adiutor postgres)
 
 usage() {
   cat <<EOF
 Usage: scripts/local.sh <command>
 
-  build    Build the mikud:dev image.
+  build    Build the adiutor:dev image.
   up       Build, then start the stack in the foreground.
   start    Build, then start the stack in the background and verify it.
-  down     Stop the stack. The database in \$MIKUD_DATA_DIR is kept.
+  down     Stop the stack. The database in \$ADIUTOR_DATA_DIR is kept.
   status   Show containers, health and runtime users.
   logs     Follow the logs.
   nuke     Stop the stack and delete its data directory (asks first).
 
-Data directory: $MIKUD_DATA_DIR (the database, and stack.env with its generated password and keys)
+Data directory: $ADIUTOR_DATA_DIR (the database, and stack.env with its generated password and keys)
 Overrides: .env.dev at the repository root (docker/dev.env.example lists them)
 EOF
 }
@@ -33,7 +33,7 @@ compose() {
 
 # The data directory and its generated database password and keys (stack.env), before anything starts.
 prepare_data_dir() {
-  ensure_stack_env "$MIKUD_DATA_DIR"
+  ensure_stack_env "$ADIUTOR_DATA_DIR"
 }
 
 build() {
@@ -48,11 +48,11 @@ status() {
 
 nuke() {
   local resolved answer
-  resolved="$(realpath -m "$MIKUD_DATA_DIR")"
+  resolved="$(realpath -m "$ADIUTOR_DATA_DIR")"
   case "$resolved" in
     "" | / | "$HOME" | "$REPO_ROOT") die "refusing to delete $resolved" ;;
   esac
-  [[ "$(basename "$resolved")" == mikud-dev* ]] || die "refusing to delete $resolved: the name must start with mikud-dev"
+  [[ "$(basename "$resolved")" == adiutor-dev* ]] || die "refusing to delete $resolved: the name must start with adiutor-dev"
   require_linux_dir "$resolved"
   read -r -p "Delete the development stack and ALL data in $resolved? Type 'nuke' to confirm: " answer || answer=""
   [ "$answer" = "nuke" ] || die "cancelled; nothing was deleted"
@@ -81,7 +81,7 @@ main() {
         die "the stack did not become healthy; see: scripts/local.sh logs"
       }
       status
-      info "Ready: listening on $(compose port mikud 8080)"
+      info "Ready: listening on $(compose port adiutor 8080)"
       ;;
     down)
       compose down --remove-orphans

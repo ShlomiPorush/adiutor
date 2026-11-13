@@ -143,7 +143,7 @@ describe("layers under StrictMode", () => {
       await Promise.resolve()
       expect(push).toHaveBeenCalledTimes(1)
       expect(back).not.toHaveBeenCalled()
-      expect((history.state as { mikudLayer?: boolean } | null)?.mikudLayer).toBe(true)
+      expect((history.state as { adiutorLayer?: boolean } | null)?.adiutorLayer).toBe(true)
       await unmount()
       await Promise.resolve()
       expect(back).toHaveBeenCalledTimes(1)
@@ -164,7 +164,7 @@ describe("layers under StrictMode", () => {
           <textarea />
         </Dialog>,
       )
-      expect(history.state).toMatchObject({ key: "page", idx: 4, mikudLayer: true })
+      expect(history.state).toMatchObject({ key: "page", idx: 4, adiutorLayer: true })
       await unmount()
       await Promise.resolve()
       expect(back).toHaveBeenCalledTimes(1)

@@ -72,7 +72,7 @@ const listbox = () => document.body.querySelector('[role="listbox"]')
 const options = () => Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
 
 beforeEach(() => {
-  localStorage.setItem("mikud.language", "en")
+  localStorage.setItem("adiutor.language", "en")
 })
 
 afterEach(async () => {

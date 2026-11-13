@@ -29,9 +29,9 @@ import type { By, Ctx } from "../services/context.ts"
 import { writeAudit } from "../services/context.ts"
 
 // Better Auth as it documents itself: its routes, its plugins (username, twoFactor, api-key, deviceAuthorization,
-// bearer), its options and its documented hooks. Mikud does not wrap its handler. The hooks below only refuse (a
+// bearer), its options and its documented hooks. Adiutor does not wrap its handler. The hooks below only refuse (a
 // closed route, a second owner, a trusted device, an agent key or an agent approval without two-factor, an
-// Authorization header outside what `mikud connect` needs) and write audit rows; Better Auth makes every decision
+// Authorization header outside what `adiutor connect` needs) and write audit rows; Better Auth makes every decision
 // about passwords, sessions and codes. See "Security design" in docs/project-foundation.md for what this leaves open.
 
 const DAY_S = 86_400
@@ -75,7 +75,7 @@ export const ALLOWED_PATHS = [
 
 /**
  * The only routes an HTTP request with an `Authorization` header reaches. bearer() turns `Authorization: Bearer
- * <session token>` into a session on every route; Mikud lets the header through only where `mikud connect` uses its
+ * <session token>` into a session on every route; Adiutor lets the header through only where `adiutor connect` uses its
  * device session: create its one key, then end that same session (/revoke-session, its own token only). Everything
  * else, listing the sessions included, refuses the header, with or without a cookie.
  */
@@ -91,7 +91,7 @@ export const DEVICE_POLL_INTERVAL = "5s"
 /** Routes of Better Auth's two-factor OTP: open only while the owner sends sign-in codes to Telegram. */
 export const OTP_PATHS = ["/two-factor/send-otp", "/two-factor/verify-otp"] as const
 
-/** Every route whose body accepts `trustDevice` (a 30-day cookie that skips the code). Mikud refuses it. */
+/** Every route whose body accepts `trustDevice` (a 30-day cookie that skips the code). Adiutor refuses it. */
 export const TRUST_DEVICE_PATHS = [
   "/two-factor/verify-totp",
   "/two-factor/verify-backup-code",
@@ -141,12 +141,12 @@ export type AuthSettings = {
 
 export type AuthOptions = AuthSettings & {
   ctx: Ctx
-  /** MIKUD_AUTH_SECRETS: Better Auth's versioned `secrets`. */
+  /** ADIUTOR_AUTH_SECRETS: Better Auth's versioned `secrets`. */
   secrets: VersionedKey[]
-  /** MIKUD_AUTH_SECRET: Better Auth's legacy `secret`, which decrypts data from before `secrets`. */
+  /** ADIUTOR_AUTH_SECRET: Better Auth's legacy `secret`, which decrypts data from before `secrets`. */
   legacySecret?: string
   publicUrl: URL
-  /** MIKUD_TRUSTED_PROXIES: the proxies whose X-Forwarded-For hop Better Auth skips. */
+  /** ADIUTOR_TRUSTED_PROXIES: the proxies whose X-Forwarded-For hop Better Auth skips. */
   trustedProxies: string[]
   /** Sends a sign-in code to the owner's Telegram chat; used only while otpViaTelegram is on. */
   sendOtp?: (code: string) => Promise<void>
@@ -156,7 +156,7 @@ export type AuthOptions = AuthSettings & {
 
 type OwnerRow = { id: string; username: string; twoFactorEnabled: boolean }
 
-/** The one owner, read on Mikud's own connection (outside Better Auth's transaction), or null before setup. */
+/** The one owner, read on Adiutor's own connection (outside Better Auth's transaction), or null before setup. */
 async function readOwner(ctx: Ctx): Promise<OwnerRow | null> {
   const [row] = await ctx.db
     .select({
@@ -218,13 +218,13 @@ export function createAuth(options: AuthOptions) {
     }
 
     if (path === "/sign-up/email") {
-      if (await readOwner(ctx)) throw refuse("FORBIDDEN", "ALREADY_SET_UP", "Mikud already has its owner.")
+      if (await readOwner(ctx)) throw refuse("FORBIDDEN", "ALREADY_SET_UP", "Adiutor already has its owner.")
       if (typeof body.username !== "string" || body.email !== ownerEmail(body.username))
-        throw refuse("BAD_REQUEST", "INVALID_EMAIL", "The e-mail must be the one Mikud derives from the username.")
+        throw refuse("BAD_REQUEST", "INVALID_EMAIL", "The e-mail must be the one Adiutor derives from the username.")
       return
     }
     if ((TRUST_DEVICE_PATHS as readonly string[]).includes(path) && body.trustDevice)
-      throw refuse("BAD_REQUEST", "TRUST_DEVICE_UNSUPPORTED", "Mikud asks for the code at every sign-in.")
+      throw refuse("BAD_REQUEST", "TRUST_DEVICE_UNSUPPORTED", "Adiutor asks for the code at every sign-in.")
     if (path === "/two-factor/generate-backup-codes") {
       await audit(ownerBy(await readOwner(ctx)), "account.backup_codes_new", "account")
       return
@@ -263,7 +263,7 @@ export function createAuth(options: AuthOptions) {
   /**
    * One documented `hooks.after`: the rows of a sign-out and of one ended session. A throwing hook on sign-out would be
    * swallowed by Better Auth and leave the session valid, and a refused /revoke-session would leave the device session
-   * of `mikud connect` alive: both are recorded after the fact, and this hook never throws.
+   * of `adiutor connect` alive: both are recorded after the fact, and this hook never throws.
    */
   const auditAfterTheFact = createAuthMiddleware(async (c) => {
     if (c.path !== "/sign-out" && c.path !== "/revoke-session") return
@@ -285,7 +285,7 @@ export function createAuth(options: AuthOptions) {
   const viaHttp = (context: HookContext) => Boolean(context?.request)
 
   return betterAuth({
-    appName: "Mikud",
+    appName: "Adiutor",
     secrets: options.secrets.map((k) => ({ version: k.version, value: k.value })),
     ...(options.legacySecret ? { secret: options.legacySecret } : {}),
     basePath: "/api/auth",
@@ -293,7 +293,7 @@ export function createAuth(options: AuthOptions) {
     trustedOrigins: [publicUrl.origin],
     telemetry: { enabled: false },
     // Better Auth would log the raw error, whose message can hold a failed query with its parameters. Its own lines
-    // go through logBetterAuth; an error that is not an APIError leaves the handler (onAPIError.throw) and Mikud's
+    // go through logBetterAuth; an error that is not an APIError leaves the handler (onAPIError.throw) and Adiutor's
     // app.onError logs only errorFacts.
     logger: { level: "error", log: logBetterAuth },
     onAPIError: { throw: true },
@@ -344,7 +344,7 @@ export function createAuth(options: AuthOptions) {
       },
     },
     advanced: {
-      // Better Auth skips its origin check under NODE_ENV=test; Mikud keeps it on everywhere.
+      // Better Auth skips its origin check under NODE_ENV=test; Adiutor keeps it on everywhere.
       disableOriginCheck: false,
       disableCSRFCheck: false,
       useSecureCookies: publicUrl.protocol === "https:",
@@ -356,7 +356,7 @@ export function createAuth(options: AuthOptions) {
         create: {
           // Inside the sign-up transaction: a second owner is refused (the single-owner index backs this up).
           before: async (user) => {
-            if (await readOwner(ctx)) throw refuse("FORBIDDEN", "ALREADY_SET_UP", "Mikud already has its owner.")
+            if (await readOwner(ctx)) throw refuse("FORBIDDEN", "ALREADY_SET_UP", "Adiutor already has its owner.")
             const name = String((user as { username?: string }).username ?? user.name)
             await audit({ actor: { kind: "owner", label: name }, source: "ui" }, "account.setup", "account", {
               username: name,
@@ -379,7 +379,7 @@ export function createAuth(options: AuthOptions) {
           before: async (session, context) => {
             const path = pathOf(context)
             if (path === "/device/token") {
-              // The session `mikud connect` receives once the owner approved: it creates one key, then ends itself.
+              // The session `adiutor connect` receives once the owner approved: it creates one key, then ends itself.
               const owner = await readOwner(ctx)
               await audit(
                 { actor: { kind: "owner", label: owner?.username ?? "owner" }, source: "api" },
@@ -435,7 +435,7 @@ export function createAuth(options: AuthOptions) {
       // readable local part of the synthetic e-mail that the authenticator app shows (ownerEmail).
       username({ usernameValidator: isValidUsername }),
       twoFactor({
-        issuer: "Mikud",
+        issuer: "Adiutor",
         twoFactorCookieMaxAge: TWO_FACTOR_CHALLENGE_S,
         ...(otp
           ? {
@@ -455,7 +455,7 @@ export function createAuth(options: AuthOptions) {
         maximumNameLength: AGENT_KEY_NAME_MAX,
         keyExpiration: { minExpiresIn: AGENT_KEY_DAYS_MIN, maxExpiresIn: AGENT_KEY_DAYS_MAX },
       }),
-      // Agent approval in the browser: `mikud connect` asks for a code, the owner approves it at /connect/device, and
+      // Agent approval in the browser: `adiutor connect` asks for a code, the owner approves it at /connect/device, and
       // the CLI receives a session token for that one approval. Its session lasts what every session lasts
       // (session.expiresIn, the idle days); the plugin has no option of its own for it.
       deviceAuthorization({
@@ -465,7 +465,7 @@ export function createAuth(options: AuthOptions) {
         validateClient: (clientId) => clientId === CONNECT_CLIENT_ID,
       }),
       // Documented on the device page: the CLI sends that token as `Authorization: Bearer`. hooks.before keeps the
-      // header to BEARER_PATHS; Mikud's /api/v1, /mcp and /api/setup never hand it to getSession.
+      // header to BEARER_PATHS; Adiutor's /api/v1, /mcp and /api/setup never hand it to getSession.
       bearer(),
     ],
   })

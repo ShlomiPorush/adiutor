@@ -11,7 +11,7 @@ afterEach(() => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 function copyOverview(): string {
-  const dir = mkdtempSync(join(tmpdir(), "mikud-sync-"))
+  const dir = mkdtempSync(join(tmpdir(), "adiutor-sync-"))
   temps.push(dir)
   cpSync(overviewDir, dir, { recursive: true })
   return dir
@@ -37,7 +37,7 @@ describe("readLatestSnapshot", () => {
   })
 
   it("fails when there is no snapshot", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "mikud-sync-"))
+    const dir = mkdtempSync(join(tmpdir(), "adiutor-sync-"))
     temps.push(dir)
     await expect(readLatestSnapshot(dir)).rejects.toThrow("no overview snapshot found")
   })

@@ -199,7 +199,7 @@ export async function sendTestMorningMessage(
   if (!send)
     throw new AppError(
       "conflict",
-      "Telegram is not configured: set MIKUD_TELEGRAM_BOT_TOKEN and MIKUD_TELEGRAM_CHAT_ID on the server.",
+      "Telegram is not configured: set ADIUTOR_TELEGRAM_BOT_TOKEN and ADIUTOR_TELEGRAM_CHAT_ID on the server.",
     )
   const { text } = await buildTodaysMessage(ctx, publicUrl)
   const record = (after: Record<string, string>) =>

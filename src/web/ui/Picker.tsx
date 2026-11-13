@@ -1,5 +1,5 @@
 // The one picker builder (v3 MP-1, MP-4, MP-5, DS-24; n8n-ops' PickerContent and usePicker in
-// components/filter-bar.tsx and its FieldPicker, rebuilt on Mikud's layer owner instead of Radix). A button
+// components/filter-bar.tsx and its FieldPicker, rebuilt on Adiutor's layer owner instead of Radix). A button
 // opens a panel anchored to it: a listbox of options, with a search field above more than ten of them, or a
 // small panel of controls (the Sort menu, ui/SortButton.tsx). The panel is a layer of ui/layers.ts: Escape
 // and Back close only the picker, also inside a dialog, the focus moves into it and back to its button, and

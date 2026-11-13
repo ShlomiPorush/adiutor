@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config"
 export default defineConfig({
   root: fileURLToPath(new URL("..", import.meta.url)),
   // The web client reads this flag; the mock API is never part of a unit test.
-  define: { __MIKUD_MOCK__: "false" },
+  define: { __ADIUTOR_MOCK__: "false" },
   test: {
     include: ["src/**/*.test.{ts,tsx}"],
     exclude: ["**/node_modules/**", "**/*.integration.test.ts"],

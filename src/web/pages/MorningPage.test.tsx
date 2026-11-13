@@ -169,7 +169,7 @@ const sectionOf = (element: Element) => element.closest("section")?.id
 
 beforeEach(() => {
   morning = MORNING
-  localStorage.setItem("mikud.language", "en")
+  localStorage.setItem("adiutor.language", "en")
   setTransport(transport)
 })
 

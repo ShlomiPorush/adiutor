@@ -1,4 +1,4 @@
-// Agent approval against the real server: `mikud connect` (the sync bundle, dist/sync/mikud-sync.js) runs as a child
+// Agent approval against the real server: `adiutor connect` (the sync bundle, dist/sync/adiutor-sync.js) runs as a child
 // process, Playwright approves or denies it on /connect/device, and the key it saved works until Settings, Agent
 // access disconnects it. Also the approval page signed out (to sign-in and back) and in English. Runs after
 // auth.spec.ts and reuses the browser stored there. The CLI polls every 5 seconds, so these tests take longer.
@@ -13,13 +13,13 @@ import { storageFile } from "./helpers.ts"
 
 test.describe.configure({ mode: "serial" })
 
-const BUNDLE = "dist/sync/mikud-sync.js"
+const BUNDLE = "dist/sync/adiutor-sync.js"
 const ORIGIN = "http://127.0.0.1:8090"
 let page: Page
 let dir = ""
 
 test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
-  dir = mkdtempSync(join(tmpdir(), "mikud-e2e-connect-"))
+  dir = mkdtempSync(join(tmpdir(), "adiutor-e2e-connect-"))
   page = await (
     await browser.newContext({ ...testInfo.project.use, storageState: storageFile(testInfo.project.name) })
   ).newPage()
@@ -51,9 +51,9 @@ function startConnect(args: string[]): Cli {
 /** The approval link the CLI printed. */
 async function linkOf(cli: Cli): Promise<string> {
   await expect
-    .poll(() => /Approve this agent in Mikud: (\S+)/.exec(cli.output())?.[1] ?? "", { timeout: 15_000 })
+    .poll(() => /Approve this agent in Adiutor: (\S+)/.exec(cli.output())?.[1] ?? "", { timeout: 15_000 })
     .not.toBe("")
-  return /Approve this agent in Mikud: (\S+)/.exec(cli.output())?.[1] as string
+  return /Approve this agent in Adiutor: (\S+)/.exec(cli.output())?.[1] as string
 }
 
 const asAgent = (key: string) =>
@@ -82,9 +82,9 @@ test("connect for the sync: approved in the browser, the key saved for the owner
 
   expect(await cli.exit).toBe(0)
   const saved = readFileSync(envFile, "utf8")
-  expect(saved).toContain(`MIKUD_URL=${ORIGIN}\n`)
-  const key = /^MIKUD_AGENT_TOKEN=(mkd_\S+)$/m.exec(saved)?.[1] ?? ""
-  expect(key).toMatch(/^mkd_[A-Za-z]{64}$/)
+  expect(saved).toContain(`ADIUTOR_URL=${ORIGIN}\n`)
+  const key = /^ADIUTOR_AGENT_TOKEN=(adt_\S+)$/m.exec(saved)?.[1] ?? ""
+  expect(key).toMatch(/^adt_[A-Za-z]{64}$/)
   expect(statSync(envFile).mode & 0o777).toBe(0o600)
   expect(cli.output()).not.toContain(key)
   expect(await asAgent(key)).toBe(200)
@@ -94,7 +94,7 @@ test("connect for the sync: approved in the browser, the key saved for the owner
   const row = panel.locator(".ui-item", { hasText: name })
   await expect(row).toContainText(key.slice(0, 6))
   await expect(row).not.toContainText(key.slice(6))
-  // The CLI ended its temporary session: no "mikud connect" session is left in Account.
+  // The CLI ended its temporary session: no "adiutor connect" session is left in Account.
   await page.goto("/account")
   await expect(page.locator("#account")).toContainText(he.account.thisBrowser)
   await expect(page.locator("#account")).not.toContainText(he.account.connectSession)
@@ -114,12 +114,12 @@ test("connect for Claude Code, denied in the browser: nothing is created", async
   await expect(page.getByText(he.connect.denied)).toBeVisible()
   expect(await cli.exit).toBe(1)
   expect(cli.output()).toContain("denied")
-  expect(cli.output()).not.toMatch(/mkd_/)
+  expect(cli.output()).not.toMatch(/adt_/)
 })
 
 test("the approval page in English, and a code typed by hand", async () => {
   await page.goto("/connect/device")
-  await page.evaluate(() => localStorage.setItem("mikud.language", "en"))
+  await page.evaluate(() => localStorage.setItem("adiutor.language", "en"))
   await page.reload()
   try {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(en.connect.title)
@@ -133,7 +133,7 @@ test("the approval page in English, and a code typed by hand", async () => {
     await expect(page.getByText(en.connect.unavailable)).toBeVisible()
     await expect(page.getByText(en.connect.reason.unknown, { exact: false })).toBeVisible()
   } finally {
-    await page.evaluate(() => localStorage.setItem("mikud.language", "he"))
+    await page.evaluate(() => localStorage.setItem("adiutor.language", "he"))
   }
 })
 

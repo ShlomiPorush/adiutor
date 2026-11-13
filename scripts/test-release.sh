@@ -6,7 +6,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/mikud-release-test.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/adiutor-release-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -112,8 +112,8 @@ sandbox() {
   mkdir -p "$seed/scripts/lib" "$seed/docker"
   cp "$REPO/scripts/release.sh" "$seed/scripts/"
   cp "$REPO/scripts/lib/common.sh" "$seed/scripts/lib/"
-  : >"$seed/docker/mikud.Dockerfile"
-  printf '{\n  "name": "mikud",\n  "version": "0.0.0",\n  "private": true\n}\n' >"$seed/package.json"
+  : >"$seed/docker/adiutor.Dockerfile"
+  printf '{\n  "name": "adiutor",\n  "version": "0.0.0",\n  "private": true\n}\n' >"$seed/package.json"
   printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- The first feature.\n' >"$seed/CHANGELOG.md"
   git -C "$seed" add -A
   git -C "$seed" commit --quiet -m "Initial"
@@ -143,7 +143,7 @@ release() {
 }
 
 has_tag() { git -C "$WORK/case/origin.git" rev-parse -q --verify "refs/tags/$1" >/dev/null; }
-image_rev() { cat "$STATE/images/ghcr.io_shlomiporush_mikud_$1" 2>/dev/null; }
+image_rev() { cat "$STATE/images/ghcr.io_shlomiporush_adiutor_$1" 2>/dev/null; }
 tag_rev() { git -C "$WORK/case/origin.git" rev-parse "$1^{commit}"; }
 has_release() { [ -f "$STATE/releases/$1" ]; }
 lacks_tag() { ! has_tag "$1"; }
@@ -170,7 +170,7 @@ check "package.json says 0.1.0" grep -q '"version": "0.1.0"' <(git -C "$WORK/cas
 check "the CHANGELOG keeps an empty Unreleased above the dated section" \
   grep -qzP '## \[Unreleased\]\n\n## \[0\.1\.0\] - \d{4}-\d{2}-\d{2}\n' <(git -C "$WORK/case/origin.git" show main:CHANGELOG.md)
 check "the GitHub Release has the title and the section's notes" \
-  [ "$(cat "$STATE/releases/v0.1.0")" = "$(printf 'Mikud 0.1.0\n### Added\n\n- The first feature.')" ]
+  [ "$(cat "$STATE/releases/v0.1.0")" = "$(printf 'Adiutor 0.1.0\n### Added\n\n- The first feature.')" ]
 check "the image is built with provenance and an SBOM" grep -q "buildx build --push --provenance=mode=max --sbom=true" "$STATE/calls"
 dir="$(checkout)"
 sed -i 's/^## \[Unreleased\]$/## [Unreleased]\n\n### Fixed\n\n- A fix./' "$dir/CHANGELOG.md"
@@ -237,7 +237,7 @@ check "a tag without a Release that is not a release commit: refused" said "pack
 check "  and nothing was published" nothing_published
 
 sandbox
-printf other >"$STATE/images/ghcr.io_shlomiporush_mikud_0.1.0"
+printf other >"$STATE/images/ghcr.io_shlomiporush_adiutor_0.1.0"
 release
 check "the next version is already in the registry: the run stops" [ $? -ne 0 ]
 check "  before tagging" lacks_tag v0.1.0
@@ -262,7 +262,7 @@ dir="$(checkout)"
 before="$(git -C "$dir" rev-parse HEAD) $(git -C "$dir" status --porcelain | wc -l)"
 DIR="$dir" run_in --target ghcr --bump minor --dry-run
 check "a dry run succeeds" [ $? -eq 0 ]
-check "  and names the version and the image" said "ghcr.io/shlomiporush/mikud:0.1.0 and :latest"
+check "  and names the version and the image" said "ghcr.io/shlomiporush/adiutor:0.1.0 and :latest"
 check "  and prints the release notes" said "The first feature."
 check "  and changes nothing in the checkout" [ "$(git -C "$dir" rev-parse HEAD) $(git -C "$dir" status --porcelain | wc -l)" = "$before" ]
 check "  nor on origin" lacks_tag v0.1.0
@@ -272,7 +272,7 @@ sandbox
 MOCK_FAIL_BUILD=1 release
 DIR="$(checkout)" run_in --target ghcr --bump major --dry-run
 check "a dry run after a stopped run says it would finish that version" said "Would finish v0.1.0"
-check "  and publishes nothing" [ ! -e "$STATE/images/ghcr.io_shlomiporush_mikud_0.1.0" ]
+check "  and publishes nothing" [ ! -e "$STATE/images/ghcr.io_shlomiporush_adiutor_0.1.0" ]
 
 # --- a run that stopped halfway, and the next run --------------------------------------------
 
@@ -289,8 +289,8 @@ sandbox
 MOCK_FAIL_BUILD=1 release
 check "the image build fails: the run stops" [ $? -ne 0 ]
 check "  with the tag on origin" has_tag v0.1.0
-check "  no image" [ ! -e "$STATE/images/ghcr.io_shlomiporush_mikud_0.1.0" ]
-check "  :latest not moved" [ ! -e "$STATE/images/ghcr.io_shlomiporush_mikud_latest" ]
+check "  no image" [ ! -e "$STATE/images/ghcr.io_shlomiporush_adiutor_0.1.0" ]
+check "  :latest not moved" [ ! -e "$STATE/images/ghcr.io_shlomiporush_adiutor_latest" ]
 check "  and no GitHub Release" lacks_release v0.1.0
 BUMP="major" release
 check "the next run finishes 0.1.0 and ignores the bump" complete 0.1.0
@@ -307,12 +307,12 @@ check "  without building the image again" [ "$(grep -c "buildx build" "$STATE/c
 
 sandbox
 MOCK_FAIL_BUILD=1 release
-printf other >"$STATE/images/ghcr.io_shlomiporush_mikud_0.1.0"
+printf other >"$STATE/images/ghcr.io_shlomiporush_adiutor_0.1.0"
 release
 check "an image of this version from another commit stops the run" [ $? -ne 0 ]
 check "  with a clear reason" said "exists but was not built from v0.1.0"
 check "  and is left as it is" [ "$(image_rev 0.1.0)" = other ]
-check "  and :latest is not moved" [ ! -e "$STATE/images/ghcr.io_shlomiporush_mikud_latest" ]
+check "  and :latest is not moved" [ ! -e "$STATE/images/ghcr.io_shlomiporush_adiutor_latest" ]
 
 sandbox
 MOCK_CREATE=fail release

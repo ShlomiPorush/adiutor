@@ -1,5 +1,5 @@
 // The app frame, copied from n8n-ops' shell (apps/web/src/app/shell.tsx at afba697, its default Regular design)
-// and adapted to Mikud's tokens, texts and layer owner (v3 NL-1, NL-6, NL-7, NL-9). From 761px a top bar runs
+// and adapted to Adiutor's tokens, texts and layer owner (v3 NL-1, NL-6, NL-7, NL-9). From 761px a top bar runs
 // across: the brand over the sidebar's column, then in the page's card the fold toggle (above 1100px), the trail
 // with the page title, the page's own actions, Quick add and the Needs attention bell. Above 1100px a 240px
 // sidebar on the grey canvas that folds into the 72px icon rail, remembered in this browser; from 761 to 1100px

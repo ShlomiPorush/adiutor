@@ -4,12 +4,12 @@ import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
 import { createApp } from "./app.ts"
 
-const root = mkdtempSync(join(tmpdir(), "mikud-web-"))
+const root = mkdtempSync(join(tmpdir(), "adiutor-web-"))
 mkdirSync(join(root, "assets"))
-writeFileSync(join(root, "index.html"), "<!doctype html><title>Mikud</title>")
+writeFileSync(join(root, "index.html"), "<!doctype html><title>Adiutor</title>")
 writeFileSync(join(root, "assets", "index-abc.js"), "console.log(1)")
 writeFileSync(join(root, "boot.js"), "void 0")
-writeFileSync(join(tmpdir(), "mikud-outside.txt"), "secret")
+writeFileSync(join(tmpdir(), "adiutor-outside.txt"), "secret")
 
 const app = createApp({ checkDatabase: async () => true, web: { root } })
 
@@ -23,7 +23,7 @@ describe("web UI serving", () => {
       expect(response.headers.get("content-type")).toContain("text/html")
       expect(response.headers.get("content-security-policy")).toContain("script-src 'self'")
       expect(response.headers.get("cache-control")).toBe("no-cache")
-      expect(await response.text()).toContain("<title>Mikud</title>")
+      expect(await response.text()).toContain("<title>Adiutor</title>")
     }
   })
 
@@ -37,8 +37,8 @@ describe("web UI serving", () => {
 
   it("answers 404 for a missing file and never serves outside its folder", async () => {
     expect((await app.request("/assets/missing.js")).status).toBe(404)
-    expect((await app.request("/../mikud-outside.txt")).status).toBe(404)
-    expect((await app.request("/%2e%2e/mikud-outside.txt")).status).toBe(404)
+    expect((await app.request("/../adiutor-outside.txt")).status).toBe(404)
+    expect((await app.request("/%2e%2e/adiutor-outside.txt")).status).toBe(404)
   })
 
   it("leaves /api, /mcp and /healthz to the server", async () => {

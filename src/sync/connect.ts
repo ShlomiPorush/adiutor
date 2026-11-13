@@ -13,20 +13,20 @@ import { parseEnvFile } from "./env.ts"
 import { lastLine, type Runner, type RunResult } from "./exec.ts"
 import type { FetchLike } from "./http.ts"
 
-/** The one client id Mikud's device plugin accepts; also the User-Agent, so Settings can name the session. */
-export const CONNECT_CLIENT_ID = "mikud-connect"
-/** The api-key plugin's keyExpiration limits Mikud sets (src/shared/auth.ts). */
+/** The one client id Adiutor's device plugin accepts; also the User-Agent, so Settings can name the session. */
+export const CONNECT_CLIENT_ID = "adiutor-connect"
+/** The api-key plugin's keyExpiration limits Adiutor sets (src/shared/auth.ts). */
 export const DAYS_MIN = 1
 export const DAYS_MAX = 365
 export const NAME_MAX = 32
 /** The variable Codex reads the key from (bearer_token_env_var). */
-export const CODEX_KEY_VARIABLE = "MIKUD_AGENT_KEY"
+export const CODEX_KEY_VARIABLE = "ADIUTOR_AGENT_KEY"
 
 export const TARGETS = ["sync", "claude", "codex"] as const
 export type Target = (typeof TARGETS)[number]
 
 export type ConnectOptions = {
-  /** Mikud's address, without a trailing slash. */
+  /** Adiutor's address, without a trailing slash. */
   url: string
   name: string
   days: number
@@ -61,9 +61,9 @@ const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 export function defaultEnvFile(platform: NodeJS.Platform, env: Record<string, string | undefined>): string {
   if (platform === "win32") {
     const base = env.LOCALAPPDATA || win32.join(env.USERPROFILE || homedir(), "AppData", "Local")
-    return win32.join(base, "mikud", "sync.env")
+    return win32.join(base, "adiutor", "sync.env")
   }
-  return join(env.XDG_CONFIG_HOME || join(homedir(), ".config"), "mikud", "sync.env")
+  return join(env.XDG_CONFIG_HOME || join(homedir(), ".config"), "adiutor", "sync.env")
 }
 
 /** Where `connect --for codex` keeps Codex's variable outside Windows: next to the sync's env file. */
@@ -104,7 +104,7 @@ async function call(
   } catch (error) {
     const err = error as Error & { cause?: { code?: string } }
     if (err.name === "TimeoutError") return { error: "no answer in time" }
-    return { error: err.cause?.code ? `cannot reach Mikud (${err.cause.code})` : "cannot reach Mikud" }
+    return { error: err.cause?.code ? `cannot reach Adiutor (${err.cause.code})` : "cannot reach Adiutor" }
   }
   const text = await response.text().catch(() => "")
   let parsed: unknown = null
@@ -198,7 +198,7 @@ export function aclEntries(output: string, path: string): string[] {
 }
 
 /**
- * The file's lines with exactly one MIKUD_URL and one MIKUD_AGENT_TOKEN, in the place of the first definition of each
+ * The file's lines with exactly one ADIUTOR_URL and one ADIUTOR_AGENT_TOKEN, in the place of the first definition of each
  * (parseEnvFile keeps the last one, so a leftover duplicate would win); every other line stays as it was.
  */
 export function withSyncKey(text: string, url: string, key: string): string {
@@ -213,8 +213,8 @@ export function withSyncKey(text: string, url: string, key: string): string {
     }
     lines = lines.flatMap((line, index) => (index === first ? [`${name}=${value}`] : pattern.test(line) ? [] : [line]))
   }
-  set("MIKUD_URL", url)
-  set("MIKUD_AGENT_TOKEN", key)
+  set("ADIUTOR_URL", url)
+  set("ADIUTOR_AGENT_TOKEN", key)
   return `${lines.join("\n")}\n`
 }
 
@@ -235,7 +235,7 @@ async function saveSyncKey(path: string, url: string, key: string): Promise<void
 // --- What the clients get ---
 
 /** The MCP server's name in both clients. */
-export const SERVER_NAME = "mikud"
+export const SERVER_NAME = "adiutor"
 const CLIENT_TIMEOUT_MS = 120_000
 const HISTORY_NOTE = "A command you paste can stay in your shell history; clear that entry if others can read it."
 
@@ -292,7 +292,7 @@ function failure(result: RunResult, key: string): string {
 }
 
 /**
- * Adds Mikud to Claude Code at user scope. `claude mcp add` refuses a name that exists; only that refusal removes the
+ * Adds Adiutor to Claude Code at user scope. `claude mcp add` refuses a name that exists; only that refusal removes the
  * user-scope entry with `claude mcp remove` and adds again. Prints the command instead when that does not work.
  *
  * The refusal is read from add's own message rather than checked first with `claude mcp get`: get looks at every
@@ -302,8 +302,8 @@ function failure(result: RunResult, key: string): string {
 async function deliverToClaude(url: string, key: string, deps: ConnectDeps): Promise<void> {
   const say = deps.out
   const byHand = (why: string) => {
-    say(`Could not add Mikud to Claude Code: ${why}.`)
-    say("Run this once to add it yourself; Mikud shows the key only now:")
+    say(`Could not add Adiutor to Claude Code: ${why}.`)
+    say("Run this once to add it yourself; Adiutor shows the key only now:")
     say("")
     say(claudeCommand(url, key))
     say("")
@@ -373,8 +373,8 @@ async function deliverToCodex(url: string, key: string, deps: ConnectDeps): Prom
     say(`Could not set ${CODEX_KEY_VARIABLE}: ${variableFailed}.`)
     say(
       deps.platform === "win32"
-        ? "Set it yourself for your Windows user; Mikud shows the key only now:"
-        : "Set it yourself in your shell profile; Mikud shows the key only now:",
+        ? "Set it yourself for your Windows user; Adiutor shows the key only now:"
+        : "Set it yourself in your shell profile; Adiutor shows the key only now:",
     )
     say("")
     say(codexVariableLine(key, deps.platform))
@@ -387,7 +387,7 @@ async function deliverToCodex(url: string, key: string, deps: ConnectDeps): Prom
     say(`Added the ${SERVER_NAME} server to Codex; it reads the key from ${CODEX_KEY_VARIABLE}.`)
   } else {
     const why = added ? `codex mcp add ${failure(added, key)}` : "the codex command was not found"
-    say(`Could not add Mikud to Codex: ${why}.`)
+    say(`Could not add Adiutor to Codex: ${why}.`)
     say("Add this to ~/.codex/config.toml yourself:")
     say("")
     for (const line of codexConfigLines(url)) say(line)
@@ -436,7 +436,7 @@ export async function connect(options: ConnectOptions, deps: ConnectDeps): Promi
 
   const code = await call(deps, `${auth}/device/code`, { client_id: CONNECT_CLIENT_ID })
   if ("error" in code || code.status !== 200 || !code.body) {
-    say(`connect: Mikud did not start the approval: ${reason(code)}`)
+    say(`connect: Adiutor did not start the approval: ${reason(code)}`)
     return EXIT_NOT_CONNECTED
   }
   const deviceCode = str(code.body.device_code)
@@ -444,13 +444,13 @@ export async function connect(options: ConnectOptions, deps: ConnectDeps): Promi
   const link = str(code.body.verification_uri_complete)
   const linkUrl = URL.canParse(link) ? new URL(link) : null
   if (!deviceCode || !userCode || !linkUrl || linkUrl.origin !== new URL(options.url).origin) {
-    say("connect: Mikud's answer to the approval request is not usable")
+    say("connect: Adiutor's answer to the approval request is not usable")
     return EXIT_NOT_CONNECTED
   }
   const expiresAt = deps.now() + num(code.body.expires_in, 600) * 1000
   let interval = num(code.body.interval, 5) * 1000
 
-  say(`Approve this agent in Mikud: ${link}`)
+  say(`Approve this agent in Adiutor: ${link}`)
   say(`Check that the page shows the code ${groupedCode(userCode)}, then choose Allow.`)
   if (options.open && !(await openBrowser(link, deps))) say("Could not open the browser; open the link yourself.")
   say("Waiting for the approval...")
@@ -487,7 +487,7 @@ export async function connect(options: ConnectOptions, deps: ConnectDeps): Promi
       say("connect: the code expired before it was approved. Run the command again.")
       return EXIT_NOT_CONNECTED
     }
-    say(`connect: Mikud refused the approval: ${reason(answer)}`)
+    say(`connect: Adiutor refused the approval: ${reason(answer)}`)
     return EXIT_NOT_CONNECTED
   }
 
@@ -499,7 +499,7 @@ export async function connect(options: ConnectOptions, deps: ConnectDeps): Promi
     if ("error" in ended || ended.status !== 200 || ended.body?.status !== true)
       say(
         `connect: could not confirm that the approval's temporary session ended (${reason(ended)}). End the session ` +
-          `"mikud connect (agent approval)" on the Account page in Mikud.`,
+          `"adiutor connect (agent approval)" on the Account page in Adiutor.`,
       )
   }
   return exit
@@ -520,7 +520,7 @@ async function createAndDeliver(
   )
   const key = "error" in created ? "" : str(created.body?.key)
   if ("error" in created || created.status !== 200 || !key) {
-    say(`connect: Mikud did not create the key: ${reason(created)}`)
+    say(`connect: Adiutor did not create the key: ${reason(created)}`)
     return EXIT_NOT_CONNECTED
   }
   const until = "error" in created ? "" : str(created.body?.expiresAt).slice(0, 10)
@@ -532,7 +532,7 @@ async function createAndDeliver(
     } catch (error) {
       say(
         `connect: the key "${options.name}" was created but could not be saved (${messageOf(error)}). ` +
-          "Disconnect it in Mikud, Settings, Agent access, and run the command again.",
+          "Disconnect it in Adiutor, Settings, Agent access, and run the command again.",
       )
       return EXIT_NOT_CONNECTED
     }

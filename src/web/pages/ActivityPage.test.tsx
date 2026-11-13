@@ -235,7 +235,7 @@ async function type(text: string) {
 }
 
 beforeEach(() => {
-  localStorage.setItem("mikud.language", "en")
+  localStorage.setItem("adiutor.language", "en")
   requests = []
   hold = null
   failAudit = false

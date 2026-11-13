@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the built web UI in dist/web: every script, stylesheet, font and image is served by Mikud
+# Checks the built web UI in dist/web: every script, stylesheet, font and image is served by Adiutor
 # itself (no external URL), and the development mock API is not in the build. scripts/verify.sh runs
 # this inside the toolchain container after the build. Usage: web-dist-check.sh [DIR]
 set -euo pipefail
@@ -43,9 +43,9 @@ if [ -n "$hits" ]; then
 fi
 
 echo "--- No development mock API in $dir"
-mock="$(find_in 'mikud\.mock\.' "${js[@]}")"
+mock="$(find_in 'adiutor\.mock\.' "${js[@]}")"
 if [ -n "$mock" ]; then
-  echo "The mock API (src/web/api/mock) is in the build; it must only load with VITE_MIKUD_MOCK=1:"
+  echo "The mock API (src/web/api/mock) is in the build; it must only load with VITE_ADIUTOR_MOCK=1:"
   while IFS= read -r line; do echo "  ${line%%:*}"; done <<<"$mock"
   fail=1
 fi

@@ -1,5 +1,5 @@
-// Operator commands, run inside the Mikud container on the server:
-//   docker compose exec mikud node dist/server/cli.js reset-password
+// Operator commands, run inside the Adiutor container on the server:
+//   docker compose exec adiutor node dist/server/cli.js reset-password
 // Sets a new random password through Better Auth's documented reset and prints it once. Every session ends; two-factor
 // stays as it is (sign in with the authenticator or a backup code). Uses the same configuration as the server.
 import { writeSync } from "node:fs"
@@ -38,7 +38,7 @@ try {
     sessionIdleDays: (await getSettings(ctx.db)).sessionIdleDays,
   })
   if (!result) {
-    err("No owner exists yet. Open Mikud in a browser to create it.")
+    err("No owner exists yet. Open Adiutor in a browser to create it.")
     code = 1
   } else {
     out(`Username: ${result.username}`)

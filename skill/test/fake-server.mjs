@@ -1,4 +1,4 @@
-// A stand-in for Mikud's agent approval (Better Auth's device authorization, api-key and revoke-session routes) and
+// A stand-in for Adiutor's agent approval (Better Auth's device authorization, api-key and revoke-session routes) and
 // its /api/v1 routes, strict like the real ones: an approved code is redeemed once, a session token works until it is
 // revoked, a key until it ends. Every code, token and key is generated here, new for every run. Tests drive it
 // through its state and a few switches.
@@ -75,13 +75,13 @@ export async function startFakeServer() {
       path: url.pathname,
       userAgent: req.headers["user-agent"] ?? "",
       authorization: req.headers.authorization ?? "",
-      agent: req.headers["x-mikud-agent"] ?? null,
+      agent: req.headers["x-adiutor-agent"] ?? null,
     })
     if (s.redirect[url.pathname]) return send(302, {}, { location: s.redirect[url.pathname] })
 
     if (req.method === "POST" && url.pathname === "/api/auth/device/code") {
       s.counts.deviceCode++
-      if (body?.client_id !== "mikud-connect") return send(400, { error: "invalid_client" })
+      if (body?.client_id !== "adiutor-connect") return send(400, { error: "invalid_client" })
       const deviceCode = pick(LETTERS, 40)
       const userCode = pick(USER_CODE, 8)
       s.devices.set(deviceCode, { userCode, state: "pending", expiresAt: Date.now() + s.expiresIn * 1000 })
@@ -104,7 +104,7 @@ export async function startFakeServer() {
         await g.opened
       }
       hints()
-      if (body?.grant_type !== DEVICE_GRANT || body?.client_id !== "mikud-connect")
+      if (body?.grant_type !== DEVICE_GRANT || body?.client_id !== "adiutor-connect")
         return send(400, { error: "invalid_request" })
       const d = s.devices.get(body.device_code)
       if (!d || d.state === "used")
@@ -144,7 +144,7 @@ export async function startFakeServer() {
       if (name.length < 1 || name.length > 32) return send(400, { code: "INVALID_NAME_LENGTH" })
       if (!Number.isInteger(expiresIn) || expiresIn < 86_400 || expiresIn > 365 * 86_400)
         return send(400, { code: "EXPIRES_IN_IS_TOO_SMALL" })
-      const key = `mkd_${pick(LETTERS, 64)}`
+      const key = `adt_${pick(LETTERS, 64)}`
       const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
       s.keys.set(key, { name, expiresIn, expiresAt, alive: true })
       if (s.lose.key) {
@@ -201,12 +201,12 @@ export async function startFakeServer() {
         s.apiStatus = null
         return send(status, { error: { code: "bad_gateway", message: "The proxy did not get an answer." } })
       }
-      // Mikud's envelope: {data}, and a page of notes with its cursor.
+      // Adiutor's envelope: {data}, and a page of notes with its cursor.
       const echo = {
         method: req.method,
         path: url.pathname,
         query: url.search,
-        agent: req.headers["x-mikud-agent"] ?? null,
+        agent: req.headers["x-adiutor-agent"] ?? null,
         body,
         writes: s.writes.length,
       }

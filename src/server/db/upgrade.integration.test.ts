@@ -20,9 +20,9 @@ import { totp } from "../testing/totp.ts"
 import { createDatabase, type Database, migrationFailure } from "./client.ts"
 import { authAccount, authSession, authTwoFactor, authUser, authVerification } from "./schema.ts"
 
-// The upgrade from the schema on main before this change (migrations 0000 to 0004: Better Auth behind Mikud's wrapper,
+// The upgrade from the schema on main before this change (migrations 0000 to 0004: Better Auth behind Adiutor's wrapper,
 // with per-session TOTP proof and the auth epoch) to Better Auth as it documents itself: invented data survives, every
-// session ends once (G14), a second sign-up is refused, and the TOTP secret encrypted with MIKUD_AUTH_SECRET still
+// session ends once (G14), a second sign-up is refused, and the TOTP secret encrypted with ADIUTOR_AUTH_SECRET still
 // verifies through Better Auth's legacy `secret` fallback.
 
 const BEFORE = 5 // migrations 0000 to 0004
@@ -36,7 +36,7 @@ let oldFolder: string
 
 /** The migrations folder with only the migrations before index `before`. */
 function folderBefore(before = BEFORE): string {
-  const dir = mkdtempSync(join(tmpdir(), "mikud-upgrade-"))
+  const dir = mkdtempSync(join(tmpdir(), "adiutor-upgrade-"))
   cpSync(migrations, dir, { recursive: true })
   const journalPath = join(dir, "meta", "_journal.json")
   const journal = JSON.parse(readFileSync(journalPath, "utf8")) as { entries: { idx: number; tag: string }[] }
@@ -46,7 +46,7 @@ function folderBefore(before = BEFORE): string {
   return dir
 }
 
-/** Better Auth as an older server ran it: only the legacy `secret` (MIKUD_AUTH_SECRET), the plugins' defaults. */
+/** Better Auth as an older server ran it: only the legacy `secret` (ADIUTOR_AUTH_SECRET), the plugins' defaults. */
 function legacyAuth(on: Database) {
   return betterAuth({
     secret: TEST_AUTH_SECRET,
@@ -67,11 +67,12 @@ function legacyAuth(on: Database) {
       },
     }),
     emailAndPassword: { enabled: true, minPasswordLength: 12 },
+    // The issuer the product had under its earlier name, as that server ran it.
     plugins: [username(), twoFactor({ issuer: "Mikud" })],
   })
 }
 
-/** Mikud as it runs now on `on`: MIKUD_AUTH_SECRETS with a new secret, MIKUD_AUTH_SECRET as the legacy fallback. */
+/** Adiutor as it runs now on `on`: ADIUTOR_AUTH_SECRETS with a new secret, ADIUTOR_AUTH_SECRET as the legacy fallback. */
 function currentCore(on: Database) {
   const t = { ctx: { db: on.db, secrets: new ReloadableSecretScanner(), clock: () => new Date() } }
   const newSecret = testSecret()
@@ -85,10 +86,10 @@ function currentCore(on: Database) {
 
 beforeAll(async () => {
   vi.spyOn(console, "error").mockImplementation(() => {})
-  const adminUrl = process.env.MIKUD_TEST_DATABASE_URL
-  if (!adminUrl) throw new Error("MIKUD_TEST_DATABASE_URL is required (scripts/verify.sh sets it)")
+  const adminUrl = process.env.ADIUTOR_TEST_DATABASE_URL
+  if (!adminUrl) throw new Error("ADIUTOR_TEST_DATABASE_URL is required (scripts/verify.sh sets it)")
   admin = postgres(adminUrl, { max: 1, onnotice: () => {} })
-  name = `mikud_upgrade_${randomBytes(4).toString("hex")}`
+  name = `adiutor_upgrade_${randomBytes(4).toString("hex")}`
   await admin.unsafe(`CREATE DATABASE "${name}"`)
   const u = new URL(adminUrl)
   u.pathname = `/${name}`
@@ -120,7 +121,7 @@ describe("upgrading a database from Better Auth behind the wrapper", () => {
       await sql.end()
     }
 
-    // The owner as the old server created it: Better Auth with only the legacy `secret` (MIKUD_AUTH_SECRET).
+    // The owner as the old server created it: Better Auth with only the legacy `secret` (ADIUTOR_AUTH_SECRET).
     const legacy = legacyAuth(database)
     const old = new TestBrowser((request) => legacy.handler(request), TEST_ORIGIN, {
       "x-forwarded-for": "198.51.100.7",
@@ -148,7 +149,7 @@ describe("upgrading a database from Better Auth behind the wrapper", () => {
       await after.end()
     }
 
-    // The new server: MIKUD_AUTH_SECRETS with a new current secret, MIKUD_AUTH_SECRET kept as the legacy fallback.
+    // The new server: ADIUTOR_AUTH_SECRETS with a new current secret, ADIUTOR_AUTH_SECRET kept as the legacy fallback.
     const { core } = currentCore(database)
     const app = createApp({ checkDatabase: async () => true, core })
     const b = new TestBrowser((request) => app.fetch(request), TEST_ORIGIN, { "x-forwarded-for": "198.51.100.8" })
@@ -170,7 +171,11 @@ describe("upgrading a database from Better Auth behind the wrapper", () => {
 
 const READABLE_EMAIL = 8 // migrations 0000 to 0007
 
-/** The e-mail the previous release derived from a username: `u-` and the lowercased username in hex. */
+/**
+ * The e-mail the previous release derived from a username: `u-` and the lowercased username in hex. It and the
+ * readable e-mail 0008 writes keep the product's earlier domain, `mikud.local`: generated migrations are never edited,
+ * so these expectations stay as 0008 runs.
+ */
 const hexEmail = (name: string) => `u-${Buffer.from(name.toLowerCase(), "utf8").toString("hex")}@mikud.local`
 
 /**
@@ -182,9 +187,9 @@ async function withOwnerBefore0008(
   email: string,
   test: (db: Database, secret: string) => Promise<void>,
 ): Promise<void> {
-  const dbName = `mikud_upgrade_${randomBytes(4).toString("hex")}`
+  const dbName = `adiutor_upgrade_${randomBytes(4).toString("hex")}`
   await admin.unsafe(`CREATE DATABASE "${dbName}"`)
-  const u = new URL(process.env.MIKUD_TEST_DATABASE_URL ?? "")
+  const u = new URL(process.env.ADIUTOR_TEST_DATABASE_URL ?? "")
   u.pathname = `/${dbName}`
   const db = createDatabase(u.toString())
   const folder = folderBefore(READABLE_EMAIL)
@@ -208,7 +213,7 @@ async function withOwnerBefore0008(
   }
 }
 
-/** The owner signs in to the current Mikud with `secret`'s authenticator, then through a CLI reset. */
+/** The owner signs in to the current Adiutor with `secret`'s authenticator, then through a CLI reset. */
 async function signsIn(db: Database, secret: string, name: string, ip: number): Promise<void> {
   const { t, core, auth } = currentCore(db)
   const app = createApp({ checkDatabase: async () => true, core })
@@ -257,12 +262,12 @@ describe("upgrading to the readable synthetic e-mail", () => {
         expect(await owners(db)).toEqual([{ email: hexEmail(name), username: name }])
         expect(await applied(db)).toBe(READABLE_EMAIL)
 
-        // docs/deployment.md, Upgrade: rename the owner, then upgrade.
+        // The repair an owner of that historical install makes by hand: rename the owner, then upgrade.
         await db.db.execute(
-          sql`update auth_user set username = 'alice', display_username = 'alice', email = 'alice@mikud.local'`,
+          sql`update auth_user set username = 'alice', display_username = 'alice', email = 'alice@adiutor.local'`,
         )
         await db.migrate(migrations)
-        expect(await owners(db)).toEqual([{ email: "alice@mikud.local", username: "alice" }])
+        expect(await owners(db)).toEqual([{ email: "alice@adiutor.local", username: "alice" }])
         await signsIn(db, secret, "alice", 20)
       })
     },

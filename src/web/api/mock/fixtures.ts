@@ -1,6 +1,6 @@
 // Invented data for the mock API (development and screenshots only; never in the production build).
 // Every project, item and name here is made up. Times are relative to the moment the mock starts.
-// scripts/lib/web-dist-check.sh fails when the mock storage key ("mikud.mock.") is found in dist/web.
+// scripts/lib/web-dist-check.sh fails when the mock storage key ("adiutor.mock.") is found in dist/web.
 
 import type { ItemStatus, ItemType, Severity, Stage } from "../../../shared/enums.ts"
 import type {
@@ -34,24 +34,24 @@ export function uuid(): string {
 /** The mock starts in the language this browser last used, so both languages can be shown. */
 function storedLanguage(): "he" | "en" {
   try {
-    return localStorage.getItem("mikud.language") === "en" ? "en" : "he"
+    return localStorage.getItem("adiutor.language") === "en" ? "en" : "he"
   } catch {
     return "he"
   }
 }
 
 /**
- * What the mock pretends the environment sets, for screenshots of locked settings (FS-6): `mikud.mock.env` in
- * localStorage holds variable names separated by commas (MIKUD_TELEGRAM_BOT_TOKEN, MIKUD_TELEGRAM_CHAT_ID,
- * MIKUD_PRIVATE_DOMAINS); `mikud.mock.telegram` set to "off" starts with no bot token and no chat id.
+ * What the mock pretends the environment sets, for screenshots of locked settings (FS-6): `adiutor.mock.env` in
+ * localStorage holds variable names separated by commas (ADIUTOR_TELEGRAM_BOT_TOKEN, ADIUTOR_TELEGRAM_CHAT_ID,
+ * ADIUTOR_PRIVATE_DOMAINS); `adiutor.mock.telegram` set to "off" starts with no bot token and no chat id.
  */
 function mockEnv(): { variables: Set<string>; telegramOff: boolean } {
   try {
-    const variables = (localStorage.getItem("mikud.mock.env") ?? "")
+    const variables = (localStorage.getItem("adiutor.mock.env") ?? "")
       .split(",")
       .map((name) => name.trim())
       .filter(Boolean)
-    return { variables: new Set(variables), telegramOff: localStorage.getItem("mikud.mock.telegram") === "off" }
+    return { variables: new Set(variables), telegramOff: localStorage.getItem("adiutor.mock.telegram") === "off" }
   } catch {
     return { variables: new Set(), telegramOff: false }
   }
@@ -61,13 +61,13 @@ function mockSettings(): Settings {
   const env = mockEnv()
   const lock = (variable: string) =>
     env.variables.has(variable) ? { locked: true, variable } : { locked: false, variable: null }
-  const tokenLock = lock("MIKUD_TELEGRAM_BOT_TOKEN")
-  const chatLock = lock("MIKUD_TELEGRAM_CHAT_ID")
+  const tokenLock = lock("ADIUTOR_TELEGRAM_BOT_TOKEN")
+  const chatLock = lock("ADIUTOR_TELEGRAM_CHAT_ID")
   const tokenSet = tokenLock.locked || !env.telegramOff
   const chatId = chatLock.locked ? "70012345" : env.telegramOff ? null : "4242"
   const missing = [...(tokenSet ? [] : ["botToken" as const]), ...(chatId ? [] : ["chatId" as const])]
   const state = missing.length === 0 ? "on" : missing.length === 2 ? "off" : "incomplete"
-  const domainsLock = lock("MIKUD_PRIVATE_DOMAINS")
+  const domainsLock = lock("ADIUTOR_PRIVATE_DOMAINS")
   return {
     id: uuid(),
     closedItemDays: 7,
@@ -561,7 +561,7 @@ export function createState(): MockState {
     {
       id: uuid(),
       name: "sync",
-      start: "mkd_Qe",
+      start: "adt_Qe",
       createdAt: ago(24 * 20),
       expiresAt: ago(-24 * 70),
       lastRequest: ago(0.2),
@@ -569,7 +569,7 @@ export function createState(): MockState {
     {
       id: uuid(),
       name: "claude",
-      start: "mkd_tR",
+      start: "adt_tR",
       createdAt: ago(24 * 20),
       expiresAt: ago(-24 * 70),
       lastRequest: ago(3),

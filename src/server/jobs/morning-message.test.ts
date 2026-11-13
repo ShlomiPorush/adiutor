@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import he from "../../shared/locales/he.json"
 import { buildMorningMessage, type MessageOptions, type MorningSummary } from "./morning-message.ts"
 
-const URL_BASE = "https://mikud.example.com"
+const URL_BASE = "https://adiutor.example.com"
 const options: MessageOptions = { language: "en", publicUrl: URL_BASE, dateFormat: "dd/MM/yyyy", timeFormat: "HH:mm" }
 const fresh = { lastSuccessAt: new Date("2026-11-01T05:30:00Z"), stale: false }
 
@@ -103,8 +103,8 @@ describe("buildMorningMessage", () => {
 
   it("keeps a path prefix of the public URL in every link", () => {
     const empty: MorningSummary = { waiting: [], newCount: 0, security: [], sync: fresh }
-    expect(String(buildMorningMessage(empty, { ...options, publicUrl: "https://example.com/mikud" }))).toContain(
-      '<a href="https://example.com/mikud/">',
+    expect(String(buildMorningMessage(empty, { ...options, publicUrl: "https://example.com/adiutor" }))).toContain(
+      '<a href="https://example.com/adiutor/">',
     )
   })
 

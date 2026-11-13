@@ -332,7 +332,7 @@ export function BackupCodes({ codes, onDone, doneLabel }: { codes: string[]; onD
   const download = () => {
     const link = document.createElement("a")
     link.href = URL.createObjectURL(new Blob([`${t("backupCodes.fileHeading")}\n\n${text}\n`], { type: "text/plain" }))
-    link.download = "mikud-backup-codes.txt"
+    link.download = "adiutor-backup-codes.txt"
     link.click()
     setTimeout(() => URL.revokeObjectURL(link.href), 1000)
   }

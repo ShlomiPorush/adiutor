@@ -1,7 +1,7 @@
 // The Account page, /account, opened from the account menu: v3 rows in groups (S-6, FS-8), Signed in, Browsers,
 // Password, Two-factor and Recovery. It is the owner's own account, not a setting of the board, so it has a page of its
 // own outside Settings and its draft. Everything here is Better Auth's own routes through its client, and acts at once, outside the save bar: the
-// signed-in browsers (and a session `mikud connect` left behind) with Sign out per browser and, at the end of the
+// signed-in browsers (and a session `adiutor connect` left behind) with Sign out per browser and, at the end of the
 // list's head, Sign out other browsers and Sign out everywhere (S-12); the password changed in a dialog (FS-22, DS-9:
 // it asks before dropping what was typed); new backup codes and a new authenticator, each in a dialog; and the
 // recovery command. Signing out of this browser is in the shell's account menu.
@@ -411,7 +411,7 @@ function NewCodesDialog({ onClose }: { onClose: () => void }) {
 
 /**
  * A new authenticator: Better Auth's disable with the password, then the setup page enrols the new one (the
- * account must have two-factor before Mikud answers again).
+ * account must have two-factor before Adiutor answers again).
  */
 function NewAuthenticatorDialog({ onClose, onDisabled }: { onClose: () => void; onDisabled: () => void }) {
   const { t } = useI18n()

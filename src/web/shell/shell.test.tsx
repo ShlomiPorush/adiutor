@@ -152,7 +152,7 @@ function stubMedia(matches: (query: string) => boolean) {
 
 beforeEach(() => {
   localStorage.clear()
-  localStorage.setItem("mikud.language", "en")
+  localStorage.setItem("adiutor.language", "en")
   delete document.documentElement.dataset.nav
   document.documentElement.classList.remove("dark")
   signOut.mockReset()
@@ -225,13 +225,13 @@ describe("the theme lives in the shell, with System (R5, Q-7)", () => {
     expect(theme()?.getAttribute("aria-label")).toBe(named(en.theme.system, en.theme.light))
     expect(document.documentElement.classList.contains("dark")).toBe(true)
     await click(theme())
-    expect(localStorage.getItem("mikud.theme")).toBe("light")
+    expect(localStorage.getItem("adiutor.theme")).toBe("light")
     expect(document.documentElement.classList.contains("dark")).toBe(false)
     await click(theme())
-    expect(localStorage.getItem("mikud.theme")).toBe("dark")
+    expect(localStorage.getItem("adiutor.theme")).toBe("dark")
     expect(document.documentElement.classList.contains("dark")).toBe(true)
     await click(theme())
-    expect(localStorage.getItem("mikud.theme")).toBe("system")
+    expect(localStorage.getItem("adiutor.theme")).toBe("system")
     expect(theme()?.getAttribute("aria-label")).toBe(named(en.theme.system, en.theme.light))
     expect(document.documentElement.classList.contains("dark")).toBe(true)
 
@@ -253,11 +253,11 @@ describe("the theme lives in the shell, with System (R5, Q-7)", () => {
     expect(radios()[2]?.getAttribute("aria-checked")).toBe("true")
     await click(radios()[1])
     expect(document.querySelector('[role="menu"]')).toBeNull()
-    expect(localStorage.getItem("mikud.theme")).toBe("dark")
+    expect(localStorage.getItem("adiutor.theme")).toBe("dark")
     expect(document.documentElement.classList.contains("dark")).toBe(true)
     await click(button(`owner.name, ${en.shell.accountMenu}`))
     await click(radios()[2])
-    expect(localStorage.getItem("mikud.theme")).toBe("system")
+    expect(localStorage.getItem("adiutor.theme")).toBe("system")
     expect(document.documentElement.classList.contains("dark")).toBe(false)
   })
 })
@@ -520,7 +520,7 @@ describe("the More sheet (NL-9, R4)", () => {
     await click(button("More"))
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
     expect(layerCount()).toBe(1)
-    expect((history.state as { mikudLayer?: boolean } | null)?.mikudLayer).toBe(true)
+    expect((history.state as { adiutorLayer?: boolean } | null)?.adiutorLayer).toBe(true)
 
     width = 1000
     await act(async () => media.resize())

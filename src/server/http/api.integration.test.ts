@@ -51,7 +51,7 @@ type Init = {
 
 async function call(path: string, init: Init = {}) {
   const headers: Record<string, string> = {
-    ...(init.owner ? { cookie: ownerBrowser.cookieHeader, "x-mikud-request": "1", origin: ORIGIN } : {}),
+    ...(init.owner ? { cookie: ownerBrowser.cookieHeader, "x-adiutor-request": "1", origin: ORIGIN } : {}),
     ...init.headers,
   }
   if (init.token) headers.authorization = `Bearer ${init.token}`
@@ -66,7 +66,7 @@ async function call(path: string, init: Init = {}) {
   return { status: res.status, headers: res.headers, json: text ? JSON.parse(text) : null }
 }
 
-const browser = { "x-mikud-request": "1", origin: ORIGIN }
+const browser = { "x-adiutor-request": "1", origin: ORIGIN }
 
 /** The owner's signed-in browser and its cookie header. */
 async function signedIn() {
@@ -111,7 +111,7 @@ describe("authentication", () => {
 
   it("accepts the owner's session and an agent key", async () => {
     expect((await call("/session", { owner: true })).json.data.actor).toEqual({ kind: "owner", label: "owner.name" })
-    const agentSession = await call("/session", { token: AGENT, headers: { "x-mikud-agent": "codex <thread>" } })
+    const agentSession = await call("/session", { token: AGENT, headers: { "x-adiutor-agent": "codex <thread>" } })
     expect(agentSession.json.data.actor).toEqual({ kind: "agent", label: "agent:codex thread" })
   })
 
@@ -164,10 +164,10 @@ describe("browser sessions", () => {
       method: "POST",
       cookie,
       body,
-      headers: { "x-mikud-request": "1", origin: "https://evil.example" },
+      headers: { "x-adiutor-request": "1", origin: "https://evil.example" },
     })
     expect(badOrigin.status).toBe(403)
-    const noOrigin = await call("/items", { method: "POST", cookie, body, headers: { "x-mikud-request": "1" } })
+    const noOrigin = await call("/items", { method: "POST", cookie, body, headers: { "x-adiutor-request": "1" } })
     expect(noOrigin.status).toBe(403)
     // Reads are plain same-origin reads.
     expect((await call("/projects", { cookie })).status).toBe(200)
@@ -198,13 +198,13 @@ describe("browser sessions", () => {
   it("gives the browser an identity cookie that never authenticates, and records visits for it", async () => {
     const { owner } = await signedIn()
     const first = await owner.call("GET", "/api/v1/session")
-    const browserCookie = first.setCookies.find((c) => c.startsWith("mikud_browser="))
+    const browserCookie = first.setCookies.find((c) => c.startsWith("adiutor_browser="))
     expect(browserCookie).toMatch(/HttpOnly/)
     expect(browserCookie).toMatch(/SameSite=Lax/)
     expect(browserCookie).not.toMatch(/Secure/)
     const browserId = first.json.data.browserId
     // Alone, the identity cookie is nobody.
-    const alone = await call("/session", { cookie: `mikud_browser=${browserId}` })
+    const alone = await call("/session", { cookie: `adiutor_browser=${browserId}` })
     expect([alone.status, alone.json.error.code]).toEqual([401, "unauthorized"])
     // The same browser keeps its identity.
     expect((await owner.call("GET", "/api/v1/session")).json.data.browserId).toBe(browserId)
@@ -345,7 +345,7 @@ describe("routes and error codes", () => {
 
 describe("the activity filters", () => {
   it("answers the first page with a total and counts, later pages without, and pages with the filters", async () => {
-    const headers = { "x-mikud-agent": "Garden" }
+    const headers = { "x-adiutor-agent": "Garden" }
     for (const title of ["Rake the leaves", "Mulch the beds", "Prune the roses"])
       expect(
         (await call("/items", { method: "POST", token: AGENT, body: { type: "task", title }, headers })).status,

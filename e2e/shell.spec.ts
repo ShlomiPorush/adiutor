@@ -117,18 +117,18 @@ test("the theme: Dark, Light and System, which follows the operating system", as
   await expect(html).not.toHaveClass(/\bdark\b/)
   // The choice is this browser's: it holds after a reload.
   await page.reload()
-  expect(await page.evaluate(() => localStorage.getItem("mikud.theme"))).toBe("system")
+  expect(await page.evaluate(() => localStorage.getItem("adiutor.theme"))).toBe("system")
 
   // The theme button walks System, Light, Dark.
   const button = page.locator("[data-theme-button]:visible").first()
   if (isPhone()) await page.locator(".ui-tabbar button").last().click()
   await button.click()
   await expect(html).not.toHaveClass(/\bdark\b/)
-  expect(await page.evaluate(() => localStorage.getItem("mikud.theme"))).toBe("light")
+  expect(await page.evaluate(() => localStorage.getItem("adiutor.theme"))).toBe("light")
   await button.click()
   await expect(html).toHaveClass(/\bdark\b/)
   await button.click()
-  expect(await page.evaluate(() => localStorage.getItem("mikud.theme"))).toBe("system")
+  expect(await page.evaluate(() => localStorage.getItem("adiutor.theme"))).toBe("system")
   if (isPhone()) await page.keyboard.press("Escape")
 })
 
@@ -172,7 +172,7 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
     async ({ method, path, body }) => {
       const response = await fetch(`/api/v1${path}`, {
         method,
-        headers: { "Content-Type": "application/json", "X-Mikud-Request": "1" },
+        headers: { "Content-Type": "application/json", "X-Adiutor-Request": "1" },
         body: body === undefined ? undefined : JSON.stringify(body),
       })
       if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`)
@@ -220,7 +220,7 @@ test("More closes when the window grows past 760px: no layer, nothing inert, its
     await expect(page.locator("[data-layer]")).toHaveCount(0)
     await expect.poll(() => page.evaluate(() => document.querySelectorAll("[inert]").length)).toBe(0)
     await expect
-      .poll(() => page.evaluate(() => Boolean((history.state as { mikudLayer?: boolean } | null)?.mikudLayer)))
+      .poll(() => page.evaluate(() => Boolean((history.state as { adiutorLayer?: boolean } | null)?.adiutorLayer)))
       .toBe(false)
     await expect(page).toHaveURL(/\/projects$/)
     // The sheet's entry is gone: one Back leaves Projects.

@@ -16,7 +16,7 @@ function routePaths(): Set<string> {
   const auth = createAuth({
     ctx: { db, secrets: createSecretScanner(), clock: () => new Date() },
     secrets: [{ version: 1, value: testSecret() }],
-    publicUrl: new URL("https://mikud.example.com"),
+    publicUrl: new URL("https://adiutor.example.com"),
     trustedProxies: [],
     sessionIdleDays: 30,
     otpViaTelegram: true,
@@ -25,7 +25,7 @@ function routePaths(): Set<string> {
   return new Set(Object.values(auth.api).map((endpoint) => (endpoint as { path?: string }).path ?? ""))
 }
 
-describe("the routes Mikud opens", () => {
+describe("the routes Adiutor opens", () => {
   const paths = routePaths()
 
   it.each([...ALLOWED_PATHS, ...OTP_PATHS])("%s exists in Better Auth", (path) => {

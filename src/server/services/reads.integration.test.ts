@@ -10,7 +10,7 @@ import { applyT3Snapshot } from "./sync.ts"
 
 let t: TestDatabase
 
-/** A browser identity (the mikud_browser cookie names one). */
+/** A browser identity (the adiutor_browser cookie names one). */
 async function browser(label: string) {
   const [device] = await t.ctx.db.insert(devices).values({ label }).returning()
   if (!device) throw new Error("no browser row")

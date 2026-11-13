@@ -195,7 +195,7 @@ async function changeTwoSections(): Promise<void> {
 beforeEach(() => {
   forgetSettingsVisit()
   localStorage.clear()
-  localStorage.setItem("mikud.language", "en")
+  localStorage.setItem("adiutor.language", "en")
   saved = structuredClone(SAVED)
   patches = []
   refusal = null
@@ -246,8 +246,8 @@ describe("the catalogue", () => {
       [...changedSections({ closedItemDays: 3, telegramChatId: "1", privateDomains: [], otpViaTelegram: true })].sort(),
     ).toEqual(["general", "secret-check", "telegram"])
     expect(FIELD_SECTION.botToken).toBe("telegram")
-    expect(refusedField("setting_locked", { variable: "MIKUD_TELEGRAM_CHAT_ID" })).toBe("chatId")
-    expect(refusedField("setting_locked", { variable: "MIKUD_PRIVATE_DOMAINS" })).toBe("privateDomains")
+    expect(refusedField("setting_locked", { variable: "ADIUTOR_TELEGRAM_CHAT_ID" })).toBe("chatId")
+    expect(refusedField("setting_locked", { variable: "ADIUTOR_PRIVATE_DOMAINS" })).toBe("privateDomains")
     expect(refusedField("validation_failed", { field: "otpViaTelegram" })).toBe("otpViaTelegram")
     expect(refusedField("validation_failed", { issues: [{ path: "telegramBotToken", message: "x" }] })).toBe("botToken")
     expect(refusedField("validation_failed", { issues: [{ path: "", message: "x" }] })).toBeNull()
@@ -337,8 +337,8 @@ describe("one draft across the sections (R2)", () => {
       body: {
         error: {
           code: "setting_locked",
-          message: "Set by MIKUD_TELEGRAM_CHAT_ID.",
-          variable: "MIKUD_TELEGRAM_CHAT_ID",
+          message: "Set by ADIUTOR_TELEGRAM_CHAT_ID.",
+          variable: "ADIUTOR_TELEGRAM_CHAT_ID",
         },
       },
     }

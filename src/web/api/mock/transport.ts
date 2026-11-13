@@ -1,5 +1,5 @@
 // The mock API: the routes of docs/api.md over the invented data in fixtures.ts, held in memory.
-// Loaded only when VITE_MIKUD_MOCK=1 (development and screenshots); the production build drops it.
+// Loaded only when VITE_ADIUTOR_MOCK=1 (development and screenshots); the production build drops it.
 // The mock is always signed in with two-factor; the sign-in pages need the real server. Better Auth's routes
 // are answered by mock/auth.ts over the same state. Ending the other sessions is kept in sessionStorage.
 
@@ -23,7 +23,7 @@ import { ago, createState, type MockState, uuid } from "./fixtures.ts"
 const state: MockState = createState()
 /** The same state for mock/auth.ts. */
 export const mockState = state
-export const ENDED_OTHERS_KEY = "mikud.mock.endedOthers"
+export const ENDED_OTHERS_KEY = "adiutor.mock.endedOthers"
 const DELAY_MS = 120
 const STALE_MS = 26 * 3_600_000
 
@@ -722,7 +722,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
         body: {
           error: {
             code: "setting_locked",
-            message: `The environment variable ${lockedBy} sets this. Change it there and restart Mikud.`,
+            message: `The environment variable ${lockedBy} sets this. Change it there and restart Adiutor.`,
             details: { variable: lockedBy },
           },
         },

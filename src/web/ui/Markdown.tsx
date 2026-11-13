@@ -13,7 +13,7 @@ import type { ComponentPropsWithoutRef, ElementType, ReactNode } from "react"
 import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-/** An address that leaves Mikud opens in a new tab. */
+/** An address that leaves Adiutor opens in a new tab. */
 function isExternal(href: string): boolean {
   return /^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith(`${location.origin}/`)
 }

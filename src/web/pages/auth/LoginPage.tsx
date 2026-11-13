@@ -14,7 +14,7 @@ import { ErrorState, Loading } from "../../ui/states.tsx"
 import { usePageTitle } from "../usePageTitle.ts"
 import { AuthFrame, BackupCodeField, type CodeAnswer, CodeField, FormError, PasswordField } from "./parts.tsx"
 
-export const RECOVERY_COMMAND = "docker compose exec mikud node dist/server/cli.js reset-password"
+export const RECOVERY_COMMAND = "docker compose exec adiutor node dist/server/cli.js reset-password"
 
 type Method = "totp" | "backup" | "otp"
 

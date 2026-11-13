@@ -7,13 +7,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { createDatabase, type Database, TRANSACTION_TIMEOUT_MS } from "./client.ts"
 import * as schema from "./schema.ts"
 
-// The migrations in drizzle/ against a real PostgreSQL. MIKUD_TEST_DATABASE_URL is a role that may create
+// The migrations in drizzle/ against a real PostgreSQL. ADIUTOR_TEST_DATABASE_URL is a role that may create
 // databases; this file makes its own and drops it at the end.
-const adminUrl = process.env.MIKUD_TEST_DATABASE_URL
-if (!adminUrl) throw new Error("MIKUD_TEST_DATABASE_URL is required (scripts/verify.sh sets it)")
+const adminUrl = process.env.ADIUTOR_TEST_DATABASE_URL
+if (!adminUrl) throw new Error("ADIUTOR_TEST_DATABASE_URL is required (scripts/verify.sh sets it)")
 
 const folder = fileURLToPath(new URL("../../../drizzle", import.meta.url))
-const name = `mikud_migrations_${randomBytes(4).toString("hex")}`
+const name = `adiutor_migrations_${randomBytes(4).toString("hex")}`
 const admin = postgres(adminUrl, { max: 1, onnotice: () => {} })
 let database: Database
 let sql: postgres.Sql

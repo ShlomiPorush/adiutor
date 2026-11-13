@@ -119,7 +119,7 @@ export async function systemCommand(
 /** The environment for a child process: the agent token never leaves this process. */
 export function childEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const copy = { ...env }
-  delete copy.MIKUD_AGENT_TOKEN
+  delete copy.ADIUTOR_AGENT_TOKEN
   return copy
 }
 

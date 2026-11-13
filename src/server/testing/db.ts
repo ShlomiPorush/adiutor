@@ -9,7 +9,7 @@ import type { By, Ctx } from "../services/context.ts"
 import { ReloadableSecretScanner } from "../services/secrets.ts"
 
 // Support for *.integration.test.ts: a database of its own per test file, migrated, dropped at the end.
-// MIKUD_TEST_DATABASE_URL is a role that may create databases (scripts/verify.sh sets it).
+// ADIUTOR_TEST_DATABASE_URL is a role that may create databases (scripts/verify.sh sets it).
 
 export const owner: By = { actor: { kind: "owner", label: "owner" }, source: "ui" }
 export const agent: By = { actor: { kind: "agent", label: "agent" }, source: "mcp" }
@@ -35,9 +35,9 @@ export type TestDatabase = {
 }
 
 export async function createTestDatabase(prefix: string, privateDomains: string[] = []): Promise<TestDatabase> {
-  const adminUrl = process.env.MIKUD_TEST_DATABASE_URL
-  if (!adminUrl) throw new Error("MIKUD_TEST_DATABASE_URL is required (scripts/verify.sh sets it)")
-  const name = `mikud_${prefix}_${randomBytes(4).toString("hex")}`
+  const adminUrl = process.env.ADIUTOR_TEST_DATABASE_URL
+  if (!adminUrl) throw new Error("ADIUTOR_TEST_DATABASE_URL is required (scripts/verify.sh sets it)")
+  const name = `adiutor_${prefix}_${randomBytes(4).toString("hex")}`
   const admin = postgres(adminUrl, { max: 1, onnotice: () => {} })
   await admin.unsafe(`CREATE DATABASE "${name}"`)
   const url = new URL(adminUrl)

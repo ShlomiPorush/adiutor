@@ -21,10 +21,10 @@ describe("fetch transport", () => {
     const [, get] = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
     expect(postUrl).toBe("/api/v1/capture")
     expect(post.credentials).toBe("same-origin")
-    expect((post.headers as Record<string, string>)["X-Mikud-Request"]).toBe("1")
+    expect((post.headers as Record<string, string>)["X-Adiutor-Request"]).toBe("1")
     expect((post.headers as Record<string, string>)["Content-Type"]).toBe("application/json")
     expect(post.body).toBe(JSON.stringify({ text: "x" }))
-    expect((get.headers as Record<string, string>)["X-Mikud-Request"]).toBeUndefined()
+    expect((get.headers as Record<string, string>)["X-Adiutor-Request"]).toBeUndefined()
   })
 
   it("reads an empty 204 answer as no body", async () => {

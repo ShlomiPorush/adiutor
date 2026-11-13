@@ -54,9 +54,13 @@ function auditable(row: SettingsRow) {
 }
 
 const locked = (variable: string) =>
-  new AppError("setting_locked", `The environment variable ${variable} sets this. Change it there and restart Mikud.`, {
-    variable,
-  })
+  new AppError(
+    "setting_locked",
+    `The environment variable ${variable} sets this. Change it there and restart Adiutor.`,
+    {
+      variable,
+    },
+  )
 
 export async function updateSettings(ctx: Ctx, by: By, patch: SettingsPatch, env?: SettingsEnv): Promise<SettingsRow> {
   requireOwner(by, "change settings")
@@ -65,11 +69,11 @@ export async function updateSettings(ctx: Ctx, by: By, patch: SettingsPatch, env
     throw invalid(`closedItemDays must be between ${CLOSED_ITEM_DAYS_MIN} and ${CLOSED_ITEM_DAYS_MAX}.`)
   const overrides = env?.overrides ?? {}
   if (patch.telegramBotToken !== undefined && overrides.telegramBotToken !== undefined)
-    throw locked("MIKUD_TELEGRAM_BOT_TOKEN")
+    throw locked("ADIUTOR_TELEGRAM_BOT_TOKEN")
   if (patch.telegramChatId !== undefined && overrides.telegramChatId !== undefined)
-    throw locked("MIKUD_TELEGRAM_CHAT_ID")
+    throw locked("ADIUTOR_TELEGRAM_CHAT_ID")
   if (patch.privateDomains !== undefined && overrides.privateDomains !== undefined)
-    throw locked("MIKUD_PRIVATE_DOMAINS")
+    throw locked("ADIUTOR_PRIVATE_DOMAINS")
   const { telegramBotToken, ...columns } = patch
   const set: Partial<SettingsRow> = { ...columns, updatedAt: ctx.clock() }
   if (telegramBotToken !== undefined) {
@@ -116,7 +120,7 @@ export async function removeSuppression(ctx: Ctx, by: By, id: string): Promise<v
   })
 }
 
-// --- Visits ("new since your last visit", per browser: the mikud_browser cookie names a devices row) ---
+// --- Visits ("new since your last visit", per browser: the adiutor_browser cookie names a devices row) ---
 
 export const FIRST_VISIT_WINDOW_MS = 24 * 60 * 60 * 1000
 

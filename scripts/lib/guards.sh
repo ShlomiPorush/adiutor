@@ -151,12 +151,12 @@ fi
 echo "--- Shell scripts"
 scripts=()
 for file in "${files[@]}"; do
-  [[ "$file" == scripts/*.sh || "$file" == skill/mikud/scripts/mikud || "$file" == skill/mikud/scripts/*.sh ]] &&
+  [[ "$file" == scripts/*.sh || "$file" == skill/adiutor/scripts/adiutor || "$file" == skill/adiutor/scripts/*.sh ]] &&
     scripts+=("$file")
 done
 shellcheck -x "${scripts[@]}" || fail=1
 shfmt -d -i 2 -ci "${scripts[@]}" || {
-  echo "Run: shfmt -w -i 2 -ci scripts skill/mikud/scripts"
+  echo "Run: shfmt -w -i 2 -ci scripts skill/adiutor/scripts"
   fail=1
 }
 while read -r mode _ _ path; do
@@ -165,7 +165,7 @@ while read -r mode _ _ path; do
     echo "$path is not executable: git update-index --chmod=+x $path"
     fail=1
   }
-done < <(git ls-files -s 'scripts/*.sh' skill/mikud/scripts/mikud skill/mikud/scripts/mikud.mjs 'skill/mikud/scripts/*.sh')
+done < <(git ls-files -s 'scripts/*.sh' skill/adiutor/scripts/adiutor skill/adiutor/scripts/adiutor.mjs 'skill/adiutor/scripts/*.sh')
 
 echo "--- Release script: refusals and resume paths against a local remote"
 bash scripts/test-release.sh || fail=1

@@ -1,5 +1,5 @@
 /*
- * Mikud design system, after the v3 style (skill v3-ui-style): the text colour is the accent and
+ * Adiutor design system, after the v3 style (skill v3-ui-style): the text colour is the accent and
  * colour means status. Every visual value is a token below; light on :root, dark on .dark on <html>.
  * Every class starts with "ui-". Only logical properties, so right to left needs no second sheet.
  * Hover styles are gated by (hover: hover); focus styles are not. Animations stay under reduced
@@ -189,7 +189,7 @@ button {
 /* ---------- Shell ---------- */
 
 /*
- * Copied from n8n-ops' shell in its Regular design (apps/web/src/app/shell.tsx at afba697), with Mikud's tokens:
+ * Copied from n8n-ops' shell in its Regular design (apps/web/src/app/shell.tsx at afba697), with Adiutor's tokens:
  * the sidebar and the brand on a grey canvas, the top bar and the page in one floating card. The card is drawn
  * behind them (.ui-frame), so their order for the keyboard and screen readers stays as is. Above 1100px the
  * sidebar folds into the icon rail (html[data-nav="rail"], NL-7); from 761 to 1100px it is always the rail.

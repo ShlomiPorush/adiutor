@@ -2,7 +2,7 @@ import { z } from "zod"
 
 // The owner's sign-in name and password, for the UI forms. Better Auth validates both on its own routes
 // (sign-up, change-password); these rules repeat its configuration so a form can answer before it sends. The
-// username rule is the username() plugin's with Mikud's usernameValidator (isValidUsername below): 3 to 30
+// username rule is the username() plugin's with Adiutor's usernameValidator (isValidUsername below): 3 to 30
 // characters of [a-zA-Z0-9_.], no dot at the start or end and no two dots in a row, not trimmed, stored lowercased in
 // `username` with the spelling as typed in `displayUsername`; sign-in lowercases what is typed. The password limits
 // are the minPasswordLength and maxPasswordLength that src/server/auth/auth.ts sets.
@@ -30,11 +30,11 @@ export const normalizeUsername = (username: string) => username.toLowerCase()
 
 export const passwordSchema = z.string().min(PASSWORD_MIN).max(PASSWORD_MAX)
 
-const OWNER_EMAIL_DOMAIN = "@mikud.local"
+const OWNER_EMAIL_DOMAIN = "@adiutor.local"
 
 /**
- * The synthetic e-mail Better Auth requires; Mikud never sends mail. The sign-up refuses any other. It is the
- * lowercased username at mikud.local, a valid address for every name isValidUsername allows.
+ * The synthetic e-mail Better Auth requires; Adiutor never sends mail. The sign-up refuses any other. It is the
+ * lowercased username at adiutor.local, a valid address for every name isValidUsername allows.
  */
 export const ownerEmail = (username: string) => `${username.toLowerCase()}${OWNER_EMAIL_DOMAIN}`
 
@@ -42,7 +42,7 @@ const TOTP_URI_PREFIX = "otpauth://totp/"
 
 /**
  * The authenticator link the setup page draws as a QR code, with the username as the account name. Better Auth's
- * two-factor plugin names the account after the e-mail (`Mikud:<username>@mikud.local`) and has no option for it, so
+ * two-factor plugin names the account after the e-mail (`Adiutor:<username>@adiutor.local`) and has no option for it, so
  * the page drops the synthetic domain from the label (owner's decision, 2026-11-03). Only the label changes: the
  * query (secret, issuer, digits, period) stays exactly as Better Auth wrote it. Any other shape comes back unchanged.
  */
@@ -65,7 +65,7 @@ export function authenticatorUri(uri: string): string {
   return `${TOTP_URI_PREFIX}${label.slice(0, colon)}:${encodeURIComponent(username)}${query}`
 }
 
-// --- Sign out after this long without Mikud open (Settings): Better Auth's sliding session.expiresIn ---
+// --- Sign out after this long without Adiutor open (Settings): Better Auth's sliding session.expiresIn ---
 
 export const SESSION_IDLE_DAYS_MIN = 1
 export const SESSION_IDLE_DAYS_MAX = 90
@@ -74,16 +74,16 @@ export const SESSION_IDLE_DAYS_DEFAULT = 30
 // --- Agent keys (Better Auth's api-key plugin) ---
 
 /** Every agent key starts with this; the secret check refuses it in agent text. */
-export const AGENT_KEY_PREFIX = "mkd_"
+export const AGENT_KEY_PREFIX = "adt_"
 export const AGENT_KEY_NAME_MAX = 32
 
-/** How long a key made by `mikud connect` lives (`--days`): the api-key plugin's keyExpiration limits, in days. */
+/** How long a key made by `adiutor connect` lives (`--days`): the api-key plugin's keyExpiration limits, in days. */
 export const AGENT_KEY_DAYS_MIN = 1
 export const AGENT_KEY_DAYS_MAX = 365
 
 // --- Agent approval in the browser (Better Auth's core deviceAuthorization plugin) ---
 
 /** The one client id the device plugin accepts (validateClient); the CLI also sends it as its User-Agent. */
-export const CONNECT_CLIENT_ID = "mikud-connect"
-/** The page where the owner approves a `mikud connect` request (the plugin's verificationUri). */
+export const CONNECT_CLIENT_ID = "adiutor-connect"
+/** The page where the owner approves an `adiutor connect` request (the plugin's verificationUri). */
 export const CONNECT_DEVICE_PATH = "/connect/device"

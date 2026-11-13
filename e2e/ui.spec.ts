@@ -19,7 +19,7 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
     async ({ method, path, body }) => {
       const response = await fetch(`/api/v1${path}`, {
         method,
-        headers: { "Content-Type": "application/json", "X-Mikud-Request": "1" },
+        headers: { "Content-Type": "application/json", "X-Adiutor-Request": "1" },
         body: body === undefined ? undefined : JSON.stringify(body),
       })
       if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${await response.text()}`)

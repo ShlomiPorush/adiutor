@@ -7,11 +7,11 @@ import { ensureBrowser } from "../services/account.ts"
 import type { Actor, By, Ctx } from "../services/context.ts"
 
 /** Names the browser for "new since your last visit". Not a credential: it never authenticates. */
-export const BROWSER_COOKIE = "mikud_browser"
+export const BROWSER_COOKIE = "adiutor_browser"
 /** Browsers cap cookie lifetimes at 400 days. */
 export const BROWSER_COOKIE_MAX_AGE = 400 * 24 * 60 * 60
-export const REQUEST_HEADER = "x-mikud-request"
-export const AGENT_LABEL_HEADER = "x-mikud-agent"
+export const REQUEST_HEADER = "x-adiutor-request"
+export const AGENT_LABEL_HEADER = "x-adiutor-agent"
 
 export type Auth =
   | { actor: Actor; via: "token"; keyId: string }
@@ -69,12 +69,12 @@ const rateLimited = () => new AppError("rate_limited", "Too many failed attempts
 const unauthorized = (message = "Sign in, or send a valid key.") => new AppError("unauthorized", message)
 
 /**
- * Browser state-changing requests must name themselves with X-Mikud-Request: 1 and come from the
+ * Browser state-changing requests must name themselves with X-Adiutor-Request: 1 and come from the
  * configured public origin. SameSite cookies are not relied on alone.
  */
 export function checkBrowserRequest(c: Context, publicUrl: URL): void {
-  if (c.req.header(REQUEST_HEADER) !== "1") throw forbidden("The X-Mikud-Request header is missing.")
-  if (c.req.header("origin") !== publicUrl.origin) throw forbidden("The request does not come from the Mikud page.")
+  if (c.req.header(REQUEST_HEADER) !== "1") throw forbidden("The X-Adiutor-Request header is missing.")
+  if (c.req.header("origin") !== publicUrl.origin) throw forbidden("The request does not come from the Adiutor page.")
 }
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"])
@@ -121,7 +121,7 @@ export function authenticate(deps: AuthDeps, options: { allowSession: boolean })
     const found = await deps.auth.current.api.getSession({ headers: cookieOnly(c.req.raw.headers) })
     if (!found) throw unauthorized()
     if (found.user.twoFactorEnabled !== true)
-      throw new AppError("totp_required", "Set up two-factor authentication to use Mikud.")
+      throw new AppError("totp_required", "Set up two-factor authentication to use Adiutor.")
     if (!SAFE_METHODS.has(c.req.method)) checkBrowserRequest(c, deps.config.publicUrl)
     const browser = await ensureBrowser(deps.ctx, getCookie(c, BROWSER_COOKIE))
     if (browser.created)

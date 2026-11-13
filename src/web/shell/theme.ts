@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react"
 
 export type Theme = "light" | "dark" | "system"
 export const THEMES: readonly Theme[] = ["light", "dark", "system"]
-const KEY = "mikud.theme"
+const KEY = "adiutor.theme"
 
 function readTheme(): Theme {
   try {
@@ -43,10 +43,10 @@ export function useTheme(): [Theme, (theme: Theme) => void, boolean] {
       setThemeState(readTheme())
     }
     window.addEventListener("storage", sync)
-    window.addEventListener("mikud-theme", sync)
+    window.addEventListener("adiutor-theme", sync)
     return () => {
       window.removeEventListener("storage", sync)
-      window.removeEventListener("mikud-theme", sync)
+      window.removeEventListener("adiutor-theme", sync)
     }
   }, [])
   const setTheme = useCallback((next: Theme) => {
@@ -56,7 +56,7 @@ export function useTheme(): [Theme, (theme: Theme) => void, boolean] {
       // Storage blocked: the theme still applies to this page.
     }
     setThemeState(next)
-    window.dispatchEvent(new Event("mikud-theme"))
+    window.dispatchEvent(new Event("adiutor-theme"))
   }, [])
   return [theme, setTheme, dark]
 }

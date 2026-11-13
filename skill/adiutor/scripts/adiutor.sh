@@ -1,7 +1,7 @@
 #!/bin/sh
-# mikud for agents without Node 20+: POSIX sh and curl, with awk, od and the other POSIX tools.
+# adiutor for agents without Node 20+: POSIX sh and curl, with awk, od and the other POSIX tools.
 #
-# One of three versions with one contract (see mikud.mjs): same commands, same one-line JSON answers and error codes,
+# One of three versions with one contract (see adiutor.mjs): same commands, same one-line JSON answers and error codes,
 # the same files and the same lock, so they can run side by side on one computer. No secret ever appears in the
 # output.
 #
@@ -42,12 +42,12 @@ for _p in C_ K_ L_ LN_ N_ NK_ O_ OW_ P_ Q_ R_ RA_ SN_ V_ W_ X_ Y_; do unset "${_
 for _p in S F H; do unset "${_p}_code" "${_p}_msg" "${_p}_status" "${_p}_body" "${_p}_sent"; done
 unset _p
 
-CLIENT_ID=mikud-connect
+CLIENT_ID=adiutor-connect
 DEVICE_GRANT=urn:ietf:params:oauth:grant-type:device_code
 NL='
 '
 TAB=$(printf '\t')
-# Control characters and DEL: never in a stored value (mikud.mjs's PLAIN rule).
+# Control characters and DEL: never in a stored value (adiutor.mjs's PLAIN rule).
 CTL=$(printf '\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177')
 LOWER=abcdefghijklmnopqrstuvwxyz
 UPPER=ABCDEFGHIJKLMNOPQRSTUVWXYZ
@@ -65,11 +65,11 @@ whole() {
     *) printf '%s' "$2" ;;
   esac
 }
-WAIT_SECONDS=$(whole "${MIKUD_WAIT_SECONDS:-}" 90)
+WAIT_SECONDS=$(whole "${ADIUTOR_WAIT_SECONDS:-}" 90)
 # Test seams: the tests shorten the lock wait and the request timeout, and move the clock forward.
-LOCK_WAIT_MS=$(whole "${MIKUD_TEST_LOCK_WAIT_MS:-}" 20000)
-TIMEOUT_MS=$(whole "${MIKUD_TEST_TIMEOUT_MS:-}" 15000)
-CLOCK_OFFSET=$(whole "${MIKUD_TEST_CLOCK_OFFSET:-}" 0)
+LOCK_WAIT_MS=$(whole "${ADIUTOR_TEST_LOCK_WAIT_MS:-}" 20000)
+TIMEOUT_MS=$(whole "${ADIUTOR_TEST_TIMEOUT_MS:-}" 15000)
+CLOCK_OFFSET=$(whole "${ADIUTOR_TEST_CLOCK_OFFSET:-}" 0)
 TIMEOUT_S="$((TIMEOUT_MS / 1000)).$(printf '%03d' $((TIMEOUT_MS % 1000)))"
 
 CONN_FIELDS="v:n origin:s key:s keyName:s expiresAt:s"
@@ -77,20 +77,20 @@ PEND_FIELDS="v:n attemptId:s origin:s deviceCode:s userCode:s link:s interval:n 
 LEFT_FIELDS="origin:s keyName:s expiresAt:s reason:s at:s"
 OWNER_FIELDS="token:s host:s pid:n start:s"
 
-SESSION_TEXT="Mikud may have opened a 'mikud connect (agent approval)' session that was not ended: end it on the Account page."
+SESSION_TEXT="Adiutor may have opened a 'adiutor connect (agent approval)' session that was not ended: end it on the Account page."
 
-HELP="mikud: keep the owner's Mikud board current, after the owner approves this computer user once.
+HELP="adiutor: keep the owner's Adiutor board current, after the owner approves this computer user once.
 
   connect [--url <address>] [--days <1-365>] [--replace]
                           Ask to connect; prints a link and a code to show the owner.
   connect --wait --url <address>
                           Wait up to $WAIT_SECONDS s for the approval; run again while it answers still_waiting.
-  status [--clear-left]   Whether this computer user is connected, and what the command left on Mikud (no secrets).
-  disconnect              Forget the connection on this computer (the key stays on Mikud until it ends).
+  status [--clear-left]   Whether this computer user is connected, and what the command left on Adiutor (no secrets).
+  disconnect              Forget the connection on this computer (the key stays on Adiutor until it ends).
   get '<path>'            GET /api/v1/<path>, for example: get 'items?q=login'
   post '<path>' --json '<body>' | --json-file <file>
   patch '<path>' --json '<body>' | --json-file <file>
-                          --as <label> (or MIKUD_AGENT_LABEL) names the agent in Mikud's activity log."
+                          --as <label> (or ADIUTOR_AGENT_LABEL) names the agent in Adiutor's activity log."
 
 # A small JSON reader, as strict as JSON.parse. Input on standard input (a pipe: it may hold a secret). Modes:
 #   valid    exit 0 when the input is one JSON value
@@ -99,7 +99,7 @@ HELP="mikud: keep the owner's Mikud board current, after the owner approves this
 #   rows     for each top value (one per line in a file), its kind and the keys (-v keys="name:s name:n ...") TAB
 #            separated
 #   compact  the value without white space
-#   answer   Mikud's answer next to its HTTP status (-v status=...): {"status":..., ...the answer's fields} when it
+#   answer   Adiutor's answer next to its HTTP status (-v status=...): {"status":..., ...the answer's fields} when it
 #            holds data, else {"status":..., "data": <answer or null>}
 # shellcheck disable=SC2016 # awk's own fields
 JSON_AWK='
@@ -441,7 +441,7 @@ plain_ok() {
   return 0
 }
 
-# num VALUE: _n, a stored number as mikud.mjs keeps it (a whole number, 0 when it is none or below 0).
+# num VALUE: _n, a stored number as adiutor.mjs keeps it (a whole number, 0 when it is none or below 0).
 num() {
   _n=$1
   case $_n in *.*) _n=${_n%%.*} ;; esac
@@ -558,7 +558,7 @@ parse_args() {
       --wait) OPT_WAIT=1 ;;
       --clear-left) OPT_CLEAR=1 ;;
       --*)
-        raise bad_option "Unknown option $pa. Run: mikud help"
+        raise bad_option "Unknown option $pa. Run: adiutor help"
         return
         ;;
       *)
@@ -580,8 +580,8 @@ HOST=$(uname -n)
 HOST_LOWER=$(lower "$HOST")
 
 # Where the connection is kept: one folder per computer user, shared by every agent install of that user.
-DIR=${MIKUD_SKILL_HOME:-}
-[ -n "$DIR" ] || DIR="${HOME:-}/.mikud"
+DIR=${ADIUTOR_SKILL_HOME:-}
+[ -n "$DIR" ] || DIR="${HOME:-}/.adiutor"
 case $DIR in /*) ;; *) DIR="$PWD/$DIR" ;; esac
 while :; do
   case $DIR in ?*/) DIR=${DIR%/} ;; *) break ;; esac
@@ -649,15 +649,15 @@ url_parse() {
 origin_of() {
   url_parse "$1"
   if [ "$UP" = bad ]; then
-    raise no_url "That is not an address. Ask the owner for Mikud's address, for example https://mikud.example.com."
+    raise no_url "That is not an address. Ask the owner for Adiutor's address, for example https://adiutor.example.com."
     return
   fi
   if [ "$UP_scheme" != https ] && ! { [ "$UP_scheme" = http ] && { [ "$UP_host" = localhost ] || [ "$UP_host" = 127.0.0.1 ]; }; }; then
-    raise no_url "Mikud's address must start with https:// (http only for localhost or 127.0.0.1)."
+    raise no_url "Adiutor's address must start with https:// (http only for localhost or 127.0.0.1)."
     return
   fi
   if [ "$UP_extra" = 1 ]; then
-    raise no_url "Give Mikud's address alone, for example https://mikud.example.com."
+    raise no_url "Give Adiutor's address alone, for example https://adiutor.example.com."
     return
   fi
   ORIGIN=$UP_origin
@@ -696,7 +696,7 @@ secure_home() {
     return
   fi
   if [ "$ST_UID" != "$MYUID" ]; then
-    insecure "$DIR belongs to another user. Remove it, or set MIKUD_SKILL_HOME to a folder of your own."
+    insecure "$DIR belongs to another user. Remove it, or set ADIUTOR_SKILL_HOME to a folder of your own."
     return
   fi
   case $ST_MODE in
@@ -752,7 +752,7 @@ read_private() {
 }
 
 hook() {
-  eval "hk_at=\${MIKUD_TEST_HOLD_$1:-}"
+  eval "hk_at=\${ADIUTOR_TEST_HOLD_$1:-}"
   [ -n "$hk_at" ] || return 0
   printf '%s' "$$" >"$hk_at.reached"
   hk_i=0
@@ -850,7 +850,7 @@ serialize() {
         ;;
       *)
         if ! plain_ok "$sz_v"; then
-          raise unexpected_answer "Mikud sent a value that cannot be stored ($sz_k)."
+          raise unexpected_answer "Adiutor sent a value that cannot be stored ($sz_k)."
           return
         fi
         SER="$SER$sz_sep\"$sz_k\":\"$sz_v\""
@@ -930,7 +930,7 @@ save_pending() {
   eval "${2}found=1"
 }
 
-# The left record: what the command left on Mikud, with non-secret fields only. LEFT holds its rows.
+# The left record: what the command left on Adiutor, with non-secret fields only. LEFT holds its rows.
 
 read_left() {
   LEFT=""
@@ -949,7 +949,7 @@ write_left() {
     return
   fi
   if ! wl_text=$(printf '%s\n' "$1" | util left-write); then
-    raise unexpected_answer "Mikud sent a value that cannot be stored ($wl_text)."
+    raise unexpected_answer "Adiutor sent a value that cannot be stored ($wl_text)."
     return
   fi
   write_private "$LEFT_FILE" "$wl_text$NL"
@@ -976,7 +976,7 @@ prune_left() {
   [ "$pl_rows" = "$LEFT" ] || write_left "$pl_rows"
 }
 
-# What the command left on Mikud, for an answer; [] when it cannot be read. Runs in a subshell: $(left_now).
+# What the command left on Adiutor, for an answer; [] when it cannot be read. Runs in a subshell: $(left_now).
 left_now() {
   if read_left; then
     if ! read_connection LN_ || [ "$LN_found" != 1 ]; then LN_origin="" LN_keyName=""; fi
@@ -1122,15 +1122,15 @@ acquire() {
 
 # lock_busy: the answer once the wait for the lock ended; VERDICT is the verdict on the lock as last read.
 lock_busy() {
-  lb_hand="Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again."
+  lb_hand="Nothing was sent. If no adiutor command runs on this computer, remove that file by hand and run the command again."
   if [ -e "$BREAKER" ] || [ -L "$BREAKER" ]; then
-    raise busy "Another mikud command may be removing a lock, or it stopped while doing so and left $BREAKER. $lb_hand"
+    raise busy "Another adiutor command may be removing a lock, or it stopped while doing so and left $BREAKER. $lb_hand"
   elif [ "$VERDICT" = unknown ]; then
-    raise busy "Another mikud command may hold the lock $LOCK, and this command cannot tell whether it still runs. $lb_hand"
+    raise busy "Another adiutor command may hold the lock $LOCK, and this command cannot tell whether it still runs. $lb_hand"
   elif [ "$VERDICT" = gone ]; then
-    raise busy "The lock $LOCK was left by a mikud command that has ended, and this command cannot remove it. $lb_hand"
+    raise busy "The lock $LOCK was left by an adiutor command that has ended, and this command cannot remove it. $lb_hand"
   else
-    raise busy "Another mikud command is using the connection. Nothing was sent; run it again."
+    raise busy "Another adiutor command is using the connection. Nothing was sent; run it again."
   fi
 }
 
@@ -1176,7 +1176,7 @@ with_lock() {
 # Before a request that spends a one-time secret, and before every change to a file: the lock must be this command's.
 assert_mine() {
   mine && return 0
-  raise busy "Another mikud command took over the connection. Run it again."
+  raise busy "Another adiutor command took over the connection. Run it again."
 }
 
 # sweep: removes the temporary files of write_private that a stopped command left behind (they may hold a secret).
@@ -1234,7 +1234,7 @@ request() {
     return 1
   fi
   case $STATUS in 3??)
-    raise unreachable "$1 answered with a redirect ($STATUS), which the command does not follow. Check Mikud's address."
+    raise unreachable "$1 answered with a redirect ($STATUS), which the command does not follow. Check Adiutor's address."
     return
     ;;
   esac
@@ -1262,7 +1262,7 @@ qq() {
   QQ="$QQ$qq_s"
 }
 
-# http_fail WHAT: a refusal: Mikud's {error: {code, message}} (or Better Auth's code), carried in `body`.
+# http_fail WHAT: a refusal: Adiutor's {error: {code, message}} (or Better Auth's code), carried in `body`.
 http_fail() {
   parse_answer
   hf_body=""
@@ -1281,12 +1281,12 @@ http_fail() {
   raise "http_$STATUS" "$1 failed ($STATUS${hf_detail:+: $hf_detail})." "$STATUS" "$hf_body"
 }
 
-UA='user-agent = "mikud-connect"'
+UA='user-agent = "adiutor-connect"'
 
 # Connecting
 
 key_name() {
-  kn_raw=${MIKUD_AGENT_NAME:-}
+  kn_raw=${ADIUTOR_AGENT_NAME:-}
   [ -n "$kn_raw" ] || kn_raw=$HOST
   printf 'skill:%s:%s' "$(printf '%s' "$kn_raw" | util keyname)" "$(rand 4)"
 }
@@ -1299,7 +1299,7 @@ grouped() {
 pending_answer() {
   eval "pa_o=\$${1}origin pa_l=\$${1}link pa_c=\$${1}userCode pa_x=\$${1}codeExpiresAt"
   pa_o=$(esc "$pa_o")
-  RESULT="\"status\":\"pending\",\"origin\":\"$pa_o\",\"link\":\"$(esc "$pa_l")\",\"code\":\"$(esc "$(grouped "$pa_c")")\",\"expiresAt\":\"$(iso "$pa_x")\",\"next\":\"mikud connect --wait --url $pa_o\""
+  RESULT="\"status\":\"pending\",\"origin\":\"$pa_o\",\"link\":\"$(esc "$pa_l")\",\"code\":\"$(esc "$(grouped "$pa_c")")\",\"expiresAt\":\"$(iso "$pa_x")\",\"next\":\"adiutor connect --wait --url $pa_o\""
 }
 
 # connected_answer ORIGIN KEYNAME EXPIRESAT: RESULT.
@@ -1309,14 +1309,14 @@ connected_answer() {
 
 ckn() { if [ "$C_found" = 1 ]; then printf '%s' "$C_keyName"; fi; }
 
-# attempt_warnings PREFIX CONNKEYNAME: WARN, what may be left on Mikud if this attempt were removed now; nothing for a
+# attempt_warnings PREFIX CONNKEYNAME: WARN, what may be left on Adiutor if this attempt were removed now; nothing for a
 # completed connect.
 attempt_warnings() {
   eval "aw_ph=\$${1}phase aw_pf=\$${1}pollInFlight aw_un=\$${1}uncertain aw_so=\$${1}sessionOpen aw_ks=\$${1}keySaved aw_kn=\$${1}keyName aw_nk=\$${1}noKey"
   WARN=""
   if [ "$aw_ph" = creating_key ]; then
     # The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts. A create
-    # that Mikud refused, or that was never sent, made no key.
+    # that Adiutor refused, or that was never sent, made no key.
     if [ "$aw_ks" = 0 ] && [ "$aw_nk" = 0 ] && { [ -z "$2" ] || [ "$2" != "$aw_kn" ]; }; then WARN=key_unknown; fi
     [ "$aw_so" = 0 ] || WARN="${WARN:+$WARN }session_unknown"
   elif [ "$aw_pf" != 0 ] || [ "$aw_un" != 0 ] || [ "$aw_so" != 0 ]; then
@@ -1324,7 +1324,7 @@ attempt_warnings() {
   fi
 }
 
-# remove_attempt PREFIX CONNKEYNAME [SEEN]: removes an attempt, after writing what it may have left on Mikud. Under the
+# remove_attempt PREFIX CONNKEYNAME [SEEN]: removes an attempt, after writing what it may have left on Adiutor. Under the
 # lock; the file is removed only while it is exactly as this command last read or wrote it (SEEN, PREFIX by default).
 # WARN says what that was.
 remove_attempt() {
@@ -1352,7 +1352,7 @@ unknown_fail() {
     return
     ;;
   esac
-  raise session_unknown "The connection to $uf_o did not finish, and the command cannot tell what Mikud did. $SESSION_TEXT"
+  raise session_unknown "The connection to $uf_o did not finish, and the command cannot tell what Adiutor did. $SESSION_TEXT"
 }
 
 # settle: an attempt a lock holder finds in creating_key (P_) belongs to a run that is gone (the lock is held through
@@ -1412,7 +1412,7 @@ connect_locked() {
     cl_origin=$cl_found_origin
   fi
   if [ -z "$cl_origin" ]; then
-    raise no_url "No Mikud address is known. Ask the owner for it, then run: mikud connect --url <address>"
+    raise no_url "No Adiutor address is known. Ask the owner for it, then run: adiutor connect --url <address>"
     return
   fi
   # The open code again, unless asked for a new one (--replace: the link did not work for the owner).
@@ -1422,12 +1422,12 @@ connect_locked() {
     return 0
   fi
   if [ "$C_found" = 1 ] && [ "$OPT_REPLACE" = 0 ]; then
-    raise already_connected "Already connected to $C_origin with the key \"$C_keyName\", until $C_expiresAt. To connect again, run: mikud connect --replace"
+    raise already_connected "Already connected to $C_origin with the key \"$C_keyName\", until $C_expiresAt. To connect again, run: adiutor connect --replace"
     return
   fi
   request "$cl_origin" POST /api/auth/device/code "$UA$NL$(json_settings "{\"client_id\":\"$CLIENT_ID\"}")" || return
   if [ "$STATUS" != 200 ]; then
-    http_fail "Asking Mikud for a code"
+    http_fail "Asking Adiutor for a code"
     return
   fi
   parse_answer
@@ -1440,12 +1440,12 @@ connect_locked() {
   cl_ucok=0
   case $cl_uc in "" | *[!$UPPER$LOWER$DIGIT-]*) ;; *) [ ${#cl_uc} -lt 4 ] || [ ${#cl_uc} -gt 20 ] || cl_ucok=1 ;; esac
   if ! secret_ok "$cl_dc" || [ "$cl_ucok" = 0 ] || ! plain_ok "$cl_link"; then
-    raise unexpected_answer "Mikud answered without a usable code. Nothing was stored."
+    raise unexpected_answer "Adiutor answered without a usable code. Nothing was stored."
     return
   fi
   url_parse "$cl_link"
   if [ "$UP" = bad ] || [ "$UP_origin" != "$cl_origin" ]; then
-    raise unexpected_answer "Mikud's approval link is not on $cl_origin. Nothing was stored."
+    raise unexpected_answer "Adiutor's approval link is not on $cl_origin. Nothing was stored."
     return
   fi
   # A pending attempt is replaced only now, once the new code exists; its link stops being used.
@@ -1474,7 +1474,7 @@ cmd_wait() {
     read_pending P_ || return
     WORG=$P_origin
     if [ -z "$WORG" ]; then
-      raise not_connected "No connection is being made. Run: mikud connect --url <address>"
+      raise not_connected "No connection is being made. Run: adiutor connect --url <address>"
       return
     fi
   fi
@@ -1490,7 +1490,7 @@ cmd_wait() {
       return 0
     fi
     if [ $(($(date +%s) + STEP_WAIT)) -gt "$cw_until" ]; then
-      printf '{"status":"still_waiting","next":"mikud connect --wait --url %s","left":%s}\n' "$(esc "$WORG")" "$(left_now)"
+      printf '{"status":"still_waiting","next":"adiutor connect --wait --url %s","left":%s}\n' "$(esc "$WORG")" "$(left_now)"
       return 0
     fi
     sleep "$STEP_WAIT"
@@ -1527,7 +1527,7 @@ wait_step() {
       raise not_connected "The connection to $WORG was cancelled meanwhile."
       return
     fi
-    raise not_connected "No connection to $WORG is being made. Run: mikud connect --url $WORG"
+    raise not_connected "No connection to $WORG is being made. Run: adiutor connect --url $WORG"
     return
   fi
   # Replaced meanwhile (connect --replace): the new attempt has its own link and code.
@@ -1546,7 +1546,7 @@ wait_step() {
       unknown_fail "$WARN" P_
       return
     fi
-    raise expired "The code expired before it was approved. Run: mikud connect --url $WORG"
+    raise expired "The code expired before it was approved. Run: adiutor connect --url $WORG"
     return
   fi
   if [ "$P_nextPollAt" -gt "$ws_t" ]; then
@@ -1591,7 +1591,7 @@ data-binary = \"$QQ\""; then
       TOKEN=""
       P_pollInFlight=0 P_uncertain=1 P_nextPollAt=$(($(now) + P_interval))
       save_pending P_ SN_ || return
-      raise unexpected_answer "Mikud answered the approval with a token this command cannot use. $SESSION_TEXT"
+      raise unexpected_answer "Adiutor answered the approval with a token this command cannot use. $SESSION_TEXT"
       return
     fi
     redeem
@@ -1623,7 +1623,7 @@ data-binary = \"$QQ\""; then
         raise denied "The owner did not approve the connection. Nothing was created."
         return
       fi
-      raise expired "The code is no longer valid. Run: mikud connect --url $WORG"
+      raise expired "The code is no longer valid. Run: adiutor connect --url $WORG"
       return
       ;;
   esac
@@ -1634,7 +1634,7 @@ data-binary = \"$QQ\""; then
   http_fail "Waiting for the approval"
 }
 
-# end_session ORIGIN: ends the approval's session with its own token. ENDED 1 only when Mikud confirmed it. Sent even
+# end_session ORIGIN: ends the approval's session with its own token. ENDED 1 only when Adiutor confirmed it. Sent even
 # after the lock was lost: no other command knows this token, and a session left open is the worse outcome.
 end_session() {
   ENDED=0
@@ -1663,7 +1663,7 @@ redeem() {
     err_save F
     end_session "$rd_origin"
     if [ "$F_code" = changed ]; then
-      raise cannot_save "The connection changed while this command ran. Run: mikud status"
+      raise cannot_save "The connection changed while this command ran. Run: adiutor status"
       return
     fi
     err_restore F
@@ -1677,7 +1677,7 @@ redeem() {
   fi
   end_session "$rd_origin"
   rd_ended=$ENDED
-  # A step from here that fails keeps the attempt, and with it what the attempt may have left on Mikud; it never
+  # A step from here that fails keeps the attempt, and with it what the attempt may have left on Adiutor; it never
   # replaces the answer.
   if [ "$rd_ended" = 1 ]; then
     rec_copy SN_ L_ "$PEND_FIELDS"
@@ -1704,11 +1704,11 @@ redeem() {
   fi
   connected_answer "$CS_origin" "$CS_keyName" "$CS_expiresAt"
   if [ "$rd_ended" != 1 ]; then
-    RESULT="$RESULT,\"warning\":\"Could not confirm that the approval's temporary session ended. End the session \\\"mikud connect (agent approval)\\\" on the Account page in Mikud.\""
+    RESULT="$RESULT,\"warning\":\"Could not confirm that the approval's temporary session ended. End the session \\\"adiutor connect (agent approval)\\\" on the Account page in Adiutor.\""
   fi
 }
 
-# not_saved: with the failure in E_*, records the new key as left on Mikud, or says so in the message.
+# not_saved: with the failure in E_*, records the new key as left on Adiutor, or says so in the message.
 not_saved() {
   err_save H
   if add_left "$cs_o$TAB$cs_n$TAB$cs_x${TAB}not_saved"; then
@@ -1720,7 +1720,7 @@ not_saved() {
   return 1
 }
 
-# no_key: with the failure in E_*, records that Mikud refused the key or the request never left, so no key exists
+# no_key: with the failure in E_*, records that Adiutor refused the key or the request never left, so no key exists
 # (no key_unknown follows).
 no_key() {
   err_save H
@@ -1732,7 +1732,7 @@ no_key() {
 }
 
 key_unknown_fail() {
-  raise key_unknown "Mikud's answer to creating the key was lost, so a key named \"$cs_n\" may exist on $cs_o: delete it in Settings, Agent access. Then run: mikud connect --url $cs_o"
+  raise key_unknown "Adiutor's answer to creating the key was lost, so a key named \"$cs_n\" may exist on $cs_o: delete it in Settings, Agent access. Then run: adiutor connect --url $cs_o"
 }
 
 # create_and_save: CS_origin, CS_keyName and CS_expiresAt of the saved connection.
@@ -1783,14 +1783,14 @@ $(json_settings "{\"name\":\"$cs_n\",\"expiresIn\":$((R_days * 86400))}")"; then
   fi
   if ! rec_same Q_ SN_ "$PEND_FIELDS" || ! rec_same V_ C_ "$CONN_FIELDS"; then
     cs_key="" V_key=""
-    raise cannot_save "Another mikud command disconnected or started a new connection while this one waited, so the new key was not saved. Run: mikud status"
+    raise cannot_save "Another adiutor command disconnected or started a new connection while this one waited, so the new key was not saved. Run: adiutor status"
     not_saved
     return
   fi
   V_key=""
   W_v=1 W_origin=$cs_o W_key=$cs_key W_keyName=$cs_n W_expiresAt=$cs_x
   cs_key=""
-  # The key being replaced stays on Mikud: recorded before the connection that names it is replaced.
+  # The key being replaced stays on Adiutor: recorded before the connection that names it is replaced.
   cs_ok=1
   if [ "$C_found" = 1 ] && [ "$C_keyName" != "$cs_n" ]; then
     if add_left "$C_origin$TAB$C_keyName$TAB$C_expiresAt${TAB}replaced"; then hook RECORDED; else cs_ok=0; fi
@@ -1879,7 +1879,7 @@ disconnect_locked() {
     RESULT='"status":"not_connected"'
     return 0
   fi
-  # The key stays on Mikud (a key cannot delete itself): recorded before the connection is removed.
+  # The key stays on Adiutor (a key cannot delete itself): recorded before the connection is removed.
   add_left "$C_origin$TAB$C_keyName$TAB$C_expiresAt${TAB}disconnected" || return
   hook RECORDED
   expect_connection || return
@@ -1973,7 +1973,7 @@ body_of() {
 label_of() {
   LABEL=""
   if [ "$OPT_AS_SET" = 1 ]; then LABEL=$OPT_AS; else
-    LABEL=${MIKUD_AGENT_LABEL:-}
+    LABEL=${ADIUTOR_AGENT_LABEL:-}
     [ -n "$LABEL" ] || return 0
   fi
   case $LABEL in "" | *[!$UPPER$LOWER$DIGIT$LABEL_CH]*) lo_ok=0 ;; *) lo_ok=1 ;; esac
@@ -1983,7 +1983,7 @@ label_of() {
   fi
 }
 
-# A key Mikud no longer accepts is forgotten, while it is still the saved one.
+# A key Adiutor no longer accepts is forgotten, while it is still the saved one.
 forget_locked() {
   read_connection K_ || return
   if rec_same K_ C_ "$CONN_FIELDS"; then remove_file "$CONNECTION"; fi
@@ -1991,7 +1991,7 @@ forget_locked() {
 
 cmd_api() {
   if [ "$POS_COUNT" != 1 ]; then
-    raise bad_path "Give one path: mikud $(lower "$1") '<path>'"
+    raise bad_path "Give one path: adiutor $(lower "$1") '<path>'"
     return
   fi
   api_path "$1" "$POS1" || return
@@ -1999,7 +1999,7 @@ cmd_api() {
   body_of "$1" || return
   read_connection C_ || return
   if [ "$C_found" != 1 ]; then
-    raise not_connected "Not connected to Mikud. Run: mikud connect"
+    raise not_connected "Not connected to Adiutor. Run: adiutor connect"
     return
   fi
   if [ -n "$OPT_URL" ]; then
@@ -2014,7 +2014,7 @@ cmd_api() {
     return
   fi
   ca_set="header = \"Authorization: Bearer $C_key\""
-  [ -z "$LABEL" ] || ca_set="$ca_set${NL}header = \"X-Mikud-Agent: $LABEL\""
+  [ -z "$LABEL" ] || ca_set="$ca_set${NL}header = \"X-Adiutor-Agent: $LABEL\""
   [ "$1" = GET ] || ca_set="$ca_set$NL$(json_settings "$BODYTEXT")"
   ca_lost="The $1 was sent, but its answer was lost"
   ca_then=": it may still be written. Read the state once before doing anything else, and never send it again blindly."
@@ -2026,7 +2026,7 @@ cmd_api() {
   ca_set=""
   if [ "$STATUS" = 401 ]; then
     with_lock forget_locked || :
-    raise connection_ended "Mikud no longer accepts this connection's key (it was disconnected in Settings or it expired). Run: mikud connect --url $C_origin"
+    raise connection_ended "Adiutor no longer accepts this connection's key (it was disconnected in Settings or it expired). Run: adiutor connect --url $C_origin"
     return
   fi
   if [ "$1" != GET ]; then
@@ -2037,7 +2037,7 @@ cmd_api() {
     esac
   fi
   case $STATUS in 2??)
-    # Mikud answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
+    # Adiutor answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
     printf '%s' "$BODY" | json answer -v status="$STATUS"
     return 0
     ;;
@@ -2056,14 +2056,14 @@ run_command() {
     get) need_curl && cmd_api GET ;;
     post) need_curl && cmd_api POST ;;
     patch) need_curl && cmd_api PATCH ;;
-    *) raise unknown_command "Unknown command \"$COMMAND\". Run: mikud help" ;;
+    *) raise unknown_command "Unknown command \"$COMMAND\". Run: adiutor help" ;;
   esac
 }
 
 run_command && exit 0
 # The files changed under a lock this command no longer held: nothing more was done.
-if [ "$E_CODE" = changed ]; then E_CODE=busy E_MSG="Another mikud command changed the connection meanwhile. Run: mikud status"; fi
-# What the command left on Mikud travels with every answer about the connection.
+if [ "$E_CODE" = changed ]; then E_CODE=busy E_MSG="Another adiutor command changed the connection meanwhile. Run: adiutor status"; fi
+# What the command left on Adiutor travels with every answer about the connection.
 case $COMMAND in
   connect | disconnect | status) print_error 1 ;;
   *) print_error 0 ;;

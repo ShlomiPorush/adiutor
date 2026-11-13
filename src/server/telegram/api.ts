@@ -60,7 +60,7 @@ export type InlineKeyboard = { inline_keyboard: { text: string; callback_data: s
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>
 
-/** The few Bot API methods Mikud uses. Messages use HTML parse mode and never show a link preview. */
+/** The few Bot API methods Adiutor uses. Messages use HTML parse mode and never show a link preview. */
 export class BotApi {
   private readonly base: string
 

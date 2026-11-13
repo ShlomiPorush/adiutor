@@ -102,7 +102,7 @@ describe("POST /telegram/test-message", () => {
     const res = await post(build(), "owner")
     expect(res.status).toBe(409)
     expect(res.json.error.code).toBe("conflict")
-    expect(res.json.error.message).toContain("MIKUD_TELEGRAM_BOT_TOKEN")
+    expect(res.json.error.message).toContain("ADIUTOR_TELEGRAM_BOT_TOKEN")
     expect(standIn.sent).toEqual([])
   })
 
