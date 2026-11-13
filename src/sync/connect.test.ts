@@ -370,7 +370,9 @@ describe("connect: Claude Code", () => {
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
     expect(failed.ran.map((r) => r.args[1])).toEqual(["add"])
     const text = d.lines.join("\n")
-    expect(text).toContain("Could not add Adiutor to Claude Code: claude mcp add exit code 1: bad header Authorization:")
+    expect(text).toContain(
+      "Could not add Adiutor to Claude Code: claude mcp add exit code 1: bad header Authorization:",
+    )
     expect(text).toContain("[redacted]")
     expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
 

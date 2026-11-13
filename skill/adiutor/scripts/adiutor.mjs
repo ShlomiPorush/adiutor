@@ -240,7 +240,9 @@ function secureHome(ctx, create) {
     }
   } else {
     if (st.uid !== process.getuid())
-      throw insecure(`${ctx.dir} belongs to another user. Remove it, or set ADIUTOR_SKILL_HOME to a folder of your own.`)
+      throw insecure(
+        `${ctx.dir} belongs to another user. Remove it, or set ADIUTOR_SKILL_HOME to a folder of your own.`,
+      )
     if ((st.mode & 0o777) !== 0o700) throw insecure(`Others can open ${ctx.dir}. Run: chmod 700 '${ctx.dir}'`)
   }
   homeChecked = true
@@ -1448,7 +1450,8 @@ async function forget(ctx, conn) {
 }
 
 async function api(ctx, method, opts) {
-  if (opts.positional.length !== 1) throw new Fail("bad_path", `Give one path: adiutor ${method.toLowerCase()} '<path>'`)
+  if (opts.positional.length !== 1)
+    throw new Fail("bad_path", `Give one path: adiutor ${method.toLowerCase()} '<path>'`)
   const target = apiPath(method, opts.positional[0])
   const label = labelOf(opts)
   const body = bodyOf(method, opts)

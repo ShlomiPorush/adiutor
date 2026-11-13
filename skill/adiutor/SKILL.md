@@ -74,8 +74,8 @@ done, run `adiutor status --clear-left`.
 
 ## The calls
 
-| MCP tool               | Command                                                                | Body or query                                                                                                    |
-| ---------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| MCP tool                 | Command                                                                | Body or query                                                                                                    |
+| ------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `adiutor_start_thread`   | `post 'threads/start'`                                                 | `{"threadId", "parentThreadId" (null for a top-level thread), "title", "projectId"?, "t3ProjectId"?, "itemId"?}` |
 | `adiutor_find_items`     | `get 'items?q=<text>&projectId=<id>&status=todo,in_progress&limit=50'` | also `inbox=true`, `type`, `threadId`, `includeClosed=true`                                                      |
 | `adiutor_get_item`       | `get 'items/<id>'`                                                     | the item, its project, threads, comments and history                                                             |

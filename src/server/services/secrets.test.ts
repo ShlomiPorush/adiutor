@@ -139,7 +139,7 @@ describe("secret scanner", () => {
 describe("Adiutor's own agent keys", () => {
   it("refuses an adt_ key, also inside a sentence, and lets the prefix alone pass", () => {
     const scanner = createSecretScanner()
-    const key = `${"mkd"}_${"AbCdEfGh".repeat(8)}`
+    const key = `${"adt"}_${"AbCdEfGh".repeat(8)}`
     expect(scanner.find(`use ${key} for the sync`)).toBe("agent_key")
     expect(scanner.redact(`key=${key}`)).not.toContain(key)
     expect(scanner.find("keys start with adt_ and 64 letters")).toBeNull()

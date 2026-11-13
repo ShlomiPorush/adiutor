@@ -72,7 +72,9 @@ describe("loadConfig", () => {
     expect(refusal({ ...valid, ADIUTOR_AUTH_SECRET: legacy, ADIUTOR_SETTINGS_KEYS: `1:${legacy}` })).toContain(
       "must differ from every auth secret",
     )
-    expect(refusal({ ...valid, ADIUTOR_AUTH_SECRET: "short" })).toContain("ADIUTOR_AUTH_SECRET must be at least 32 bytes")
+    expect(refusal({ ...valid, ADIUTOR_AUTH_SECRET: "short" })).toContain(
+      "ADIUTOR_AUTH_SECRET must be at least 32 bytes",
+    )
   })
 
   it("refuses the variables Better Auth would read on its own", () => {
@@ -116,7 +118,9 @@ describe("loadConfig", () => {
     const botToken = testBotToken()
 
     it("sets nothing without the variables, or with empty ones", () => {
-      expect(loadConfig({ ...valid, ADIUTOR_TELEGRAM_BOT_TOKEN: "", ADIUTOR_TELEGRAM_CHAT_ID: " " }).overrides).toEqual({})
+      expect(loadConfig({ ...valid, ADIUTOR_TELEGRAM_BOT_TOKEN: "", ADIUTOR_TELEGRAM_CHAT_ID: " " }).overrides).toEqual(
+        {},
+      )
     })
 
     it("reads each Telegram field on its own: one without the other is fine", () => {

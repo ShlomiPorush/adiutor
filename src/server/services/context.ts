@@ -80,9 +80,9 @@ export async function writeAudit(ctx: Ctx, tx: DbOrTx, by: By, entry: AuditEntry
  * A transaction then never waits for this lock while it holds a row lock, so these transactions cannot
  * deadlock with each other, and a check of a suppression or a link under the lock stays true until
  * commit. Adiutor has one owner and a low write volume: running these transactions one at a time costs
- * nothing noticeable. The value spells "mikd" in ASCII and fits in 31 bits.
+ * nothing noticeable. The value spells "adtr" in ASCII and fits in 31 bits.
  */
-export const LINK_STRUCTURE_LOCK_KEY = 0x6d696b64
+export const LINK_STRUCTURE_LOCK_KEY = 0x61647472
 
 /** Takes the link structure lock (see LINK_STRUCTURE_LOCK_KEY); released at commit or rollback. */
 export async function lockLinkStructure(tx: Tx): Promise<void> {

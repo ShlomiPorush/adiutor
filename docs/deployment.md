@@ -75,9 +75,9 @@ Adiutor must be reachable only over your NetBird network. The shipped `docker-co
 | Label                                              | Shipped value  | Change it to                                                                           |
 | -------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------- |
 | `traefik.docker.network` and the `networks:` entry | `traefik`      | The Docker network your reverse proxy uses                                             |
-| `traefik.http.routers.adiutor.entrypoints`           | `https`        | Your proxy's entry point that only NetBird can reach                                   |
-| `traefik.http.routers.adiutor.middlewares`           | `default@file` | Your middleware chain (headers, and an allow list of NetBird addresses if you use one) |
-| `traefik.http.routers.adiutor.tls`                   | `true`         | Add `traefik.http.routers.adiutor.tls.certresolver=<resolver>` if your proxy needs it    |
+| `traefik.http.routers.adiutor.entrypoints`         | `https`        | Your proxy's entry point that only NetBird can reach                                   |
+| `traefik.http.routers.adiutor.middlewares`         | `default@file` | Your middleware chain (headers, and an allow list of NetBird addresses if you use one) |
+| `traefik.http.routers.adiutor.tls`                 | `true`         | Add `traefik.http.routers.adiutor.tls.certresolver=<resolver>` if your proxy needs it  |
 
 1. Put a NetBird private service in front of the proxy: a NetBird network resource (or route) for the proxy host, with an access policy that allows only your own peers.
 2. Make `DOMAIN` resolve only inside NetBird, for example with a NetBird DNS zone or a private DNS record that points at the proxy's NetBird address.

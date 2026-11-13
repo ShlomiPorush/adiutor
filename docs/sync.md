@@ -18,11 +18,11 @@ Security values follow the snapshot honestly: an enabled family sends its alert 
 
 Read from the environment, or from a `--env` file of `KEY=VALUE` lines, which wins over the environment:
 
-| Name                 | Purpose                                                                                                                                                                                        |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ADIUTOR_URL`          | Base URL of the Adiutor server, for example `https://adiutor.example.com`                                                                                                                          |
+| Name                   | Purpose                                                                                                                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ADIUTOR_URL`          | Base URL of the Adiutor server, for example `https://adiutor.example.com`                                                                                                                      |
 | `ADIUTOR_AGENT_TOKEN`  | The sync's agent key (`adt_...`), written by `connect --for sync`. Never accepted on the command line, never printed (any echo is replaced with `[redacted]`), never passed to a child process |
-| `T3CODE_CLI_PATH`    | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                                                                                                          |
+| `T3CODE_CLI_PATH`      | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                                                                                                          |
 | `ADIUTOR_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it                                                                                                                                             |
 
 Keep the env file outside every repository: `connect` writes `%LOCALAPPDATA%\adiutor\sync.env` on Windows and `~/.config/adiutor/sync.env` elsewhere, readable only by the owner.

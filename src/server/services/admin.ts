@@ -54,9 +54,13 @@ function auditable(row: SettingsRow) {
 }
 
 const locked = (variable: string) =>
-  new AppError("setting_locked", `The environment variable ${variable} sets this. Change it there and restart Adiutor.`, {
-    variable,
-  })
+  new AppError(
+    "setting_locked",
+    `The environment variable ${variable} sets this. Change it there and restart Adiutor.`,
+    {
+      variable,
+    },
+  )
 
 export async function updateSettings(ctx: Ctx, by: By, patch: SettingsPatch, env?: SettingsEnv): Promise<SettingsRow> {
   requireOwner(by, "change settings")
