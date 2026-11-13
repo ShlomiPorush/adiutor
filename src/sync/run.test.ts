@@ -40,7 +40,8 @@ beforeAll(async () => {
         body: JSON.parse(text),
       }
       received.push(request)
-      const reply = replies.get(req.url ?? "")?.(request) ?? { status: 200, body: { ok: true } }
+      const handler = replies.get(req.url ?? "")
+      const reply = typeof handler === "function" ? handler(request) : { status: 200, body: { ok: true } }
       res.writeHead(reply.status, { "content-type": "application/json" })
       res.end(JSON.stringify(reply.body))
     })
