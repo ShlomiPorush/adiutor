@@ -30,12 +30,15 @@ export function usePageQuery<T>(options: {
   enabled?: boolean
   /** Keeps showing the previous key's data while a new key loads (a page that changes its key). */
   keepPrevious?: boolean
+  /** Reads from the server on every mount, even while the cached data is fresh (TanStack's refetchOnMount). */
+  freshOnMount?: boolean
 }): UseQueryResult<T> {
   return useQuery({
     queryKey: options.queryKey,
     queryFn: options.queryFn,
     enabled: options.enabled,
     placeholderData: options.keepPrevious ? keepPreviousData : undefined,
+    refetchOnMount: options.freshOnMount ? "always" : undefined,
     refetchInterval: options.every,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
