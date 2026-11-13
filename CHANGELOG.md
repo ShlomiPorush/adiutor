@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-13
+
 ### Added
 
 - **Server**: a TypeScript server on Node.js 26 that refuses to start without a database URL, a public URL and its versioned keys (`ADIUTOR_AUTH_SECRETS` for sign-in, `ADIUTOR_SETTINGS_KEYS` for secrets stored in Settings), or with a `BETTER_AUTH_*` variable set. It applies its database migrations on start, logs a failed migration with PostgreSQL's message, and answers `/healthz` when the database answers. Needs PostgreSQL 17 or newer: every transaction ends after 30 seconds (`transaction_timeout`). Unexpected errors are logged as their class, SQLSTATE and error code only, never with query text or parameters.
