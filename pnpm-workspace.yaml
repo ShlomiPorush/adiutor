@@ -3,3 +3,7 @@
 # Packages allowed to run install scripts. esbuild verifies its platform binary.
 allowBuilds:
   esbuild: true
+
+# drizzle-kit 0.31 pulls esbuild 0.18 through @esbuild-kit/core-utils; 0.25 fixes GHSA-67mh-4wv8-2f99 (its serve).
+overrides:
+  "@esbuild-kit/core-utils>esbuild": "0.25.12"
