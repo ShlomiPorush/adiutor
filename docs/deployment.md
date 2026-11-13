@@ -1,6 +1,6 @@
 # Deploying Mikud
 
-Status: written ahead of the launch; nothing here has been run against a production server. The board UI and the Telegram bot are on `main` (rows 7 and 8 of the [foundation plan](project-foundation.md)); the dry run on the development stack comes first (step 7).
+Status: written ahead of the launch; nothing here has been run against a production server. The board UI and the Telegram bot are on `main` (rows 7 and 8 of the [foundation plan](project-foundation.md)).
 
 These notes are for the owner, who deploys production himself. Agents never deploy. Replace every example value (`mikud.example.com`, `db.example.com`, `<...>`) with your own; keep the real values in `.env` on the server and in your private notes, never in the repository.
 
@@ -29,7 +29,9 @@ These notes are for the owner, who deploys production himself. Agents never depl
 
    The role owns its database, so the migrations can create their tables. It needs no other rights.
 
-3. Allow the role to connect from the Docker host in your server's `pg_hba.conf`, and only from there.
+3. In your server's `pg_hba.conf`, allow the role to connect to its database only from where `mikud` connects (see "Reaching PostgreSQL" below):
+   - **PostgreSQL on another host:** the Docker host's address.
+   - **PostgreSQL in a container on the same Docker host:** the subnet of the Docker network the two containers share (`docker network inspect <network>`).
 
 4. Write the connection URL for `.env`:
 
@@ -37,7 +39,9 @@ These notes are for the owner, who deploys production himself. Agents never depl
    DATABASE_URL=postgres://mikud:<database password>@db.example.com:5432/mikud
    ```
 
-   When the database is on another host, add `?sslmode=verify-full` (or `?sslmode=require` when the server's certificate cannot be verified). When PostgreSQL runs in a container on the same Docker host, use its container name as the host and attach `mikud` to that container's network (step 3).
+   **Reaching PostgreSQL.** The shipped `docker-compose.yml` puts `mikud` only on the `traefik` network:
+   - **PostgreSQL on another host:** use that host's name in the URL and add `?sslmode=verify-full` (or `?sslmode=require` when the server's certificate cannot be verified). Its firewall and `pg_hba.conf` must let the Docker host in.
+   - **PostgreSQL in a container on the same Docker host:** use its container name as the host. `mikud` must share a Docker network with that container: in `docker-compose.yml`, add that network under the service's `networks:` and declare it at the end of the file as `external: true`, next to `traefik`. Allow that network's subnet in `pg_hba.conf` (item 3). Every container on that network can then reach `mikud:8080` directly too (see section 3, "The client address and the rate limits").
 
 ## 2. Write `.env`
 
@@ -50,14 +54,16 @@ These notes are for the owner, who deploys production himself. Agents never depl
    openssl rand -hex 32   # MIKUD_SETTINGS_KEYS, written as 1:<value>
    ```
 
+   Generate both keys and the database password (step 1) new, on the server, with these `openssl rand` commands. Never reuse a value from the development stack's `stack.env` or `.env.dev` in production: the first launch starts with a new, empty database, so nothing needs the development keys.
+
 4. Fill in every value; `.env.example` explains each one:
    - `VERSION`: the release to run, for example `0.1.0`.
    - `DOMAIN`: the host name you open, for example `mikud.example.com`.
    - `DATABASE_URL`: from step 1.
-   - `MIKUD_PUBLIC_URL`: `https://` and `DOMAIN`, exactly what the browser's address bar shows. Browser changes whose `Origin` differs are refused, and Telegram links use it.
+   - `MIKUD_PUBLIC_URL`: exactly the origin the browser's address bar shows: `https://` and `DOMAIN`, plus `:<port>` when the proxy's entry point is not on 443. Any difference makes every browser change fail with 403 (invalid origin), sign-in included. Telegram links use it, and the same value goes into every `--url` of `mikud connect` (section 6). Write the full value, for example `https://mikud.example.com`, instead of the example's `https://${DOMAIN}`, and check that the server gets it resolved: `docker compose config` shows the environment the container receives.
    - `MIKUD_AUTH_SECRETS`: `1:<value>` from step 3. Better Auth signs the sign-in cookies and encrypts the TOTP secret and the backup codes with it. To rotate, put a new version first and keep the old one (`2:<new>,1:<old>`): every browser signs in again, and the stored TOTP secret stays readable while the old version is listed.
    - `MIKUD_SETTINGS_KEYS`: `1:<value>` from step 3. It encrypts the secrets you store in Settings (the Telegram bot token), and must differ from the auth secret. Rotate it the same way; a stored value whose version is no longer listed must be entered again in Settings.
-   - `MIKUD_TRUSTED_PROXIES`: the address (or CIDR range) Traefik uses to reach `mikud` on the `traefik` network, for example the network's subnet from `docker network inspect traefik`. Better Auth then reads the client address from `X-Forwarded-For` (step 3).
+   - `MIKUD_TRUSTED_PROXIES`: the address (or CIDR range) Traefik uses to reach `mikud` on the `traefik` network, for example the network's subnet from `docker network inspect traefik`. Better Auth then reads the client address from `X-Forwarded-For` (step 3). Prefer Traefik's own fixed address when you can give it one: the whole subnet trusts every container on that network, and any of them can reach `mikud:8080` directly and forge `X-Forwarded-For`. That weakens only the per-address rate limits; sign-in and agent keys are still required.
    - Keep backups of `.env` with the database backup: with other keys every browser is signed out, the TOTP secret cannot be read, and the stored bot token must be entered again.
 
    Everything else you manage in Mikud itself, in Settings: the Telegram bot token and chat id, sending sign-in codes to Telegram, the private domains of the secret check, the connected agents and how long a browser stays signed in. `MIKUD_TELEGRAM_BOT_TOKEN`, `MIKUD_TELEGRAM_CHAT_ID` and `MIKUD_PRIVATE_DOMAINS` may still be set here: each then overrides its field, and Settings shows that field locked. Leave `TELEGRAM_API_URL` empty. Never set a `BETTER_AUTH_*` variable: the server refuses to start with one, because Better Auth would read it on its own.
@@ -81,30 +87,38 @@ Mikud must be reachable only over your NetBird network. The shipped `docker-comp
 
 **The client address and the rate limits.** Better Auth limits sign-up, sign-in, the two-factor codes and the password change to 5 attempts per 5 minutes per client address. Behind Traefik it takes that address from `X-Forwarded-For`, skipping the proxies in `MIKUD_TRUSTED_PROXIES`. That is safe only under two conditions, which the shipped setup meets; keep them:
 
-- Mikud is reachable only through Traefik: the Compose file publishes no port, and `mikud` is only on the `traefik` network.
+- Mikud is reachable only through Traefik: the Compose file publishes no port, and `mikud` is only on the `traefik` network. A database network added in step 1 lets that network's containers reach `mikud` directly as well.
 - Traefik replaces the forwarding headers clients send: do not set `forwardedHeaders.insecure` or `forwardedHeaders.trustedIPs` on the entry point Mikud uses.
 
 Without `MIKUD_TRUSTED_PROXIES`, every request shares one bucket, which fails safe for one owner. Two-factor also locks sign-in for 15 minutes after 10 wrong codes. Mikud's own limit of 10 failed agent keys a minute counts by connection address.
 
 ## 4. Start and check
 
-1. In the deploy directory:
+1. Make the image pullable. After the first release, the `mikud` package on GHCR is private. Choose one:
+   - Make it public in the package's settings on GitHub (Package settings, Change visibility). GitHub does not let a public package become private again.
+   - Or, on the server, run `docker login ghcr.io` with your GitHub username and a classic personal access token that has only the `read:packages` scope.
+
+2. In the deploy directory:
 
    ```bash
    docker compose pull
    docker compose up -d
    docker compose ps          # mikud: running (healthy) after up to 30 seconds
-   docker compose logs mikud  # migrations applied, then the listening port
+   docker compose logs mikud  # Mikud <version> listening, with the port
    ```
 
-2. From a device on NetBird:
+   The migrations run before that line, which is the only one the server logs at start; there is no line of their own. A failed migration logs `Database migration failed` and the server exits instead of listening.
+
+   Create your account (section 5) right after the container is healthy: until then, anyone on the private network who opens the address could create the owner account.
+
+3. From a device on NetBird:
 
    ```bash
    curl -fsS https://mikud.example.com/healthz
    # {"status":"ok","database":"ok"}
    ```
 
-3. From a device outside NetBird (a phone on mobile data with NetBird off), check that the same URL does not answer.
+4. From a device outside NetBird (a phone on mobile data with NetBird off), check that the same URL does not answer.
 
 `/healthz` answers 503 with `"database":"down"` when PostgreSQL does not answer; Docker then marks the container unhealthy.
 
@@ -118,17 +132,20 @@ The browser signs in with a username, a password and a code from an authenticato
 4. On the phone, with NetBird connected, open the same URL and sign in with the username, the password and a code.
 5. A browser stays signed in while you open Mikud there at least once every 30 days. Settings, General changes that length (1 to 90 days); a shorter value does not shorten browsers signed in already, so choose "Sign out everywhere" after shortening it. The Account page (the account menu, Account) lists the signed-in browsers, changes the password, signs this browser out, signs the others out, signs out everywhere, makes new backup codes, and sets up a new authenticator.
 6. Telegram links open the item after you sign in, when the browser is not signed in.
-7. Settings, Telegram: enter the bot token from BotFather and your chat id (the number of your own chat with the bot), then save. The bot and the morning message start at once, without a restart. "Send sign-in codes to Telegram" is off by default; turned on, it makes your Telegram chat another way in.
+7. Before you enter the real bot token in production, stop the development stack (`scripts/local.sh down` in the Mikud checkout in WSL) and make sure its Settings, Telegram hold no real bot token. Two stacks with one bot take each other's updates, and both send the morning message.
+8. Settings, Telegram: enter the bot token from BotFather and your chat id (the number of your own chat with the bot), then save. The bot and the morning message start at once, without a restart. "Send sign-in codes to Telegram" is off by default; turned on, it makes your Telegram chat another way in.
 
 ## 6. Connect the agents and the reconciler
 
 Every agent and the reconciler get their own key through `mikud connect`, a command of the sync bundle (build it as [sync.md](sync.md) says). You approve each one in the browser on `/connect/device`, signed in with two-factor; Settings, Agent access shows the commands with your address, lists every connected agent with its end date and last request, and disconnects one or all at once. A key keeps working after you sign out.
 
 - **Reconciler:** in the Mikud checkout on your PC, `node dist/sync/mikud-sync.js connect --url https://mikud.example.com --name sync --for sync`. It writes `MIKUD_URL` and `MIKUD_AGENT_TOKEN` into `%LOCALAPPDATA%\mikud\sync.env`, restricted to your Windows user. The T3 scheduled task in [prompts/reconcile.md](../prompts/reconcile.md) runs the sync with that file. After its first run, `GET /api/v1/sync/runs` shows the run's outcome.
-- **Claude Code:** `... connect --url https://mikud.example.com --name claude --for claude` prints a `claude mcp add` command with the key once. Run it, then clear that line from your shell history if others can read it; Claude Code keeps the key in its own configuration.
-- **Codex:** `... connect --url https://mikud.example.com --name codex --for codex` prints the `~/.codex/config.toml` lines (`bearer_token_env_var = "MIKUD_AGENT_KEY"`) and the `setx` command that sets the key for your Windows user, once.
+- **Claude Code:** `... connect --url https://mikud.example.com --name claude --for claude` runs `claude mcp add` itself; Claude Code keeps the key in its own user configuration. Start a new Claude Code session to use it.
+- **Codex:** `... connect --url https://mikud.example.com --name codex --for codex` sets `MIKUD_AGENT_KEY` for your Windows user with `setx`, then runs `codex mcp add`, so Codex's `config.toml` names the variable and never holds the key. Restart Codex from a new terminal.
+- Only when a step fails does `connect` print that step's command or lines, with the key; clear them from your shell history if others can read it. [sync.md](sync.md), "Connecting an agent or the sync", has the details.
+- Always pass `--url` with the value of `MIKUD_PUBLIC_URL`. Without it, `connect` falls back to `MIKUD_URL` from the environment or an existing env file, which may still point at the development stack.
 - `--days` sets how long a key works (1 to 365, default 90). When it ends, run the command again. [agent-instruction.md](agent-instruction.md) has the instruction text for the agents.
-- Mikud never logs a key. A key printed for Claude Code or Codex can stay in your shell history and stays in that client's configuration.
+- Mikud never logs a key. Claude Code keeps its key in its configuration, and Windows keeps Codex's `MIKUD_AGENT_KEY` in your user environment.
 - If `connect` reports that it could not end its temporary session, end the session "mikud connect (agent approval)" on the Account page.
 
 ## 7. Move from the dry run to production (once)
@@ -207,7 +224,7 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 1. Read the release notes of the new version on the repository's Releases page.
 2. Back up the Mikud database with your own tools. Migrations only move forward; the backup is the way back.
 3. Set `VERSION` in `.env` to the new version.
-4. Run:
+4. Run the commands below. While the package is private, the server's `docker login ghcr.io` from step 4 must still be valid, or the pull fails; log in again with a token that has only `read:packages`.
 
    ```bash
    docker compose pull

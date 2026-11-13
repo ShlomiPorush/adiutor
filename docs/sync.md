@@ -1,6 +1,6 @@
 # Sync tool
 
-Status: built and tested against fixtures and a stub server. The server routes it calls (`/api/v1/sync/t3`, `/api/v1/sync/security`) are on `main`; see [api.md](api.md). Not yet run against a Mikud server; that happens in the dry run.
+Status: built and tested against fixtures and a stub server. The server routes it calls (`/api/v1/sync/t3`, `/api/v1/sync/security`) are on `main`; see [api.md](api.md). Not yet run against a Mikud server; that happens in the launch checks in production.
 
 `dist/sync/mikud-sync.js` runs on the owner's PC, started by the T3 scheduled task in [prompts/reconcile.md](../prompts/reconcile.md). It is the only way T3 and GitHub data reach Mikud: the server never calls T3 or GitHub.
 
