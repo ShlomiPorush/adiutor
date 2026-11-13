@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Mikud: API, MCP and (later) the built UI in one bundle. Build context: repository root.
+# Adiutor: API, MCP and (later) the built UI in one bundle. Build context: repository root.
 
 FROM node:26.13.0-bookworm-slim AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -18,7 +18,7 @@ RUN pnpm run build
 FROM node:26.13.0-bookworm-slim
 ARG VERSION=dev
 ENV NODE_ENV=production \
-    MIKUD_VERSION=${VERSION} \
+    ADIUTOR_VERSION=${VERSION} \
     PORT=8080 \
     MIGRATIONS_DIR=drizzle
 WORKDIR /app

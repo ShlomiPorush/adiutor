@@ -4,15 +4,15 @@ export type ServerConfig = {
   port: number
   databaseUrl: string
   /**
-   * Better Auth's versioned `secrets` (MIKUD_AUTH_SECRETS, "2:new,1:old"): the first signs cookies and encrypts new
+   * Better Auth's versioned `secrets` (ADIUTOR_AUTH_SECRETS, "2:new,1:old"): the first signs cookies and encrypts new
    * data, the others only decrypt. Each at least MIN_SECRET_BYTES bytes.
    */
   authSecrets: VersionedKey[]
-  /** MIKUD_AUTH_SECRET, optional: Better Auth's legacy `secret`, which decrypts data from before `secrets`. */
+  /** ADIUTOR_AUTH_SECRET, optional: Better Auth's legacy `secret`, which decrypts data from before `secrets`. */
   legacyAuthSecret: string | undefined
-  /** MIKUD_SETTINGS_KEYS ("2:new,1:old"): encrypts the secrets stored in Settings. Never an auth secret. */
+  /** ADIUTOR_SETTINGS_KEYS ("2:new,1:old"): encrypts the secrets stored in Settings. Never an auth secret. */
   settingsKeys: VersionedKey[]
-  /** MIKUD_TRUSTED_PROXIES: the proxy addresses or CIDR ranges in front of Mikud (Traefik), comma-separated. */
+  /** ADIUTOR_TRUSTED_PROXIES: the proxy addresses or CIDR ranges in front of Adiutor (Traefik), comma-separated. */
   trustedProxies: string[]
   /** The URL the owner opens; browsers' Origin must match it. */
   publicUrl: URL
@@ -34,9 +34,9 @@ export type EnvOverrides = {
 
 /** The environment variable behind each override, named by the UI when a field is locked. */
 export const OVERRIDE_VARIABLES = {
-  telegramBotToken: "MIKUD_TELEGRAM_BOT_TOKEN",
-  telegramChatId: "MIKUD_TELEGRAM_CHAT_ID",
-  privateDomains: "MIKUD_PRIVATE_DOMAINS",
+  telegramBotToken: "ADIUTOR_TELEGRAM_BOT_TOKEN",
+  telegramChatId: "ADIUTOR_TELEGRAM_CHAT_ID",
+  privateDomains: "ADIUTOR_PRIVATE_DOMAINS",
 } as const satisfies Record<keyof EnvOverrides, string>
 
 export const DEFAULT_TELEGRAM_API_URL = "https://api.telegram.org"
@@ -53,11 +53,11 @@ export class ConfigError extends Error {
   override name = "ConfigError"
 }
 
-/** Variables Better Auth would read on its own when its options lack a value: Mikud refuses them (need 5). */
+/** Variables Better Auth would read on its own when its options lack a value: Adiutor refuses them (need 5). */
 const FOREIGN_AUTH_VARIABLES = /^(BETTER_AUTH_|AUTH_SECRET$)/
 
 /** Variables of earlier versions: only warned about. */
-const RETIRED = ["MIKUD_OWNER_TOKEN", "MIKUD_AGENT_TOKEN"] as const
+const RETIRED = ["ADIUTOR_OWNER_TOKEN", "ADIUTOR_AGENT_TOKEN"] as const
 
 /** Splits a comma-separated list of domain names, normalized. */
 export function parseDomains(text: string): string[] {
@@ -115,37 +115,37 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 
   for (const name of Object.keys(env).sort())
     if (FOREIGN_AUTH_VARIABLES.test(name) && env[name] !== undefined)
-      problems.push(`${name} is set: Better Auth would read it on its own; Mikud uses MIKUD_AUTH_SECRETS only`)
+      problems.push(`${name} is set: Better Auth would read it on its own; Adiutor uses ADIUTOR_AUTH_SECRETS only`)
   for (const name of RETIRED) if (env[name]) warnings.push(`${name} is no longer used: remove it`)
 
   const databaseUrl = required("DATABASE_URL")
-  const publicUrlText = required("MIKUD_PUBLIC_URL")
-  const authSecretsText = required("MIKUD_AUTH_SECRETS")
-  const settingsKeysText = required("MIKUD_SETTINGS_KEYS")
-  const authSecrets = authSecretsText ? parseKeys("MIKUD_AUTH_SECRETS", authSecretsText, problems) : []
-  const settingsKeys = settingsKeysText ? parseKeys("MIKUD_SETTINGS_KEYS", settingsKeysText, problems) : []
-  const legacyAuthSecret = env.MIKUD_AUTH_SECRET || undefined
+  const publicUrlText = required("ADIUTOR_PUBLIC_URL")
+  const authSecretsText = required("ADIUTOR_AUTH_SECRETS")
+  const settingsKeysText = required("ADIUTOR_SETTINGS_KEYS")
+  const authSecrets = authSecretsText ? parseKeys("ADIUTOR_AUTH_SECRETS", authSecretsText, problems) : []
+  const settingsKeys = settingsKeysText ? parseKeys("ADIUTOR_SETTINGS_KEYS", settingsKeysText, problems) : []
+  const legacyAuthSecret = env.ADIUTOR_AUTH_SECRET || undefined
   if (legacyAuthSecret && Buffer.byteLength(legacyAuthSecret, "utf8") < MIN_SECRET_BYTES)
-    problems.push(`MIKUD_AUTH_SECRET must be at least ${MIN_SECRET_BYTES} bytes`)
+    problems.push(`ADIUTOR_AUTH_SECRET must be at least ${MIN_SECRET_BYTES} bytes`)
   const authValues = new Set([...authSecrets.map((k) => k.value), ...(legacyAuthSecret ? [legacyAuthSecret] : [])])
   if (settingsKeys.some((k) => authValues.has(k.value)))
-    problems.push("MIKUD_SETTINGS_KEYS must differ from every auth secret")
+    problems.push("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
 
   let publicUrl: URL | undefined
   if (publicUrlText) {
     publicUrl = URL.canParse(publicUrlText) ? new URL(publicUrlText) : undefined
     if (!publicUrl || (publicUrl.protocol !== "https:" && publicUrl.protocol !== "http:"))
-      problems.push("MIKUD_PUBLIC_URL must be an http or https URL")
+      problems.push("ADIUTOR_PUBLIC_URL must be an http or https URL")
   }
 
   if (databaseUrl && !/^postgres(ql)?:\/\//.test(databaseUrl)) problems.push("DATABASE_URL must be a postgres:// URL")
 
-  const trustedProxies = (env.MIKUD_TRUSTED_PROXIES ?? "")
+  const trustedProxies = (env.ADIUTOR_TRUSTED_PROXIES ?? "")
     .split(",")
     .map((p) => p.trim())
     .filter(Boolean)
   if (trustedProxies.some((p) => !/^[0-9A-Fa-f:.]+(\/\d{1,3})?$/.test(p)))
-    problems.push("MIKUD_TRUSTED_PROXIES must be a comma-separated list of IP addresses or CIDR ranges")
+    problems.push("ADIUTOR_TRUSTED_PROXIES must be a comma-separated list of IP addresses or CIDR ranges")
 
   const port = Number(env.PORT ?? 8080)
   if (!Number.isInteger(port) || port <= 0 || port > 65535) problems.push("PORT must be a port number")
@@ -168,7 +168,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     trustedProxies,
     publicUrl,
     migrationsDir: env.MIGRATIONS_DIR || "drizzle",
-    version: env.MIKUD_VERSION || "dev",
+    version: env.ADIUTOR_VERSION || "dev",
     telegramApiUrl: apiUrlText,
     overrides,
     warnings,
@@ -178,22 +178,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 /** Each override on its own: an empty variable is not set; a malformed one refuses to start, naming it only. */
 function readOverrides(env: NodeJS.ProcessEnv, problems: string[]): EnvOverrides {
   const overrides: EnvOverrides = {}
-  const token = env.MIKUD_TELEGRAM_BOT_TOKEN?.trim()
+  const token = env.ADIUTOR_TELEGRAM_BOT_TOKEN?.trim()
   if (token) {
     if (!TELEGRAM_BOT_TOKEN.test(token))
-      problems.push("MIKUD_TELEGRAM_BOT_TOKEN does not look like a bot token from BotFather")
+      problems.push("ADIUTOR_TELEGRAM_BOT_TOKEN does not look like a bot token from BotFather")
     overrides.telegramBotToken = token
   }
-  const chatId = env.MIKUD_TELEGRAM_CHAT_ID?.trim()
+  const chatId = env.ADIUTOR_TELEGRAM_CHAT_ID?.trim()
   if (chatId) {
-    if (!TELEGRAM_CHAT_ID.test(chatId)) problems.push("MIKUD_TELEGRAM_CHAT_ID must be a numeric chat id")
+    if (!TELEGRAM_CHAT_ID.test(chatId)) problems.push("ADIUTOR_TELEGRAM_CHAT_ID must be a numeric chat id")
     overrides.telegramChatId = chatId
   }
-  const domains = env.MIKUD_PRIVATE_DOMAINS?.trim()
+  const domains = env.ADIUTOR_PRIVATE_DOMAINS?.trim()
   if (domains) {
     const list = parseDomains(domains)
     if (list.some((d) => !DOMAIN_NAME.test(d)))
-      problems.push("MIKUD_PRIVATE_DOMAINS must be a comma-separated list of domain names")
+      problems.push("ADIUTOR_PRIVATE_DOMAINS must be a comma-separated list of domain names")
     overrides.privateDomains = list
   }
   return overrides

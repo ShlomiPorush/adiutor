@@ -1,20 +1,20 @@
 // Seeds a pull request stack (scripts/try-pr.sh) through the HTTP API. First the owner, as the first-run setup
 // does it from the browser, on Better Auth's routes: sign-up with a generated password, TOTP enrolment, then an
 // agent key (api-key plugin). The username, password, TOTP secret, backup codes and agent key go to
-// MIKUD_OWNER_FILE (0600) and are never printed. Then invented fixtures with that agent key only, so the board has
+// ADIUTOR_OWNER_FILE (0600) and are never printed. Then invented fixtures with that agent key only, so the board has
 // something to show: projects from a T3 snapshot, items in every status, goals, a stage proposal, security sources,
 // comments and an inbox item.
-// Reads MIKUD_URL, MIKUD_ORIGIN (the stack's public URL, for the origin check) and MIKUD_OWNER_FILE from the
+// Reads ADIUTOR_URL, ADIUTOR_ORIGIN (the stack's public URL, for the origin check) and ADIUTOR_OWNER_FILE from the
 // environment. Never prints a key, password or secret.
 
 import { createHmac, randomBytes } from "node:crypto"
 import { writeFileSync } from "node:fs"
 
-const base = process.env.MIKUD_URL
-const origin = process.env.MIKUD_ORIGIN
-const ownerFile = process.env.MIKUD_OWNER_FILE
+const base = process.env.ADIUTOR_URL
+const origin = process.env.ADIUTOR_ORIGIN
+const ownerFile = process.env.ADIUTOR_OWNER_FILE
 if (!base || !origin || !ownerFile) {
-  console.error("MIKUD_URL, MIKUD_ORIGIN and MIKUD_OWNER_FILE are required")
+  console.error("ADIUTOR_URL, ADIUTOR_ORIGIN and ADIUTOR_OWNER_FILE are required")
   process.exit(2)
 }
 
@@ -58,14 +58,14 @@ async function page(path, body) {
 const username = "owner"
 // The username rule of src/shared/auth.ts (USERNAME_PATTERN, 3 to 30 characters), checked before the sign-up.
 if (!/^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$/.test(username) || username.length < 3 || username.length > 30) {
-  console.error("the seed username does not follow Mikud's username rule")
+  console.error("the seed username does not follow Adiutor's username rule")
   process.exit(2)
 }
 const password = randomBytes(18).toString("base64url")
 await page("/api/auth/sign-up/email", {
   name: username,
-  // The synthetic e-mail of src/shared/auth.ts (ownerEmail): the lowercased username at mikud.local.
-  email: `${username.toLowerCase()}@mikud.local`,
+  // The synthetic e-mail of src/shared/auth.ts (ownerEmail): the lowercased username at adiutor.local.
+  email: `${username.toLowerCase()}@adiutor.local`,
   username,
   displayUsername: username,
   password,
@@ -77,13 +77,13 @@ const { key: token } = await page("/api/auth/api-key/create", { name: "try-pr se
 writeFileSync(
   ownerFile,
   [
-    "# Pull request stack only. Sign in at MIKUD_PUBLIC_URL; add the TOTP secret to an authenticator app.",
-    `MIKUD_OWNER_USERNAME=${username}`,
-    `MIKUD_OWNER_PASSWORD=${password}`,
-    `MIKUD_OWNER_TOTP_SECRET=${totpSecret}`,
-    `MIKUD_OWNER_BACKUP_CODES=${backupCodes.join(",")}`,
+    "# Pull request stack only. Sign in at ADIUTOR_PUBLIC_URL; add the TOTP secret to an authenticator app.",
+    `ADIUTOR_OWNER_USERNAME=${username}`,
+    `ADIUTOR_OWNER_PASSWORD=${password}`,
+    `ADIUTOR_OWNER_TOTP_SECRET=${totpSecret}`,
+    `ADIUTOR_OWNER_BACKUP_CODES=${backupCodes.join(",")}`,
     "# An agent key (Settings, Agent access) for the API and MCP: Authorization: Bearer <key>.",
-    `MIKUD_AGENT_KEY=${token}`,
+    `ADIUTOR_AGENT_KEY=${token}`,
     "",
   ].join("\n"),
   { mode: 0o600 },
@@ -101,7 +101,7 @@ async function call(method, path, body) {
     headers: {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
-      "x-mikud-agent": "try-pr seed",
+      "x-adiutor-agent": "try-pr seed",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })

@@ -35,7 +35,7 @@ export type AppDeps = {
   web?: { root: string }
 }
 
-/** The socket's address: the key of Mikud's own limit on failed agent keys (Better Auth limits its own routes). */
+/** The socket's address: the key of Adiutor's own limit on failed agent keys (Better Auth limits its own routes). */
 function socketAddress(c: Context): string {
   try {
     return getConnInfo(c).remote.address ?? "unknown"

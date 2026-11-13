@@ -211,7 +211,7 @@ const resetLabel = (value: string) => en.settings.resetTo.replace("{value}", val
 beforeEach(() => {
   forgetSettingsVisit()
   localStorage.clear()
-  localStorage.setItem("mikud.language", "en")
+  localStorage.setItem("adiutor.language", "en")
   saved = structuredClone(SAVED)
   patches = []
   suppressions = []
@@ -300,9 +300,9 @@ describe("Changed and Reset to default (FS-6, R7)", () => {
   it("never marks or resets a secret or a locked value; Reset all of General sends only General", async () => {
     saved.closedItemDays = 12
     saved.sessionIdleDays = 45
-    saved.telegram.botToken = { set: true, readable: true, locked: true, variable: "MIKUD_TELEGRAM_BOT_TOKEN" }
-    saved.telegram.chatId = { value: "70012345", locked: true, variable: "MIKUD_TELEGRAM_CHAT_ID" }
-    saved.privateDomains = { value: ["corp.example"], locked: true, variable: "MIKUD_PRIVATE_DOMAINS" }
+    saved.telegram.botToken = { set: true, readable: true, locked: true, variable: "ADIUTOR_TELEGRAM_BOT_TOKEN" }
+    saved.telegram.chatId = { value: "70012345", locked: true, variable: "ADIUTOR_TELEGRAM_CHAT_ID" }
+    saved.privateDomains = { value: ["corp.example"], locked: true, variable: "ADIUTOR_PRIVATE_DOMAINS" }
     await render("/settings/telegram")
     const telegram = document.querySelector("#telegram") as HTMLElement
     expect(telegram.querySelector(".ui-set-clear")).toBeNull()
@@ -359,7 +359,7 @@ describe("numbers read as the save sends them (F2, SV-2, FS-6)", () => {
 
 describe("set by the environment (FS-3, FS-6, R6)", () => {
   it("a locked secret is stored in the environment, with no buttons and the variable named", async () => {
-    saved.telegram.botToken = { set: true, readable: true, locked: true, variable: "MIKUD_TELEGRAM_BOT_TOKEN" }
+    saved.telegram.botToken = { set: true, readable: true, locked: true, variable: "ADIUTOR_TELEGRAM_BOT_TOKEN" }
     await render("/settings/telegram")
     const token = row(en.telegramSettings.botToken) as HTMLElement
     expect(pill(en.telegramSettings.botToken)).toBe(en.settings.env.pill)
@@ -367,12 +367,12 @@ describe("set by the environment (FS-3, FS-6, R6)", () => {
     expect(token.querySelector(".ui-set-control")?.textContent).toBe(en.telegramSettings.setByEnv)
     expect(token.querySelectorAll(".ui-set-control button")).toHaveLength(0)
     expect(plain(token.querySelector(".ui-set-env")?.textContent)).toBe(
-      en.settings.env.note.replace("{variable}", "MIKUD_TELEGRAM_BOT_TOKEN"),
+      en.settings.env.note.replace("{variable}", "ADIUTOR_TELEGRAM_BOT_TOKEN"),
     )
   })
 
   it("a locked chat id stays in place, disabled, without Clear, and is never sent", async () => {
-    saved.telegram.chatId = { value: "70012345", locked: true, variable: "MIKUD_TELEGRAM_CHAT_ID" }
+    saved.telegram.chatId = { value: "70012345", locked: true, variable: "ADIUTOR_TELEGRAM_CHAT_ID" }
     await render("/settings/telegram")
     const chat = row(en.telegramSettings.chatId) as HTMLElement
     const input = chat.querySelector("input") as HTMLInputElement
@@ -380,7 +380,7 @@ describe("set by the environment (FS-3, FS-6, R6)", () => {
     expect(input.value).toBe("70012345")
     expect(pill(en.telegramSettings.chatId)).toBe(en.settings.env.pill)
     expect(button(en.settings.clear, chat)).toBeUndefined()
-    expect(chat.querySelector(".ui-set-env")?.textContent).toContain("MIKUD_TELEGRAM_CHAT_ID")
+    expect(chat.querySelector(".ui-set-env")?.textContent).toContain("ADIUTOR_TELEGRAM_CHAT_ID")
     // The label still names the field exactly: the tag sits beside the label, not inside it.
     expect(chat.querySelector("label")?.textContent).toBe(en.telegramSettings.chatId)
   })
@@ -404,9 +404,9 @@ describe("set by the environment (FS-3, FS-6, R6)", () => {
     // The environment now sets all three (the variables were set and the server restarted); the page reads again.
     // A new answer, not the same object changed in place: the query compares what it gets with what it holds.
     saved = structuredClone(saved)
-    saved.telegram.botToken = { set: true, readable: true, locked: true, variable: "MIKUD_TELEGRAM_BOT_TOKEN" }
-    saved.telegram.chatId = { value: "70012345", locked: true, variable: "MIKUD_TELEGRAM_CHAT_ID" }
-    saved.privateDomains = { value: ["corp.example"], locked: true, variable: "MIKUD_PRIVATE_DOMAINS" }
+    saved.telegram.botToken = { set: true, readable: true, locked: true, variable: "ADIUTOR_TELEGRAM_BOT_TOKEN" }
+    saved.telegram.chatId = { value: "70012345", locked: true, variable: "ADIUTOR_TELEGRAM_CHAT_ID" }
+    saved.privateDomains = { value: ["corp.example"], locked: true, variable: "ADIUTOR_PRIVATE_DOMAINS" }
     await act(async () => {
       await client?.invalidateQueries({ queryKey: qk.settings })
     })
@@ -488,7 +488,7 @@ describe("private domains as value chips (FS-15, S-13)", () => {
   })
 
   it("set by the environment: chips without their X, the Add field disabled in place", async () => {
-    saved.privateDomains = { value: ["corp.example"], locked: true, variable: "MIKUD_PRIVATE_DOMAINS" }
+    saved.privateDomains = { value: ["corp.example"], locked: true, variable: "ADIUTOR_PRIVATE_DOMAINS" }
     await render("/settings/secret-check")
     expect(document.querySelectorAll("#secret-check .ui-value-chip")).toHaveLength(1)
     expect(document.querySelector("#secret-check .ui-value-chip-x")).toBeNull()
@@ -628,7 +628,7 @@ describe("bulk actions at the end of a list's head (S-12, DS-20)", () => {
     ({
       id,
       name: `agent-${id}`,
-      start: "mkd_ab",
+      start: "adt_ab",
       createdAt: "2026-11-01T08:00:00.000Z",
       expiresAt: null,
       lastRequest: null,

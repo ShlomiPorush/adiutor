@@ -5,7 +5,7 @@ import { resetState, saveState } from "./state.ts"
 /**
  * Forgets the shared state of an earlier run. With E2E_TARGET (host:port, set by scripts/verify.sh for its stack,
  * which is thrown away after the run), makes a new owner password for this run unless E2E_PASSWORD is set, and
- * forwards 127.0.0.1:8090 to the Mikud container, so the pages load from the server's public URL and every request
+ * forwards 127.0.0.1:8090 to the Adiutor container, so the pages load from the server's public URL and every request
  * carries its Origin. Any other stack keeps its owner, so the password must come from E2E_PASSWORD.
  */
 export default async function globalSetup(): Promise<(() => Promise<void>) | undefined> {
@@ -20,7 +20,7 @@ export default async function globalSetup(): Promise<(() => Promise<void>) | und
     saveState({ password: randomBytes(18).toString("base64url") })
   }
   if (!target) return undefined
-  const [host = "mikud", port = "8080"] = target.split(":")
+  const [host = "adiutor", port = "8080"] = target.split(":")
   const server = createServer((socket) => {
     const upstream = connect(Number(port), host)
     socket.pipe(upstream).pipe(socket)

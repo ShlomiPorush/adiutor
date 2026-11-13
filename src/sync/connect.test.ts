@@ -32,15 +32,15 @@ import {
 import { parseEnvFile } from "./env.ts"
 import type { Runner, RunResult } from "./exec.ts"
 
-// `connect` against a stand-in Mikud: the device flow's answers, the key, and the end of the temporary session.
+// `connect` against a stand-in Adiutor: the device flow's answers, the key, and the end of the temporary session.
 // The session, the device code and the key are new on every run: nothing in the repository works as one.
 
-const URL_BASE = "https://mikud.example.com"
+const URL_BASE = "https://adiutor.example.com"
 const SESSION = randomBytes(32).toString("base64url")
 const DEVICE_CODE = randomBytes(32).toString("base64url")
 const LETTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-/** Like Better Auth's api-key plugin makes them: mkd_ and 64 letters. */
-const KEY = `mkd_${Array.from({ length: 64 }, () => LETTERS[randomInt(LETTERS.length)]).join("")}`
+/** Like Better Auth's api-key plugin makes them: adt_ and 64 letters. */
+const KEY = `adt_${Array.from({ length: 64 }, () => LETTERS[randomInt(LETTERS.length)]).join("")}`
 const temps: string[] = []
 
 afterEach(() => {
@@ -48,7 +48,7 @@ afterEach(() => {
 })
 
 function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "mikud-connect-"))
+  const dir = mkdtempSync(join(tmpdir(), "adiutor-connect-"))
   temps.push(dir)
   return dir
 }
@@ -56,7 +56,7 @@ function tempDir(): string {
 type Sent = { path: string; body: Record<string, unknown>; auth?: string; userAgent?: string }
 type Reply = { status: number; body: unknown }
 
-/** A stand-in Mikud: token answers in order, then the key and the revoke answers a test chooses. */
+/** A stand-in Adiutor: token answers in order, then the key and the revoke answers a test chooses. */
 function standIn(options: { polls?: Reply[]; create?: Reply; revoke?: Reply | "network" } = {}) {
   const sent: Sent[] = []
   const polls = [...(options.polls ?? [{ status: 200, body: { access_token: SESSION, token_type: "Bearer" } }])]
@@ -142,18 +142,18 @@ const options = (overrides: Partial<ConnectOptions> = {}): ConnectOptions => ({
   name: "claude-laptop",
   days: 30,
   target: "claude",
-  envFile: join(tempDir(), "mikud", "sync.env"),
+  envFile: join(tempDir(), "adiutor", "sync.env"),
   open: false,
   ...overrides,
 })
 
 describe("connect: the device flow", () => {
   it("polls through authorization_pending and slow_down, creates one named key with its days, then ends the session", async () => {
-    const mikud = standIn({ polls: [pending, slowDown, pending, { status: 200, body: { access_token: SESSION } }] })
-    const d = deps(mikud.fetch)
+    const adiutor = standIn({ polls: [pending, slowDown, pending, { status: 200, body: { access_token: SESSION } }] })
+    const d = deps(adiutor.fetch)
     expect(await connect(options(), d)).toBe(0)
 
-    expect(mikud.sent.map((s) => s.path)).toEqual([
+    expect(adiutor.sent.map((s) => s.path)).toEqual([
       "/device/code",
       "/device/token",
       "/device/token",
@@ -162,41 +162,41 @@ describe("connect: the device flow", () => {
       "/api-key/create",
       "/revoke-session",
     ])
-    expect(mikud.sent[0]?.body).toEqual({ client_id: CONNECT_CLIENT_ID })
-    expect(mikud.sent.every((s) => s.userAgent === CONNECT_CLIENT_ID)).toBe(true)
+    expect(adiutor.sent[0]?.body).toEqual({ client_id: CONNECT_CLIENT_ID })
+    expect(adiutor.sent.every((s) => s.userAgent === CONNECT_CLIENT_ID)).toBe(true)
     // RFC 8628: slow_down adds 5 seconds to every later wait.
     expect(d.waits).toEqual([5000, 5000, 10_000, 10_000])
-    const create = mikud.sent[5]
+    const create = adiutor.sent[5]
     expect(create?.auth).toBe(`Bearer ${SESSION}`)
     expect(create?.body).toEqual({ name: "claude-laptop", expiresIn: 30 * 86_400 })
-    const revoke = mikud.sent[6]
+    const revoke = adiutor.sent[6]
     expect(revoke?.auth).toBe(`Bearer ${SESSION}`)
     expect(revoke?.body).toEqual({ token: SESSION })
     // The device code and polling never carry a session.
-    expect(mikud.sent.slice(0, 5).every((s) => s.auth === undefined)).toBe(true)
+    expect(adiutor.sent.slice(0, 5).every((s) => s.auth === undefined)).toBe(true)
     expect(d.lines.join("\n")).toContain("ABCD-EFGH")
     expect(d.lines.join("\n")).not.toContain(SESSION)
   })
 
   it("treats a rate-limited poll (429) as slow_down and keeps waiting for the approval", async () => {
     const limited = { status: 429, body: { message: "Too many requests" } }
-    const mikud = standIn({ polls: [pending, limited, limited, { status: 200, body: { access_token: SESSION } }] })
-    const d = deps(mikud.fetch)
+    const adiutor = standIn({ polls: [pending, limited, limited, { status: 200, body: { access_token: SESSION } }] })
+    const d = deps(adiutor.fetch)
     expect(await connect(options(), d)).toBe(0)
     expect(d.waits).toEqual([5000, 5000, 10_000, 15_000])
-    expect(mikud.sent.map((s) => s.path)).toContain("/api-key/create")
+    expect(adiutor.sent.map((s) => s.path)).toContain("/api-key/create")
   })
 
   it("stops at access_denied without a key or a session", async () => {
-    const mikud = standIn({ polls: [pending, { status: 400, body: { error: "access_denied" } }] })
-    const d = deps(mikud.fetch)
+    const adiutor = standIn({ polls: [pending, { status: 400, body: { error: "access_denied" } }] })
+    const d = deps(adiutor.fetch)
     expect(await connect(options(), d)).toBe(1)
-    expect(mikud.sent.map((s) => s.path)).not.toContain("/api-key/create")
-    expect(mikud.sent.map((s) => s.path)).not.toContain("/revoke-session")
+    expect(adiutor.sent.map((s) => s.path)).not.toContain("/api-key/create")
+    expect(adiutor.sent.map((s) => s.path)).not.toContain("/revoke-session")
     expect(d.lines.join("\n")).toContain("denied")
   })
 
-  it("stops when the code expires, by Mikud's answer or by its own clock", async () => {
+  it("stops when the code expires, by Adiutor's answer or by its own clock", async () => {
     const byAnswer = standIn({ polls: [pending, { status: 400, body: { error: "expired_token" } }] })
     expect(await connect(options(), deps(byAnswer.fetch))).toBe(1)
     const neverAnswered = standIn({ polls: Array.from({ length: 200 }, () => pending) })
@@ -207,28 +207,28 @@ describe("connect: the device flow", () => {
     expect(d.lines.join("\n")).toContain("expired")
   })
 
-  it("ends the session even when Mikud does not create the key", async () => {
-    const mikud = standIn({ create: { status: 400, body: { code: "EXPIRES_IN_IS_TOO_LARGE" } } })
-    const d = deps(mikud.fetch)
+  it("ends the session even when Adiutor does not create the key", async () => {
+    const adiutor = standIn({ create: { status: 400, body: { code: "EXPIRES_IN_IS_TOO_LARGE" } } })
+    const d = deps(adiutor.fetch)
     expect(await connect(options(), d)).toBe(1)
-    expect(mikud.sent.at(-1)?.path).toBe("/revoke-session")
+    expect(adiutor.sent.at(-1)?.path).toBe("/revoke-session")
     expect(d.lines.join("\n")).toContain("EXPIRES_IN_IS_TOO_LARGE")
   })
 
   it("says so when the end of the session is not confirmed", async () => {
     for (const revoke of [{ status: 403, body: { code: "OWN_SESSION_ONLY" } }, "network" as const]) {
-      const mikud = standIn({ revoke })
-      const d = deps(mikud.fetch)
+      const adiutor = standIn({ revoke })
+      const d = deps(adiutor.fetch)
       expect(await connect(options(), d)).toBe(0)
       expect(d.lines.join("\n")).toContain("could not confirm that the approval's temporary session ended")
-      expect(d.lines.join("\n")).toContain("mikud connect (agent approval)")
+      expect(d.lines.join("\n")).toContain("adiutor connect (agent approval)")
       expect(d.lines.join("\n")).not.toContain(SESSION)
     }
   })
 
   it("refuses an approval link on another address and never opens it", async () => {
-    const mikud = standIn()
-    const d = deps(mikud.fetch)
+    const adiutor = standIn()
+    const d = deps(adiutor.fetch)
     expect(await connect(options({ url: "https://other.example.com", open: true }), d)).toBe(1)
     expect(d.ran).toEqual([])
   })
@@ -239,8 +239,8 @@ describe("connect: the device flow", () => {
       ["darwin", "open"],
       ["linux", "xdg-open"],
     ] as const) {
-      const mikud = standIn()
-      const d = deps(mikud.fetch, { platform })
+      const adiutor = standIn()
+      const d = deps(adiutor.fetch, { platform })
       await connect(options({ open: true }), d)
       expect(d.ran[0]?.command).toBe(command)
       expect(d.ran[0]?.args.at(-1)).toBe(`${URL_BASE}/connect/device?user_code=ABCDEFGH`)
@@ -275,15 +275,15 @@ describe("connect: Claude Code", () => {
     }
     return { ran, runner }
   }
-  const ok: RunResult = { code: 0, stdout: "Added HTTP MCP server mikud", stderr: "" }
+  const ok: RunResult = { code: 0, stdout: "Added HTTP MCP server adiutor", stderr: "" }
   const exists: RunResult = {
     code: 1,
     stdout: "",
-    stderr: "MCP server mikud already exists in user config",
+    stderr: "MCP server adiutor already exists in user config",
     error: "exit code 1",
   }
 
-  it("adds Mikud at user scope with claude mcp add, the key only in its header, and prints no key", async () => {
+  it("adds Adiutor at user scope with claude mcp add, the key only in its header, and prints no key", async () => {
     const { ran, runner } = scripted([ok])
     const d = deps(standIn().fetch, { runner, findCommand: async (name) => (name === "claude" ? CLAUDE : undefined) })
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
@@ -294,28 +294,28 @@ describe("connect: Claude Code", () => {
       "http",
       "--scope",
       "user",
-      "mikud",
+      "adiutor",
       `${URL_BASE}/mcp`,
       "--header",
       `Authorization: Bearer ${KEY}`,
     ])
     expect(ran).toEqual([{ command: CLAUDE, args: addArgs }])
-    expect(d.lines.join("\n")).toContain("Added the mikud server to Claude Code (user scope)")
+    expect(d.lines.join("\n")).toContain("Added the adiutor server to Claude Code (user scope)")
     expect(keyLines(d.lines)).toEqual([])
     expect(d.lines.join("\n")).not.toContain("shell history")
   })
 
-  it("replaces an existing mikud server: claude mcp remove at user scope, then add again", async () => {
+  it("replaces an existing adiutor server: claude mcp remove at user scope, then add again", async () => {
     const { ran, runner } = scripted([exists, { code: 0, stdout: "Removed", stderr: "" }, ok])
     const d = deps(standIn().fetch, { runner, findCommand: async () => CLAUDE })
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
     expect(ran).toEqual([
       { command: CLAUDE, args: addArgs },
-      { command: CLAUDE, args: ["mcp", "remove", "mikud", "--scope", "user"] },
+      { command: CLAUDE, args: ["mcp", "remove", "adiutor", "--scope", "user"] },
       { command: CLAUDE, args: addArgs },
     ])
-    expect(CLAUDE_REMOVE_ARGS).toEqual(["mcp", "remove", "mikud", "--scope", "user"])
-    expect(d.lines.join("\n")).toContain("Replaced the mikud server in Claude Code (user scope)")
+    expect(CLAUDE_REMOVE_ARGS).toEqual(["mcp", "remove", "adiutor", "--scope", "user"])
+    expect(d.lines.join("\n")).toContain("Replaced the adiutor server in Claude Code (user scope)")
     expect(keyLines(d.lines)).toEqual([])
   })
 
@@ -324,9 +324,9 @@ describe("connect: Claude Code", () => {
     const d = deps(standIn().fetch, { runner, findCommand: async () => undefined })
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
     expect(ran).toEqual([])
-    const command = `claude mcp add --transport http --scope user mikud ${URL_BASE}/mcp --header "Authorization: Bearer ${KEY}"`
+    const command = `claude mcp add --transport http --scope user adiutor ${URL_BASE}/mcp --header "Authorization: Bearer ${KEY}"`
     expect(claudeCommand(URL_BASE, KEY)).toBe(command)
-    expect(d.lines.join("\n")).toContain("Could not add Mikud to Claude Code: the claude command was not found.")
+    expect(d.lines.join("\n")).toContain("Could not add Adiutor to Claude Code: the claude command was not found.")
     expect(keyLines(d.lines)).toEqual([command])
     expect(d.lines.join("\n")).toContain("shell history")
   })
@@ -335,8 +335,8 @@ describe("connect: Claude Code", () => {
     const refusals = [
       // Managed settings that allow only plugin servers (docs: errors, "Cannot add MCP server").
       "Cannot add MCP server: your organization's managed settings allow only MCP servers that plugins provide",
-      "MCP server mikud already exists in local config",
-      "MCP server mikud-old already exists in user config",
+      "MCP server adiutor already exists in local config",
+      "MCP server adiutor-old already exists in user config",
       "Error: something else went wrong",
       "",
     ]
@@ -345,11 +345,11 @@ describe("connect: Claude Code", () => {
       const d = deps(standIn().fetch, { runner: failed.runner, findCommand: async () => CLAUDE })
       expect(await connect(options({ target: "claude" }), d)).toBe(0)
       expect(failed.ran.map((r) => r.args[1])).toEqual(["add"])
-      expect(d.lines.join("\n")).toContain("Could not add Mikud to Claude Code: claude mcp add exit code 1")
+      expect(d.lines.join("\n")).toContain("Could not add Adiutor to Claude Code: claude mcp add exit code 1")
       expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
     }
-    expect(CLAUDE_NAME_TAKEN.test("MCP server mikud already exists in user config\r\n")).toBe(true)
-    expect(CLAUDE_NAME_TAKEN.test("warning\nMCP server mikud already exists in user config.\n")).toBe(true)
+    expect(CLAUDE_NAME_TAKEN.test("MCP server adiutor already exists in user config\r\n")).toBe(true)
+    expect(CLAUDE_NAME_TAKEN.test("warning\nMCP server adiutor already exists in user config.\n")).toBe(true)
   })
 
   it("masks the key before shortening the reason, so no part of it shows", async () => {
@@ -370,7 +370,7 @@ describe("connect: Claude Code", () => {
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
     expect(failed.ran.map((r) => r.args[1])).toEqual(["add"])
     const text = d.lines.join("\n")
-    expect(text).toContain("Could not add Mikud to Claude Code: claude mcp add exit code 1: bad header Authorization:")
+    expect(text).toContain("Could not add Adiutor to Claude Code: claude mcp add exit code 1: bad header Authorization:")
     expect(text).toContain("[redacted]")
     expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
 
@@ -406,29 +406,29 @@ describe("connect: Codex", () => {
     return { ran, runner }
   }
   const fine = () => ({ code: 0, stdout: "", stderr: "" })
-  const configLines = [`[mcp_servers.mikud]`, `url = "${URL_BASE}/mcp"`, `bearer_token_env_var = "MIKUD_AGENT_KEY"`]
+  const configLines = [`[mcp_servers.adiutor]`, `url = "${URL_BASE}/mcp"`, `bearer_token_env_var = "ADIUTOR_AGENT_KEY"`]
 
-  it("on Windows, sets MIKUD_AGENT_KEY with setx, then runs codex mcp add, and prints no key", async () => {
+  it("on Windows, sets ADIUTOR_AGENT_KEY with setx, then runs codex mcp add, and prints no key", async () => {
     const { ran, runner } = recording(fine)
     const d = deps(standIn().fetch, { platform: "win32", runner, findCommand: windowsCommands })
     expect(await connect(options({ target: "codex" }), d)).toBe(0)
     expect(codexAddArgs(URL_BASE)).toEqual([
       "mcp",
       "add",
-      "mikud",
+      "adiutor",
       "--url",
       `${URL_BASE}/mcp`,
       "--bearer-token-env-var",
-      "MIKUD_AGENT_KEY",
+      "ADIUTOR_AGENT_KEY",
     ])
     // codex mcp add replaces an entry of the same name itself: a second connect runs the same, without a remove.
     expect(ran).toEqual([
-      { command: SETX, args: ["MIKUD_AGENT_KEY", KEY] },
+      { command: SETX, args: ["ADIUTOR_AGENT_KEY", KEY] },
       { command: CODEX, args: codexAddArgs(URL_BASE) },
     ])
     const text = d.lines.join("\n")
-    expect(text).toContain("Set MIKUD_AGENT_KEY for your Windows user.")
-    expect(text).toContain("Added the mikud server to Codex; it reads the key from MIKUD_AGENT_KEY.")
+    expect(text).toContain("Set ADIUTOR_AGENT_KEY for your Windows user.")
+    expect(text).toContain("Added the adiutor server to Codex; it reads the key from ADIUTOR_AGENT_KEY.")
     expect(text).toContain("Restart Codex from a new terminal")
     expect(keyLines(d.lines)).toEqual([])
 
@@ -438,7 +438,7 @@ describe("connect: Codex", () => {
       deps(standIn().fetch, { platform: "win32", runner: again.runner, findCommand: windowsCommands }),
     )
     expect(again.ran.map((r) => r.args.slice(0, 2))).toEqual([
-      ["MIKUD_AGENT_KEY", KEY],
+      ["ADIUTOR_AGENT_KEY", KEY],
       ["mcp", "add"],
     ])
   })
@@ -452,21 +452,21 @@ describe("connect: Codex", () => {
       findCommand: async () => "/opt/bin/codex",
     })
     expect(await connect(options({ target: "codex" }), d)).toBe(0)
-    const file = join(config, "mikud", "codex.env")
+    const file = join(config, "adiutor", "codex.env")
     expect(codexEnvFile({ XDG_CONFIG_HOME: config })).toBe(file)
-    expect(readFileSync(file, "utf8")).toBe(`export MIKUD_AGENT_KEY=${KEY}\n`)
+    expect(readFileSync(file, "utf8")).toBe(`export ADIUTOR_AGENT_KEY=${KEY}\n`)
     expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(ran).toEqual([{ command: "/opt/bin/codex", args: codexAddArgs(URL_BASE) }])
     expect(d.lines).toContain(`. "${file}"`)
     expect(keyLines(d.lines)).toEqual([])
 
     // A second connect replaces the old key in the file.
-    writeFileSync(file, "export MIKUD_AGENT_KEY=old\n")
+    writeFileSync(file, "export ADIUTOR_AGENT_KEY=old\n")
     await connect(
       options({ target: "codex" }),
       deps(standIn().fetch, { env: { XDG_CONFIG_HOME: config }, runner, findCommand: async () => "/opt/bin/codex" }),
     )
-    expect(readFileSync(file, "utf8")).toBe(`export MIKUD_AGENT_KEY=${KEY}\n`)
+    expect(readFileSync(file, "utf8")).toBe(`export ADIUTOR_AGENT_KEY=${KEY}\n`)
   })
 
   it("prints the config.toml lines, without the key, when codex is not installed or fails", async () => {
@@ -478,12 +478,12 @@ describe("connect: Codex", () => {
       )
       const d = deps(standIn().fetch, { platform: "win32", runner, findCommand })
       expect(await connect(options({ target: "codex" }), d)).toBe(0)
-      expect(ran[0]).toEqual({ command: SETX, args: ["MIKUD_AGENT_KEY", KEY] })
+      expect(ran[0]).toEqual({ command: SETX, args: ["ADIUTOR_AGENT_KEY", KEY] })
       const text = d.lines.join("\n")
       expect(text).toContain(
         (await findCommand("codex"))
-          ? "Could not add Mikud to Codex: codex mcp add exit code 2: error: unexpected argument."
-          : "Could not add Mikud to Codex: the codex command was not found.",
+          ? "Could not add Adiutor to Codex: codex mcp add exit code 2: error: unexpected argument."
+          : "Could not add Adiutor to Codex: the codex command was not found.",
       )
       expect(text).toContain(`Add this to ~/.codex/config.toml yourself:\n\n${configLines.join("\n")}`)
       expect(text).toContain("Restart Codex from a new terminal")
@@ -499,10 +499,10 @@ describe("connect: Codex", () => {
     expect(await connect(options({ target: "codex" }), windows)).toBe(0)
     expect(ran.map((r) => r.command)).toEqual([SETX, CODEX])
     expect(windows.lines.join("\n")).toContain(
-      "Could not set MIKUD_AGENT_KEY: setx exit code 1: ERROR: Access is denied.",
+      "Could not set ADIUTOR_AGENT_KEY: setx exit code 1: ERROR: Access is denied.",
     )
-    expect(keyLines(windows.lines)).toEqual([`setx MIKUD_AGENT_KEY "${KEY}"`])
-    expect(codexVariableLine(KEY, "win32")).toBe(`setx MIKUD_AGENT_KEY "${KEY}"`)
+    expect(keyLines(windows.lines)).toEqual([`setx ADIUTOR_AGENT_KEY "${KEY}"`])
+    expect(codexVariableLine(KEY, "win32")).toBe(`setx ADIUTOR_AGENT_KEY "${KEY}"`)
 
     const noSetx = deps(standIn().fetch, {
       platform: "win32",
@@ -512,9 +512,9 @@ describe("connect: Codex", () => {
     })
     expect(await connect(options({ target: "codex" }), noSetx)).toBe(0)
     expect(noSetx.lines.join("\n")).toContain(
-      "Could not set MIKUD_AGENT_KEY: setx was not found in %SystemRoot%\\System32.",
+      "Could not set ADIUTOR_AGENT_KEY: setx was not found in %SystemRoot%\\System32.",
     )
-    expect(keyLines(noSetx.lines)).toEqual([`setx MIKUD_AGENT_KEY "${KEY}"`])
+    expect(keyLines(noSetx.lines)).toEqual([`setx ADIUTOR_AGENT_KEY "${KEY}"`])
 
     // A file where the folder should be: the env file cannot be written.
     const blocked = join(tempDir(), "not-a-folder")
@@ -525,26 +525,26 @@ describe("connect: Codex", () => {
       findCommand: async () => "/opt/bin/codex",
     })
     expect(await connect(options({ target: "codex" }), linux)).toBe(0)
-    expect(linux.lines.join("\n")).toContain("Could not set MIKUD_AGENT_KEY: cannot write")
-    expect(keyLines(linux.lines)).toEqual([`export MIKUD_AGENT_KEY="${KEY}"`])
-    expect(linux.lines.join("\n")).toContain("Added the mikud server to Codex")
+    expect(linux.lines.join("\n")).toContain("Could not set ADIUTOR_AGENT_KEY: cannot write")
+    expect(keyLines(linux.lines)).toEqual([`export ADIUTOR_AGENT_KEY="${KEY}"`])
+    expect(linux.lines.join("\n")).toContain("Added the adiutor server to Codex")
   })
 })
 
 describe("connect: the sync's env file", () => {
   it("writes the key into a file only the owner can read, keeps its other values, never the session token", async () => {
-    const file = join(tempDir(), "mikud", "sync.env")
+    const file = join(tempDir(), "adiutor", "sync.env")
     const d = deps(standIn().fetch)
     expect(await connect(options({ target: "sync", envFile: file }), d)).toBe(0)
     expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(statSync(join(file, "..")).mode & 0o077).toBe(0)
-    expect(readFileSync(file, "utf8")).toBe(`MIKUD_URL=${URL_BASE}\nMIKUD_AGENT_TOKEN=${KEY}\n`)
+    expect(readFileSync(file, "utf8")).toBe(`ADIUTOR_URL=${URL_BASE}\nADIUTOR_AGENT_TOKEN=${KEY}\n`)
     expect(d.lines.join("\n")).not.toContain(KEY)
 
-    writeFileSync(file, `# the sync\nT3CODE_CLI_PATH=C:\\t3\\t3.cmd\nMIKUD_AGENT_TOKEN=old\n`, { mode: 0o644 })
+    writeFileSync(file, `# the sync\nT3CODE_CLI_PATH=C:\\t3\\t3.cmd\nADIUTOR_AGENT_TOKEN=old\n`, { mode: 0o644 })
     expect(await connect(options({ target: "sync", envFile: file }), deps(standIn().fetch))).toBe(0)
     expect(readFileSync(file, "utf8")).toBe(
-      `# the sync\nT3CODE_CLI_PATH=C:\\t3\\t3.cmd\nMIKUD_AGENT_TOKEN=${KEY}\nMIKUD_URL=${URL_BASE}\n`,
+      `# the sync\nT3CODE_CLI_PATH=C:\\t3\\t3.cmd\nADIUTOR_AGENT_TOKEN=${KEY}\nADIUTOR_URL=${URL_BASE}\n`,
     )
     expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(readFileSync(file, "utf8")).not.toContain(SESSION)
@@ -555,41 +555,41 @@ describe("connect: the sync's env file", () => {
     writeFileSync(
       file,
       [
-        "MIKUD_URL=https://old.example.com",
-        "MIKUD_AGENT_TOKEN=old-one",
+        "ADIUTOR_URL=https://old.example.com",
+        "ADIUTOR_AGENT_TOKEN=old-one",
         "T3CODE_CLI_PATH=C:\\t3\\t3.cmd",
-        "export MIKUD_AGENT_TOKEN=old-two",
+        "export ADIUTOR_AGENT_TOKEN=old-two",
         "# a comment",
-        "MIKUD_URL=https://older.example.com",
-        "MIKUD_OVERVIEW_DIR=C:\\overview",
+        "ADIUTOR_URL=https://older.example.com",
+        "ADIUTOR_OVERVIEW_DIR=C:\\overview",
         "",
       ].join("\n"),
     )
     expect(await connect(options({ target: "sync", envFile: file }), deps(standIn().fetch))).toBe(0)
     const text = readFileSync(file, "utf8")
     expect(parseEnvFile(text)).toEqual({
-      MIKUD_URL: URL_BASE,
-      MIKUD_AGENT_TOKEN: KEY,
+      ADIUTOR_URL: URL_BASE,
+      ADIUTOR_AGENT_TOKEN: KEY,
       T3CODE_CLI_PATH: "C:\\t3\\t3.cmd",
-      MIKUD_OVERVIEW_DIR: "C:\\overview",
+      ADIUTOR_OVERVIEW_DIR: "C:\\overview",
     })
-    expect(text.split("\n").filter((line) => /MIKUD_AGENT_TOKEN=/.test(line))).toEqual([`MIKUD_AGENT_TOKEN=${KEY}`])
-    expect(text.split("\n").filter((line) => /MIKUD_URL=/.test(line))).toEqual([`MIKUD_URL=${URL_BASE}`])
+    expect(text.split("\n").filter((line) => /ADIUTOR_AGENT_TOKEN=/.test(line))).toEqual([`ADIUTOR_AGENT_TOKEN=${KEY}`])
+    expect(text.split("\n").filter((line) => /ADIUTOR_URL=/.test(line))).toEqual([`ADIUTOR_URL=${URL_BASE}`])
     expect(text).toContain("# a comment\n")
   })
 
   it("ends the session when the key cannot be saved, and says which key to disconnect", async () => {
     const file = join(tempDir(), "sync.env")
     writeFileSync(file, "this line is not KEY=VALUE\n")
-    const mikud = standIn()
-    const d = deps(mikud.fetch)
+    const adiutor = standIn()
+    const d = deps(adiutor.fetch)
     expect(await connect(options({ target: "sync", envFile: file }), d)).toBe(1)
-    expect(mikud.sent.at(-1)?.path).toBe("/revoke-session")
+    expect(adiutor.sent.at(-1)?.path).toBe("/revoke-session")
     expect(d.lines.join("\n")).toContain('the key "claude-laptop" was created but could not be saved')
     expect(readFileSync(file, "utf8")).not.toContain(KEY)
   })
 
-  it("on Windows, restricts the file with icacls and checks it before asking Mikud for anything", async () => {
+  it("on Windows, restricts the file with icacls and checks it before asking Adiutor for anything", async () => {
     const file = join(tempDir(), "sync.env")
     const acl = (entries: string[]): RunResult => ({
       code: 0,
@@ -631,11 +631,11 @@ describe("connect: the sync's env file", () => {
     }
   })
 
-  it("on Windows, refuses the env file before asking Mikud when icacls is not in System32", async () => {
+  it("on Windows, refuses the env file before asking Adiutor when icacls is not in System32", async () => {
     const file = join(tempDir(), "sync.env")
-    const mikud = standIn()
+    const adiutor = standIn()
     const asked: string[] = []
-    const d = deps(mikud.fetch, {
+    const d = deps(adiutor.fetch, {
       platform: "win32",
       env: { USERNAME: "owner", USERDOMAIN: "DESKTOP" },
       systemCommand: async (name) => {
@@ -646,27 +646,27 @@ describe("connect: the sync's env file", () => {
     expect(await connect(options({ target: "sync", envFile: file }), d)).toBe(1)
     expect(asked).toEqual(["icacls"])
     expect(d.ran).toEqual([])
-    expect(mikud.sent).toEqual([])
+    expect(adiutor.sent).toEqual([])
     expect(d.lines.join("\n")).toContain("icacls was not found in %SystemRoot%\\System32")
     expect(readFileSync(file, "utf8")).toBe("")
   })
 
   it("reads icacls entries and sets only the two keys", () => {
-    const path = "C:\\Users\\owner\\AppData\\Local\\mikud\\sync.env"
+    const path = "C:\\Users\\owner\\AppData\\Local\\adiutor\\sync.env"
     expect(aclEntries(`${path} DESKTOP\\owner:(F)\n                 NT AUTHORITY\\SYSTEM:(F)\n\nDone\n`, path)).toEqual(
       ["DESKTOP\\owner:(F)", "NT AUTHORITY\\SYSTEM:(F)"],
     )
-    expect(withSyncKey("export MIKUD_URL=x\r\nOTHER=1\r\n", "https://m", "k")).toBe(
-      "MIKUD_URL=https://m\nOTHER=1\nMIKUD_AGENT_TOKEN=k\n",
+    expect(withSyncKey("export ADIUTOR_URL=x\r\nOTHER=1\r\n", "https://m", "k")).toBe(
+      "ADIUTOR_URL=https://m\nOTHER=1\nADIUTOR_AGENT_TOKEN=k\n",
     )
   })
 
   it("keeps the env file outside every repository by default", () => {
     expect(defaultEnvFile("win32", { LOCALAPPDATA: "C:\\Users\\owner\\AppData\\Local" })).toBe(
-      "C:\\Users\\owner\\AppData\\Local\\mikud\\sync.env",
+      "C:\\Users\\owner\\AppData\\Local\\adiutor\\sync.env",
     )
     expect(defaultEnvFile("linux", { XDG_CONFIG_HOME: "/home/owner/.config" })).toBe(
-      "/home/owner/.config/mikud/sync.env",
+      "/home/owner/.config/adiutor/sync.env",
     )
   })
 })
@@ -696,10 +696,10 @@ describe("connect: the command line", () => {
     expect((await run(["--name", "x", "--for", "claude", "--url", URL_BASE, "--days", "1.5"])).code).toBe(2)
     expect((await run(["--name", "x".repeat(33), "--for", "claude", "--url", URL_BASE])).code).toBe(2)
     expect((await run(["--name", "x", "--for", "claude", "--env", "/nonexistent/sync.env"])).code).toBe(2)
-    expect(connectUrl("http://mikud.example.com")).toBeUndefined()
-    expect(connectUrl("https://user:pw@mikud.example.com")).toBeUndefined()
-    expect(connectUrl("https://mikud.example.com/?q=1")).toBeUndefined()
-    expect(connectUrl("https://mikud.example.com/")).toBe("https://mikud.example.com")
+    expect(connectUrl("http://adiutor.example.com")).toBeUndefined()
+    expect(connectUrl("https://user:pw@adiutor.example.com")).toBeUndefined()
+    expect(connectUrl("https://adiutor.example.com/?q=1")).toBeUndefined()
+    expect(connectUrl("https://adiutor.example.com/")).toBe("https://adiutor.example.com")
     expect(connectUrl("http://127.0.0.1:8090")).toBe("http://127.0.0.1:8090")
   })
 

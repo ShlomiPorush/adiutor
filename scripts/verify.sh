@@ -6,7 +6,7 @@ set -euo pipefail
 # shellcheck source=scripts/lib/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
-PROJECT="mikud-verify"
+PROJECT="adiutor-verify"
 CHANGED_BASE=""
 CHECKS=1
 E2E=1
@@ -73,7 +73,7 @@ run_checks() {
   info "Agent skill: contract tests (node and sh versions)"
   in_toolchain "pnpm test:skill" || die "the agent skill's contract tests failed"
   info "Agent skill: the node version on Node 20 ($SKILL_NODE_IMAGE)"
-  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e MIKUD_IMPLS=node \
+  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e ADIUTOR_IMPLS=node \
     -v "$REPO_ROOT:/repo" -w /repo "$SKILL_NODE_IMAGE" node --test skill/test/contract.test.mjs ||
     die "the agent skill's contract tests failed on Node 20"
   info "Web UI build: local assets only, no mock API"
@@ -87,24 +87,24 @@ run_checks() {
 }
 
 # Fixed values only: neither a developer's .env.dev (real tokens), nor an interpolation file, nor the developer's
-# MIKUD_PUBLIC_URL reaches the verification stack. Its password and keys are new on every run
+# ADIUTOR_PUBLIC_URL reaches the verification stack. Its password and keys are new on every run
 # (stack.env in its temporary data directory). The tests' Origin is http://127.0.0.1:8090.
 stack() {
-  env -u COMPOSE_ENV_FILES MIKUD_IMAGE_TAG=verify MIKUD_PORT=0 MIKUD_LOCAL_ENV_FILE=/dev/null \
-    MIKUD_PUBLIC_URL=http://127.0.0.1:8090 MIKUD_STACK_ENV_FILE="${MIKUD_DATA_DIR:-/nonexistent}/stack.env" \
+  env -u COMPOSE_ENV_FILES ADIUTOR_IMAGE_TAG=verify ADIUTOR_PORT=0 ADIUTOR_LOCAL_ENV_FILE=/dev/null \
+    ADIUTOR_PUBLIC_URL=http://127.0.0.1:8090 ADIUTOR_STACK_ENV_FILE="${ADIUTOR_DATA_DIR:-/nonexistent}/stack.env" \
     docker compose --env-file /dev/null -p "$PROJECT" --project-directory "$REPO_ROOT" \
     -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
 }
 
 # The verification database, with this run's generated password.
 stack_db_url() {
-  echo "postgres://mikud:$(stack_db_password "$MIKUD_DATA_DIR")@postgres:5432/mikud"
+  echo "postgres://adiutor:$(stack_db_password "$ADIUTOR_DATA_DIR")@postgres:5432/adiutor"
 }
 
 cleanup_stack() {
   stack down --remove-orphans >/dev/null 2>&1 || true
-  if [ -n "${MIKUD_DATA_DIR:-}" ]; then
-    remove_data_dir "$MIKUD_DATA_DIR"
+  if [ -n "${ADIUTOR_DATA_DIR:-}" ]; then
+    remove_data_dir "$ADIUTOR_DATA_DIR"
   fi
 }
 
@@ -115,44 +115,44 @@ fail_stack() {
 }
 
 # Runs e2e/ in the Playwright image on the stack's network, with the stack's database for e2e/session.spec.ts. e2e/global-setup.ts forwards 127.0.0.1:8090,
-# the stack's MIKUD_PUBLIC_URL, to the container, so the server's Origin check sees its own address.
+# the stack's ADIUTOR_PUBLIC_URL, to the container, so the server's Origin check sees its own address.
 run_e2e() {
   local pinned
   pinned="$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/package.json")"
   [ "v$pinned-noble" = "${PLAYWRIGHT_IMAGE##*:}" ] ||
     die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
   docker run --rm --ipc=host --network "${PROJECT}_default" \
-    --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=mikud:8080 \
+    --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=adiutor:8080 \
     -e E2E_DATABASE_URL="$(stack_db_url)" \
     -v "$REPO_ROOT:/repo" -w /repo "$PLAYWRIGHT_IMAGE" \
     npx --no-install playwright test --config config/playwright.config.ts
 }
 
 run_integration() {
-  MIKUD_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mikud-verify.XXXXXX")"
-  export MIKUD_DATA_DIR
+  ADIUTOR_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/adiutor-verify.XXXXXX")"
+  export ADIUTOR_DATA_DIR
   trap cleanup_stack EXIT
-  ensure_stack_env "$MIKUD_DATA_DIR"
+  ensure_stack_env "$ADIUTOR_DATA_DIR"
 
   info "Integration: disposable PostgreSQL ($PROJECT)"
   stack up -d --remove-orphans --wait --wait-timeout 120 postgres || fail_stack "PostgreSQL did not become healthy"
   TOOLCHAIN_EXTRA_ARGS=(--network "${PROJECT}_default"
-    -e MIKUD_TEST_DATABASE_URL="$(stack_db_url)")
+    -e ADIUTOR_TEST_DATABASE_URL="$(stack_db_url)")
   in_toolchain "pnpm test:integration" || die "integration tests failed"
   TOOLCHAIN_EXTRA_ARGS=()
 
   info "Container: image, health, runtime user and hardening"
   build_image verify "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
-  stack up -d --wait --wait-timeout 120 mikud || fail_stack "the mikud container did not become healthy"
+  stack up -d --wait --wait-timeout 120 adiutor || fail_stack "the adiutor container did not become healthy"
   TOOLCHAIN_EXTRA_ARGS=(--network "${PROJECT}_default")
   # shellcheck disable=SC2016 # expands inside the container
-  in_toolchain 'body="$(node -e "fetch(\"http://mikud:8080/healthz\").then(async (r) => { console.log(r.status, await r.text()); process.exit(r.ok ? 0 : 1) })")" &&
+  in_toolchain 'body="$(node -e "fetch(\"http://adiutor:8080/healthz\").then(async (r) => { console.log(r.status, await r.text()); process.exit(r.ok ? 0 : 1) })")" &&
     echo "    /healthz: $body" && grep -q "\"database\":\"ok\"" <<<"$body"' ||
     fail_stack "/healthz does not report the database"
   TOOLCHAIN_EXTRA_ARGS=()
-  check_non_root "$PROJECT" mikud postgres
+  check_non_root "$PROJECT" adiutor postgres
   check_hardening "$PROJECT"
-  stack exec -T mikud test -f dist/server/cli.js || fail_stack "the image has no recovery command (dist/server/cli.js)"
+  stack exec -T adiutor test -f dist/server/cli.js || fail_stack "the image has no recovery command (dist/server/cli.js)"
   echo "    recovery command present: dist/server/cli.js"
 
   if [ $E2E -eq 1 ]; then
@@ -160,7 +160,7 @@ run_integration() {
     run_e2e || fail_stack "end-to-end tests failed"
     # The owner exists now: the bundled recovery command must reset it. Its output (a password) is not shown.
     info "Recovery command in the container"
-    stack exec -T mikud node dist/server/cli.js reset-password | grep -q '^New password: .\{20,\}$' ||
+    stack exec -T adiutor node dist/server/cli.js reset-password | grep -q '^New password: .\{20,\}$' ||
       fail_stack "node dist/server/cli.js reset-password did not reset the owner"
     echo "    reset-password set a new password"
   fi
@@ -168,8 +168,8 @@ run_integration() {
   info "Stopping $PROJECT"
   stack down --remove-orphans || die "the verification stack did not stop"
   [ -z "$(stack ps -q)" ] || die "the verification stack still runs after stopping it"
-  remove_data_dir "$MIKUD_DATA_DIR"
-  unset MIKUD_DATA_DIR
+  remove_data_dir "$ADIUTOR_DATA_DIR"
+  unset ADIUTOR_DATA_DIR
   trap - EXIT
 }
 

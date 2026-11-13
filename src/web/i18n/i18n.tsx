@@ -12,7 +12,7 @@ export type Language = "he" | "en"
 export type Vars = Record<string, string | number>
 
 const LOCALES: Record<Language, unknown> = { he, en }
-const STORAGE_KEY = "mikud.language"
+const STORAGE_KEY = "adiutor.language"
 
 function lookup(tree: unknown, key: string): string | undefined {
   let node: unknown = tree

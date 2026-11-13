@@ -123,9 +123,9 @@
     "system": "The system"
   },
   "app": {
-    "name": "Mikud",
-    "loading": "Loading Mikud...",
-    "unreachable": "Mikud did not answer"
+    "name": "Adiutor",
+    "loading": "Loading Adiutor...",
+    "unreachable": "Adiutor did not answer"
   },
   "common": {
     "close": "Close",
@@ -143,7 +143,7 @@
     "main": "Main",
     "more": "More",
     "allPages": "All pages",
-    "homeLabel": "Mikud, overview",
+    "homeLabel": "Adiutor, overview",
     "youAreHere": "You are here",
     "inboxCount": "{count} unsorted in the inbox",
     "morning": "Overview",
@@ -216,7 +216,7 @@
     }
   },
   "errors": {
-    "network": "Mikud did not answer. Check the connection",
+    "network": "Adiutor did not answer. Check the connection",
     "http": "The server answered HTTP {status}",
     "unexpected": "Something unexpected went wrong",
     "reasonThenRetry": "{reason}. Try again in a moment.",
@@ -683,7 +683,7 @@
       "api_key_delete": "disconnected an agent",
       "device_approve": "approved an agent connection",
       "device_deny": "denied an agent connection",
-      "session_connect": "gave mikud connect its short session",
+      "session_connect": "gave adiutor connect its short session",
       "session_revoke": "ended a session",
       "account_totp_disable": "turned off two-factor authentication",
       "account_backup_codes_new": "made new backup codes"
@@ -747,7 +747,7 @@
       },
       "agents": {
         "title": "Agent access",
-        "hint": "Agents and the sync connect with mikud connect: you approve each one in the browser, and it gets its own key with a name and an end date. A key keeps working after you sign out; disconnect it here when a machine is lost or a key leaks."
+        "hint": "Agents and the sync connect with adiutor connect: you approve each one in the browser, and it gets its own key with a name and an end date. A key keeps working after you sign out; disconnect it here when a machine is lost or a key leaks."
       },
       "secret-check": {
         "title": "Secret check",
@@ -831,15 +831,15 @@
     "lastUpdate": "Last message to the bot",
     "noUpdateYet": "None yet",
     "session": {
-      "idleDays": "Sign out after this long without Mikud open",
-      "idleDaysHint": "Days. Opening Mikud, or coming back to its tab, keeps a browser signed in. A shorter value does not shorten browsers already signed in; use Sign out everywhere for that. Default: 30.",
+      "idleDays": "Sign out after this long without Adiutor open",
+      "idleDaysHint": "Days. Opening Adiutor, or coming back to its tab, keeps a browser signed in. A shorter value does not shorten browsers already signed in; use Sign out everywhere for that. Default: 30.",
       "shortened": "Settings saved. Browsers already signed in keep their time; sign out everywhere to apply the shorter length now."
     },
     "env": {
       "pill": "Set by the environment",
       "tooltip": "An environment variable sets this; change it there",
-      "note": "Set by the environment variable {variable}. Change it there and restart Mikud.",
-      "refused": "Not saved: an environment variable sets this setting. Change it there and restart Mikud."
+      "note": "Set by the environment variable {variable}. Change it there and restart Adiutor.",
+      "refused": "Not saved: an environment variable sets this setting. Change it there and restart Adiutor."
     },
     "changed": "Changed",
     "changedTooltip": "Differs from the default",
@@ -883,7 +883,7 @@
     "home": "Open the overview"
   },
   "telegram": {
-    "help": "Send me any text and I will save it in Mikud, under {inbox}. Every morning, Sunday to Friday at 08:00, I send you what is waiting on you.",
+    "help": "Send me any text and I will save it in Adiutor, under {inbox}. Every morning, Sunday to Friday at 08:00, I send you what is waiting on you.",
     "saved": "Saved under {inbox}: {title}",
     "open": "Open",
     "refusedSecret": "Nothing was saved: the text looks like it holds a secret (a password, token, key or server address). Remove it and send it again.",
@@ -892,10 +892,10 @@
     "movedToNote": "Saved as a general note: {title}",
     "movedComment": "Moved into a general note from Telegram.",
     "alreadyNote": "This is a note already.",
-    "itemChanged": "The item changed in Mikud since then, so it stays an item. Open it in Mikud.",
+    "itemChanged": "The item changed in Adiutor since then, so it stays an item. Open it in Adiutor.",
     "noteUnknown": "This button no longer works. Nothing was changed.",
-    "refusedSecretNote": "Not moved: the text looks like it holds a secret. Remove it in Mikud first.",
-    "signInCode": "Your Mikud sign-in code: {code}\nIt works once, for a few minutes. If you are not signing in right now, change your password in Mikud.",
+    "refusedSecretNote": "Not moved: the text looks like it holds a secret. Remove it in Adiutor first.",
+    "signInCode": "Your Adiutor sign-in code: {code}\nIt works once, for a few minutes. If you are not signing in right now, change your password in Adiutor.",
     "morning": {
       "allClear": "Nothing is waiting on you today.",
       "waiting": "Waiting on you: {count}",
@@ -923,10 +923,10 @@
     "hide": "Hide password",
     "capsLock": "Caps Lock is on",
     "code": "Code",
-    "codeHint": "The 6 digits your authenticator app shows for Mikud. They change every 30 seconds.",
+    "codeHint": "The 6 digits your authenticator app shows for Adiutor. They change every 30 seconds.",
     "recovery": "Forgot the password? On the server, run this. Then sign in with your authenticator or a backup code:",
     "error": {
-      "network": "Mikud did not answer. Check the connection and try again.",
+      "network": "Adiutor did not answer. Check the connection and try again.",
       "wrongPassword": "The username or password is not right.",
       "wrongCode": "That code is not right. Enter the code your app shows now.",
       "codeExpired": "The sign-in took too long. Enter your password again.",
@@ -946,17 +946,17 @@
   },
   "login": {
     "title": "Sign in",
-    "description": "Sign in to Mikud with your username and password.",
+    "description": "Sign in to Adiutor with your username and password.",
     "submit": "Continue",
     "signingIn": "Signing in...",
     "codeTitle": "Enter your code",
-    "codeDescription": "Open your authenticator app and enter the 6-digit code for Mikud.",
+    "codeDescription": "Open your authenticator app and enter the 6-digit code for Adiutor.",
     "verify": "Sign in",
     "verifying": "Checking...",
     "back": "Back",
     "backupDescription": "Enter one of the backup codes you saved.",
-    "otpDescription": "Mikud sends a sign-in code to your Telegram chat.",
-    "otpHint": "The 6 digits Mikud sent to your Telegram chat.",
+    "otpDescription": "Adiutor sends a sign-in code to your Telegram chat.",
+    "otpHint": "The 6 digits Adiutor sent to your Telegram chat.",
     "otpSend": "Send a code to Telegram",
     "otpSending": "Sending...",
     "useApp": "Use the authenticator app",
@@ -964,7 +964,7 @@
     "useOtp": "Send a code to Telegram instead"
   },
   "setup": {
-    "title": "Welcome to Mikud",
+    "title": "Welcome to Adiutor",
     "description": "Create the owner account. Two-factor authentication is set up next and is required.",
     "steps": "Setup steps",
     "stepAccount": "Account",
@@ -972,14 +972,14 @@
     "stepDone": "done",
     "create": "Create account",
     "creating": "Creating...",
-    "alreadySetUp": "Mikud already has its owner. Sign in instead.",
+    "alreadySetUp": "Adiutor already has its owner. Sign in instead.",
     "totpTitle": "Set up two-factor authentication",
     "totpDescription": "Required. Scan the QR code with an authenticator app such as 1Password, Aegis or Google Authenticator.",
     "confirmPassword": "Your password",
     "confirmPasswordHint": "Needed once to start the setup.",
     "start": "Continue",
     "starting": "Checking...",
-    "qrAlt": "QR code to add Mikud to an authenticator app",
+    "qrAlt": "QR code to add Adiutor to an authenticator app",
     "manual": "Can't scan it? Enter this key in the app:",
     "enterCode": "Then enter the code the app shows:",
     "finish": "Finish setup",
@@ -988,7 +988,7 @@
     "stepCodes": "Backup codes",
     "codesTitle": "Save your backup codes",
     "codesDescription": "Two-factor is on, and every other browser was signed out. Without these codes, losing the authenticator app locks you out.",
-    "continue": "Continue to Mikud",
+    "continue": "Continue to Adiutor",
     "signOutOthersFailed": "Two-factor is on, but signing out the other browsers failed. Try again, so no browser stays signed in with the password alone.",
     "signOutOthersRetry": "Sign out the other browsers"
   },
@@ -997,7 +997,7 @@
     "description": "The browsers signed in to your account, your password, two-factor authentication and the way back in. Each action here takes effect at once.",
     "signedInAs": "Signed in as",
     "sessions": "Signed-in browsers",
-    "sessionsHint": "Each browser where you are signed in, and when it is signed out unless you open Mikud there again.",
+    "sessionsHint": "Each browser where you are signed in, and when it is signed out unless you open Adiutor there again.",
     "thisBrowser": "This browser",
     "signedIn": "Signed in",
     "unknownBrowser": "Unknown browser",
@@ -1035,10 +1035,10 @@
     "done": "Done",
     "newAuthenticator": "Set up a new authenticator",
     "newAuthenticatorTitle": "Set up a new authenticator?",
-    "newAuthenticatorHint": "Enter your password. Two-factor is turned off, and Mikud takes you straight to setting up the new app. Until you finish, Mikud stays closed.",
+    "newAuthenticatorHint": "Enter your password. Two-factor is turned off, and Adiutor takes you straight to setting up the new app. Until you finish, Adiutor stays closed.",
     "newAuthenticatorSubmit": "Turn off and set up again",
     "newAuthenticatorBusy": "Turning off...",
-    "connectSession": "mikud connect (agent approval)",
+    "connectSession": "adiutor connect (agent approval)",
     "connectSessionHint": "A short session for one agent approval; it normally ends within seconds.",
     "endOne": "Sign out",
     "endOneTitle": "Sign out {name}?",
@@ -1056,23 +1056,23 @@
     "recoveryRow": "Reset the password on the server"
   },
   "backupCodes": {
-    "hint": "These {count} backup codes let you in without the authenticator app, once each. Mikud shows them only now. Keep them somewhere safe, apart from this device.",
+    "hint": "These {count} backup codes let you in without the authenticator app, once each. Adiutor shows them only now. Keep them somewhere safe, apart from this device.",
     "copy": "Copy all",
     "copied": "The backup codes were copied",
     "copyFailed": "Could not copy. Download them or write them down.",
     "download": "Download",
     "saved": "I saved the backup codes",
-    "fileHeading": "Mikud backup codes. Each code signs in once without the authenticator app."
+    "fileHeading": "Adiutor backup codes. Each code signs in once without the authenticator app."
   },
   "agentKeys": {
     "howTitle": "How to connect",
-    "howHint": "Run the command in the Mikud checkout on your computer. It opens Mikud to approve the agent; the key never shows on this page.",
+    "howHint": "Run the command in the Adiutor checkout on your computer. It opens Adiutor to approve the agent; the key never shows on this page.",
     "how": {
       "sync": "The sync on this computer",
       "claude": "Claude Code",
       "codex": "Codex"
     },
-    "howOptions": "{name} sets the name shown below and {days} how long the key works (1 to 365 days, 90 if left out). For Claude Code and Codex the command adds Mikud to the client itself; restart Codex afterwards. If the client's command is missing or fails, it prints the setup once instead, and that can stay in your shell history.",
+    "howOptions": "{name} sets the name shown below and {days} how long the key works (1 to 365 days, 90 if left out). For Claude Code and Codex the command adds Adiutor to the client itself; restart Codex afterwards. If the client's command is missing or fails, it prints the setup once instead, and that can stay in your shell history.",
     "listTitle": "Connected agents",
     "loading": "Loading the agents...",
     "failed": "Could not load the agents",
@@ -1109,20 +1109,20 @@
   },
   "connect": {
     "title": "Connect an agent",
-    "lead": "An agent on your computer asks for its own key to Mikud.",
+    "lead": "An agent on your computer asks for its own key to Adiutor.",
     "enterCode": "Enter the code your agent shows.",
     "code": "Code",
     "codeInvalid": "The code has 8 letters and digits, as the agent shows it.",
     "continue": "Continue",
     "loading": "Loading the request...",
     "who": "Who is asking",
-    "client": "mikud connect, run by an agent or by the sync",
+    "client": "adiutor connect, run by an agent or by the sync",
     "identityTag": "Started by an agent",
     "identity": "Allow only if you just started this in your agent and it shows the same code.",
     "what": "What it may do",
     "whatKey": "It gets one agent key, with the name and the days set in its command. It can read the board and keep items up to date.",
     "never": "Agents can never delete items or projects, change a project's stage, or manage agents.",
-    "warnTitle": "Agents do not ask for another approval in Mikud.",
+    "warnTitle": "Agents do not ask for another approval in Adiutor.",
     "warnText": "Threads and notes can contain instructions that mislead an agent. Allow only what you started, for the shortest time it needs.",
     "signedInAs": "Signed in as {user}.",
     "footnote": "Disconnect this agent at any time in Settings → Agent access.",
@@ -1136,9 +1136,9 @@
       "expired": "This code expired.",
       "unknown": "No request has this code.",
       "answered": "This request was already answered.",
-      "network": "Mikud could not be reached.",
+      "network": "Adiutor could not be reached.",
       "rate_limited": "Too many attempts from this address.",
-      "other": "Mikud could not read the request."
+      "other": "Adiutor could not read the request."
     },
     "nothingShared": "Close this window and connect the agent again. Nothing was shared with it.",
     "failed": {

@@ -70,7 +70,7 @@ const pair = effectiveTelegram(settings, env.overrides, env.cipher)
 if (pair.state === "incomplete") log.warn("telegram is incomplete: the bot is off", { missing: pair.missing })
 
 // The image holds the built UI in dist/web next to the server bundle; a checkout without a UI build serves the API only.
-const webRoot = process.env.MIKUD_WEB_DIR ?? "dist/web"
+const webRoot = process.env.ADIUTOR_WEB_DIR ?? "dist/web"
 const web = existsSync(join(webRoot, "index.html")) ? { root: webRoot } : undefined
 const app = createApp({
   checkDatabase: database.ping,
@@ -79,7 +79,7 @@ const app = createApp({
 })
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
-  log.info(`Mikud ${config.version} listening`, { port })
+  log.info(`Adiutor ${config.version} listening`, { port })
 }) as Server
 
 const shutdown = (signal: string) => {

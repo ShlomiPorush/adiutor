@@ -133,7 +133,7 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             .for("update")
           if (existing) {
             projectIds.set(p.t3ProjectId, existing.id)
-            // The owner names projects in Mikud; the sync only fills a missing repository.
+            // The owner names projects in Adiutor; the sync only fills a missing repository.
             if (p.repo && !existing.githubRepo) {
               const [after] = await tx
                 .update(projects)

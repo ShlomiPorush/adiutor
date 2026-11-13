@@ -65,9 +65,9 @@ export const PATCH_FIELD: Record<keyof SettingsPatch, DraftField> = {
 
 /** The variable that locks each field the environment may set (`setting_locked` names it). */
 const VARIABLE_FIELD: Record<string, DraftField> = {
-  MIKUD_TELEGRAM_BOT_TOKEN: "botToken",
-  MIKUD_TELEGRAM_CHAT_ID: "chatId",
-  MIKUD_PRIVATE_DOMAINS: "privateDomains",
+  ADIUTOR_TELEGRAM_BOT_TOKEN: "botToken",
+  ADIUTOR_TELEGRAM_CHAT_ID: "chatId",
+  ADIUTOR_PRIVATE_DOMAINS: "privateDomains",
 }
 
 /** The sections that hold a change: a dot beside each in the sidebar and the picker. */

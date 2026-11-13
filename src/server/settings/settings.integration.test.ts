@@ -101,10 +101,10 @@ describe("Telegram in Settings", () => {
     expect([locked.status, locked.json.error.code, locked.json.error.variable]).toEqual([
       409,
       "setting_locked",
-      "MIKUD_TELEGRAM_BOT_TOKEN",
+      "ADIUTOR_TELEGRAM_BOT_TOKEN",
     ])
     expect((await read()).telegram).toMatchObject({
-      botToken: { set: true, readable: true, locked: true, variable: "MIKUD_TELEGRAM_BOT_TOKEN" },
+      botToken: { set: true, readable: true, locked: true, variable: "ADIUTOR_TELEGRAM_BOT_TOKEN" },
       state: "incomplete",
       missing: ["chatId"],
     })
@@ -203,10 +203,10 @@ describe("the secret check's private domains", () => {
     expect((await read()).privateDomains).toEqual({
       value: ["lab.test"],
       locked: true,
-      variable: "MIKUD_PRIVATE_DOMAINS",
+      variable: "ADIUTOR_PRIVATE_DOMAINS",
     })
     const locked = await patch({ privateDomains: [] })
-    expect([locked.status, locked.json.error.variable]).toEqual([409, "MIKUD_PRIVATE_DOMAINS"])
+    expect([locked.status, locked.json.error.variable]).toEqual([409, "ADIUTOR_PRIVATE_DOMAINS"])
     await expect(
       createItem(
         t.ctx,

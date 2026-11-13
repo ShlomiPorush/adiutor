@@ -387,7 +387,7 @@ export type Settings = {
   dateFormat: string
   timeFormat: string
   language: Language
-  /** Sign out after this many days without Mikud open. */
+  /** Sign out after this many days without Adiutor open. */
   sessionIdleDays: number
   /** Sign-in codes to Telegram as a second factor (off by default). */
   otpViaTelegram: boolean

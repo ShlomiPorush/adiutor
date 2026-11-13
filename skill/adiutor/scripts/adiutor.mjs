@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /*
- * mikud for agents: connect to Mikud with a code the owner approves in the browser (Better Auth's device
- * authorization), then keep the owner's board current through Mikud's /api/v1 routes.
+ * adiutor for agents: connect to Adiutor with a code the owner approves in the browser (Better Auth's device
+ * authorization), then keep the owner's board current through Adiutor's /api/v1 routes.
  *
- * One of three versions with one contract: mikud.mjs (Node 20+), mikud.ps1 (Windows PowerShell 5.1 and PowerShell 7)
- * and mikud.sh (POSIX sh and curl). Same commands, same one-line JSON answers and error codes, the same files and the
+ * One of three versions with one contract: adiutor.mjs (Node 20+), adiutor.ps1 (Windows PowerShell 5.1 and PowerShell 7)
+ * and adiutor.sh (POSIX sh and curl). Same commands, same one-line JSON answers and error codes, the same files and the
  * same lock, so they can run side by side on one computer. No secret ever appears in the output.
  *
  * The approved code gives a session token, which is a full owner session. It lives in memory only: the command turns
  * it into one agent key (api-key/create) and ends that session (revoke-session) at once, whatever happens in between.
- * Mikud has no refresh token: the key is the connection until it ends or the owner disconnects it. What a lost answer
- * or a stopped run may have left on Mikud (a session, a key) is written to the `left` record before the information
- * is lost, and reported with its Mikud address until it ends or the owner says he cleaned up.
+ * Adiutor has no refresh token: the key is the connection until it ends or the owner disconnects it. What a lost answer
+ * or a stopped run may have left on Adiutor (a session, a key) is written to the `left` record before the information
+ * is lost, and reported with its Adiutor address until it ends or the owner says he cleaned up.
  */
 import { execFileSync } from "node:child_process"
 import { randomBytes } from "node:crypto"
@@ -19,18 +19,18 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-const CLIENT_ID = "mikud-connect"
+const CLIENT_ID = "adiutor-connect"
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 const DAYS_DEFAULT = 90
 const DAYS_MIN = 1
 const DAYS_MAX = 365
 const whole = (value, fallback) => (/^[1-9][0-9]*$/.test(String(value ?? "")) ? Number(value) : fallback)
-const WAIT_SECONDS = whole(process.env.MIKUD_WAIT_SECONDS, 90)
+const WAIT_SECONDS = whole(process.env.ADIUTOR_WAIT_SECONDS, 90)
 // Test seams: the tests shorten the lock wait and the request timeout, and move the clock forward.
-const LOCK_WAIT_MS = whole(process.env.MIKUD_TEST_LOCK_WAIT_MS, 20_000)
-const TIMEOUT_MS = whole(process.env.MIKUD_TEST_TIMEOUT_MS, 15_000)
-const CLOCK_OFFSET = whole(process.env.MIKUD_TEST_CLOCK_OFFSET, 0)
-// Device codes and keys as Mikud sends them; anything else is refused before it is stored.
+const LOCK_WAIT_MS = whole(process.env.ADIUTOR_TEST_LOCK_WAIT_MS, 20_000)
+const TIMEOUT_MS = whole(process.env.ADIUTOR_TEST_TIMEOUT_MS, 15_000)
+const CLOCK_OFFSET = whole(process.env.ADIUTOR_TEST_CLOCK_OFFSET, 0)
+// Device codes and keys as Adiutor sends them; anything else is refused before it is stored.
 const SECRET = /^[A-Za-z0-9._~+/=-]{8,512}$/
 // Every value in a file: no quote, backslash or control character, so the shell version reads it too.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
@@ -94,7 +94,7 @@ const LEFT_FIELDS = [
   ["reason", "s"],
   ["at", "s"],
 ]
-// Reasons whose key end date came from Mikud: the entry drops by itself once that date has passed.
+// Reasons whose key end date came from Adiutor: the entry drops by itself once that date has passed.
 const DATED = new Set(["replaced", "disconnected", "not_saved"])
 const REASONS = new Set([...DATED, "key_unknown", "session_unknown"])
 
@@ -128,22 +128,22 @@ const rm = (target) => {
 // Windows tools by their full path: in Git Bash, for one, whoami is a different program.
 const system32 = (exe) => path.join(process.env.SystemRoot || "C:\\Windows", "System32", exe)
 const groupedCode = (code) => (code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code)
-const waitCommand = (origin) => `mikud connect --wait --url ${origin}`
+const waitCommand = (origin) => `adiutor connect --wait --url ${origin}`
 const SESSION_TEXT =
-  "Mikud may have opened a 'mikud connect (agent approval)' session that was not ended: end it on the Account page."
+  "Adiutor may have opened a 'adiutor connect (agent approval)' session that was not ended: end it on the Account page."
 
-const HELP = `mikud: keep the owner's Mikud board current, after the owner approves this computer user once.
+const HELP = `adiutor: keep the owner's Adiutor board current, after the owner approves this computer user once.
 
   connect [--url <address>] [--days <1-365>] [--replace]
                           Ask to connect; prints a link and a code to show the owner.
   connect --wait --url <address>
                           Wait up to ${WAIT_SECONDS} s for the approval; run again while it answers still_waiting.
-  status [--clear-left]   Whether this computer user is connected, and what the command left on Mikud (no secrets).
-  disconnect              Forget the connection on this computer (the key stays on Mikud until it ends).
+  status [--clear-left]   Whether this computer user is connected, and what the command left on Adiutor (no secrets).
+  disconnect              Forget the connection on this computer (the key stays on Adiutor until it ends).
   get '<path>'            GET /api/v1/<path>, for example: get 'items?q=login'
   post '<path>' --json '<body>' | --json-file <file>
   patch '<path>' --json '<body>' | --json-file <file>
-                          --as <label> (or MIKUD_AGENT_LABEL) names the agent in Mikud's activity log.`
+                          --as <label> (or ADIUTOR_AGENT_LABEL) names the agent in Adiutor's activity log.`
 
 /* Arguments */
 
@@ -163,7 +163,7 @@ function parseArgs(args) {
     else if (a === "--replace") opts.replace = true
     else if (a === "--wait") opts.wait = true
     else if (a === "--clear-left") opts.clearLeft = true
-    else if (a.startsWith("--")) throw new Fail("bad_option", `Unknown option ${a}. Run: mikud help`)
+    else if (a.startsWith("--")) throw new Fail("bad_option", `Unknown option ${a}. Run: adiutor help`)
     else opts.positional.push(a)
   }
   return opts
@@ -184,14 +184,14 @@ function originOf(raw) {
   } catch {
     throw new Fail(
       "no_url",
-      "That is not an address. Ask the owner for Mikud's address, for example https://mikud.example.com.",
+      "That is not an address. Ask the owner for Adiutor's address, for example https://adiutor.example.com.",
     )
   }
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1"
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
-    throw new Fail("no_url", "Mikud's address must start with https:// (http only for localhost or 127.0.0.1).")
+    throw new Fail("no_url", "Adiutor's address must start with https:// (http only for localhost or 127.0.0.1).")
   if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== ""))
-    throw new Fail("no_url", "Give Mikud's address alone, for example https://mikud.example.com.")
+    throw new Fail("no_url", "Give Adiutor's address alone, for example https://adiutor.example.com.")
   return url.origin
 }
 
@@ -199,7 +199,7 @@ function originOf(raw) {
 
 function context() {
   const base = win ? process.env.USERPROFILE || os.homedir() : os.homedir()
-  const dir = path.resolve(process.env.MIKUD_SKILL_HOME || path.join(base, ".mikud"))
+  const dir = path.resolve(process.env.ADIUTOR_SKILL_HOME || path.join(base, ".adiutor"))
   return {
     dir,
     connection: path.join(dir, "connection"),
@@ -240,7 +240,7 @@ function secureHome(ctx, create) {
     }
   } else {
     if (st.uid !== process.getuid())
-      throw insecure(`${ctx.dir} belongs to another user. Remove it, or set MIKUD_SKILL_HOME to a folder of your own.`)
+      throw insecure(`${ctx.dir} belongs to another user. Remove it, or set ADIUTOR_SKILL_HOME to a folder of your own.`)
     if ((st.mode & 0o777) !== 0o700) throw insecure(`Others can open ${ctx.dir}. Run: chmod 700 '${ctx.dir}'`)
   }
   homeChecked = true
@@ -437,7 +437,7 @@ function serialize(fields, rec) {
   const parts = fields.map(([k, type]) => {
     if (type === "n") return `"${k}":${Math.max(0, Math.floor(Number(rec[k]) || 0))}`
     const value = String(rec[k] ?? "")
-    if (!PLAIN.test(value)) throw new Fail("unexpected_answer", `Mikud sent a value that cannot be stored (${k}).`)
+    if (!PLAIN.test(value)) throw new Fail("unexpected_answer", `Adiutor sent a value that cannot be stored (${k}).`)
     return `"${k}":"${value}"`
   })
   return `{${parts.join(",")}}`
@@ -457,7 +457,7 @@ function parseLine(fields, line, file) {
 }
 
 function hook(point) {
-  const at = process.env[`MIKUD_TEST_HOLD_${point.toUpperCase().replace(/-/g, "_")}`]
+  const at = process.env[`ADIUTOR_TEST_HOLD_${point.toUpperCase().replace(/-/g, "_")}`]
   if (!at) return
   fs.writeFileSync(`${at}.reached`, String(process.pid))
   for (let i = 0; i < 1200 && !fs.existsSync(`${at}.go`); i++) pause(50)
@@ -561,7 +561,7 @@ function savePending(ctx, rec, seen) {
   return { ...rec }
 }
 
-/* The left record: what the command left on Mikud, with non-secret fields only. */
+/* The left record: what the command left on Adiutor, with non-secret fields only. */
 
 function readLeft(ctx) {
   const text = readPrivate(ctx, ctx.left)
@@ -754,23 +754,23 @@ async function acquire(ctx) {
 /** The answer once the wait for the lock ended; `state` is the verdict on the lock as last read. */
 function lockBusy(ctx, state) {
   const byHand =
-    "Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again."
+    "Nothing was sent. If no adiutor command runs on this computer, remove that file by hand and run the command again."
   if (fs.existsSync(ctx.breaker) || isLink(ctx.breaker))
     return new Fail(
       "busy",
-      `Another mikud command may be removing a lock, or it stopped while doing so and left ${ctx.breaker}. ${byHand}`,
+      `Another adiutor command may be removing a lock, or it stopped while doing so and left ${ctx.breaker}. ${byHand}`,
     )
   if (state === "unknown")
     return new Fail(
       "busy",
-      `Another mikud command may hold the lock ${ctx.lock}, and this command cannot tell whether it still runs. ${byHand}`,
+      `Another adiutor command may hold the lock ${ctx.lock}, and this command cannot tell whether it still runs. ${byHand}`,
     )
   if (state === "gone")
     return new Fail(
       "busy",
-      `The lock ${ctx.lock} was left by a mikud command that has ended, and this command cannot remove it. ${byHand}`,
+      `The lock ${ctx.lock} was left by an adiutor command that has ended, and this command cannot remove it. ${byHand}`,
     )
-  return new Fail("busy", "Another mikud command is using the connection. Nothing was sent; run it again.")
+  return new Fail("busy", "Another adiutor command is using the connection. Nothing was sent; run it again.")
 }
 
 const isLink = (file) => {
@@ -840,7 +840,7 @@ function release(ctx) {
 
 /** Before a request that spends a one-time secret, and before every change to a file: the lock must be this command's. */
 function assertMine(ctx) {
-  if (!mine(ctx)) throw new Fail("busy", "Another mikud command took over the connection. Run it again.")
+  if (!mine(ctx)) throw new Fail("busy", "Another adiutor command took over the connection. Run it again.")
 }
 
 // A temporary file of writePrivate. Every one is written under the lock, so the holder finds only those a stopped
@@ -885,14 +885,14 @@ const NOT_SENT = new Set([
   "ERR_TLS_CERT_ALTNAME_INVALID",
 ])
 
-/** One request to the stored origin only, never following a redirect. `connect` names the request mikud-connect. */
+/** One request to the stored origin only, never following a redirect. `connect` names the request adiutor-connect. */
 async function request(origin, method, url, { json, bearer, connect, label } = {}) {
-  if (new URL(url).origin !== origin) throw new Fail("bad_path", "Only Mikud's own address is called.")
+  if (new URL(url).origin !== origin) throw new Fail("bad_path", "Only Adiutor's own address is called.")
   const headers = { accept: "application/json" }
   if (json !== undefined) headers["content-type"] = "application/json"
   if (bearer) headers.authorization = `Bearer ${bearer}`
   if (connect) headers["user-agent"] = CLIENT_ID
-  if (label) headers["x-mikud-agent"] = label
+  if (label) headers["x-adiutor-agent"] = label
   let res
   try {
     res = await fetch(url, {
@@ -912,7 +912,7 @@ async function request(origin, method, url, { json, bearer, connect, label } = {
     res.body?.cancel().catch(() => {})
     throw new Fail(
       "unreachable",
-      `${origin} answered with a redirect (${res.status}), which the command does not follow. Check Mikud's address.`,
+      `${origin} answered with a redirect (${res.status}), which the command does not follow. Check Adiutor's address.`,
       { sent: true },
     )
   }
@@ -929,7 +929,7 @@ async function request(origin, method, url, { json, bearer, connect, label } = {
   return { status: res.status, text, json: parsed }
 }
 
-/** A refusal: Mikud's {error: {code, message}} (or Better Auth's code), carried in `body`. */
+/** A refusal: Adiutor's {error: {code, message}} (or Better Auth's code), carried in `body`. */
 function httpFail(r, what) {
   const body = r.json !== null && typeof r.json === "object" ? r.json : null
   const inner = body?.error && typeof body.error === "object" ? body.error : null
@@ -944,7 +944,7 @@ function httpFail(r, what) {
 /* Connecting */
 
 function keyName() {
-  const raw = process.env.MIKUD_AGENT_NAME || host()
+  const raw = process.env.ADIUTOR_AGENT_NAME || host()
   const computer =
     raw
       .replace(/[^A-Za-z0-9._-]+/g, "-")
@@ -974,12 +974,12 @@ const connectedAnswer = (conn) => ({
 /** The key name was saved as the connection: the attempt finished creating its key. */
 const keySaved = (pend, conn) => Boolean(pend.keySaved || conn?.keyName === pend.keyName)
 
-/** What may be left on Mikud if this attempt were removed now; nothing for a completed connect. */
+/** What may be left on Adiutor if this attempt were removed now; nothing for a completed connect. */
 function attemptWarnings(pend, conn) {
   const warnings = []
   if (pend.phase === "creating_key") {
     // The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts. A create
-    // that Mikud refused, or that was never sent, made no key.
+    // that Adiutor refused, or that was never sent, made no key.
     if (!keySaved(pend, conn) && !pend.noKey) warnings.push("key_unknown")
     if (pend.sessionOpen) warnings.push("session_unknown")
   } else if (pend.pollInFlight || pend.uncertain || pend.sessionOpen) warnings.push("session_unknown")
@@ -987,7 +987,7 @@ function attemptWarnings(pend, conn) {
 }
 
 /**
- * Removes an attempt, after writing what it may have left on Mikud. Under the lock; the file is removed only while it
+ * Removes an attempt, after writing what it may have left on Adiutor. Under the lock; the file is removed only while it
  * is exactly as this command last read or wrote it (`seen`).
  */
 function removeAttempt(ctx, pend, conn, seen = pend) {
@@ -1010,7 +1010,7 @@ function unknownFail(warnings, pend) {
     )
   return new Fail(
     "session_unknown",
-    `The connection to ${pend.origin} did not finish, and the command cannot tell what Mikud did. ${SESSION_TEXT}`,
+    `The connection to ${pend.origin} did not finish, and the command cannot tell what Adiutor did. ${SESSION_TEXT}`,
   )
 }
 
@@ -1035,7 +1035,7 @@ async function connect(ctx, opts) {
     if (!origin)
       throw new Fail(
         "no_url",
-        "No Mikud address is known. Ask the owner for it, then run: mikud connect --url <address>",
+        "No Adiutor address is known. Ask the owner for it, then run: adiutor connect --url <address>",
       )
     // The open code again, unless asked for a new one (--replace: the link did not work for the owner).
     if (pend && !opts.replace && pend.origin === origin && pend.phase === "polling" && pend.codeExpiresAt > now())
@@ -1043,25 +1043,25 @@ async function connect(ctx, opts) {
     if (conn && !opts.replace)
       throw new Fail(
         "already_connected",
-        `Already connected to ${conn.origin} with the key "${conn.keyName}", until ${conn.expiresAt}. To connect again, run: mikud connect --replace`,
+        `Already connected to ${conn.origin} with the key "${conn.keyName}", until ${conn.expiresAt}. To connect again, run: adiutor connect --replace`,
       )
     const r = await request(origin, "POST", `${origin}/api/auth/device/code`, {
       json: { client_id: CLIENT_ID },
       connect: true,
     })
-    if (r.status !== 200) throw httpFail(r, "Asking Mikud for a code")
+    if (r.status !== 200) throw httpFail(r, "Asking Adiutor for a code")
     const d = r.json ?? {}
     const deviceCode = str(d.device_code)
     const userCode = str(d.user_code)
     const link = str(d.verification_uri_complete)
     if (!SECRET.test(deviceCode) || !/^[A-Za-z0-9-]{4,20}$/.test(userCode) || !PLAIN.test(link))
-      throw new Fail("unexpected_answer", "Mikud answered without a usable code. Nothing was stored.")
+      throw new Fail("unexpected_answer", "Adiutor answered without a usable code. Nothing was stored.")
     let linkOrigin = ""
     try {
       linkOrigin = new URL(link).origin
     } catch {}
     if (linkOrigin !== origin)
-      throw new Fail("unexpected_answer", `Mikud's approval link is not on ${origin}. Nothing was stored.`)
+      throw new Fail("unexpected_answer", `Adiutor's approval link is not on ${origin}. Nothing was stored.`)
     // A pending attempt is replaced only now, once the new code exists; its link stops being used.
     if (pend) removeAttempt(ctx, pend, conn)
     const t = now()
@@ -1097,7 +1097,7 @@ async function waitForApproval(ctx, opts) {
   let origin = opts.url ? originOf(opts.url) : ""
   if (!origin) {
     origin = readPending(ctx)?.origin ?? ""
-    if (!origin) throw new Fail("not_connected", "No connection is being made. Run: mikud connect --url <address>")
+    if (!origin) throw new Fail("not_connected", "No connection is being made. Run: adiutor connect --url <address>")
   }
   const until = Date.now() + WAIT_SECONDS * 1000
   const state = { attemptId: null }
@@ -1130,7 +1130,7 @@ async function waitStep(ctx, origin, state) {
     // Another command finished this attempt (a parallel --wait), or it was never made here.
     if (conn?.origin === origin && (state.attemptId || !pend)) return { done: connectedAnswer(conn) }
     if (state.attemptId) throw new Fail("not_connected", `The connection to ${origin} was cancelled meanwhile.`)
-    throw new Fail("not_connected", `No connection to ${origin} is being made. Run: mikud connect --url ${origin}`)
+    throw new Fail("not_connected", `No connection to ${origin} is being made. Run: adiutor connect --url ${origin}`)
   }
   // Replaced meanwhile (connect --replace): the new attempt has its own link and code.
   if (state.attemptId && pend.attemptId !== state.attemptId) return { done: pendingAnswer(pend) }
@@ -1144,7 +1144,7 @@ async function waitStep(ctx, origin, state) {
   if (pend.codeExpiresAt <= t) {
     const warnings = removeAttempt(ctx, pend, conn)
     if (warnings.length) throw unknownFail(warnings, pend)
-    throw new Fail("expired", `The code expired before it was approved. Run: mikud connect --url ${origin}`)
+    throw new Fail("expired", `The code expired before it was approved. Run: adiutor connect --url ${origin}`)
   }
   if (pend.nextPollAt > t) return { wait: pend.nextPollAt - t }
   // A mark left set: the run before this one sent a poll and never recorded its answer.
@@ -1184,7 +1184,7 @@ async function waitStep(ctx, origin, state) {
     if (warnings.length) throw unknownFail(warnings, pend)
     if (error === "access_denied")
       throw new Fail("denied", "The owner did not approve the connection. Nothing was created.")
-    throw new Fail("expired", `The code is no longer valid. Run: mikud connect --url ${origin}`)
+    throw new Fail("expired", `The code is no longer valid. Run: adiutor connect --url ${origin}`)
   }
   // A failure after the server may have started: a session may exist.
   if (r.status >= 500 || r.status === 200) pend.uncertain = 1
@@ -1194,7 +1194,7 @@ async function waitStep(ctx, origin, state) {
 }
 
 /**
- * Ends the approval's session with its own token. True only when Mikud confirmed it. Sent even after the lock was
+ * Ends the approval's session with its own token. True only when Adiutor confirmed it. Sent even after the lock was
  * lost: no other command knows this token, and a session left open is the worse outcome.
  */
 async function endSession(origin, sessionToken) {
@@ -1224,7 +1224,7 @@ async function redeem(ctx, seen, conn, sessionToken) {
     // Nothing is sent before this mark is written: the session ends at once.
     await endSession(seen.origin, sessionToken)
     if (e instanceof Changed)
-      throw new Fail("cannot_save", "The connection changed while this command ran. Run: mikud status")
+      throw new Fail("cannot_save", "The connection changed while this command ran. Run: adiutor status")
     throw e
   }
   hook("token")
@@ -1235,7 +1235,7 @@ async function redeem(ctx, seen, conn, sessionToken) {
     outcome = { fail: e }
   }
   const ended = await endSession(seen.origin, sessionToken)
-  // A step from here that fails keeps the attempt, and with it what the attempt may have left on Mikud; it never
+  // A step from here that fails keeps the attempt, and with it what the attempt may have left on Adiutor; it never
   // replaces the answer.
   try {
     if (ended) att.seen = savePending(ctx, { ...att.seen, sessionOpen: 0 }, att.seen)
@@ -1262,7 +1262,7 @@ async function redeem(ctx, seen, conn, sessionToken) {
     ...(ended
       ? {}
       : {
-          warning: `Could not confirm that the approval's temporary session ended. End the session "mikud connect (agent approval)" on the Account page in Mikud.`,
+          warning: `Could not confirm that the approval's temporary session ended. End the session "adiutor connect (agent approval)" on the Account page in Adiutor.`,
         }),
   }
 }
@@ -1272,9 +1272,9 @@ async function createAndSave(ctx, att, sessionToken) {
   const unknown = () =>
     new Fail(
       "key_unknown",
-      `Mikud's answer to creating the key was lost, so a key named "${name}" may exist on ${origin}: delete it in Settings, Agent access. Then run: mikud connect --url ${origin}`,
+      `Adiutor's answer to creating the key was lost, so a key named "${name}" may exist on ${origin}: delete it in Settings, Agent access. Then run: adiutor connect --url ${origin}`,
     )
-  // Mikud refused the key, or the request never left: no key exists, and the attempt records it (no key_unknown).
+  // Adiutor refused the key, or the request never left: no key exists, and the attempt records it (no key_unknown).
   const noKey = (fail) => {
     try {
       att.seen = savePending(ctx, { ...att.seen, noKey: 1 }, att.seen)
@@ -1305,10 +1305,10 @@ async function createAndSave(ctx, att, sessionToken) {
     if (!same(PENDING_FIELDS, readPending(ctx), att.seen) || !same(CONNECTION_FIELDS, readConnection(ctx), att.conn))
       throw new Fail(
         "cannot_save",
-        "Another mikud command disconnected or started a new connection while this one waited, so the new key was not saved. Run: mikud status",
+        "Another adiutor command disconnected or started a new connection while this one waited, so the new key was not saved. Run: adiutor status",
       )
     const old = att.conn
-    // The key being replaced stays on Mikud: recorded before the connection that names it is replaced.
+    // The key being replaced stays on Adiutor: recorded before the connection that names it is replaced.
     if (old && old.keyName !== name) {
       addLeft(ctx, [{ origin: old.origin, keyName: old.keyName, expiresAt: old.expiresAt, reason: "replaced" }])
       hook("recorded")
@@ -1367,7 +1367,7 @@ async function disconnect(ctx) {
     const pend = readPending(ctx)
     if (pend) removeAttempt(ctx, pend, conn)
     if (!conn) return { status: "not_connected" }
-    // The key stays on Mikud (a key cannot delete itself): recorded before the connection is removed.
+    // The key stays on Adiutor (a key cannot delete itself): recorded before the connection is removed.
     addLeft(ctx, [{ origin: conn.origin, keyName: conn.keyName, expiresAt: conn.expiresAt, reason: "disconnected" }])
     hook("recorded")
     if (!same(CONNECTION_FIELDS, readConnection(ctx), conn)) throw new Changed()
@@ -1430,14 +1430,14 @@ function bodyOf(method, opts) {
 }
 
 function labelOf(opts) {
-  const label = opts.as ?? process.env.MIKUD_AGENT_LABEL ?? ""
+  const label = opts.as ?? process.env.ADIUTOR_AGENT_LABEL ?? ""
   if (label === "" && opts.as === undefined) return ""
   if (!LABEL.test(label))
     throw new Fail("bad_label", "The agent label takes 1 to 60 letters, digits, spaces and . _ : - only.")
   return label
 }
 
-/** A key Mikud no longer accepts is forgotten, while it is still the saved one. */
+/** A key Adiutor no longer accepts is forgotten, while it is still the saved one. */
 async function forget(ctx, conn) {
   try {
     await withLock(ctx, async () => {
@@ -1448,12 +1448,12 @@ async function forget(ctx, conn) {
 }
 
 async function api(ctx, method, opts) {
-  if (opts.positional.length !== 1) throw new Fail("bad_path", `Give one path: mikud ${method.toLowerCase()} '<path>'`)
+  if (opts.positional.length !== 1) throw new Fail("bad_path", `Give one path: adiutor ${method.toLowerCase()} '<path>'`)
   const target = apiPath(method, opts.positional[0])
   const label = labelOf(opts)
   const body = bodyOf(method, opts)
   const conn = readConnection(ctx)
-  if (!conn) throw new Fail("not_connected", "Not connected to Mikud. Run: mikud connect")
+  if (!conn) throw new Fail("not_connected", "Not connected to Adiutor. Run: adiutor connect")
   if (opts.url && originOf(opts.url) !== conn.origin)
     throw new Fail("not_connected", `Connected to ${conn.origin}, not to ${originOf(opts.url)}.`)
   const unknown = (status) =>
@@ -1477,12 +1477,12 @@ async function api(ctx, method, opts) {
     await forget(ctx, conn)
     throw new Fail(
       "connection_ended",
-      `Mikud no longer accepts this connection's key (it was disconnected in Settings or it expired). Run: mikud connect --url ${conn.origin}`,
+      `Adiutor no longer accepts this connection's key (it was disconnected in Settings or it expired). Run: adiutor connect --url ${conn.origin}`,
     )
   }
   if (method !== "GET" && [502, 503, 504].includes(r.status)) throw unknown(r.status)
   if (r.status >= 200 && r.status < 300) {
-    // Mikud answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
+    // Adiutor answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
     const answer = r.json
     if (answer && typeof answer === "object" && !Array.isArray(answer) && "data" in answer) {
       const { status: _ignored, ...fields } = answer
@@ -1498,7 +1498,7 @@ async function main() {
   const command = args.shift() ?? "help"
   if (["help", "--help", "-h"].includes(command)) return process.stdout.write(`${HELP}\n`)
   if (Number(process.versions.node.split(".")[0]) < 20)
-    throw new Fail("node_too_old", "Node 20 or later is needed. Use the mikud launcher, which picks another version.")
+    throw new Fail("node_too_old", "Node 20 or later is needed. Use the adiutor launcher, which picks another version.")
   if (!win) process.umask(0o077)
   const opts = parseArgs(args)
   const ctx = context()
@@ -1519,13 +1519,13 @@ async function main() {
     // The files changed under a lock this command no longer held: nothing more was done.
     const e =
       err instanceof Changed
-        ? new Fail("busy", "Another mikud command changed the connection meanwhile. Run: mikud status")
+        ? new Fail("busy", "Another adiutor command changed the connection meanwhile. Run: adiutor status")
         : err
-    // What the command left on Mikud travels with every answer about the connection.
+    // What the command left on Adiutor travels with every answer about the connection.
     if (e instanceof Fail && ["connect", "disconnect", "status"].includes(command)) e.extra.left = leftNow(ctx)
     throw e
   }
-  throw new Fail("unknown_command", `Unknown command "${command}". Run: mikud help`)
+  throw new Fail("unknown_command", `Unknown command "${command}". Run: adiutor help`)
 }
 
 main().catch((e) => {

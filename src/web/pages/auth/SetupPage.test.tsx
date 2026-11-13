@@ -53,8 +53,8 @@ it("draws the QR code with the username as the account name and shows Better Aut
     { length: 32 },
     () => "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"[Math.floor(Math.random() * 32)],
   ).join("")
-  const query = `?secret=${secret}&issuer=Mikud&digits=6&period=30`
-  enrol.totpURI = `otpauth://totp/Mikud:owner.name%40mikud.local${query}`
+  const query = `?secret=${secret}&issuer=Adiutor&digits=6&period=30`
+  enrol.totpURI = `otpauth://totp/Adiutor:owner.name%40adiutor.local${query}`
   enrol.drawn = []
 
   await act(async () => {
@@ -65,6 +65,6 @@ it("draws the QR code with the username as the account name and shows Better Aut
     )
   })
 
-  await vi.waitFor(() => expect(enrol.drawn).toEqual([`otpauth://totp/Mikud:owner.name${query}`]))
+  await vi.waitFor(() => expect(enrol.drawn).toEqual([`otpauth://totp/Adiutor:owner.name${query}`]))
   expect(container.querySelector("[data-testid=totp-secret]")?.textContent).toContain(secret)
 })

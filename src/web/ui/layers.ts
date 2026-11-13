@@ -79,7 +79,7 @@ function pushEntry(): void {
   if (holdsEntry) return
   const state = (history.state ?? {}) as { idx?: unknown }
   const idx = typeof state.idx === "number" ? { idx: state.idx + 1 } : {}
-  history.pushState({ ...state, ...idx, mikudLayer: true }, "")
+  history.pushState({ ...state, ...idx, adiutorLayer: true }, "")
   holdsEntry = true
 }
 
@@ -106,7 +106,7 @@ function releaseEntry(): void {
     releaseQueued = false
     if (!holdsEntry || needsEntry()) return
     holdsEntry = false
-    if ((history.state as { mikudLayer?: boolean } | null)?.mikudLayer) {
+    if ((history.state as { adiutorLayer?: boolean } | null)?.adiutorLayer) {
       ignorePops++
       history.back()
     }

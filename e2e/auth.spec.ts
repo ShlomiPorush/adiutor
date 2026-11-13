@@ -81,7 +81,7 @@ test("signing in with the password and the code returns to the page asked for", 
   await page.evaluate(async () => {
     await fetch("/api/v1/settings", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", "X-Mikud-Request": "1" },
+      headers: { "Content-Type": "application/json", "X-Adiutor-Request": "1" },
       body: JSON.stringify({ language: "he" }),
     })
   })

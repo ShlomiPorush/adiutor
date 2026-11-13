@@ -7,10 +7,10 @@ import { testBotToken, testSecret } from "./testing/secrets.ts"
 const authSecret = testSecret()
 const settingsKey = testSecret()
 const valid = {
-  DATABASE_URL: `postgres://mikud:${randomBytes(16).toString("hex")}@db.example.com:5432/mikud`,
-  MIKUD_PUBLIC_URL: "https://mikud.example.com",
-  MIKUD_AUTH_SECRETS: `1:${authSecret}`,
-  MIKUD_SETTINGS_KEYS: `1:${settingsKey}`,
+  DATABASE_URL: `postgres://adiutor:${randomBytes(16).toString("hex")}@db.example.com:5432/adiutor`,
+  ADIUTOR_PUBLIC_URL: "https://adiutor.example.com",
+  ADIUTOR_AUTH_SECRETS: `1:${authSecret}`,
+  ADIUTOR_SETTINGS_KEYS: `1:${settingsKey}`,
 }
 
 function refusal(env: Record<string, string | undefined>): string {
@@ -28,7 +28,7 @@ describe("loadConfig", () => {
     const config = loadConfig(valid)
     expect(config.port).toBe(8080)
     expect(config.migrationsDir).toBe("drizzle")
-    expect(config.publicUrl.origin).toBe("https://mikud.example.com")
+    expect(config.publicUrl.origin).toBe("https://adiutor.example.com")
     expect(config.authSecrets).toEqual([{ version: 1, value: authSecret }])
     expect(config.settingsKeys).toEqual([{ version: 1, value: settingsKey }])
     expect(config.legacyAuthSecret).toBeUndefined()
@@ -38,7 +38,7 @@ describe("loadConfig", () => {
     expect(config.warnings).toEqual([])
   })
 
-  it.each(["DATABASE_URL", "MIKUD_PUBLIC_URL", "MIKUD_AUTH_SECRETS", "MIKUD_SETTINGS_KEYS"])(
+  it.each(["DATABASE_URL", "ADIUTOR_PUBLIC_URL", "ADIUTOR_AUTH_SECRETS", "ADIUTOR_SETTINGS_KEYS"])(
     "refuses without %s",
     (name) => {
       expect(refusal({ ...valid, [name]: undefined })).toContain(`${name} is required`)
@@ -48,31 +48,31 @@ describe("loadConfig", () => {
 
   it("reads versioned keys, newest first, and refuses a bad entry, a repeated version or a short key unprinted", () => {
     const older = testSecret()
-    expect(loadConfig({ ...valid, MIKUD_AUTH_SECRETS: `2:${authSecret}, 1:${older}` }).authSecrets).toEqual([
+    expect(loadConfig({ ...valid, ADIUTOR_AUTH_SECRETS: `2:${authSecret}, 1:${older}` }).authSecrets).toEqual([
       { version: 2, value: authSecret },
       { version: 1, value: older },
     ])
-    expect(refusal({ ...valid, MIKUD_AUTH_SECRETS: authSecret })).toContain("must look like <version>:<secret>")
-    expect(refusal({ ...valid, MIKUD_AUTH_SECRETS: `1:${authSecret},1:${older}` })).toContain("repeats version 1")
+    expect(refusal({ ...valid, ADIUTOR_AUTH_SECRETS: authSecret })).toContain("must look like <version>:<secret>")
+    expect(refusal({ ...valid, ADIUTOR_AUTH_SECRETS: `1:${authSecret},1:${older}` })).toContain("repeats version 1")
     const short = "x".repeat(31)
-    const message = refusal({ ...valid, MIKUD_SETTINGS_KEYS: `1:${short}` })
-    expect(message).toContain("MIKUD_SETTINGS_KEYS entry 1 must be at least 32 bytes")
+    const message = refusal({ ...valid, ADIUTOR_SETTINGS_KEYS: `1:${short}` })
+    expect(message).toContain("ADIUTOR_SETTINGS_KEYS entry 1 must be at least 32 bytes")
     expect(message).not.toContain(short)
     // Counted in bytes: 16 two-byte characters are enough (U+0100 to U+07FF: two bytes each, none that trim() drops).
     const twoByte = String.fromCodePoint(...Array.from({ length: 16 }, () => randomInt(0x100, 0x800)))
-    expect(loadConfig({ ...valid, MIKUD_AUTH_SECRETS: `1:${twoByte}` }).authSecrets).toHaveLength(1)
+    expect(loadConfig({ ...valid, ADIUTOR_AUTH_SECRETS: `1:${twoByte}` }).authSecrets).toHaveLength(1)
   })
 
   it("keeps the settings key apart from every auth secret, the legacy one too", () => {
-    expect(refusal({ ...valid, MIKUD_SETTINGS_KEYS: `1:${authSecret}` })).toContain(
-      "MIKUD_SETTINGS_KEYS must differ from every auth secret",
+    expect(refusal({ ...valid, ADIUTOR_SETTINGS_KEYS: `1:${authSecret}` })).toContain(
+      "ADIUTOR_SETTINGS_KEYS must differ from every auth secret",
     )
     const legacy = testSecret()
-    expect(loadConfig({ ...valid, MIKUD_AUTH_SECRET: legacy }).legacyAuthSecret).toBe(legacy)
-    expect(refusal({ ...valid, MIKUD_AUTH_SECRET: legacy, MIKUD_SETTINGS_KEYS: `1:${legacy}` })).toContain(
+    expect(loadConfig({ ...valid, ADIUTOR_AUTH_SECRET: legacy }).legacyAuthSecret).toBe(legacy)
+    expect(refusal({ ...valid, ADIUTOR_AUTH_SECRET: legacy, ADIUTOR_SETTINGS_KEYS: `1:${legacy}` })).toContain(
       "must differ from every auth secret",
     )
-    expect(refusal({ ...valid, MIKUD_AUTH_SECRET: "short" })).toContain("MIKUD_AUTH_SECRET must be at least 32 bytes")
+    expect(refusal({ ...valid, ADIUTOR_AUTH_SECRET: "short" })).toContain("ADIUTOR_AUTH_SECRET must be at least 32 bytes")
   })
 
   it("refuses the variables Better Auth would read on its own", () => {
@@ -82,28 +82,28 @@ describe("loadConfig", () => {
   })
 
   it("only warns about the old token variables", () => {
-    const config = loadConfig({ ...valid, MIKUD_OWNER_TOKEN: "o".repeat(40), MIKUD_AGENT_TOKEN: "a".repeat(40) })
+    const config = loadConfig({ ...valid, ADIUTOR_OWNER_TOKEN: "o".repeat(40), ADIUTOR_AGENT_TOKEN: "a".repeat(40) })
     expect(config.warnings).toEqual([
-      "MIKUD_OWNER_TOKEN is no longer used: remove it",
-      "MIKUD_AGENT_TOKEN is no longer used: remove it",
+      "ADIUTOR_OWNER_TOKEN is no longer used: remove it",
+      "ADIUTOR_AGENT_TOKEN is no longer used: remove it",
     ])
   })
 
   it("reads the trusted proxies and refuses one that is not an address or range", () => {
-    expect(loadConfig({ ...valid, MIKUD_TRUSTED_PROXIES: "192.0.2.10, 198.51.100.0/24" }).trustedProxies).toEqual([
+    expect(loadConfig({ ...valid, ADIUTOR_TRUSTED_PROXIES: "192.0.2.10, 198.51.100.0/24" }).trustedProxies).toEqual([
       "192.0.2.10",
       "198.51.100.0/24",
     ])
-    expect(refusal({ ...valid, MIKUD_TRUSTED_PROXIES: "traefik" })).toContain("MIKUD_TRUSTED_PROXIES")
+    expect(refusal({ ...valid, ADIUTOR_TRUSTED_PROXIES: "traefik" })).toContain("ADIUTOR_TRUSTED_PROXIES")
   })
 
   it("refuses a public URL that is not http or https", () => {
-    expect(refusal({ ...valid, MIKUD_PUBLIC_URL: "not a url" })).toContain("MIKUD_PUBLIC_URL")
-    expect(refusal({ ...valid, MIKUD_PUBLIC_URL: "ftp://mikud.example.com" })).toContain("MIKUD_PUBLIC_URL")
+    expect(refusal({ ...valid, ADIUTOR_PUBLIC_URL: "not a url" })).toContain("ADIUTOR_PUBLIC_URL")
+    expect(refusal({ ...valid, ADIUTOR_PUBLIC_URL: "ftp://adiutor.example.com" })).toContain("ADIUTOR_PUBLIC_URL")
   })
 
   it("refuses a database URL that is not PostgreSQL and never prints it", () => {
-    const message = refusal({ ...valid, DATABASE_URL: "mysql://user:secret@db/mikud" })
+    const message = refusal({ ...valid, DATABASE_URL: "mysql://user:secret@db/adiutor" })
     expect(message).toContain("DATABASE_URL must be a postgres:// URL")
     expect(message).not.toContain("secret@")
   })
@@ -116,14 +116,14 @@ describe("loadConfig", () => {
     const botToken = testBotToken()
 
     it("sets nothing without the variables, or with empty ones", () => {
-      expect(loadConfig({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: "", MIKUD_TELEGRAM_CHAT_ID: " " }).overrides).toEqual({})
+      expect(loadConfig({ ...valid, ADIUTOR_TELEGRAM_BOT_TOKEN: "", ADIUTOR_TELEGRAM_CHAT_ID: " " }).overrides).toEqual({})
     })
 
     it("reads each Telegram field on its own: one without the other is fine", () => {
-      expect(loadConfig({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: botToken }).overrides).toEqual({
+      expect(loadConfig({ ...valid, ADIUTOR_TELEGRAM_BOT_TOKEN: botToken }).overrides).toEqual({
         telegramBotToken: botToken,
       })
-      expect(loadConfig({ ...valid, MIKUD_TELEGRAM_CHAT_ID: "-1001" }).overrides).toEqual({ telegramChatId: "-1001" })
+      expect(loadConfig({ ...valid, ADIUTOR_TELEGRAM_CHAT_ID: "-1001" }).overrides).toEqual({ telegramChatId: "-1001" })
       expect(loadConfig({ ...valid, TELEGRAM_API_URL: "http://stand-in:8099/" }).telegramApiUrl).toBe(
         "http://stand-in:8099",
       )
@@ -131,21 +131,21 @@ describe("loadConfig", () => {
 
     it("refuses a malformed value by its name, never printing it", () => {
       const badToken = `${botToken}!`
-      const message = refusal({ ...valid, MIKUD_TELEGRAM_BOT_TOKEN: badToken })
-      expect(message).toContain("MIKUD_TELEGRAM_BOT_TOKEN does not look like a bot token")
+      const message = refusal({ ...valid, ADIUTOR_TELEGRAM_BOT_TOKEN: badToken })
+      expect(message).toContain("ADIUTOR_TELEGRAM_BOT_TOKEN does not look like a bot token")
       expect(message).not.toContain(badToken)
-      expect(refusal({ ...valid, MIKUD_TELEGRAM_CHAT_ID: "@owner" })).toContain(
-        "MIKUD_TELEGRAM_CHAT_ID must be a numeric chat id",
+      expect(refusal({ ...valid, ADIUTOR_TELEGRAM_CHAT_ID: "@owner" })).toContain(
+        "ADIUTOR_TELEGRAM_CHAT_ID must be a numeric chat id",
       )
       expect(refusal({ ...valid, TELEGRAM_API_URL: "ftp://example.com" })).toContain("TELEGRAM_API_URL")
     })
 
     it("reads the private domains, normalized, and refuses one that is not a domain", () => {
       expect(
-        loadConfig({ ...valid, MIKUD_PRIVATE_DOMAINS: " Corp.Example , .internal.test.,," }).overrides.privateDomains,
+        loadConfig({ ...valid, ADIUTOR_PRIVATE_DOMAINS: " Corp.Example , .internal.test.,," }).overrides.privateDomains,
       ).toEqual(["corp.example", "internal.test"])
-      expect(refusal({ ...valid, MIKUD_PRIVATE_DOMAINS: "corp.example, not a domain" })).toContain(
-        "MIKUD_PRIVATE_DOMAINS",
+      expect(refusal({ ...valid, ADIUTOR_PRIVATE_DOMAINS: "corp.example, not a domain" })).toContain(
+        "ADIUTOR_PRIVATE_DOMAINS",
       )
     })
   })

@@ -74,7 +74,7 @@ describe("effective settings: the environment first, per field", () => {
       set: true,
       readable: true,
       locked: true,
-      variable: "MIKUD_TELEGRAM_BOT_TOKEN",
+      variable: "ADIUTOR_TELEGRAM_BOT_TOKEN",
     })
     expect(merged.view.chatId).toEqual({ value: "42", locked: false, variable: null })
     const env = effectiveTelegram(
@@ -100,6 +100,6 @@ describe("effective settings: the environment first, per field", () => {
     })
     expect(
       effectivePrivateDomains(row({ privateDomains: ["corp.example"] }), { privateDomains: ["lab.test"] }),
-    ).toEqual({ value: ["lab.test"], locked: true, variable: "MIKUD_PRIVATE_DOMAINS" })
+    ).toEqual({ value: ["lab.test"], locked: true, variable: "ADIUTOR_PRIVATE_DOMAINS" })
   })
 })

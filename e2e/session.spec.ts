@@ -1,7 +1,7 @@
 // Better Auth's own client keeps a session alive (deferSessionRefresh on the server): bringing the tab back to the
 // front makes it read the session and, when the answer says needsRefresh, send POST /get-session, which extends it.
 // That POST has no body; it reaches Better Auth through the transport fix in src/server/app.ts (withoutEmptyBody). A
-// tab that stays visible and idle, with only Mikud's own polling, never extends it. Time moves through the
+// tab that stays visible and idle, with only Adiutor's own polling, never extends it. Time moves through the
 // database: the session is made to look refreshed two hours ago (updateAge is one hour), as the integration tests
 // do. Needs E2E_DATABASE_URL (scripts/verify.sh sets it); the client logic is the same on every device, so it runs
 // on the desktop project only.
@@ -74,7 +74,7 @@ test("bringing the tab back to the front extends the session (the client's POST 
   await expect.poll(expiry, { timeout: 10_000 }).toBeGreaterThan(before + HOUR)
 })
 
-test("a tab that stays visible and idle, with only Mikud's polling, does not extend it", async () => {
+test("a tab that stays visible and idle, with only Adiutor's polling, does not extend it", async () => {
   test.setTimeout(90_000)
   const before = await refreshedTwoHoursAgo()
   const refreshes: string[] = []

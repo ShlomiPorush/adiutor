@@ -227,7 +227,7 @@ export const restoreNoteBody = z.object({
   fromVersion: z.number().int().min(1),
 })
 
-/** The label an agent writes as (`X-Mikud-Agent`, docs/api.md): `agent`, or `agent:` and its name. */
+/** The label an agent writes as (`X-Adiutor-Agent`, docs/api.md): `agent`, or `agent:` and its name. */
 export const AGENT_LABEL = /^agent(:[A-Za-z0-9 ._:-]{1,60})?$/
 
 /**

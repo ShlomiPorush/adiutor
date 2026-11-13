@@ -1,5 +1,5 @@
 {
-  "name": "mikud",
+  "name": "adiutor",
   "version": "0.0.0",
   "private": true,
   "description": "Personal project-focus system: a morning board, a Telegram morning message and an MCP server for AI agents",
@@ -12,7 +12,7 @@
   "scripts": {
     "build": "pnpm build:server && pnpm build:sync && pnpm build:web",
     "build:server": "esbuild src/server/index.ts src/server/healthcheck.ts src/server/cli.ts --bundle --platform=node --target=node26 --format=esm --outdir=dist/server",
-    "build:sync": "esbuild src/sync/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/sync/mikud-sync.js",
+    "build:sync": "esbuild src/sync/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/sync/adiutor-sync.js",
     "build:web": "vite build --config config/vite.config.ts",
     "dev:web": "vite --config config/vite.config.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p src/web/tsconfig.json && tsc -p e2e/tsconfig.json",

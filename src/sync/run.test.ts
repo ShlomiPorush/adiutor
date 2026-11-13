@@ -57,7 +57,7 @@ afterEach(() => {
 })
 
 function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "mikud-sync-"))
+  const dir = mkdtempSync(join(tmpdir(), "adiutor-sync-"))
   temps.push(dir)
   return dir
 }
@@ -88,7 +88,7 @@ function fakeRunner(options: { collectorFails?: boolean } = {}) {
 function deps(overrides: Partial<Deps> = {}, env: Record<string, string> = {}) {
   const lines: string[] = []
   const value: Deps = {
-    env: { MIKUD_URL: baseUrl, MIKUD_AGENT_TOKEN: token, T3CODE_CLI_PATH: "C:\\t3\\t3.cmd", ...env },
+    env: { ADIUTOR_URL: baseUrl, ADIUTOR_AGENT_TOKEN: token, T3CODE_CLI_PATH: "C:\\t3\\t3.cmd", ...env },
     runner: fakeRunner().runner,
     fetch: (input, init) => fetch(input, init),
     out: (line) => lines.push(line),
@@ -166,7 +166,7 @@ describe("runSync", () => {
   })
 
   it("sends nothing in a dry run and needs no server settings", async () => {
-    const { deps: d, output } = deps({}, { MIKUD_URL: "", MIKUD_AGENT_TOKEN: "" })
+    const { deps: d, output } = deps({}, { ADIUTOR_URL: "", ADIUTOR_AGENT_TOKEN: "" })
     expect(await runSync({ ...run, collect: false, dryRun: true }, d)).toBe(0)
     expect(received).toHaveLength(0)
     const text = output()
@@ -206,9 +206,9 @@ describe("runSync", () => {
   })
 
   it("refuses to run without the URL or the token", async () => {
-    const { deps: d, output } = deps({}, { MIKUD_AGENT_TOKEN: "" })
+    const { deps: d, output } = deps({}, { ADIUTOR_AGENT_TOKEN: "" })
     expect(await runSync(run, d)).toBe(2)
-    expect(output()).toContain("MIKUD_AGENT_TOKEN is required")
+    expect(output()).toContain("ADIUTOR_AGENT_TOKEN is required")
   })
 })
 
@@ -216,13 +216,13 @@ describe("the agent token", () => {
   it("never appears in any output, even when the server repeats it", async () => {
     const dir = tempDir()
     const envFile = join(dir, "sync.env")
-    writeFileSync(envFile, `MIKUD_URL=${baseUrl}\nMIKUD_AGENT_TOKEN=${token}\n`)
+    writeFileSync(envFile, `ADIUTOR_URL=${baseUrl}\nADIUTOR_AGENT_TOKEN=${token}\n`)
     replies.set("/api/v1/sync/t3", (r) => ({
       status: 401,
       body: { error: { code: "unauthorized", message: `got ${r.auth}` } },
     }))
     replies.set("/api/v1/sync/security", (r) => ({ status: 200, body: { echo: r.auth } }))
-    const { deps: d, output } = deps({}, { MIKUD_URL: "", MIKUD_AGENT_TOKEN: "" })
+    const { deps: d, output } = deps({}, { ADIUTOR_URL: "", ADIUTOR_AGENT_TOKEN: "" })
 
     expect(await runSync({ ...run, envFile }, d)).toBe(0)
     expect(received.every((r) => r.auth === `Bearer ${token}`)).toBe(true)
@@ -235,7 +235,7 @@ describe("the agent token", () => {
     await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve))
     const port = (closed.address() as AddressInfo).port
     await new Promise<void>((resolve) => closed.close(() => resolve()))
-    const { deps: d, output } = deps({}, { MIKUD_URL: `http://127.0.0.1:${port}` })
+    const { deps: d, output } = deps({}, { ADIUTOR_URL: `http://127.0.0.1:${port}` })
     expect(await runSync(run, d)).toBe(1)
     expect(output()).toContain("t3 sync: not sent: cannot reach the server")
     expect(output()).not.toContain(token)
@@ -244,14 +244,14 @@ describe("the agent token", () => {
   it("never appears in a configuration error or a bad env file", async () => {
     const dir = tempDir()
     const envFile = join(dir, "sync.env")
-    writeFileSync(envFile, `MIKUD_URL=${baseUrl}\n${token}\n`)
-    const bad = deps({}, { MIKUD_AGENT_TOKEN: "" })
+    writeFileSync(envFile, `ADIUTOR_URL=${baseUrl}\n${token}\n`)
+    const bad = deps({}, { ADIUTOR_AGENT_TOKEN: "" })
     expect(await runSync({ ...run, envFile }, bad.deps)).toBe(2)
     expect(bad.output()).toContain("env file line 2 is not KEY=VALUE")
     expect(bad.output()).not.toContain(token)
 
     const short = "short-token-0123456789"
-    const config = deps({}, { MIKUD_AGENT_TOKEN: short })
+    const config = deps({}, { ADIUTOR_AGENT_TOKEN: short })
     expect(await runSync(run, config.deps)).toBe(2)
     expect(config.output()).not.toContain(short)
   })
@@ -269,7 +269,7 @@ describe("main", () => {
   it("prints the usage for help and refuses an incomplete command", async () => {
     const help = deps()
     expect(await main(["--help"], help.deps)).toBe(0)
-    expect(help.output()).toContain("Usage: node mikud-sync.js run --projects <file>")
+    expect(help.output()).toContain("Usage: node adiutor-sync.js run --projects <file>")
     expect(await main(["run"], deps().deps)).toBe(2)
     expect(await main(["push", "--projects", projectsFile], deps().deps)).toBe(2)
   })

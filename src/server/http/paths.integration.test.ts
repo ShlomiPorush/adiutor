@@ -264,7 +264,7 @@ describe("credentials are checked before the body is read", () => {
     })
 
     // Behaviour kept: an authenticated request over the limit still gets 413 validation_failed. The owner's session
-    // that passes the CSRF check now reaches the limit after the authentication, which may set its mikud_browser
+    // that passes the CSRF check now reaches the limit after the authentication, which may set its adiutor_browser
     // cookie on that 413 answer: a bounded side effect for the signed-in owner only.
     it.each([
       ["/api/v1/sync/t3", 16 * 1024 * 1024 + 1],
@@ -320,7 +320,7 @@ describe("credentials are checked before the body is read", () => {
     })
 
     it.each(routes)("%s refuses a password-only session with 403 totp_required at once", async (path) => {
-      const headers = { cookie: passwordOnly, "x-mikud-request": "1", origin: TEST_ORIGIN }
+      const headers = { cookie: passwordOnly, "x-adiutor-request": "1", origin: TEST_ORIGIN }
       const res = await openPost(path, { headers, chunks: someChunks() })
       expect(res).toMatchObject({ status: 403, json: { error: { code: "totp_required" } }, stillSending: true })
     })

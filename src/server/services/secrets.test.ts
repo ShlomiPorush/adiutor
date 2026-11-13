@@ -47,15 +47,15 @@ describe("secret scanner", () => {
     ["secret_assignment", 'config {"api_key": "a8f5f167f44f4964e6c998dee827110c"}'],
     ["secret_assignment", "TOKEN: Zq81-kd92-xx01"],
     ["secret_assignment", "client_secret = 9f8e7d6c5b4a"],
-    ["secret_assignment", `MIKUD_OWNER_TOKEN=${rep("0123456789abcdef", 64)}`],
-    ["secret_assignment", `export MIKUD_AGENT_TOKEN="${rep("f00dCafe12", 40)}"`],
+    ["secret_assignment", `ADIUTOR_OWNER_TOKEN=${rep("0123456789abcdef", 64)}`],
+    ["secret_assignment", `export ADIUTOR_AGENT_TOKEN="${rep("f00dCafe12", 40)}"`],
     ["secret_assignment", "DB_PASSWORD=Spring2026x"],
     ["secret_assignment", "smtp_passwd: x9k2m4q7z"],
     ["secret_assignment", `STRIPE_SECRET=${rep("q1w2e3r4", 24)}`],
     ["secret_assignment", `OPENAI_APIKEY=${rep("Zz9Yy8Xx7", 24)}`],
     ["secret_assignment", `signing-key: ${rep("a1b2c3d4", 16)}`],
     // Lower-case values (hex, a passphrase of words) after an env-style secret name.
-    ["secret_assignment", `MIKUD_OWNER_TOKEN=${rep("deadbeef", 64)}`],
+    ["secret_assignment", `ADIUTOR_OWNER_TOKEN=${rep("deadbeef", 64)}`],
     ["secret_assignment", `DB_PASSWORD=${["correct", "horse", "battery"].join("")}`],
     ["ipv4_address", `server at ${ip(10, 1, 20, 30)}`],
     ["ipv4_address", `ssh to ${ip(192, 168, 1, 50)}:22`],
@@ -81,13 +81,13 @@ describe("secret scanner", () => {
     ["a masked password", "password=***"],
     ["a placeholder token", "token: <token>"],
     ["a redacted value", "api_key=[redacted]"],
-    ["an environment variable reference", `token=${"$"}{GITHUB_TOKEN} and secret: MIKUD_AGENT_TOKEN`],
+    ["an environment variable reference", `token=${"$"}{GITHUB_TOKEN} and secret: ADIUTOR_AGENT_TOKEN`],
     ["prose about tokens", "The token: expired after a week. Rotate the secret: done."],
-    ["an env-style placeholder", "MIKUD_OWNER_TOKEN=<64 hex characters> and DB_PASSWORD=*** and API_KEY=changeme"],
-    ["an env-style reference", `MIKUD_AGENT_TOKEN=${"$"}{MIKUD_AGENT_TOKEN} and CACHE_KEY=${"$"}CACHE`],
+    ["an env-style placeholder", "ADIUTOR_OWNER_TOKEN=<64 hex characters> and DB_PASSWORD=*** and API_KEY=changeme"],
+    ["an env-style reference", `ADIUTOR_AGENT_TOKEN=${"$"}{ADIUTOR_AGENT_TOKEN} and CACHE_KEY=${"$"}CACHE`],
     ["a short env-style value", "SORT_KEY=name1"],
-    ["an env-style name in prose", "Set MIKUD_OWNER_TOKEN: rotated last week"],
-    ["a placeholder in a URL", "postgres://mikud:<password>@db.example.com/mikud"],
+    ["an env-style name in prose", "Set ADIUTOR_OWNER_TOKEN: rotated last week"],
+    ["a placeholder in a URL", "postgres://adiutor:<password>@db.example.com/adiutor"],
     ["a URL with a port", "open https://example.com:8443/path@v2"],
     ["the public domain of a private one", "corp.example.org is someone else's"],
     ["a time", "meet at 10:30, deploy at 12:00:01"],
@@ -128,7 +128,7 @@ describe("secret scanner", () => {
     expect(scanner.redact(text)).toBe(text)
   })
 
-  it.each(["***", "<token>", "[redacted]", `${"$"}{VAR}`, "MIKUD_OWNER_TOKEN", "changeme", ""])(
+  it.each(["***", "<token>", "[redacted]", `${"$"}{VAR}`, "ADIUTOR_OWNER_TOKEN", "changeme", ""])(
     "treats %s as a placeholder",
     (value) => {
       expect(isPlaceholder(value)).toBe(true)
@@ -136,13 +136,13 @@ describe("secret scanner", () => {
   )
 })
 
-describe("Mikud's own agent keys", () => {
-  it("refuses an mkd_ key, also inside a sentence, and lets the prefix alone pass", () => {
+describe("Adiutor's own agent keys", () => {
+  it("refuses an adt_ key, also inside a sentence, and lets the prefix alone pass", () => {
     const scanner = createSecretScanner()
     const key = `${"mkd"}_${"AbCdEfGh".repeat(8)}`
     expect(scanner.find(`use ${key} for the sync`)).toBe("agent_key")
     expect(scanner.redact(`key=${key}`)).not.toContain(key)
-    expect(scanner.find("keys start with mkd_ and 64 letters")).toBeNull()
+    expect(scanner.find("keys start with adt_ and 64 letters")).toBeNull()
   })
 
   it("reloads the private domains without a new scanner", () => {

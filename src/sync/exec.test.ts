@@ -55,7 +55,7 @@ describe("buildInvocation", () => {
 })
 
 describe("findCommand", () => {
-  const root = mkdtempSync(join(tmpdir(), "mikud-find-"))
+  const root = mkdtempSync(join(tmpdir(), "adiutor-find-"))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
   const folder = (name: string, files: Record<string, number>) => {
     const dir = join(root, name)
@@ -100,7 +100,7 @@ describe("findCommand", () => {
 })
 
 describe("systemCommand", () => {
-  const root = mkdtempSync(join(tmpdir(), "mikud-system-"))
+  const root = mkdtempSync(join(tmpdir(), "adiutor-system-"))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(join(root, "System32"))
   writeFileSync(join(root, "System32", "icacls.exe"), "")
@@ -135,7 +135,7 @@ describe("systemCommand", () => {
 
 describe("childEnv", () => {
   it("never passes the agent token to a child process", () => {
-    const env = childEnv({ PATH: "/bin", MIKUD_AGENT_TOKEN: "x".repeat(40) })
+    const env = childEnv({ PATH: "/bin", ADIUTOR_AGENT_TOKEN: "x".repeat(40) })
     expect(env).toEqual({ PATH: "/bin" })
   })
 })
@@ -149,12 +149,12 @@ describe("lastLine", () => {
 
 // A fake T3 CLI that prints its arguments and the token variable as JSON, run for real.
 describe("runProcess", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mikud sync ("))
+  const dir = mkdtempSync(join(tmpdir(), "adiutor sync ("))
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
   const echo = join(dir, "echo.js")
   writeFileSync(
     echo,
-    "console.log(JSON.stringify({ args: process.argv.slice(2), token: process.env.MIKUD_AGENT_TOKEN ?? null }))\n" +
+    "console.log(JSON.stringify({ args: process.argv.slice(2), token: process.env.ADIUTOR_AGENT_TOKEN ?? null }))\n" +
       "if (process.argv.includes('fail')) { console.error('No T3 Code project matches'); process.exit(3) }\n",
   )
   const tricky = ["thread", "list", "--project", "a&b|c<d>e^f!g (x) ;$(id)", "--json"]
@@ -163,13 +163,13 @@ describe("runProcess", () => {
     const cli = join(dir, "t3")
     writeFileSync(cli, `#!/bin/sh\nexec "${process.execPath}" "${echo}" "$@"\n`)
     chmodSync(cli, 0o755)
-    process.env.MIKUD_AGENT_TOKEN = "z".repeat(40)
+    process.env.ADIUTOR_AGENT_TOKEN = "z".repeat(40)
     try {
       const result = await runProcess(cli, tricky, { timeoutMs: 10_000 })
       expect(result.error).toBeUndefined()
       expect(JSON.parse(result.stdout)).toEqual({ args: tricky, token: null })
     } finally {
-      delete process.env.MIKUD_AGENT_TOKEN
+      delete process.env.ADIUTOR_AGENT_TOKEN
     }
     const failed = await runProcess(cli, ["fail"], { timeoutMs: 10_000 })
     expect(failed.error).toBe("exit code 3")

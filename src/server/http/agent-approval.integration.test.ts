@@ -9,8 +9,8 @@ import { TEST_ORIGIN, TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { totp } from "../testing/totp.ts"
 
-// Agent approval in the browser, as Mikud configures Better Auth (src/server/auth/auth.ts): the core
-// deviceAuthorization plugin, bearer() and the api-key plugin, over HTTP through the app. `mikud connect` asks for a
+// Agent approval in the browser, as Adiutor configures Better Auth (src/server/auth/auth.ts): the core
+// deviceAuthorization plugin, bearer() and the api-key plugin, over HTTP through the app. `adiutor connect` asks for a
 // code, the owner's signed-in browser approves it, the CLI receives a session token, creates one key with it and ends
 // that session. Owner gaps G-A, G-B and G10 are in docs/project-foundation.md, "Security design".
 
@@ -162,7 +162,7 @@ describe("agent approval: the device flow", () => {
     const created = await c.createKey(token, { name: "claude-laptop", expiresIn: 7 * 86_400 })
     expect(created.status).toBe(200)
     expect(created.json.name).toBe("claude-laptop")
-    expect(created.json.key).toMatch(/^mkd_/)
+    expect(created.json.key).toMatch(/^adt_/)
     expect(Math.abs(new Date(created.json.expiresAt as string).getTime() - (Date.now() + 7 * DAY))).toBeLessThan(60_000)
 
     expect((await c.revoke(token)).json).toEqual({ status: true })
@@ -306,7 +306,7 @@ describe("agent approval: bearer() and the agent keys stay apart", () => {
   it("a cookie together with a wrong bearer never falls back to the owner", async () => {
     const b = await owner()
     const token = await approvedToken(b)
-    for (const wrong of ["mkd_not-a-key", token]) {
+    for (const wrong of ["adt_not-a-key", token]) {
       const answer = await b.call("GET", "/api/v1/session", { headers: { authorization: `Bearer ${wrong}` } })
       expect([wrong.slice(0, 4), answer.status]).toEqual([wrong.slice(0, 4), 401])
     }

@@ -266,7 +266,7 @@ test("Agent access has no manual key: it shows how to connect, with this address
   const panel = page.locator("#agents")
   await expect(panel.getByRole("heading", { name: he.agentKeys.howTitle })).toBeVisible()
   await expect(panel).toContainText(
-    "node dist/sync/mikud-sync.js connect --url http://127.0.0.1:8090 --name sync --for sync",
+    "node dist/sync/adiutor-sync.js connect --url http://127.0.0.1:8090 --name sync --for sync",
   )
   await expect(panel).toContainText("--name claude --for claude")
   await expect(panel).toContainText("--name codex --for codex")

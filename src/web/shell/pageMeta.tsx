@@ -1,6 +1,6 @@
-// Each page names itself: the browser tab title ("Projects · Mikud"), the crumbs in the top bar and
+// Each page names itself: the browser tab title ("Projects · Adiutor"), the crumbs in the top bar and
 // the page label in the phone top bar (v3 NL-3, NL-5). A page with sections (Settings) adds the open
-// section after its title: "Settings › Telegram" in the trail, "Settings · Telegram · Mikud" in the tab.
+// section after its title: "Settings › Telegram" in the trail, "Settings · Telegram · Adiutor" in the tab.
 
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react"
 import { useI18n } from "../i18n/i18n.tsx"

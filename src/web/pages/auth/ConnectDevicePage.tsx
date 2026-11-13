@@ -1,4 +1,4 @@
-// /connect/device: the owner approves an agent that ran `mikud connect` (Better Auth's device authorization). Inside
+// /connect/device: the owner approves an agent that ran `adiutor connect` (Better Auth's device authorization). Inside
 // the session gate, so a signed-out browser signs in first and comes back here with its code. GET /device claims the
 // code for this session and says whether it is still waiting; Allow and Deny answer it once. The page reads the
 // request once and never refreshes it on its own (SV-10 exception): Better Auth limits GET /device to 5 reads per code

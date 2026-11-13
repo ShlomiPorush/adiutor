@@ -2,7 +2,7 @@ import { ownerEmail } from "../../shared/auth.ts"
 import { testPassword } from "./secrets.ts"
 import { secretOf, totp } from "./totp.ts"
 
-// A browser for HTTP integration tests: a cookie jar, the Origin and X-Mikud-Request headers of the Mikud page,
+// A browser for HTTP integration tests: a cookie jar, the Origin and X-Adiutor-Request headers of the Adiutor page,
 // and the owner's flows (setup, enrolment, sign-in) on Better Auth's routes against an app's fetch. Better Auth keys
 // its rate limits on X-Forwarded-For: give each browser its own address (extra headers).
 
@@ -46,7 +46,7 @@ export class TestBrowser {
     // The page's own headers on everything but GET, unless a test leaves them out.
     if (method !== "GET" && options.page !== false) {
       headers.origin ??= this.origin
-      headers["x-mikud-request"] ??= "1"
+      headers["x-adiutor-request"] ??= "1"
     }
     if (options.body !== undefined) headers["content-type"] = "application/json"
     const response = await this.fetch(

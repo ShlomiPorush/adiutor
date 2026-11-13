@@ -61,7 +61,7 @@ export async function mockAuthFetch(input: RequestInfo | URL, init?: RequestInit
       const userCode = url.searchParams.get("user_code") ?? ""
       if (!/^[A-Z0-9]{8}$/.test(userCode))
         return json({ error: "invalid_request", error_description: "Invalid user code" }, 400)
-      return json({ user_code: userCode, status: "pending", client_id: "mikud-connect" })
+      return json({ user_code: userCode, status: "pending", client_id: "adiutor-connect" })
     }
     case "/device/approve":
     case "/device/deny":

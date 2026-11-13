@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 
-export const NAV_KEY = "mikud.nav"
+export const NAV_KEY = "adiutor.nav"
 export const WIDE_SIDEBAR = "(min-width: 1101px)"
 
 const root = () => document.documentElement

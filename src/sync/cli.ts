@@ -16,33 +16,33 @@ import { type Deps, EXIT_USAGE, runSync } from "./run.ts"
 
 export const DEFAULT_DAYS = 90
 
-export const USAGE = `Usage: node mikud-sync.js run --projects <file> [options]
-       node mikud-sync.js connect --name <name> --for <sync|claude|codex> [options]
+export const USAGE = `Usage: node adiutor-sync.js run --projects <file> [options]
+       node adiutor-sync.js connect --name <name> --for <sync|claude|codex> [options]
 
-run: runs the overview collector, reads every T3 project's threads and sends both to Mikud.
+run: runs the overview collector, reads every T3 project's threads and sends both to Adiutor.
 
   --projects <file>  T3 projects file written by the scheduled agent from t3_project_list (required)
-  --overview <dir>   overview checkout (default: MIKUD_OVERVIEW_DIR)
+  --overview <dir>   overview checkout (default: ADIUTOR_OVERVIEW_DIR)
   --env <file>       KEY=VALUE file with the settings below; it wins over the environment
   --no-collect       do not run the collector; use the newest existing snapshot
   --dry-run          print payload sizes and a sample; send nothing
 
-Settings: MIKUD_URL, MIKUD_AGENT_TOKEN, T3CODE_CLI_PATH, MIKUD_OVERVIEW_DIR.
+Settings: ADIUTOR_URL, ADIUTOR_AGENT_TOKEN, T3CODE_CLI_PATH, ADIUTOR_OVERVIEW_DIR.
 The token is read only from the environment or the env file, never from the command line.
 Exit code: 0 when something was sent, 1 when nothing could be sent, 2 for bad arguments or settings.
 
-connect: you approve the agent in Mikud in the browser; it then gets one agent key.
+connect: you approve the agent in Adiutor in the browser; it then gets one agent key.
 
   --name <name>      the name Settings, Agent access shows (required, up to ${NAME_MAX} characters)
   --for <target>     sync: save the key in the sync's env file (readable by you only)
-                     claude: add Mikud to Claude Code with claude mcp add (user scope)
-                     codex: set MIKUD_AGENT_KEY (setx on Windows, ~/.config/mikud/codex.env
-                     elsewhere), then add Mikud with codex mcp add
+                     claude: add Adiutor to Claude Code with claude mcp add (user scope)
+                     codex: set ADIUTOR_AGENT_KEY (setx on Windows, ~/.config/adiutor/codex.env
+                     elsewhere), then add Adiutor with codex mcp add
                      When claude or codex is missing or fails, it prints the setup once instead.
   --days <days>      how long the key works, ${DAYS_MIN} to ${DAYS_MAX} days (default ${DEFAULT_DAYS})
-  --url <url>        Mikud's address (default: MIKUD_URL, then MIKUD_URL in the env file)
-  --env <file>       the sync's env file (default: %LOCALAPPDATA%\\mikud\\sync.env on Windows,
-                     ~/.config/mikud/sync.env elsewhere)
+  --url <url>        Adiutor's address (default: ADIUTOR_URL, then ADIUTOR_URL in the env file)
+  --env <file>       the sync's env file (default: %LOCALAPPDATA%\\adiutor\\sync.env on Windows,
+                     ~/.config/adiutor/sync.env elsewhere)
   --no-open          do not open the browser; open the printed link yourself
 Exit code: 0 when connected, 1 when not, 2 for bad arguments.`
 
@@ -101,7 +101,7 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"])
 
 /**
- * Mikud's address for connect: https, or http on this machine only (the approval's session token travels in it).
+ * Adiutor's address for connect: https, or http on this machine only (the approval's session token travels in it).
  * Undefined when it is not one.
  */
 export function connectUrl(value: string): string | undefined {
@@ -126,16 +126,16 @@ async function connectCommand(
     problems.push(`--days must be a whole number from ${DAYS_MIN} to ${DAYS_MAX}`)
   const envFile = values.env ?? defaultEnvFile(platform, deps.env)
 
-  let raw = values.url ?? deps.env.MIKUD_URL
+  let raw = values.url ?? deps.env.ADIUTOR_URL
   if (!raw) {
     try {
-      raw = parseEnvFile(await readFile(envFile, "utf8")).MIKUD_URL
+      raw = parseEnvFile(await readFile(envFile, "utf8")).ADIUTOR_URL
     } catch {
       raw = undefined
     }
   }
   const url = raw ? connectUrl(raw.trim()) : undefined
-  if (!url) problems.push("--url (or MIKUD_URL) must be Mikud's https address, or http on localhost")
+  if (!url) problems.push("--url (or ADIUTOR_URL) must be Adiutor's https address, or http on localhost")
 
   if (problems.length > 0 || !target || !url) {
     deps.out(`connect: ${problems.join("; ")}`)

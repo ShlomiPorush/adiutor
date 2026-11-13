@@ -3,7 +3,7 @@
 // (/setup). Any later 401 does the same, without asking about unsaved changes, and the page comes back afterwards.
 // A wrong password or code on the sign-in pages stays on its form: those pages are outside the gate.
 // The gate also mounts Better Auth's useSession: its own refresh (on opening, coming back to the front or online,
-// and another tab's change) is what keeps the session alive; Mikud's polling never extends it.
+// and another tab's change) is what keeps the session alive; Adiutor's polling never extends it.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { type ReactNode, useEffect, useRef } from "react"

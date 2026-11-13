@@ -1,4 +1,4 @@
-// Entry point of dist/sync/mikud-sync.js. The logic lives in the imported modules so tests can drive it.
+// Entry point of dist/sync/adiutor-sync.js. The logic lives in the imported modules so tests can drive it.
 import { main } from "./cli.ts"
 import { runProcess } from "./exec.ts"
 

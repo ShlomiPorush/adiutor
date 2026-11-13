@@ -3,7 +3,7 @@ import { z } from "zod"
 import { authenticatorUri, isValidUsername, ownerEmail, USERNAME_MAX, usernameSchema } from "./auth.ts"
 
 // The username rule the setup form and the username plugin's usernameValidator share, and the synthetic e-mail it
-// makes. Better Auth's sign-up checks the e-mail with zod's z.email() (the same zod version as Mikud's).
+// makes. Better Auth's sign-up checks the e-mail with zod's z.email() (the same zod version as Adiutor's).
 
 const WORD = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
 
@@ -54,9 +54,9 @@ describe("the username rule", () => {
 })
 
 describe("the synthetic e-mail", () => {
-  it("is the lowercased username at mikud.local", () => {
-    expect(ownerEmail("Owner.Name")).toBe("owner.name@mikud.local")
-    expect(ownerEmail("A_b.C")).toBe("a_b.c@mikud.local")
+  it("is the lowercased username at adiutor.local", () => {
+    expect(ownerEmail("Owner.Name")).toBe("owner.name@adiutor.local")
+    expect(ownerEmail("A_b.C")).toBe("a_b.c@adiutor.local")
   })
 
   it("passes Better Auth's e-mail check for every name the rule allows", () => {
@@ -82,32 +82,32 @@ describe("the authenticator link", () => {
     `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&digits=6&period=30`
 
   it.each(["shlomi", "owner.name", "a_b.c", "___"])("names the account %s, not the synthetic e-mail", (name) => {
-    const uri = authenticatorUri(betterAuth("Mikud", ownerEmail(name)))
-    expect(uri).toBe(`otpauth://totp/Mikud:${name}?secret=${secret}&issuer=Mikud&digits=6&period=30`)
+    const uri = authenticatorUri(betterAuth("Adiutor", ownerEmail(name)))
+    expect(uri).toBe(`otpauth://totp/Adiutor:${name}?secret=${secret}&issuer=Adiutor&digits=6&period=30`)
     expect(new URL(uri).searchParams.get("secret")).toBe(secret)
   })
 
   it("keeps the query exactly as written, in its order", () => {
-    const query = `?period=30&digits=6&issuer=Mikud&algorithm=SHA1&secret=${secret}`
-    expect(authenticatorUri(`otpauth://totp/Mikud:owner%40mikud.local${query}`)).toBe(
-      `otpauth://totp/Mikud:owner${query}`,
+    const query = `?period=30&digits=6&issuer=Adiutor&algorithm=SHA1&secret=${secret}`
+    expect(authenticatorUri(`otpauth://totp/Adiutor:owner%40adiutor.local${query}`)).toBe(
+      `otpauth://totp/Adiutor:owner${query}`,
     )
   })
 
   it("keeps an encoded issuer as it is", () => {
-    expect(authenticatorUri(betterAuth("Mikud Dev: home", "owner@mikud.local"))).toBe(
-      `otpauth://totp/Mikud%20Dev%3A%20home:owner?secret=${secret}&issuer=Mikud%20Dev%3A%20home&digits=6&period=30`,
+    expect(authenticatorUri(betterAuth("Adiutor Dev: home", "owner@adiutor.local"))).toBe(
+      `otpauth://totp/Adiutor%20Dev%3A%20home:owner?secret=${secret}&issuer=Adiutor%20Dev%3A%20home&digits=6&period=30`,
     )
   })
 
   it.each([
-    ["another e-mail", betterAuth("Mikud", "owner@example.com")],
-    ["no account name before the domain", betterAuth("Mikud", "@mikud.local")],
-    ["no issuer prefix", `otpauth://totp/owner%40mikud.local?secret=${secret}`],
-    ["an encoded separator only", `otpauth://totp/Mikud%3Aowner%40mikud.local?secret=${secret}`],
-    ["a broken escape", `otpauth://totp/Mikud:owner%E0%40mikud.local?secret=${secret}`],
-    ["HOTP", `otpauth://hotp/Mikud:owner%40mikud.local?secret=${secret}&counter=0`],
-    ["not a link", "Mikud:owner@mikud.local"],
+    ["another e-mail", betterAuth("Adiutor", "owner@example.com")],
+    ["no account name before the domain", betterAuth("Adiutor", "@adiutor.local")],
+    ["no issuer prefix", `otpauth://totp/owner%40adiutor.local?secret=${secret}`],
+    ["an encoded separator only", `otpauth://totp/Adiutor%3Aowner%40adiutor.local?secret=${secret}`],
+    ["a broken escape", `otpauth://totp/Adiutor:owner%E0%40adiutor.local?secret=${secret}`],
+    ["HOTP", `otpauth://hotp/Adiutor:owner%40adiutor.local?secret=${secret}&counter=0`],
+    ["not a link", "Adiutor:owner@adiutor.local"],
   ])("leaves %s unchanged", (_case, uri) => {
     expect(authenticatorUri(uri)).toBe(uri)
   })

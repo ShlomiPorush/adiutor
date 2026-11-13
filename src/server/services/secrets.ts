@@ -75,8 +75,8 @@ const BASE_RULES: Rule[] = [
     group: 1,
     accept: (m) => !isPlaceholder(m[1] ?? ""),
   },
-  // Mikud's own agent keys (Better Auth's api-key plugin: mkd_ and 64 letters).
-  { name: "agent_key", pattern: /\bmkd_[A-Za-z]{64}(?![A-Za-z0-9_])/g },
+  // Adiutor's own agent keys (Better Auth's api-key plugin: adt_ and 64 letters).
+  { name: "agent_key", pattern: /\badt_[A-Za-z]{64}(?![A-Za-z0-9_])/g },
   { name: "github_token", pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})\b/g },
   { name: "anthropic_key", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
   { name: "openai_key", pattern: /\bsk-(?!ant-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}/g },
@@ -95,7 +95,7 @@ const BASE_RULES: Rule[] = [
   },
   {
     name: "secret_assignment",
-    // Environment-style names (MIKUD_OWNER_TOKEN, DB_PASSWORD, signing-key, OPENAI_APIKEY): the word
+    // Environment-style names (ADIUTOR_OWNER_TOKEN, DB_PASSWORD, signing-key, OPENAI_APIKEY): the word
     // boundary of the rule above does not see a key after "_", so these get their own rule. The name says
     // the value is a secret, so any value of 8 or more characters is one, lower-case words and hex
     // included; only placeholders (***, <...>, [redacted], ${VAR}, changeme, example) pass.

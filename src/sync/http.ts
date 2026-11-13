@@ -1,4 +1,4 @@
-// Sends one payload to the Mikud API with the agent token. The answer is treated as opaque JSON to
+// Sends one payload to the Adiutor API with the agent token. The answer is treated as opaque JSON to
 // print. Redirects are refused, so the token is only ever sent to the configured URL.
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>

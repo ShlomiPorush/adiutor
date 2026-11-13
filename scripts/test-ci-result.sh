@@ -6,7 +6,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/mikud-ci-result-test.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/adiutor-ci-result-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 SHA="1111111111111111111111111111111111111111"
 OTHER_SHA="2222222222222222222222222222222222222222"

@@ -8,26 +8,26 @@ const token = randomBytes(24).toString("hex")
 describe("parseEnvFile", () => {
   it("reads KEY=VALUE lines, comments, export, quotes, CRLF and a BOM", () => {
     const text = [
-      "\uFEFF# Mikud sync settings",
+      "\uFEFF# Adiutor sync settings",
       "",
-      "MIKUD_URL=https://mikud.example.com/",
-      'export MIKUD_AGENT_TOKEN="abc=def"',
+      "ADIUTOR_URL=https://adiutor.example.com/",
+      'export ADIUTOR_AGENT_TOKEN="abc=def"',
       "T3CODE_CLI_PATH='C:\\Program Files (x86)\\t3\\t3.cmd'",
-      "  MIKUD_OVERVIEW_DIR = C:\\Work\\overview  ",
+      "  ADIUTOR_OVERVIEW_DIR = C:\\Work\\overview  ",
       "EMPTY=",
     ].join("\r\n")
     expect(parseEnvFile(text)).toEqual({
-      MIKUD_URL: "https://mikud.example.com/",
-      MIKUD_AGENT_TOKEN: "abc=def",
+      ADIUTOR_URL: "https://adiutor.example.com/",
+      ADIUTOR_AGENT_TOKEN: "abc=def",
       T3CODE_CLI_PATH: "C:\\Program Files (x86)\\t3\\t3.cmd",
-      MIKUD_OVERVIEW_DIR: "C:\\Work\\overview",
+      ADIUTOR_OVERVIEW_DIR: "C:\\Work\\overview",
       EMPTY: "",
     })
   })
 
   it("names a bad line by number and never repeats it", () => {
     const secret = "ghp_examplesecretvalue1234567890"
-    expect(() => parseEnvFile(`MIKUD_URL=https://mikud.example.com\n${secret}\n`)).toThrow(
+    expect(() => parseEnvFile(`ADIUTOR_URL=https://adiutor.example.com\n${secret}\n`)).toThrow(
       new SyncConfigError("env file line 2 is not KEY=VALUE"),
     )
     expect(() => parseEnvFile("=value")).toThrow("line 1")
@@ -37,16 +37,16 @@ describe("parseEnvFile", () => {
 
 describe("loadSyncConfig", () => {
   const env = {
-    MIKUD_URL: "http://127.0.0.1:8090",
-    MIKUD_AGENT_TOKEN: token,
+    ADIUTOR_URL: "http://127.0.0.1:8090",
+    ADIUTOR_AGENT_TOKEN: token,
     T3CODE_CLI_PATH: "/usr/local/bin/t3",
-    MIKUD_OVERVIEW_DIR: "/home/dev/overview",
+    ADIUTOR_OVERVIEW_DIR: "/home/dev/overview",
   }
 
   it("reads the environment and lets the env file win", () => {
-    const config = loadSyncConfig(env, { MIKUD_URL: "https://mikud.example.com/" }, { requireServer: true })
+    const config = loadSyncConfig(env, { ADIUTOR_URL: "https://adiutor.example.com/" }, { requireServer: true })
     expect(config).toEqual({
-      url: "https://mikud.example.com",
+      url: "https://adiutor.example.com",
       token,
       cliPath: "/usr/local/bin/t3",
       overviewDir: "/home/dev/overview",
@@ -61,14 +61,14 @@ describe("loadSyncConfig", () => {
       overviewDir: undefined,
     })
     expect(() => loadSyncConfig({}, {}, { requireServer: true })).toThrow(
-      "MIKUD_URL is required; MIKUD_AGENT_TOKEN is required",
+      "ADIUTOR_URL is required; ADIUTOR_AGENT_TOKEN is required",
     )
   })
 
   it("refuses a short token without printing it", () => {
     const short = "s".repeat(31)
     try {
-      loadSyncConfig({ ...env, MIKUD_AGENT_TOKEN: short }, {}, { requireServer: true })
+      loadSyncConfig({ ...env, ADIUTOR_AGENT_TOKEN: short }, {}, { requireServer: true })
       throw new Error("accepted")
     } catch (error) {
       expect((error as Error).message).toContain("at least 32 characters")
@@ -78,12 +78,12 @@ describe("loadSyncConfig", () => {
 
   it("refuses a URL that is not plain http or https", () => {
     for (const url of [
-      "ftp://mikud.example.com",
+      "ftp://adiutor.example.com",
       "not a url",
-      "https://user:pw@mikud.example.com",
+      "https://user:pw@adiutor.example.com",
       "https://x.example.com/?a=1",
     ])
-      expect(() => loadSyncConfig({ ...env, MIKUD_URL: url }, {}, { requireServer: true })).toThrow("MIKUD_URL")
+      expect(() => loadSyncConfig({ ...env, ADIUTOR_URL: url }, {}, { requireServer: true })).toThrow("ADIUTOR_URL")
   })
 })
 

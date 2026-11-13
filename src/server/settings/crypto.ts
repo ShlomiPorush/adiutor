@@ -1,10 +1,10 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto"
 import type { VersionedKey } from "../config.ts"
 
-// Secrets stored in Settings (the Telegram bot token), encrypted with MIKUD_SETTINGS_KEYS, never with the auth
+// Secrets stored in Settings (the Telegram bot token), encrypted with ADIUTOR_SETTINGS_KEYS, never with the auth
 // secrets. A value is `v<version>.<iv>.<ciphertext+tag>` in base64url: AES-256-GCM with a 12-byte random IV, and
 // the column name as additional authenticated data, so a value copied into another column does not decrypt. The
-// AES key is HKDF-SHA256(key, salt "mikud", info "settings-secret"). The first key encrypts; any listed version
+// AES key is HKDF-SHA256(key, salt "adiutor", info "settings-secret"). The first key encrypts; any listed version
 // decrypts. A value whose version is no longer listed, or that does not decrypt, cannot be read: the UI asks for it
 // again.
 
@@ -17,7 +17,7 @@ export type SettingsCipher = {
   decrypt(column: string, stored: string): string | null
 }
 
-const derive = (value: string) => Buffer.from(hkdfSync("sha256", value, "mikud", "settings-secret", 32))
+const derive = (value: string) => Buffer.from(hkdfSync("sha256", value, "adiutor", "settings-secret", 32))
 
 export function createSettingsCipher(keys: VersionedKey[]): SettingsCipher {
   const [current] = keys

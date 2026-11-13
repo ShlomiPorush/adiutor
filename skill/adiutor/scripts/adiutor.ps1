@@ -1,14 +1,14 @@
-# mikud for agents: connect to Mikud with a code the owner approves in the browser (Better Auth's device
-# authorization), then keep the owner's board current through Mikud's /api/v1 routes.
+# adiutor for agents: connect to Adiutor with a code the owner approves in the browser (Better Auth's device
+# authorization), then keep the owner's board current through Adiutor's /api/v1 routes.
 #
-# One of three versions with one contract: mikud.mjs (Node 20+), mikud.ps1 (Windows PowerShell 5.1 and PowerShell 7)
-# and mikud.sh (POSIX sh and curl). Same commands, same one-line JSON answers and error codes, the same files and the
-# same lock, so they can run side by side on one computer. No secret ever appears in the output. See mikud.mjs for
+# One of three versions with one contract: adiutor.mjs (Node 20+), adiutor.ps1 (Windows PowerShell 5.1 and PowerShell 7)
+# and adiutor.sh (POSIX sh and curl). Same commands, same one-line JSON answers and error codes, the same files and the
+# same lock, so they can run side by side on one computer. No secret ever appears in the output. See adiutor.mjs for
 # the design; this file follows it function by function.
 #
-# It hands over to mikud.mjs when Node 20+ is installed, unless MIKUD_NO_NODE is set.
+# It hands over to adiutor.mjs when Node 20+ is installed, unless ADIUTOR_NO_NODE is set.
 #
-# Run it as: powershell -NoProfile -ExecutionPolicy Bypass -File mikud.ps1 <command> ...
+# Run it as: powershell -NoProfile -ExecutionPolicy Bypass -File adiutor.ps1 <command> ...
 # (the policy is bypassed for this one process only; nothing on the computer changes).
 
 $ErrorActionPreference = 'Stop'
@@ -22,9 +22,9 @@ function ConvertTo-WindowsArgument([string]$a) {
   '"' + (($a -replace '(\\*)"', '$1$1\"') -replace '(\\+)\z', '$1$1') + '"'
 }
 
-# Node 20+ runs mikud.mjs. Started directly (no shell, no PowerShell argument rewriting), with this process's
+# Node 20+ runs adiutor.mjs. Started directly (no shell, no PowerShell argument rewriting), with this process's
 # standard input and output, so the arguments and the answer pass through unchanged.
-if (-not $env:MIKUD_NO_NODE) {
+if (-not $env:ADIUTOR_NO_NODE) {
   $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
   # On Windows only a real node.exe: a .cmd stand-in would hand the arguments to cmd.exe.
   if ($node -and (-not $IsWin -or $node.Source -match '\.exe\z')) {
@@ -34,7 +34,7 @@ if (-not $env:MIKUD_NO_NODE) {
       $psi = New-Object System.Diagnostics.ProcessStartInfo
       $psi.FileName = $node.Source
       $psi.UseShellExecute = $false
-      $all = @((Join-Path $PSScriptRoot 'mikud.mjs')) + @($args | ForEach-Object { [string]$_ })
+      $all = @((Join-Path $PSScriptRoot 'adiutor.mjs')) + @($args | ForEach-Object { [string]$_ })
       if ($IsWin) { $psi.Arguments = @($all | ForEach-Object { ConvertTo-WindowsArgument $_ }) -join ' ' }
       else { foreach ($a in $all) { $psi.ArgumentList.Add($a) } }
       $child = [Diagnostics.Process]::Start($psi)
@@ -49,7 +49,7 @@ $Core = $PSVersionTable.PSVersion.Major -ge 6
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 
-$ClientId = 'mikud-connect'
+$ClientId = 'adiutor-connect'
 $DeviceGrant = 'urn:ietf:params:oauth:grant-type:device_code'
 $DaysDefault = 90
 $DaysMin = 1
@@ -58,13 +58,13 @@ function Get-Whole($value, [double]$fallback) {
   if ([string]$value -cmatch '^[1-9][0-9]*\z') { return [double]::Parse([string]$value, $Invariant) }
   $fallback
 }
-$WaitSeconds = Get-Whole $env:MIKUD_WAIT_SECONDS 90
+$WaitSeconds = Get-Whole $env:ADIUTOR_WAIT_SECONDS 90
 # Test seams: the tests shorten the lock wait and the request timeout, and move the clock forward.
-$LockWaitMs = Get-Whole $env:MIKUD_TEST_LOCK_WAIT_MS 20000
-$TimeoutMs = Get-Whole $env:MIKUD_TEST_TIMEOUT_MS 15000
-$ClockOffset = [long](Get-Whole $env:MIKUD_TEST_CLOCK_OFFSET 0)
+$LockWaitMs = Get-Whole $env:ADIUTOR_TEST_LOCK_WAIT_MS 20000
+$TimeoutMs = Get-Whole $env:ADIUTOR_TEST_TIMEOUT_MS 15000
+$ClockOffset = [long](Get-Whole $env:ADIUTOR_TEST_CLOCK_OFFSET 0)
 # Every pattern is matched case-sensitively (-cmatch) and ends with \z: in .NET, $ also matches before a last newline.
-# Device codes and keys as Mikud sends them; anything else is refused before it is stored.
+# Device codes and keys as Adiutor sends them; anything else is refused before it is stored.
 $Secret = '^[A-Za-z0-9._~+/=-]{8,512}\z'
 # Every value in a file: no quote, backslash or control character, so the shell version reads it too.
 $Plain = '^[^"\\\x00-\x1f\x7f]*\z'
@@ -89,20 +89,20 @@ $PendingFields = @(
   @('pollInFlight', 'n'), @('uncertain', 'n'), @('sessionOpen', 'n'), @('keySaved', 'n'), @('noKey', 'n')
 )
 $LeftFields = @(@('origin', 's'), @('keyName', 's'), @('expiresAt', 's'), @('reason', 's'), @('at', 's'))
-# Reasons whose key end date came from Mikud: the entry drops by itself once that date has passed.
+# Reasons whose key end date came from Adiutor: the entry drops by itself once that date has passed.
 $Dated = @('replaced', 'disconnected', 'not_saved')
 $Reasons = $Dated + @('key_unknown', 'session_unknown')
 
-class MikudFail : System.Exception {
+class AdiutorFail : System.Exception {
   [string]$Code
   [string]$Text
   [hashtable]$Extra
-  MikudFail([string]$code, [string]$text) : base($text) { $this.Code = $code; $this.Text = $text; $this.Extra = @{} }
+  AdiutorFail([string]$code, [string]$text) : base($text) { $this.Code = $code; $this.Text = $text; $this.Extra = @{} }
 }
 
 # The attempt changed under this run (another command, after a wrongly broken lock): answer from the new state.
-class MikudChanged : System.Exception {
-  MikudChanged() : base('The attempt changed.') {}
+class AdiutorChanged : System.Exception {
+  AdiutorChanged() : base('The attempt changed.') {}
 }
 
 # A JSON number, kept as the text it came in.
@@ -112,7 +112,7 @@ class JsonNumber {
 }
 
 function New-Fail([string]$code, [string]$text, [hashtable]$extra) {
-  $f = [MikudFail]::new($code, $text)
+  $f = [AdiutorFail]::new($code, $text)
   if ($extra) { $f.Extra = $extra }
   $f
 }
@@ -135,8 +135,8 @@ function Get-HostName {
 }
 function Test-SameHost($name) { ([string]$name).ToLowerInvariant() -ceq (Get-HostName).ToLowerInvariant() }
 function Get-GroupedCode([string]$code) { if ($code.Length -eq 8) { return $code.Substring(0, 4) + '-' + $code.Substring(4) }; $code }
-function Get-WaitCommand([string]$origin) { "mikud connect --wait --url $origin" }
-$SessionText = "Mikud may have opened a 'mikud connect (agent approval)' session that was not ended: end it on the Account page."
+function Get-WaitCommand([string]$origin) { "adiutor connect --wait --url $origin" }
+$SessionText = "Adiutor may have opened a 'adiutor connect (agent approval)' session that was not ended: end it on the Account page."
 
 # Windows tools by their full path: started from Git Bash, for one, whoami.exe may be a different program.
 $Icacls = ''
@@ -305,7 +305,7 @@ function ConvertTo-JsonText($value) {
 
 function New-Object-Ordered { New-Object System.Collections.Specialized.OrderedDictionary }
 
-# A string field of a parsed object, or '' (like str() in mikud.mjs).
+# A string field of a parsed object, or '' (like str() in adiutor.mjs).
 function Get-Str($obj, [string]$key) {
   if ($obj -is [Collections.IDictionary] -and $obj.Contains($key) -and $obj[$key] -is [string]) { return $obj[$key] }
   ''
@@ -355,18 +355,18 @@ function Write-Line([string]$text) { Write-Raw $Utf8.GetBytes("$text`n") }
 function Write-Answer($value) { Write-Line (ConvertTo-JsonText $value) }
 
 $Help = @"
-mikud: keep the owner's Mikud board current, after the owner approves this computer user once.
+adiutor: keep the owner's Adiutor board current, after the owner approves this computer user once.
 
   connect [--url <address>] [--days <1-365>] [--replace]
                           Ask to connect; prints a link and a code to show the owner.
   connect --wait --url <address>
                           Wait up to $WaitSeconds s for the approval; run again while it answers still_waiting.
-  status [--clear-left]   Whether this computer user is connected, and what the command left on Mikud (no secrets).
-  disconnect              Forget the connection on this computer (the key stays on Mikud until it ends).
+  status [--clear-left]   Whether this computer user is connected, and what the command left on Adiutor (no secrets).
+  disconnect              Forget the connection on this computer (the key stays on Adiutor until it ends).
   get '<path>'            GET /api/v1/<path>, for example: get 'items?q=login'
   post '<path>' --json '<body>' | --json-file <file>
   patch '<path>' --json '<body>' | --json-file <file>
-                          --as <label> (or MIKUD_AGENT_LABEL) names the agent in Mikud's activity log.
+                          --as <label> (or ADIUTOR_AGENT_LABEL) names the agent in Adiutor's activity log.
 "@ -replace "`r`n", "`n"
 
 # Arguments
@@ -391,7 +391,7 @@ function Read-Options([string[]]$list) {
     } elseif ($a -ceq '--replace') { $opts.replace = $true }
     elseif ($a -ceq '--wait') { $opts.wait = $true }
     elseif ($a -ceq '--clear-left') { $opts.clearLeft = $true }
-    elseif ($a.StartsWith('--', [StringComparison]::Ordinal)) { Fail 'bad_option' "Unknown option $a. Run: mikud help" }
+    elseif ($a.StartsWith('--', [StringComparison]::Ordinal)) { Fail 'bad_option' "Unknown option $a. Run: adiutor help" }
     else { $opts.positional.Add($a) }
   }
   $opts
@@ -409,14 +409,14 @@ function Get-Days($raw) {
 function Get-Origin([string]$raw) {
   $u = $null
   if (-not [Uri]::TryCreate($raw, [UriKind]::Absolute, [ref]$u)) {
-    Fail 'no_url' "That is not an address. Ask the owner for Mikud's address, for example https://mikud.example.com."
+    Fail 'no_url' "That is not an address. Ask the owner for Adiutor's address, for example https://adiutor.example.com."
   }
   $loopback = $u.Host -ceq 'localhost' -or $u.Host -ceq '127.0.0.1'
   if (-not ($u.Scheme -ceq 'https' -or ($u.Scheme -ceq 'http' -and $loopback))) {
-    Fail 'no_url' "Mikud's address must start with https:// (http only for localhost or 127.0.0.1)."
+    Fail 'no_url' "Adiutor's address must start with https:// (http only for localhost or 127.0.0.1)."
   }
   if ($u.UserInfo -or $u.Query -or $u.Fragment -or ($u.AbsolutePath -cne '/' -and $u.AbsolutePath -cne '')) {
-    Fail 'no_url' "Give Mikud's address alone, for example https://mikud.example.com."
+    Fail 'no_url' "Give Adiutor's address alone, for example https://adiutor.example.com."
   }
   "$($u.Scheme)://$($u.Authority)"
 }
@@ -425,7 +425,7 @@ function Get-Origin([string]$raw) {
 
 function Get-Ctx {
   if ($IsWin -and $env:USERPROFILE) { $base = $env:USERPROFILE } else { $base = [Environment]::GetFolderPath('UserProfile') }
-  if ($env:MIKUD_SKILL_HOME) { $dir = $env:MIKUD_SKILL_HOME } else { $dir = Join-Path $base '.mikud' }
+  if ($env:ADIUTOR_SKILL_HOME) { $dir = $env:ADIUTOR_SKILL_HOME } else { $dir = Join-Path $base '.adiutor' }
   $dir = [IO.Path]::GetFullPath($dir)
   $rootOf = [IO.Path]::GetPathRoot($dir)
   while ($dir.Length -gt $rootOf.Length -and ($dir.EndsWith('\') -or $dir.EndsWith('/'))) { $dir = $dir.Substring(0, $dir.Length - 1) }
@@ -487,7 +487,7 @@ function Protect-Home($ctx, [bool]$create) {
         [void][IO.Directory]::CreateDirectory($ctx.dir, [IO.UnixFileMode]'UserRead, UserWrite, UserExecute')
       }
     } catch {
-      if ($_.Exception -is [MikudFail]) { throw }
+      if ($_.Exception -is [AdiutorFail]) { throw }
       Fail 'cannot_save' "Cannot create $($ctx.dir). Allow this agent to write there."
     }
     $attr = Get-LinkAttributes $ctx.dir
@@ -503,7 +503,7 @@ function Protect-Home($ctx, [bool]$create) {
     }
   } else {
     if ((Get-UnixOwner $ctx.dir) -ne (Get-CurrentUid)) {
-      Fail-Insecure "$($ctx.dir) belongs to another user. Remove it, or set MIKUD_SKILL_HOME to a folder of your own."
+      Fail-Insecure "$($ctx.dir) belongs to another user. Remove it, or set ADIUTOR_SKILL_HOME to a folder of your own."
     }
     if ((Get-UnixMode $ctx.dir) -ne 448) { Fail-Insecure "Others can open $($ctx.dir). Run: chmod 700 '$($ctx.dir)'" }
   }
@@ -667,7 +667,7 @@ function Format-Line($fields, $rec) {
     else {
       $value = ''
       if ($null -ne $rec[$k]) { $value = [string]$rec[$k] }
-      if ($value -cnotmatch $Plain) { Fail 'unexpected_answer' "Mikud sent a value that cannot be stored ($k)." }
+      if ($value -cnotmatch $Plain) { Fail 'unexpected_answer' "Adiutor sent a value that cannot be stored ($k)." }
       '"' + $k + '":"' + $value + '"'
     }
   }
@@ -690,7 +690,7 @@ function Read-Line($fields, [string]$line, [string]$file) {
 }
 
 function Invoke-Hook([string]$point) {
-  $at = [Environment]::GetEnvironmentVariable('MIKUD_TEST_HOLD_' + $point.ToUpperInvariant().Replace('-', '_'))
+  $at = [Environment]::GetEnvironmentVariable('ADIUTOR_TEST_HOLD_' + $point.ToUpperInvariant().Replace('-', '_'))
   if (-not $at) { return }
   [IO.File]::WriteAllText("$at.reached", [string]$PID)
   for ($i = 0; $i -lt 1200 -and -not [IO.File]::Exists("$at.go"); $i++) { Start-Sleep -Milliseconds 50 }
@@ -749,7 +749,7 @@ function Write-Private($ctx, [string]$file, [string]$text) {
     } finally { if ($fs) { $fs.Dispose() } }
   } catch {
     Remove-Path $tmp
-    if ($_.Exception -is [MikudFail]) { throw }
+    if ($_.Exception -is [AdiutorFail]) { throw }
     Fail 'cannot_save' "Cannot write in $($ctx.dir). Allow this agent to write there."
   }
   Move-Over $tmp $file
@@ -802,12 +802,12 @@ function Test-SameRec($fields, $a, $b) {
 # Writes the attempt only while the file is exactly as this command last read or wrote it ($seen; $null: no attempt).
 # Answers what was written, the $seen of the next save.
 function Save-Pending($ctx, $rec, $seen) {
-  if (-not (Test-SameRec $PendingFields (Read-Pending $ctx) $seen)) { throw [MikudChanged]::new() }
+  if (-not (Test-SameRec $PendingFields (Read-Pending $ctx) $seen)) { throw [AdiutorChanged]::new() }
   Write-Private $ctx $ctx.pending ((Format-Line $PendingFields $rec) + "`n")
   Copy-Rec $rec $null
 }
 
-# The left record: what the command left on Mikud, with non-secret fields only.
+# The left record: what the command left on Adiutor, with non-secret fields only.
 
 function Read-Left($ctx) {
   $text = Read-Private $ctx $ctx.left
@@ -1015,17 +1015,17 @@ function Enter-Lock($ctx) {
 
 # The answer once the wait for the lock ended; $state is the verdict on the lock as last read.
 function Fail-LockBusy($ctx, [string]$state) {
-  $byHand = 'Nothing was sent. If no mikud command runs on this computer, remove that file by hand and run the command again.'
+  $byHand = 'Nothing was sent. If no adiutor command runs on this computer, remove that file by hand and run the command again.'
   if (Test-Exists $ctx.breaker) {
-    Fail 'busy' "Another mikud command may be removing a lock, or it stopped while doing so and left $($ctx.breaker). $byHand"
+    Fail 'busy' "Another adiutor command may be removing a lock, or it stopped while doing so and left $($ctx.breaker). $byHand"
   }
   if ($state -ceq 'unknown') {
-    Fail 'busy' "Another mikud command may hold the lock $($ctx.lock), and this command cannot tell whether it still runs. $byHand"
+    Fail 'busy' "Another adiutor command may hold the lock $($ctx.lock), and this command cannot tell whether it still runs. $byHand"
   }
   if ($state -ceq 'gone') {
-    Fail 'busy' "The lock $($ctx.lock) was left by a mikud command that has ended, and this command cannot remove it. $byHand"
+    Fail 'busy' "The lock $($ctx.lock) was left by an adiutor command that has ended, and this command cannot remove it. $byHand"
   }
-  Fail 'busy' 'Another mikud command is using the connection. Nothing was sent; run it again.'
+  Fail 'busy' 'Another adiutor command is using the connection. Nothing was sent; run it again.'
 }
 
 # Removes a file; $true when it is gone (also when it was gone already), $false when it could not be removed.
@@ -1073,7 +1073,7 @@ function Exit-Lock($ctx, [string]$token) {
 
 # Before a request that spends a one-time secret, and before every change to a file: the lock must be this command's.
 function Assert-Mine($ctx) {
-  if (-not (Test-Mine $ctx)) { Fail 'busy' 'Another mikud command took over the connection. Run it again.' }
+  if (-not (Test-Mine $ctx)) { Fail 'busy' 'Another adiutor command took over the connection. Run it again.' }
 }
 
 # A temporary file of Write-Private. Every one is written under the lock, so the holder finds only those a stopped
@@ -1137,7 +1137,7 @@ function Get-NetCode($err) {
   'network error'
 }
 
-# One request to the stored origin only, never following a redirect. -Connect names the request mikud-connect.
+# One request to the stored origin only, never following a redirect. -Connect names the request adiutor-connect.
 # $body is JSON text or $null. Answers @{ status; text; json }.
 function Invoke-Request([string]$origin, [string]$method, [string]$target, $body, [string]$bearer, [bool]$connect, [string]$label) {
   # A header value with a control character would change the request: refused before anything is sent.
@@ -1149,8 +1149,8 @@ function Invoke-Request([string]$origin, [string]$method, [string]$target, $body
   $head = "$method $target HTTP/1.1`r`nHost: $($u.Authority)`r`nAccept: application/json`r`n"
   if ($null -ne $body) { $bodyBytes = $Utf8.GetBytes([string]$body); $head += "Content-Type: application/json`r`n" }
   if ($bearer) { $head += "Authorization: Bearer $bearer`r`n" }
-  if ($connect) { $head += "User-Agent: $ClientId`r`n" } else { $head += "User-Agent: mikud`r`n" }
-  if ($label) { $head += "X-Mikud-Agent: $label`r`n" }
+  if ($connect) { $head += "User-Agent: $ClientId`r`n" } else { $head += "User-Agent: adiutor`r`n" }
+  if ($label) { $head += "X-Adiutor-Agent: $label`r`n" }
   if ($null -ne $bodyBytes) { $head += "Content-Length: $($bodyBytes.Length)`r`n" }
   elseif ($method -cne 'GET') { $head += "Content-Length: 0`r`n" }
   $head += "Connection: close`r`n`r`n"
@@ -1177,7 +1177,7 @@ function Invoke-Request([string]$origin, [string]$method, [string]$target, $body
         $stream = $ssl
       }
     } catch {
-      # The name, the connection or TLS failed first: nothing reached Mikud.
+      # The name, the connection or TLS failed first: nothing reached Adiutor.
       throw (New-Fail 'unreachable' "Cannot reach $origin ($(Get-NetCode $_.Exception))." @{ sent = $false })
     }
     try {
@@ -1220,10 +1220,10 @@ function Invoke-Request([string]$origin, [string]$method, [string]$target, $body
     if ($status -lt 100 -or $status -ge 200 -or $status -eq 101) { break }
     $from = $split + 4
   }
-  # The answer started and broke off (or never came): Mikud got the request and may have acted on it.
+  # The answer started and broke off (or never came): Adiutor got the request and may have acted on it.
   if ($status -lt 200) { throw (New-Fail 'unreachable' "Cannot reach $origin (UND_ERR_SOCKET)." @{ sent = $true }) }
   if ($status -ge 300 -and $status -lt 400) {
-    throw (New-Fail 'unreachable' "$origin answered with a redirect ($status), which the command does not follow. Check Mikud's address." @{ sent = $true })
+    throw (New-Fail 'unreachable' "$origin answered with a redirect ($status), which the command does not follow. Check Adiutor's address." @{ sent = $true })
   }
   $headers = @{}
   foreach ($line in ($lines | Select-Object -Skip 1)) {
@@ -1246,7 +1246,7 @@ function Invoke-Request([string]$origin, [string]$method, [string]$target, $body
   @{ status = $status; text = $text; json = $parsed }
 }
 
-# A refusal: Mikud's {error: {code, message}} (or Better Auth's code), carried in body.
+# A refusal: Adiutor's {error: {code, message}} (or Better Auth's code), carried in body.
 function New-HttpFail($r, [string]$what) {
   $body = $null
   if ($r.json -is [Collections.IDictionary] -or $r.json -is [Collections.IList]) { $body = $r.json }
@@ -1264,7 +1264,7 @@ function New-HttpFail($r, [string]$what) {
 # Connecting
 
 function Get-KeyName {
-  $raw = $env:MIKUD_AGENT_NAME
+  $raw = $env:ADIUTOR_AGENT_NAME
   if (-not $raw) { $raw = Get-HostName }
   $computer = $raw -creplace '[^A-Za-z0-9._-]+', '-'
   if ($computer.Length -gt 15) { $computer = $computer.Substring(0, 15) }
@@ -1296,19 +1296,19 @@ function Get-ConnectedAnswer($conn) {
 # The key name was saved as the connection: the attempt finished creating its key.
 function Test-KeySaved($pend, $conn) { [bool]$pend.keySaved -or ($null -ne $conn -and $conn.keyName -ceq $pend.keyName) }
 
-# What may be left on Mikud if this attempt were removed now; nothing for a completed connect.
+# What may be left on Adiutor if this attempt were removed now; nothing for a completed connect.
 function Get-AttemptWarnings($pend, $conn) {
   $warnings = @()
   if ($pend.phase -ceq 'creating_key') {
     # The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts. A create
-    # that Mikud refused, or that was never sent, made no key.
+    # that Adiutor refused, or that was never sent, made no key.
     if (-not (Test-KeySaved $pend $conn) -and -not $pend.noKey) { $warnings += 'key_unknown' }
     if ($pend.sessionOpen) { $warnings += 'session_unknown' }
   } elseif ($pend.pollInFlight -or $pend.uncertain -or $pend.sessionOpen) { $warnings += 'session_unknown' }
   , $warnings
 }
 
-# Removes an attempt, after writing what it may have left on Mikud. Under the lock; the file is removed only while it
+# Removes an attempt, after writing what it may have left on Adiutor. Under the lock; the file is removed only while it
 # is exactly as this command last read or wrote it ($seen).
 function Remove-Attempt($ctx, $pend, $conn, $seen) {
   if ($null -eq $seen) { $seen = $pend }
@@ -1326,7 +1326,7 @@ function New-UnknownFail($warnings, $pend) {
   if ($warnings -ccontains 'key_unknown') {
     return New-Fail 'key_unknown' "The connection to $($pend.origin) did not finish, and a key named `"$($pend.keyName)`" may exist: delete it in Settings, Agent access.$session" $null
   }
-  New-Fail 'session_unknown' "The connection to $($pend.origin) did not finish, and the command cannot tell what Mikud did. $SessionText" $null
+  New-Fail 'session_unknown' "The connection to $($pend.origin) did not finish, and the command cannot tell what Adiutor did. $SessionText" $null
 }
 
 # An attempt a lock holder finds in creating_key belongs to a run that is gone (the lock is held through every step
@@ -1351,27 +1351,27 @@ function Invoke-Connect($ctx, $opts) {
     elseif ($conn -and $conn.origin) { $origin = $conn.origin }
     elseif ($found) { $origin = $found.origin }
     else { $origin = '' }
-    if (-not $origin) { Fail 'no_url' 'No Mikud address is known. Ask the owner for it, then run: mikud connect --url <address>' }
+    if (-not $origin) { Fail 'no_url' 'No Adiutor address is known. Ask the owner for it, then run: adiutor connect --url <address>' }
     # The open code again, unless asked for a new one (--replace: the link did not work for the owner).
     if ($pend -and -not $opts.replace -and $pend.origin -ceq $origin -and $pend.phase -ceq 'polling' -and $pend.codeExpiresAt -gt (Now)) {
       $result = Get-PendingAnswer $pend
     } else {
       if ($conn -and -not $opts.replace) {
-        Fail 'already_connected' "Already connected to $($conn.origin) with the key `"$($conn.keyName)`", until $($conn.expiresAt). To connect again, run: mikud connect --replace"
+        Fail 'already_connected' "Already connected to $($conn.origin) with the key `"$($conn.keyName)`", until $($conn.expiresAt). To connect again, run: adiutor connect --replace"
       }
       $r = Invoke-Request $origin 'POST' '/api/auth/device/code' (ConvertTo-JsonText ([ordered]@{ client_id = $ClientId })) '' $true ''
-      if ($r.status -ne 200) { throw (New-HttpFail $r 'Asking Mikud for a code') }
+      if ($r.status -ne 200) { throw (New-HttpFail $r 'Asking Adiutor for a code') }
       $d = $r.json
       $deviceCode = Get-Str $d 'device_code'
       $userCode = Get-Str $d 'user_code'
       $link = Get-Str $d 'verification_uri_complete'
       if ($deviceCode -cnotmatch $Secret -or $userCode -cnotmatch '^[A-Za-z0-9-]{4,20}\z' -or $link -cnotmatch $Plain) {
-        Fail 'unexpected_answer' 'Mikud answered without a usable code. Nothing was stored.'
+        Fail 'unexpected_answer' 'Adiutor answered without a usable code. Nothing was stored.'
       }
       $linkOrigin = ''
       $lu = $null
       if ([Uri]::TryCreate($link, [UriKind]::Absolute, [ref]$lu) -and ($lu.Scheme -ceq 'http' -or $lu.Scheme -ceq 'https')) { $linkOrigin = "$($lu.Scheme)://$($lu.Authority)" }
-      if ($linkOrigin -cne $origin) { Fail 'unexpected_answer' "Mikud's approval link is not on $origin. Nothing was stored." }
+      if ($linkOrigin -cne $origin) { Fail 'unexpected_answer' "Adiutor's approval link is not on $origin. Nothing was stored." }
       # A pending attempt is replaced only now, once the new code exists; its link stops being used.
       if ($pend) { [void](Remove-Attempt $ctx $pend $conn $null) }
       $t = Now
@@ -1385,7 +1385,7 @@ function Invoke-Connect($ctx, $opts) {
         keyName = (Get-KeyName); phase = 'polling'; pollInFlight = 0; uncertain = 0; sessionOpen = 0; keySaved = 0; noKey = 0
       }
       # Only into the state this command read: no attempt, and the connection it decided on.
-      if (-not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $conn)) { throw [MikudChanged]::new() }
+      if (-not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $conn)) { throw [AdiutorChanged]::new() }
       [void](Save-Pending $ctx $next $null)
       $result = Get-PendingAnswer $next
     }
@@ -1400,7 +1400,7 @@ function Invoke-Wait($ctx, $opts) {
   if (-not $origin) {
     $p = Read-Pending $ctx
     if ($p) { $origin = $p.origin }
-    if (-not $origin) { Fail 'not_connected' 'No connection is being made. Run: mikud connect --url <address>' }
+    if (-not $origin) { Fail 'not_connected' 'No connection is being made. Run: adiutor connect --url <address>' }
   }
   $until = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
   $state = @{ attemptId = $null }
@@ -1409,7 +1409,7 @@ function Invoke-Wait($ctx, $opts) {
     try {
       $token = Enter-Lock $ctx
       try { $step = Invoke-WaitStep $ctx $origin $state } finally { Exit-Lock $ctx $token }
-    } catch [MikudChanged] { continue }
+    } catch [AdiutorChanged] { continue }
     if ($step.ContainsKey('done')) {
       $step.done['left'] = Get-LeftNow $ctx
       return Write-Answer $step.done
@@ -1439,7 +1439,7 @@ function Invoke-WaitStep($ctx, [string]$origin, $state) {
     # Another command finished this attempt (a parallel --wait), or it was never made here.
     if ($conn -and $conn.origin -ceq $origin -and ($state.attemptId -or -not $pend)) { return @{ done = (Get-ConnectedAnswer $conn) } }
     if ($state.attemptId) { Fail 'not_connected' "The connection to $origin was cancelled meanwhile." }
-    Fail 'not_connected' "No connection to $origin is being made. Run: mikud connect --url $origin"
+    Fail 'not_connected' "No connection to $origin is being made. Run: adiutor connect --url $origin"
   }
   # Replaced meanwhile (connect --replace): the new attempt has its own link and code.
   if ($state.attemptId -and $pend.attemptId -cne $state.attemptId) { return @{ done = (Get-PendingAnswer $pend) } }
@@ -1450,7 +1450,7 @@ function Invoke-WaitStep($ctx, [string]$origin, $state) {
   if ($pend.codeExpiresAt -le $t) {
     $warnings = Remove-Attempt $ctx $pend $conn $null
     if ($warnings.Count) { throw (New-UnknownFail $warnings $pend) }
-    Fail 'expired' "The code expired before it was approved. Run: mikud connect --url $origin"
+    Fail 'expired' "The code expired before it was approved. Run: adiutor connect --url $origin"
   }
   if ($pend.nextPollAt -gt $t) { return @{ wait = $pend.nextPollAt - $t } }
   # A mark left set: the run before this one sent a poll and never recorded its answer.
@@ -1464,7 +1464,7 @@ function Invoke-WaitStep($ctx, [string]$origin, $state) {
     $r = Invoke-Request $origin 'POST' '/api/auth/device/token' $pollBody '' $true ''
   } catch {
     $e = $_.Exception
-    if ($e -is [MikudFail] -and $e.Code -ceq 'unreachable') {
+    if ($e -is [AdiutorFail] -and $e.Code -ceq 'unreachable') {
       $pend.pollInFlight = 0
       if ($e.Extra['sent'] -ne $false) { $pend.uncertain = 1 }
       $pend.nextPollAt = (Now) + $pend.interval
@@ -1488,7 +1488,7 @@ function Invoke-WaitStep($ctx, [string]$origin, $state) {
     $warnings = Remove-Attempt $ctx $pend $conn $seen
     if ($warnings.Count) { throw (New-UnknownFail $warnings $pend) }
     if ($err -ceq 'access_denied') { Fail 'denied' 'The owner did not approve the connection. Nothing was created.' }
-    Fail 'expired' "The code is no longer valid. Run: mikud connect --url $origin"
+    Fail 'expired' "The code is no longer valid. Run: adiutor connect --url $origin"
   }
   # A failure after the server may have started: a session may exist.
   if ($r.status -ge 500 -or $r.status -eq 200) { $pend.uncertain = 1 }
@@ -1497,7 +1497,7 @@ function Invoke-WaitStep($ctx, [string]$origin, $state) {
   throw (New-HttpFail $r 'Waiting for the approval')
 }
 
-# Ends the approval's session with its own token. True only when Mikud confirmed it. Sent even after the lock was
+# Ends the approval's session with its own token. True only when Adiutor confirmed it. Sent even after the lock was
 # lost: no other command knows this token, and a session left open is the worse outcome.
 function Stop-Session([string]$origin, [string]$sessionToken) {
   try {
@@ -1518,7 +1518,7 @@ function Invoke-Redeem($ctx, $seen, $conn, [string]$sessionToken) {
     $e = $_.Exception
     # Nothing is sent before this mark is written: the session ends at once.
     [void](Stop-Session $seen.origin $sessionToken)
-    if ($e -is [MikudChanged]) { Fail 'cannot_save' 'The connection changed while this command ran. Run: mikud status' }
+    if ($e -is [AdiutorChanged]) { Fail 'cannot_save' 'The connection changed while this command ran. Run: adiutor status' }
     throw $e
   }
   Invoke-Hook 'token'
@@ -1526,7 +1526,7 @@ function Invoke-Redeem($ctx, $seen, $conn, [string]$sessionToken) {
   $failure = $null
   try { $saved = Invoke-CreateAndSave $ctx $att $sessionToken } catch { $failure = $_.Exception }
   $ended = Stop-Session $seen.origin $sessionToken
-  # A step from here that fails keeps the attempt, and with it what the attempt may have left on Mikud; it never
+  # A step from here that fails keeps the attempt, and with it what the attempt may have left on Adiutor; it never
   # replaces the answer.
   try { if ($ended) { $att.seen = Save-Pending $ctx (Copy-Rec $att.seen @{ sessionOpen = 0 }) $att.seen } } catch {}
   Invoke-Hook 'revoked'
@@ -1541,12 +1541,12 @@ function Invoke-Redeem($ctx, $seen, $conn, [string]$sessionToken) {
   } catch {}
   Invoke-Hook 'done'
   if ($failure) {
-    if (-not $ended -and $failure -is [MikudFail]) { $failure.Text += " $SessionText" }
+    if (-not $ended -and $failure -is [AdiutorFail]) { $failure.Text += " $SessionText" }
     throw $failure
   }
   $answer = Get-ConnectedAnswer $saved
   if (-not $ended) {
-    $answer['warning'] = 'Could not confirm that the approval''s temporary session ended. End the session "mikud connect (agent approval)" on the Account page in Mikud.'
+    $answer['warning'] = 'Could not confirm that the approval''s temporary session ended. End the session "adiutor connect (agent approval)" on the Account page in Adiutor.'
   }
   $answer
 }
@@ -1554,8 +1554,8 @@ function Invoke-Redeem($ctx, $seen, $conn, [string]$sessionToken) {
 function Invoke-CreateAndSave($ctx, $att, [string]$sessionToken) {
   $origin = $att.pend.origin
   $name = $att.pend.keyName
-  $unknown = New-Fail 'key_unknown' "Mikud's answer to creating the key was lost, so a key named `"$name`" may exist on ${origin}: delete it in Settings, Agent access. Then run: mikud connect --url $origin" $null
-  # Mikud refused the key, or the request never left: no key exists, and the attempt records it (no key_unknown).
+  $unknown = New-Fail 'key_unknown' "Adiutor's answer to creating the key was lost, so a key named `"$name`" may exist on ${origin}: delete it in Settings, Agent access. Then run: adiutor connect --url $origin" $null
+  # Adiutor refused the key, or the request never left: no key exists, and the attempt records it (no key_unknown).
   $noKey = {
     param($fail)
     try { $att.seen = Save-Pending $ctx (Copy-Rec $att.seen @{ noKey = 1 }) $att.seen } catch {}
@@ -1567,7 +1567,7 @@ function Invoke-CreateAndSave($ctx, $att, [string]$sessionToken) {
     $r = Invoke-Request $origin 'POST' '/api/auth/api-key/create' $create $sessionToken $true ''
   } catch {
     $e = $_.Exception
-    if ($e -is [MikudFail] -and $e.Code -ceq 'unreachable' -and $e.Extra['sent'] -ne $false) { throw $unknown }
+    if ($e -is [AdiutorFail] -and $e.Code -ceq 'unreachable' -and $e.Extra['sent'] -ne $false) { throw $unknown }
     throw (& $noKey $e)
   }
   Invoke-Hook 'key'
@@ -1580,10 +1580,10 @@ function Invoke-CreateAndSave($ctx, $att, [string]$sessionToken) {
   try {
     # Saved only while both files are as this command read them: a parallel disconnect or --replace wins.
     if (-not (Test-SameRec $PendingFields (Read-Pending $ctx) $att.seen) -or -not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $att.conn)) {
-      Fail 'cannot_save' 'Another mikud command disconnected or started a new connection while this one waited, so the new key was not saved. Run: mikud status'
+      Fail 'cannot_save' 'Another adiutor command disconnected or started a new connection while this one waited, so the new key was not saved. Run: adiutor status'
     }
     $old = $att.conn
-    # The key being replaced stays on Mikud: recorded before the connection that names it is replaced.
+    # The key being replaced stays on Adiutor: recorded before the connection that names it is replaced.
     if ($old -and $old.keyName -cne $name) {
       Add-Left $ctx @(@{ origin = $old.origin; keyName = $old.keyName; expiresAt = $old.expiresAt; reason = 'replaced' })
       Invoke-Hook 'recorded'
@@ -1591,7 +1591,7 @@ function Invoke-CreateAndSave($ctx, $att, [string]$sessionToken) {
     Write-Connection $ctx @{ v = 1; origin = $origin; key = $key; keyName = $name; expiresAt = $expiresAt }
   } catch {
     $fail = $_.Exception
-    if (-not ($fail -is [MikudFail])) { $fail = New-Fail 'cannot_save' "Cannot save the connection in $($ctx.dir)." $null }
+    if (-not ($fail -is [AdiutorFail])) { $fail = New-Fail 'cannot_save' "Cannot save the connection in $($ctx.dir)." $null }
     try { Add-Left $ctx @(@{ origin = $origin; keyName = $name; expiresAt = $expiresAt; reason = 'not_saved' }) }
     catch { $fail.Text += " The key `"$name`" on $origin works until ${expiresAt}: delete it in Settings, Agent access." }
     throw $fail
@@ -1652,10 +1652,10 @@ function Invoke-Disconnect($ctx) {
     if ($pend) { [void](Remove-Attempt $ctx $pend $conn $null) }
     if (-not $conn) { $result['status'] = 'not_connected' }
     else {
-      # The key stays on Mikud (a key cannot delete itself): recorded before the connection is removed.
+      # The key stays on Adiutor (a key cannot delete itself): recorded before the connection is removed.
       Add-Left $ctx @(@{ origin = $conn.origin; keyName = $conn.keyName; expiresAt = $conn.expiresAt; reason = 'disconnected' })
       Invoke-Hook 'recorded'
-      if (-not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $conn)) { throw [MikudChanged]::new() }
+      if (-not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $conn)) { throw [AdiutorChanged]::new() }
       Remove-PrivateFile $ctx $ctx.connection
       $result['status'] = 'disconnected'
       $result['origin'] = $conn.origin
@@ -1704,14 +1704,14 @@ function Get-Body([string]$method, $opts) {
 
 function Get-AgentLabel($opts) {
   $label = $opts.as
-  if ($null -eq $label) { $label = $env:MIKUD_AGENT_LABEL }
+  if ($null -eq $label) { $label = $env:ADIUTOR_AGENT_LABEL }
   if ($null -eq $label) { $label = '' }
   if ($label -eq '' -and $null -eq $opts.as) { return '' }
   if ($label -cnotmatch $LabelPattern) { Fail 'bad_label' 'The agent label takes 1 to 60 letters, digits, spaces and . _ : - only.' }
   $label
 }
 
-# A key Mikud no longer accepts is forgotten, while it is still the saved one.
+# A key Adiutor no longer accepts is forgotten, while it is still the saved one.
 function Clear-Connection($ctx, $conn) {
   try {
     $token = Enter-Lock $ctx
@@ -1723,12 +1723,12 @@ function Clear-Connection($ctx, $conn) {
 }
 
 function Invoke-Api($ctx, [string]$method, $opts) {
-  if ($opts.positional.Count -ne 1) { Fail 'bad_path' "Give one path: mikud $($method.ToLowerInvariant()) '<path>'" }
+  if ($opts.positional.Count -ne 1) { Fail 'bad_path' "Give one path: adiutor $($method.ToLowerInvariant()) '<path>'" }
   $target = Get-ApiPath $method $opts.positional[0]
   $label = Get-AgentLabel $opts
   $body = Get-Body $method $opts
   $conn = Read-Connection $ctx
-  if (-not $conn) { Fail 'not_connected' 'Not connected to Mikud. Run: mikud connect' }
+  if (-not $conn) { Fail 'not_connected' 'Not connected to Adiutor. Run: adiutor connect' }
   if ($opts.url -and (Get-Origin $opts.url) -cne $conn.origin) { Fail 'not_connected' "Connected to $($conn.origin), not to $(Get-Origin $opts.url)." }
   $unknown = {
     param($status)
@@ -1741,16 +1741,16 @@ function Invoke-Api($ctx, [string]$method, $opts) {
     $r = Invoke-Request $conn.origin $method "/api/v1/$target" $body $conn.key $false $label
   } catch {
     $e = $_.Exception
-    if ($e -is [MikudFail] -and $e.Code -ceq 'unreachable' -and $method -cne 'GET' -and $e.Extra['sent'] -ne $false) { throw (& $unknown 0) }
+    if ($e -is [AdiutorFail] -and $e.Code -ceq 'unreachable' -and $method -cne 'GET' -and $e.Extra['sent'] -ne $false) { throw (& $unknown 0) }
     throw $e
   }
   if ($r.status -eq 401) {
     Clear-Connection $ctx $conn
-    Fail 'connection_ended' "Mikud no longer accepts this connection's key (it was disconnected in Settings or it expired). Run: mikud connect --url $($conn.origin)"
+    Fail 'connection_ended' "Adiutor no longer accepts this connection's key (it was disconnected in Settings or it expired). Run: adiutor connect --url $($conn.origin)"
   }
   if ($method -cne 'GET' -and @(502, 503, 504) -contains $r.status) { throw (& $unknown $r.status) }
   if ($r.status -ge 200 -and $r.status -lt 300) {
-    # Mikud answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
+    # Adiutor answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
     $answer = $r.json
     $o = New-Object-Ordered
     $o['status'] = $r.status
@@ -1786,12 +1786,12 @@ function Invoke-Main([string[]]$argv) {
   } catch {
     $e = $_.Exception
     # The files changed under a lock this command no longer held: nothing more was done.
-    if ($e -is [MikudChanged]) { $e = New-Fail 'busy' 'Another mikud command changed the connection meanwhile. Run: mikud status' $null }
-    # What the command left on Mikud travels with every answer about the connection.
-    if ($e -is [MikudFail] -and @('connect', 'disconnect', 'status') -ccontains $command) { $e.Extra['left'] = Get-LeftNow $ctx }
+    if ($e -is [AdiutorChanged]) { $e = New-Fail 'busy' 'Another adiutor command changed the connection meanwhile. Run: adiutor status' $null }
+    # What the command left on Adiutor travels with every answer about the connection.
+    if ($e -is [AdiutorFail] -and @('connect', 'disconnect', 'status') -ccontains $command) { $e.Extra['left'] = Get-LeftNow $ctx }
     throw $e
   }
-  Fail 'unknown_command' "Unknown command `"$command`". Run: mikud help"
+  Fail 'unknown_command' "Unknown command `"$command`". Run: adiutor help"
 }
 
 try {
@@ -1800,7 +1800,7 @@ try {
 } catch {
   $e = $_.Exception
   $out = New-Object-Ordered
-  if ($e -is [MikudFail]) {
+  if ($e -is [AdiutorFail]) {
     $out['error'] = $e.Code
     $out['message'] = $e.Text
     if ($e.Extra.ContainsKey('status') -and $null -ne $e.Extra['status']) { $out['status'] = $e.Extra['status'] }

@@ -7,10 +7,10 @@ import { defineConfig, type Plugin } from "vite"
 // --config config/vite.config.ts. The production build goes to dist/web, which the server serves.
 const repo = (path: string) => fileURLToPath(new URL(`../${path}`, import.meta.url))
 
-// The typed mock API (src/web/api/mock) is compiled in only when VITE_MIKUD_MOCK=1 is set for a
-// development run or a screenshot build. The production build defines __MIKUD_MOCK__ as false, so
+// The typed mock API (src/web/api/mock) is compiled in only when VITE_ADIUTOR_MOCK=1 is set for a
+// development run or a screenshot build. The production build defines __ADIUTOR_MOCK__ as false, so
 // the bundler drops the mock entirely; scripts/lib/web-dist-check.sh fails if it ever ships.
-const mock = process.env.VITE_MIKUD_MOCK === "1"
+const mock = process.env.VITE_ADIUTOR_MOCK === "1"
 
 const FONT_LICENCES: Record<string, string> = {
   onest: "node_modules/@fontsource-variable/onest/LICENSE",
@@ -21,7 +21,7 @@ const FONT_LICENCES: Record<string, string> = {
 /** Ships the SIL Open Font License of each bundled font next to the font files. */
 function fontLicences(): Plugin {
   return {
-    name: "mikud-font-licences",
+    name: "adiutor-font-licences",
     apply: "build",
     generateBundle() {
       for (const [name, path] of Object.entries(FONT_LICENCES)) {
@@ -40,7 +40,7 @@ export default defineConfig({
   publicDir: repo("src/web/public"),
   envDir: false,
   plugins: [react(), fontLicences()],
-  define: { __MIKUD_MOCK__: JSON.stringify(mock) },
+  define: { __ADIUTOR_MOCK__: JSON.stringify(mock) },
   build: {
     outDir: repo("dist/web"),
     emptyOutDir: true,

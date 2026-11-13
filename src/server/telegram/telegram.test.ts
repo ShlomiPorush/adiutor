@@ -36,7 +36,7 @@ describe("classifyUpdate", () => {
   })
 
   it("answers commands with help and never files them", () => {
-    for (const text of ["/start", "/help", "/help@mikud_bot", "/settings now"])
+    for (const text of ["/start", "/help", "/help@adiutor_bot", "/settings now"])
       expect(classifyUpdate(message(OWNER_CHAT, { text }), OWNER_CHAT)).toEqual({ kind: "command" })
     expect(classifyUpdate(message(OWNER_CHAT, { text: "/ not a command" }), OWNER_CHAT).kind).toBe("capture")
   })

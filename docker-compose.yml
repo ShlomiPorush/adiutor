@@ -2,17 +2,17 @@
 # Behind Traefik on the external "traefik" network, so no port is published. Configure through .env
 # (copy .env.example); every variable is documented there.
 #
-# Mikud keeps no files: all state is in the PostgreSQL database DATABASE_URL points at, which the
+# Adiutor keeps no files: all state is in the PostgreSQL database DATABASE_URL points at, which the
 # owner runs and backs up. This file runs only the application container.
 #
 # Compose interpolation is limited to VERSION and DOMAIN. Everything the server reads comes through
 # env_file.
-name: mikud
+name: adiutor
 
 services:
-  mikud:
-    image: ghcr.io/shlomiporush/mikud:${VERSION:?Set VERSION in .env to the release to run}
-    container_name: mikud
+  adiutor:
+    image: ghcr.io/shlomiporush/adiutor:${VERSION:?Set VERSION in .env to the release to run}
+    container_name: adiutor
     # Runs as node (set in the image) with no capability and no way to gain privileges, on a
     # read-only root file system.
     security_opt:
@@ -37,12 +37,12 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik"
-      - "traefik.http.services.mikud.loadbalancer.server.port=8080"
-      - "traefik.http.routers.mikud.entrypoints=https"
-      - "traefik.http.routers.mikud.rule=Host(`${DOMAIN:?Set DOMAIN in .env}`)"
-      - "traefik.http.routers.mikud.tls=true"
-      - "traefik.http.routers.mikud.service=mikud"
-      - "traefik.http.routers.mikud.middlewares=default@file"
+      - "traefik.http.services.adiutor.loadbalancer.server.port=8080"
+      - "traefik.http.routers.adiutor.entrypoints=https"
+      - "traefik.http.routers.adiutor.rule=Host(`${DOMAIN:?Set DOMAIN in .env}`)"
+      - "traefik.http.routers.adiutor.tls=true"
+      - "traefik.http.routers.adiutor.service=adiutor"
+      - "traefik.http.routers.adiutor.middlewares=default@file"
     # Calls /healthz, which includes the database; the same check as the image's, written out here.
     healthcheck:
       test: ["CMD", "node", "dist/server/healthcheck.js"]

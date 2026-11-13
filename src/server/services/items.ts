@@ -305,7 +305,7 @@ export function refuseChildThread(parentThreadId: string | null | undefined): vo
   if (parentThreadId)
     throw new AppError(
       "not_top_level",
-      "This is a subagent or review thread. Only top-level T3 threads are tracked; do not call Mikud from it.",
+      "This is a subagent or review thread. Only top-level T3 threads are tracked; do not call Adiutor from it.",
     )
 }
 

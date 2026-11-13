@@ -186,8 +186,8 @@ describe("Telegram bot", () => {
     })
     await waitFor(() => standIn.sent.length === 3)
     expect(standIn.sent.map((m) => m.text)).toEqual([
-      "Send me any text and I will save it in Mikud, under Inbox. Every morning, Sunday to Friday at 08:00, I send you what is waiting on you.",
-      "Send me any text and I will save it in Mikud, under Inbox. Every morning, Sunday to Friday at 08:00, I send you what is waiting on you.",
+      "Send me any text and I will save it in Adiutor, under Inbox. Every morning, Sunday to Friday at 08:00, I send you what is waiting on you.",
+      "Send me any text and I will save it in Adiutor, under Inbox. Every morning, Sunday to Friday at 08:00, I send you what is waiting on you.",
       "I save text messages only. Nothing was saved.",
     ])
     expect(await allItems()).toHaveLength(0)

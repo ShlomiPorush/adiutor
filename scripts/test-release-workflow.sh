@@ -8,7 +8,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKFLOW="$REPO/.github/workflows/release.yml"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/mikud-release-workflow-test.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/adiutor-release-workflow-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 FAILED=0
 PASSED=0

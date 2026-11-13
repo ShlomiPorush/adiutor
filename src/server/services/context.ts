@@ -79,7 +79,7 @@ export async function writeAudit(ctx: Ctx, tx: DbOrTx, by: By, entry: AuditEntry
  * Each such transaction takes it as its first statement (`inLinkTx`), before it reads or locks any row.
  * A transaction then never waits for this lock while it holds a row lock, so these transactions cannot
  * deadlock with each other, and a check of a suppression or a link under the lock stays true until
- * commit. Mikud has one owner and a low write volume: running these transactions one at a time costs
+ * commit. Adiutor has one owner and a low write volume: running these transactions one at a time costs
  * nothing noticeable. The value spells "mikd" in ASCII and fits in 31 bits.
  */
 export const LINK_STRUCTURE_LOCK_KEY = 0x6d696b64

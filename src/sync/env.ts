@@ -34,7 +34,7 @@ export function parseEnvFile(text: string): Record<string, string> {
 }
 
 export type SyncConfig = {
-  /** Base URL of the Mikud server, without a trailing slash. */
+  /** Base URL of the Adiutor server, without a trailing slash. */
   url?: string
   /** The agent token. Never printed, logged or passed to a child process. */
   token?: string
@@ -44,7 +44,7 @@ export type SyncConfig = {
   overviewDir?: string
 }
 
-const NAMES = ["MIKUD_URL", "MIKUD_AGENT_TOKEN", "T3CODE_CLI_PATH", "MIKUD_OVERVIEW_DIR"] as const
+const NAMES = ["ADIUTOR_URL", "ADIUTOR_AGENT_TOKEN", "T3CODE_CLI_PATH", "ADIUTOR_OVERVIEW_DIR"] as const
 
 /**
  * Merges the environment with the env file (the file wins: it is the explicit choice of the caller)
@@ -60,28 +60,28 @@ export function loadSyncConfig(
     return value === "" ? undefined : value
   }
   const problems: string[] = []
-  const url = pick("MIKUD_URL")
-  const token = pick("MIKUD_AGENT_TOKEN")
+  const url = pick("ADIUTOR_URL")
+  const token = pick("ADIUTOR_AGENT_TOKEN")
 
   if (url !== undefined) {
     const parsed = URL.canParse(url) ? new URL(url) : undefined
     if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:"))
-      problems.push("MIKUD_URL must be an http or https URL")
+      problems.push("ADIUTOR_URL must be an http or https URL")
     else if (parsed.username || parsed.password || parsed.search || parsed.hash)
-      problems.push("MIKUD_URL must not contain credentials, a query or a fragment")
-  } else if (options.requireServer) problems.push("MIKUD_URL is required")
+      problems.push("ADIUTOR_URL must not contain credentials, a query or a fragment")
+  } else if (options.requireServer) problems.push("ADIUTOR_URL is required")
 
   if (token !== undefined) {
     if (token.length < MIN_TOKEN_LENGTH)
-      problems.push(`MIKUD_AGENT_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`)
-  } else if (options.requireServer) problems.push("MIKUD_AGENT_TOKEN is required")
+      problems.push(`ADIUTOR_AGENT_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`)
+  } else if (options.requireServer) problems.push("ADIUTOR_AGENT_TOKEN is required")
 
   if (problems.length > 0) throw new SyncConfigError(`Invalid configuration: ${problems.join("; ")}`)
   return {
     url: url?.replace(/\/+$/, ""),
     token,
     cliPath: pick("T3CODE_CLI_PATH"),
-    overviewDir: pick("MIKUD_OVERVIEW_DIR"),
+    overviewDir: pick("ADIUTOR_OVERVIEW_DIR"),
   }
 }
 

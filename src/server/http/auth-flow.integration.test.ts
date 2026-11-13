@@ -16,7 +16,7 @@ import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import { testBotToken, testPassword, testSecret } from "../testing/secrets.ts"
 import { totp, wrongTotp } from "../testing/totp.ts"
 
-// Better Auth as Mikud configures it (src/server/auth/auth.ts), over HTTP through the app: its own routes, the
+// Better Auth as Adiutor configures it (src/server/auth/auth.ts), over HTTP through the app: its own routes, the
 // documented hooks, and the gaps the owner accepted (G1 to G18 in docs/project-foundation.md, "Security design").
 
 const DAY = 86_400_000
@@ -96,7 +96,7 @@ describe("first run: Better Auth's sign-up", () => {
       twoFactorEnabled: false,
     })
     expect((await b.call("GET", "/api/setup/status")).json.data).toEqual({ hasUser: true, session: "enrol" })
-    // Signed in by password only: Mikud's API refuses it until two-factor is on.
+    // Signed in by password only: Adiutor's API refuses it until two-factor is on.
     const refused = await v1(b)
     expect([refused.status, refused.json.error.code]).toEqual([403, "totp_required"])
 
@@ -115,7 +115,7 @@ describe("first run: Better Auth's sign-up", () => {
     async (name) => {
       const b = browser()
       expect((await b.setup(name)).status).toBe(200)
-      const email = `${name.toLowerCase()}@mikud.local`
+      const email = `${name.toLowerCase()}@adiutor.local`
       expect((await owner())?.email).toBe(email)
       // Better Auth names the authenticator entry after the e-mail: the username, not hex.
       const enabled = await b.call("POST", "/api/auth/two-factor/enable", { body: { password: TEST_PASSWORD } })
@@ -125,7 +125,7 @@ describe("first run: Better Auth's sign-up", () => {
       expect(label).toContain(email)
       expect(label).not.toMatch(/u-[0-9a-f]+@/)
       // The setup page draws it with the username as the account name and Better Auth's query as it is.
-      expect(authenticatorUri(uri)).toBe(`otpauth://totp/Mikud:${name.toLowerCase()}${uri.slice(uri.indexOf("?"))}`)
+      expect(authenticatorUri(uri)).toBe(`otpauth://totp/Adiutor:${name.toLowerCase()}${uri.slice(uri.indexOf("?"))}`)
       const secret = new URL(uri).searchParams.get("secret") ?? ""
       expect((await b.verify(totp(secret))).status).toBe(200)
       const again = browser()
@@ -191,13 +191,13 @@ describe("first run: Better Auth's sign-up", () => {
   })
 })
 
-describe("two-factor, required by Mikud through the account flag", () => {
+describe("two-factor, required by Adiutor through the account flag", () => {
   it("enrols with a code: ten backup codes, the flag on, the API open, the audit row", async () => {
     const b = browser()
     await b.setup()
     const enabled = await b.call("POST", "/api/auth/two-factor/enable", { body: { password: TEST_PASSWORD } })
     expect(enabled.status).toBe(200)
-    expect(enabled.json.totpURI).toMatch(/^otpauth:\/\/totp\/Mikud:/)
+    expect(enabled.json.totpURI).toMatch(/^otpauth:\/\/totp\/Adiutor:/)
     expect(enabled.json.backupCodes).toHaveLength(10)
     const secret = new URL(enabled.json.totpURI).searchParams.get("secret") ?? ""
     expect((await b.verify(totp(secret))).status).toBe(200)
@@ -648,7 +648,7 @@ describe("audit rows from the documented hooks, and their refusals", () => {
     expect(await sessions()).toHaveLength(0)
   })
 
-  it("G5, accepted: a refused change after its row leaves the row (the audit is on Mikud's own connection)", async () => {
+  it("G5, accepted: a refused change after its row leaves the row (the audit is on Adiutor's own connection)", async () => {
     const b = browser()
     await b.owner()
     await t.ctx.db.execute(
@@ -666,7 +666,7 @@ describe("audit rows from the documented hooks, and their refusals", () => {
   })
 })
 
-describe("signing out after days without Mikud open (sliding expiresIn, deferSessionRefresh)", () => {
+describe("signing out after days without Adiutor open (sliding expiresIn, deferSessionRefresh)", () => {
   const expiry = async () => (await sessions())[0]?.expiresAt.getTime() ?? 0
 
   it("never extends a session on a read; a POST /get-session does", async () => {
@@ -741,7 +741,7 @@ describe("signing out after days without Mikud open (sliding expiresIn, deferSes
     })
   })
 
-  it("lets Mikud's own polling alone run out: the session ends after the set days", async () => {
+  it("lets Adiutor's own polling alone run out: the session ends after the set days", async () => {
     const b = browser()
     await b.owner()
     for (let day = 1; day <= 31; day++) {
@@ -795,12 +795,12 @@ describe("signing out after days without Mikud open (sliding expiresIn, deferSes
 })
 
 describe("agent keys (Better Auth's api-key plugin)", () => {
-  it("creates mkd_ keys from a signed-in browser with two-factor, refuses another prefix, revokes by deleting", async () => {
+  it("creates adt_ keys from a signed-in browser with two-factor, refuses another prefix, revokes by deleting", async () => {
     const b = browser()
     await b.owner()
     const created = await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync" } })
     expect(created.status).toBe(200)
-    expect(created.json.key).toMatch(/^mkd_[A-Za-z]{64}$/)
+    expect(created.json.key).toMatch(/^adt_[A-Za-z]{64}$/)
     const prefixed = await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", prefix: "xyz_" } })
     expect([prefixed.status, prefixed.json.code]).toEqual([400, "INVALID_KEY_PREFIX"])
     const [stored] = await t.ctx.db.select().from(authApiKey)

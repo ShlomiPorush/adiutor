@@ -1,12 +1,12 @@
-# Mikud requirements
+# Adiutor requirements
 
 Status: approved by the owner on 2026-11-01. Nothing in this document is implemented yet; see [project-foundation.md](project-foundation.md) for the build plan and status.
 
-Mikud (Hebrew for "focus") is a personal, single-user system that shows the owner what needs him across all of his projects. The UI is in Hebrew (right to left) first. This document uses English names for every concept; the Hebrew labels live only in the Hebrew locale file.
+Adiutor (Latin for "helper") is a personal, single-user system that shows the owner what needs him across all of his projects. The product took this name, for its name and every identifier, before its first release; the Hebrew UI writes it in Latin script too (owner's decision, 2026-11-13). The UI is in Hebrew (right to left) first. This document uses English names for every concept; the Hebrew labels live only in the Hebrew locale file.
 
 ## 1. Problem
 
-The owner runs about 30 projects, code and non-code, through T3 Code agent threads. A previous daily overview page showed repository hygiene (dependency PRs, CI failures, a long list of alerts) instead of his work. He opened it and closed it within a minute. Mikud must answer, in a few seconds each morning: what waits on me, what changed since I last looked, and is anything critical in security.
+The owner runs about 30 projects, code and non-code, through T3 Code agent threads. A previous daily overview page showed repository hygiene (dependency PRs, CI failures, a long list of alerts) instead of his work. He opened it and closed it within a minute. Adiutor must answer, in a few seconds each morning: what waits on me, what changed since I last looked, and is anything critical in security.
 
 - T3 is the source of truth for work. Git is one input, not the model.
 - Kanzo (github.com/emanuele-em/kanzo) inspired the idea (a small board that agents update over MCP). Kanzo is AGPL: take ideas only, never code.
@@ -16,8 +16,8 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 - Users: the owner and his AI agents. No other people, no roles beyond owner and agent.
 - Devices: the owner's desktop and his phone.
 - Network: reachable only over the owner's private overlay network (NetBird). Never published to the internet.
-- Every API and MCP call from an agent or the sync carries an agent key, in addition to the network restriction. An agent or the sync gets its key from `mikud connect` after the owner approves it in the browser; the key never shows in the UI. Settings, Agent access lists the keys and disconnects them. There is no owner key: owner actions happen in the signed-in browser.
-- The owner's browsers sign in (owner's decision, 2026-11-01, replacing "There is no login screen" and the paste-a-token pairing of browsers): one account with a username and a password, and a TOTP code from an authenticator app, which is required. The first run creates the account, sets up TOTP and shows 10 backup codes once. A browser stays signed in while the owner opens Mikud there at least once in 30 days (owner's setting, 1 to 90 days); he can see the signed-in browsers, sign out the others or sign out everywhere, change the password, make new backup codes and set up a new authenticator, on an Account page of its own that the account menu opens (owner's decision, 2026-11-03; it was a Settings section). A forgotten password is reset by a command run on the server, never a route over the network; a lost authenticator is replaced with a backup code. Authentication uses Better Auth only as it documents itself (owner's decision, 2026-11-02); what it does not guarantee is listed as accepted gaps in the foundation plan, "Security design".
+- Every API and MCP call from an agent or the sync carries an agent key, in addition to the network restriction. An agent or the sync gets its key from `adiutor connect` after the owner approves it in the browser; the key never shows in the UI. Settings, Agent access lists the keys and disconnects them. There is no owner key: owner actions happen in the signed-in browser.
+- The owner's browsers sign in (owner's decision, 2026-11-01, replacing "There is no login screen" and the paste-a-token pairing of browsers): one account with a username and a password, and a TOTP code from an authenticator app, which is required. The first run creates the account, sets up TOTP and shows 10 backup codes once. A browser stays signed in while the owner opens Adiutor there at least once in 30 days (owner's setting, 1 to 90 days); he can see the signed-in browsers, sign out the others or sign out everywhere, change the password, make new backup codes and set up a new authenticator, on an Account page of its own that the account menu opens (owner's decision, 2026-11-03; it was a Settings section). A forgotten password is reset by a command run on the server, never a route over the network; a lost authenticator is replaced with a backup code. Authentication uses Better Auth only as it documents itself (owner's decision, 2026-11-02); what it does not guarantee is listed as accepted gaps in the foundation plan, "Security design".
 
 ## 3. Domain model
 
@@ -26,7 +26,7 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 - Fields: name, stage, near goal, count of items closed toward that goal out of the items attached to it, a one-line "where we are", a link to the GitHub repository and its open Issues count (Issues stay in GitHub: no import, no sync).
 - Stages: `idea` → `poc` → `development` → `production`, plus `redesign` and `frozen`.
 - Only the owner changes a stage. Agents may propose a stage change; the proposal waits for the owner.
-- Every T3 project is a Mikud project. A project with no open items does not appear in the overview.
+- Every T3 project is an Adiutor project. A project with no open items does not appear in the overview.
 - A project's stage may be unset until the owner sets it. Drafts written by agents arrive as stage proposals.
 
 ### Item (card)
@@ -44,7 +44,7 @@ The owner runs about 30 projects, code and non-code, through T3 Code agent threa
 - Agents may create items, comment, change status, mark items `done` or `not_relevant`, and update a project's "where we are".
 - Agents may not delete items or projects. Deleting is owner-only, in the UI.
 - Agents may not change a stage; they propose one.
-- Agents never write secrets into Mikud: no tokens, passwords, keys, hostnames, IP addresses or other server details.
+- Agents never write secrets into Adiutor: no tokens, passwords, keys, hostnames, IP addresses or other server details.
 - Every change, by anyone, goes to an audit log.
 
 ### Inbox
@@ -89,18 +89,18 @@ The inbox count is visible on the home screen and links to the inbox.
 ## 7. Agents and T3
 
 - **Primary mechanism: an agent instruction** in the owner's shared agent configuration. At thread start: find or create the item, link the T3 thread, set `in_progress`. At the end: a summary comment and the right status.
-- Agents use Mikud through the `mikud` skill, which holds that instruction and works through the MCP tools when a session has them, or otherwise through its own command with an agent key the owner approved in the browser. The shared agent configuration installs the skill for Claude Code and Codex, and one always-on line tells agents to load it at the start of every top-level T3 thread.
+- Agents use Adiutor through the `adiutor` skill, which holds that instruction and works through the MCP tools when a session has them, or otherwise through its own command with an agent key the owner approved in the browser. The shared agent configuration installs the skill for Claude Code and Codex, and one always-on line tells agents to load it at the start of every top-level T3 thread.
 - **Safety net: a daily reconciler.** A T3 scheduled task on the owner's PC runs before the morning message. It first runs the `overview` collector, then reads T3 threads, creates items for top-level threads that have none, and fixes status mismatches: running → `in_progress`, waiting for the owner → `waiting_on_you`, settled → `done`.
 - The reconciler never overrides the owner: it does not change an item whose status the owner set after the thread's last activity, never recreates an item or project the owner deleted, and decides from all threads linked to an item together.
 - The schedule is bound to one dedicated thread in a T3 project whose default thread mode is `local`, because fresh scheduled threads in a git project try to create worktrees.
-- The reconciler also carries the security and Issues counts from the `overview` collector to Mikud, with how fresh each source is.
+- The reconciler also carries the security and Issues counts from the `overview` collector to Adiutor, with how fresh each source is.
 - The server keeps serving when the PC is off; only the sync stops, and the board and the morning message say since when.
 
 ## 8. Operations
 
 - One application container in the same style as n8n-ops: TypeScript, PostgreSQL, an MCP server and a web UI. In production the database is a new database on a PostgreSQL server the owner already runs (owner's decision, 2026-11-01).
 - The owner deploys to production himself, on the server that hosts n8n-ops, reachable only over NetBird. The repository provides the image, a production Compose file and deployment notes; agents do not deploy.
-- The owner backs up the database with his own tools (owner's decision, 2026-11-01). Mikud has no backup feature.
+- The owner backs up the database with his own tools (owner's decision, 2026-11-01). Adiutor has no backup feature.
 - Private deployment values (hostnames, addresses, network details, keys) live only on the server and in ignored local notes, never in the repository.
 - Every setting the owner manages lives in Settings with a default; an environment variable may override one and the UI then shows it locked. Only the database connection, file paths, deployment wiring and the encryption keys live in the environment alone.
 
@@ -111,7 +111,7 @@ There is one launch and no partial use.
 1. Everything in this document is built and verified, except section 10 (Notes), which the launch does not wait for.
 2. The owner deploys production with a new, empty database (owner's decision, 2026-11-12; it replaces a dry run on the development stack and the move of its data). The launch checks run there on real data: every project is seeded with drafts (a stage proposal, goal, "where we are") written by an agent from T3 threads and the repositories; one real Telegram morning message is sent; the overview is shown at desktop and phone sizes.
 3. The owner reviews and approves or corrects.
-4. Only after approval: the always-on line that loads the `mikud` skill goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.
+4. Only after approval: the always-on line that loads the `adiutor` skill goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.
 
 ## 10. Notes
 
@@ -126,6 +126,6 @@ Notes are where the owner and his agents keep information worth finding again: d
 - UI: a Notes page in the sidebar with search and filters (project; written by the owner or by an agent), a project's notes on its project page, and a Markdown editor with a preview that is correct in Hebrew (RTL) and English (LTR). Notes created or changed by agents appear in Agent updates on the Overview.
 - Telegram: the bot files text in the inbox as an item, as in section 5, and its answer carries a button that moves the text into a new general note. When the owner does not press it, the item stays in the inbox and nothing is lost. Pressing it closes the inbox item as `not_relevant` with a comment that links the note (owner's decision, 2026-11-06); the bot never deletes an item.
 - Search runs in PostgreSQL, with no extra service.
-- The agent instruction (the `mikud` skill) says when an agent writes a note and when it files an item.
-- Not in the first version: files and images (Mikud keeps its state only in PostgreSQL and has no volume), tags, and links between notes.
-- Considered and not adopted (2026-11-03): running AFFiNE next to Mikud, or taking its code. Its server is under the AFFiNE Enterprise Edition license with no per-file boundary to the MPL 2.0 parts, its documents are CRDT updates written in the browser (outside the services layer, the audit and the secret check), and its right-to-left support has open issues. Ideas only, as with Kanzo.
+- The agent instruction (the `adiutor` skill) says when an agent writes a note and when it files an item.
+- Not in the first version: files and images (Adiutor keeps its state only in PostgreSQL and has no volume), tags, and links between notes.
+- Considered and not adopted (2026-11-03): running AFFiNE next to Adiutor, or taking its code. Its server is under the AFFiNE Enterprise Edition license with no per-file boundary to the MPL 2.0 parts, its documents are CRDT updates written in the browser (outside the services layer, the audit and the secret check), and its right-to-left support has open issues. Ideas only, as with Kanzo.

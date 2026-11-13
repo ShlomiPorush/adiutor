@@ -1,5 +1,5 @@
 // Settings, Agent access, in two groups (How to connect, one row per client with its command; Connected agents):
-// the agents connected with `mikud connect`, each with its own key of Better Auth's api-key plugin, through its client. The owner approves every connection in the browser (/connect/device); the key itself
+// the agents connected with `adiutor connect`, each with its own key of Better Auth's api-key plugin, through its client. The owner approves every connection in the browser (/connect/device); the key itself
 // never reaches this page. The list shows each key's name, first characters, when it was connected, when it ends and
 // its last request. Disconnect deletes one key, Disconnect all, at the end of the list's head (S-12), deletes every
 // key (the plugin has no bulk delete, and one list answers at most 100 keys: disconnectAll.ts); both ask first and act
@@ -23,8 +23,8 @@ import { Group, Row } from "./parts.tsx"
 
 const time = (value: Date | string) => (typeof value === "string" ? value : value.toISOString())
 
-/** The sync bundle's path inside the Mikud checkout on the owner's computer. */
-const BUNDLE = "node dist/sync/mikud-sync.js"
+/** The sync bundle's path inside the Adiutor checkout on the owner's computer. */
+const BUNDLE = "node dist/sync/adiutor-sync.js"
 
 /** The connect command for one target, with this page's own address. */
 export function connectCommand(origin: string, name: string, target: "sync" | "claude" | "codex"): string {

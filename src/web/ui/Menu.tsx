@@ -1,5 +1,5 @@
 // The one menu builder (v3 MP-7, DS-24; the shape of n8n-ops' account menu, a Radix DropdownMenu, rebuilt on
-// Mikud's layer owner). A menu is a layer of ui/layers.ts: Escape and Back close it and stay on the page, the
+// Adiutor's layer owner). A menu is a layer of ui/layers.ts: Escape and Back close it and stay on the page, the
 // focus moves to its first item and back to its button, and the page behind is inert. It opens beside its
 // button, clamped 8px inside the screen, and a press beside it closes it. Up and Down move through the items
 // and wrap, Home and End jump, Tab closes it; choosing an item closes the menu first, then runs the item. A

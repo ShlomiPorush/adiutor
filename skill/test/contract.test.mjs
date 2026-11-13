@@ -1,6 +1,6 @@
-// The command's contract, run against every version this computer can run (MIKUD_IMPLS picks them; a version whose
+// The command's contract, run against every version this computer can run (ADIUTOR_IMPLS picks them; a version whose
 // file does not exist yet is skipped): the same answers, the same files, and the same care with what a lost answer or
-// a stopped run may leave on Mikud. Every secret comes from fake-server.mjs, new for every run.
+// a stopped run may leave on Adiutor. Every secret comes from fake-server.mjs, new for every run.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -12,14 +12,14 @@ import { fileURLToPath } from "node:url"
 import { startFakeServer } from "./fake-server.mjs"
 
 const win = process.platform === "win32"
-const scripts = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "mikud", "scripts")
-const FILES = { node: "mikud.mjs", sh: "mikud.sh", ps: "mikud.ps1", pwsh: "mikud.ps1" }
-// ps is Windows PowerShell 5.1, pwsh PowerShell 7: the same mikud.ps1 runs on both.
-const requested = (process.env.MIKUD_IMPLS ?? (win ? "node,ps,pwsh" : "node,sh")).split(",").filter(Boolean)
+const scripts = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "adiutor", "scripts")
+const FILES = { node: "adiutor.mjs", sh: "adiutor.sh", ps: "adiutor.ps1", pwsh: "adiutor.ps1" }
+// ps is Windows PowerShell 5.1, pwsh PowerShell 7: the same adiutor.ps1 runs on both.
+const requested = (process.env.ADIUTOR_IMPLS ?? (win ? "node,ps,pwsh" : "node,sh")).split(",").filter(Boolean)
 for (const impl of requested) if (!FILES[impl]) throw new Error(`unknown implementation ${impl}`)
 const present = (impl) => fs.existsSync(path.join(scripts, FILES[impl]))
 const impls = requested.filter(present)
-const tmpBase = process.env.MIKUD_TEST_TMP ?? (win ? "T:\\mikud\\skill-tests" : os.tmpdir())
+const tmpBase = process.env.ADIUTOR_TEST_TMP ?? (win ? "T:\\adiutor\\skill-tests" : os.tmpdir())
 fs.mkdirSync(tmpBase, { recursive: true })
 const root = fs.mkdtempSync(path.join(tmpBase, "run-"))
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -31,10 +31,10 @@ const host = () => (win ? process.env.COMPUTERNAME || os.hostname() : os.hostnam
 const standin = path.join(root, "standin")
 fs.mkdirSync(standin)
 const nodeCalled = path.join(root, "node-called")
-fs.writeFileSync(path.join(standin, "node"), `#!/bin/sh\necho called >> "$MIKUD_TEST_NODE_CALLED"\nexit 1\n`, {
+fs.writeFileSync(path.join(standin, "node"), `#!/bin/sh\necho called >> "$ADIUTOR_TEST_NODE_CALLED"\nexit 1\n`, {
   mode: 0o755,
 })
-fs.writeFileSync(path.join(standin, "node.cmd"), `@echo called>>"%MIKUD_TEST_NODE_CALLED%"\r\n@exit /b 1\r\n`)
+fs.writeFileSync(path.join(standin, "node.cmd"), `@echo called>>"%ADIUTOR_TEST_NODE_CALLED%"\r\n@exit /b 1\r\n`)
 // The sh version's curl, wrapped to record its arguments (no secret may be in them).
 const curlWrap = path.join(root, "curlwrap")
 const curlArgs = path.join(root, "curl-args")
@@ -54,19 +54,19 @@ if (!win) {
 }
 
 function command(impl) {
-  if (impl === "node") return [process.execPath, [path.join(scripts, "mikud.mjs")]]
-  if (impl === "sh") return ["sh", [path.join(scripts, "mikud.sh")]]
-  const ps = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(scripts, "mikud.ps1")]
+  if (impl === "node") return [process.execPath, [path.join(scripts, "adiutor.mjs")]]
+  if (impl === "sh") return ["sh", [path.join(scripts, "adiutor.sh")]]
+  const ps = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(scripts, "adiutor.ps1")]
   if (impl === "ps") return ["powershell.exe", ps]
   if (impl === "pwsh") return ["pwsh", ps]
   throw new Error(`unknown implementation ${impl}`)
 }
 
-/** The environment every run gets: its own folder, no Mikud settings from the host. */
+/** The environment every run gets: its own folder, no Adiutor settings from the host. */
 function baseEnv(home, extra) {
   const env = { ...process.env }
-  for (const k of Object.keys(env)) if (k.startsWith("MIKUD_")) delete env[k]
-  return { ...env, MIKUD_SKILL_HOME: home, MIKUD_WAIT_SECONDS: "8", MIKUD_TEST_NODE_CALLED: nodeCalled, ...extra }
+  for (const k of Object.keys(env)) if (k.startsWith("ADIUTOR_")) delete env[k]
+  return { ...env, ADIUTOR_SKILL_HOME: home, ADIUTOR_WAIT_SECONDS: "8", ADIUTOR_TEST_NODE_CALLED: nodeCalled, ...extra }
 }
 
 /** Runs one command; resolves with its exit code, its parsed answer and its raw output. `first`: folders first on PATH. */
@@ -74,7 +74,7 @@ function run(impl, home, args, env = {}, first = []) {
   const [cmd, base] = command(impl)
   const extra = { ...env }
   if (impl !== "node") {
-    extra.MIKUD_NO_NODE = "1"
+    extra.ADIUTOR_NO_NODE = "1"
     const dirs = [...first, standin, ...(impl === "sh" && fs.existsSync(curlWrap) ? [curlWrap] : [])]
     extra.PATH = [...dirs, process.env.PATH].join(path.delimiter)
   } else if (first.length) extra.PATH = [...first, process.env.PATH].join(path.delimiter)
@@ -140,10 +140,10 @@ const leftReasons = (answer) => (answer.left ?? []).map((e) => e.reason).sort()
 after(() => fs.rmSync(root, { recursive: true, force: true }))
 
 for (const impl of requested.filter((i) => !present(i)))
-  describe.skip(`mikud (${impl}): ${FILES[impl]} does not exist yet`, () => {})
+  describe.skip(`adiutor (${impl}): ${FILES[impl]} does not exist yet`, () => {})
 
 for (const impl of impls) {
-  describe(`mikud (${impl})`, () => {
+  describe(`adiutor (${impl})`, () => {
     let server
     let other
     let n = 0
@@ -183,7 +183,7 @@ for (const impl of impls) {
       assert.equal(c.json.origin, server.origin)
       assert.match(c.json.link, new RegExp(`^${server.origin}/connect/device\\?user_code=[A-Z0-9]{8}$`))
       assert.match(c.json.code, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/)
-      assert.equal(c.json.next, `mikud connect --wait --url ${server.origin}`)
+      assert.equal(c.json.next, `adiutor connect --wait --url ${server.origin}`)
       assert.deepEqual(c.json.left, [])
       const s1 = await r(home, ["status"])
       assert.equal(s1.json.status, "not_connected", s1.all)
@@ -207,7 +207,7 @@ for (const impl of impls) {
       assert.equal(w.json.expiresAt, keys[0][1].expiresAt)
       assert.equal(server.aliveSessions(), 0, "the approval's session was ended")
       assert.equal(server.counts.revoke, 1)
-      for (const req of server.authRequests()) assert.equal(req.userAgent, "mikud-connect", req.path)
+      for (const req of server.authRequests()) assert.equal(req.userAgent, "adiutor-connect", req.path)
       const s2 = await r(home, ["status"])
       assert.deepEqual(
         { ...s2.json },
@@ -225,7 +225,7 @@ for (const impl of impls) {
       assert.equal(g.json.data.path, "/api/v1/items")
       assert.equal(g.json.data.query, "?q=login")
       assert.equal(server.requests.at(-1).authorization, `Bearer ${keys[0][0]}`)
-      assert.notEqual(server.requests.at(-1).userAgent, "mikud-connect")
+      assert.notEqual(server.requests.at(-1).userAgent, "adiutor-connect")
       noSecrets(server, c, s1, again, w, s2, g)
       // Files: the key only in `connection`, nothing else left behind (no lock, no temporary file).
       const files = filesUnder(home)
@@ -265,14 +265,14 @@ for (const impl of impls) {
       assert.equal(s.json?.status, "connected", s.all)
     })
 
-    it("names the key after MIKUD_AGENT_NAME, cut to 32 characters, and keeps --days", async () => {
+    it("names the key after ADIUTOR_AGENT_NAME, cut to 32 characters, and keeps --days", async () => {
       const home = fresh()
       const c = await r(home, ["connect", "--url", server.origin, "--days", "7"], {
-        MIKUD_AGENT_NAME: "Build box (east) with a long name",
+        ADIUTOR_AGENT_NAME: "Build box (east) with a long name",
       })
       assert.equal(c.json?.status, "pending", c.all)
       server.approve()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_AGENT_NAME: "ignored" })
+      const w = await r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_AGENT_NAME: "ignored" })
       assert.equal(w.json?.status, "connected", w.all)
       assert.match(w.json.keyName, /^skill:Build-box-east:[0-9a-f]{8}$/)
       assert.equal(server.aliveKeys()[0][1].expiresIn, 7 * DAY)
@@ -286,10 +286,10 @@ for (const impl of impls) {
       const home = fresh()
       await r(home, ["connect", "--url", server.origin])
       server.slowDownOnce = true
-      const w = await r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_WAIT_SECONDS: "3" })
+      const w = await r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_WAIT_SECONDS: "3" })
       assert.equal(w.code, 0, w.all)
       assert.equal(w.json.status, "still_waiting")
-      assert.equal(w.json.next, `mikud connect --wait --url ${server.origin}`)
+      assert.equal(w.json.next, `adiutor connect --wait --url ${server.origin}`)
       server.deny()
       const d = await r(home, ["connect", "--wait", "--url", server.origin])
       assert.equal(d.json.error, "denied", d.all)
@@ -345,7 +345,7 @@ for (const impl of impls) {
       assert.deepEqual(w.json.left, [])
     })
 
-    it("disconnect forgets the connection and reports the key left on Mikud", async () => {
+    it("disconnect forgets the connection and reports the key left on Adiutor", async () => {
       const home = fresh()
       const w = await connected(home)
       const d = await r(home, ["disconnect"])
@@ -415,7 +415,7 @@ for (const impl of impls) {
       server.lose.revoke = true
       const w = await r(home, ["connect", "--wait", "--url", server.origin])
       assert.equal(w.json?.status, "connected", w.all)
-      assert.match(w.json.warning, /mikud connect \(agent approval\)/)
+      assert.match(w.json.warning, /adiutor connect \(agent approval\)/)
       assert.deepEqual(leftReasons(w.json), ["session_unknown"])
     })
 
@@ -424,7 +424,7 @@ for (const impl of impls) {
       await r(home, ["connect", "--url", server.origin])
       server.approve()
       const hold = path.join(root, `${impl}-save-${n}`)
-      const p = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_KEY: hold })
+      const p = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_KEY: hold })
       await reached(hold)
       // The connection's place is taken by a folder: the save cannot happen.
       fs.mkdirSync(path.join(home, "connection"))
@@ -447,7 +447,7 @@ for (const impl of impls) {
         await r(home, ["connect", "--url", server.origin])
         server.approve()
         const hold = path.join(root, `${impl}-damaged-${n}`)
-        const p = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_KEY: hold })
+        const p = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_KEY: hold })
         await reached(hold)
         fs.writeFileSync(path.join(home, "pending"), "{damaged")
         // The left record cannot be written either: then the answer itself names the key.
@@ -470,7 +470,7 @@ for (const impl of impls) {
       }
     })
 
-    it("a create Mikud refused: no key_unknown, and the session ended", async () => {
+    it("a create Adiutor refused: no key_unknown, and the session ended", async () => {
       const home = fresh()
       await r(home, ["connect", "--url", server.origin])
       server.approve()
@@ -492,9 +492,9 @@ for (const impl of impls) {
         await r(home, ["connect", "--url", lone.origin])
         lone.approve()
         const hold = path.join(root, `${impl}-unsent-${n}`)
-        const p = r(home, ["connect", "--wait", "--url", lone.origin], { MIKUD_TEST_HOLD_TOKEN: hold })
+        const p = r(home, ["connect", "--wait", "--url", lone.origin], { ADIUTOR_TEST_HOLD_TOKEN: hold })
         await reached(hold)
-        // Mikud stops listening: the create and the revoke never reach it.
+        // Adiutor stops listening: the create and the revoke never reach it.
         await lone.close()
         go(hold)
         const w = await p
@@ -550,9 +550,9 @@ for (const impl of impls) {
     it("never breaks the lock of a live holder: others answer busy and send nothing", async () => {
       const home = fresh()
       const hold = path.join(root, `${impl}-live-${n}`)
-      const holder = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: hold })
+      const holder = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: hold })
       await reached(hold)
-      const busy = await r(home, ["connect", "--url", server.origin], { MIKUD_TEST_LOCK_WAIT_MS: "1500" })
+      const busy = await r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_LOCK_WAIT_MS: "1500" })
       assert.equal(busy.json?.error, "busy", busy.all)
       assert.equal(server.counts.deviceCode, 0)
       go(hold)
@@ -562,7 +562,7 @@ for (const impl of impls) {
     it("breaks the lock of a holder that died", async () => {
       const home = fresh()
       const hold = path.join(root, `${impl}-dead-${n}`)
-      const holder = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: hold })
+      const holder = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: hold })
       await reached(hold)
       await kill(holder)
       const next = await r(home, ["connect", "--url", server.origin])
@@ -587,13 +587,13 @@ for (const impl of impls) {
       const lock = path.join(home, "lock")
       const owner = { token: "elsewhere", host: "another-host.invalid", pid: 1, start: "1" }
       fs.writeFileSync(lock, `${JSON.stringify(owner)}\n`)
-      const a = await r(home, ["connect"], { MIKUD_TEST_LOCK_WAIT_MS: "1000" })
+      const a = await r(home, ["connect"], { ADIUTOR_TEST_LOCK_WAIT_MS: "1000" })
       assert.equal(a.json?.error, "busy", a.all)
       assert.ok(a.json.message.includes(lock), a.json.message)
       assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).token, "elsewhere")
       // A lock that names no holder (its holder stopped before writing it) is undecidable too.
       fs.writeFileSync(lock, "")
-      const b = await r(home, ["connect"], { MIKUD_TEST_LOCK_WAIT_MS: "1000" })
+      const b = await r(home, ["connect"], { ADIUTOR_TEST_LOCK_WAIT_MS: "1000" })
       assert.equal(b.json?.error, "busy", b.all)
       assert.equal(fs.existsSync(lock), true)
       fs.rmSync(lock)
@@ -603,7 +603,7 @@ for (const impl of impls) {
     it("releases the lock by its token only, and changes nothing once the lock is not its own", async () => {
       const home = fresh()
       const hold = path.join(root, `${impl}-token-${n}`)
-      const holder = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: hold })
+      const holder = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: hold })
       await reached(hold)
       // As if another command had wrongly broken it and taken a lock of its own.
       const lock = path.join(home, "lock")
@@ -623,19 +623,19 @@ for (const impl of impls) {
       const lock = path.join(home, "lock")
       const h = (name) => path.join(root, `${impl}-race-${name}-${n}`)
       // A holder that died: its lock stays behind.
-      const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("dead") })
+      const dead = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: h("dead") })
       await reached(h("dead"))
       await kill(dead)
       // B and C both see that dead lock. (BREAK_MOVED: the same point in the break of 1de3555, which moved the lock
       // aside; this test shows that break's failure.)
       const b = r(home, ["connect", "--url", server.origin], {
-        MIKUD_TEST_HOLD_BREAK_OBSERVED: h("b-seen"),
-        MIKUD_TEST_HOLD_TEMP: h("b-temp"),
+        ADIUTOR_TEST_HOLD_BREAK_OBSERVED: h("b-seen"),
+        ADIUTOR_TEST_HOLD_TEMP: h("b-temp"),
       })
       const c = r(home, ["connect", "--url", server.origin], {
-        MIKUD_TEST_HOLD_BREAK_OBSERVED: h("c-seen"),
-        MIKUD_TEST_HOLD_BREAK_HELD: h("c-held"),
-        MIKUD_TEST_HOLD_BREAK_MOVED: h("c-held"),
+        ADIUTOR_TEST_HOLD_BREAK_OBSERVED: h("c-seen"),
+        ADIUTOR_TEST_HOLD_BREAK_HELD: h("c-held"),
+        ADIUTOR_TEST_HOLD_BREAK_MOVED: h("c-held"),
       })
       await Promise.all([reached(h("b-seen")), reached(h("c-seen"))])
       // B breaks it, takes a fresh lock, asks for a code and stops right before it saves the attempt.
@@ -645,7 +645,7 @@ for (const impl of impls) {
       // C now breaks what it saw, and stops there; D comes meanwhile and must find the lock taken.
       go(h("c-seen"))
       await reached(h("c-held"))
-      const d = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("d-locked") })
+      const d = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: h("d-locked") })
       const dLocked = `${h("d-locked")}.reached`
       for (let i = 0; i < 60 && !fs.existsSync(dLocked); i++) await sleep(50)
       assert.equal(fs.existsSync(dLocked), false, "D took the lock while B held it")
@@ -674,13 +674,13 @@ for (const impl of impls) {
       const lock = path.join(home, "lock")
       const breaker = path.join(home, "lock.break")
       const hold = path.join(root, `${impl}-breaker-${n}`)
-      const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: hold })
+      const dead = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: hold })
       await reached(hold)
       await kill(dead)
       // A command that stopped while it broke that lock.
       fs.copyFileSync(lock, breaker)
       const deadLock = fs.readFileSync(lock, "utf8")
-      const a = await r(home, ["connect", "--url", server.origin], { MIKUD_TEST_LOCK_WAIT_MS: "1000" })
+      const a = await r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_LOCK_WAIT_MS: "1000" })
       assert.equal(a.json?.error, "busy", a.all)
       assert.ok(a.json.message.includes(breaker), a.json.message)
       assert.equal(server.counts.deviceCode, 0)
@@ -702,7 +702,7 @@ for (const impl of impls) {
       const home = fresh()
       const lock = path.join(home, "lock")
       const h = (name) => path.join(root, `${impl}-stuck-${name}-${n}`)
-      const dead = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_LOCKED: h("dead") })
+      const dead = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: h("dead") })
       await reached(h("dead"))
       await kill(dead)
       let p
@@ -712,12 +712,12 @@ for (const impl of impls) {
         const script = `$f = [IO.File]::Open('${lock}', 'Open', 'Read', 'Read'); [IO.File]::WriteAllText('${h("open")}.reached', 'x'); while (-not [IO.File]::Exists('${h("open")}.go')) { Start-Sleep -Milliseconds 50 }; $f.Dispose()`
         holder = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: "ignore" })
         await reached(h("open"))
-        p = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_LOCK_WAIT_MS: "1500" })
+        p = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_LOCK_WAIT_MS: "1500" })
       } else {
         // The folder made read-only once the command checked it: the dead lock can be neither removed nor broken.
         p = r(home, ["connect", "--url", server.origin], {
-          MIKUD_TEST_LOCK_WAIT_MS: "1500",
-          MIKUD_TEST_HOLD_BREAK_OBSERVED: h("seen"),
+          ADIUTOR_TEST_LOCK_WAIT_MS: "1500",
+          ADIUTOR_TEST_HOLD_BREAK_OBSERVED: h("seen"),
         })
         await reached(h("seen"))
         fs.chmodSync(home, 0o500)
@@ -746,7 +746,7 @@ for (const impl of impls) {
       await r(home, ["connect", "--url", server.origin])
       server.approve()
       const hold = path.join(root, `${impl}-broken-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_KEY: hold })
+      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_KEY: hold })
       await reached(hold)
       // The lock removed by hand, and another command replaces the attempt meanwhile.
       fs.rmSync(path.join(home, "lock"))
@@ -786,7 +786,7 @@ for (const impl of impls) {
       await r(home, ["connect", "--url", server.origin])
       server.approve()
       const hold = path.join(root, `${impl}-token-kill-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_TOKEN: hold })
+      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_TOKEN: hold })
       await reached(hold)
       await kill(a)
       const s = await r(home, ["status"])
@@ -817,7 +817,7 @@ for (const impl of impls) {
       server.approve()
       server.revokeStatus = 500
       const hold = path.join(root, `${impl}-done-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_DONE: hold })
+      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_DONE: hold })
       await reached(hold)
       await kill(a)
       const s = await r(home, ["status"])
@@ -831,7 +831,7 @@ for (const impl of impls) {
       await r(home, ["connect", "--replace"])
       server.approve()
       const hold = path.join(root, `${impl}-replaced-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_DONE: hold })
+      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_DONE: hold })
       await reached(hold)
       await kill(a)
       const s = await r(home, ["status"])
@@ -847,7 +847,7 @@ for (const impl of impls) {
       await r(home, ["connect", "--url", server.origin])
       server.approve()
       const hold = path.join(root, `${impl}-revoked-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_REVOKED: hold })
+      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_REVOKED: hold })
       await reached(hold)
       await kill(a)
       const s = await r(home, ["status"])
@@ -868,7 +868,7 @@ for (const impl of impls) {
       server.revokeStatus = 500
       const w = await r(home, ["connect", "--wait", "--url", server.origin])
       assert.equal(w.json?.error, "key_unknown", w.all)
-      const later = { MIKUD_TEST_CLOCK_OFFSET: String(100 * DAY) }
+      const later = { ADIUTOR_TEST_CLOCK_OFFSET: String(100 * DAY) }
       const s = await r(home, ["status"], later)
       // The connection's key ended, so a dated entry would have dropped; these have no date the command knows.
       assert.deepEqual(leftReasons(s.json), ["key_unknown", "session_unknown"], s.all)
@@ -881,11 +881,11 @@ for (const impl of impls) {
       await connected(home, server, ["--days", "1"])
       const d = await r(home, ["disconnect"])
       assert.deepEqual(leftReasons(d.json), ["disconnected"])
-      const s = await r(home, ["status"], { MIKUD_TEST_CLOCK_OFFSET: String(2 * DAY) })
+      const s = await r(home, ["status"], { ADIUTOR_TEST_CLOCK_OFFSET: String(2 * DAY) })
       assert.deepEqual(s.json.left, [], s.all)
     })
 
-    it("replacing a connection to another Mikud keeps the old address in the entry", async () => {
+    it("replacing a connection to another Adiutor keeps the old address in the entry", async () => {
       const home = fresh()
       const first = await connected(home)
       const c = await r(home, ["connect", "--replace", "--url", other.origin])
@@ -920,7 +920,7 @@ for (const impl of impls) {
       const home = fresh()
       const w = await connected(home)
       const hold = path.join(root, `${impl}-recorded-${n}`)
-      const d = r(home, ["disconnect"], { MIKUD_TEST_HOLD_RECORDED: hold })
+      const d = r(home, ["disconnect"], { ADIUTOR_TEST_HOLD_RECORDED: hold })
       await reached(hold)
       await kill(d)
       const s = await r(home, ["status"])
@@ -940,7 +940,7 @@ for (const impl of impls) {
       await r(home, ["connect", "--replace"])
       server.approve()
       const hold = path.join(root, `${impl}-replace-recorded-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { MIKUD_TEST_HOLD_RECORDED: hold })
+      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_RECORDED: hold })
       await reached(hold)
       await kill(a)
       const s = await r(home, ["status"])
@@ -952,7 +952,7 @@ for (const impl of impls) {
     it("a run stopped after writing a temporary file: the next holder of the lock removes it", async () => {
       const home = fresh()
       const hold = path.join(root, `${impl}-written-${n}`)
-      const a = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_WRITTEN: hold })
+      const a = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_WRITTEN: hold })
       await reached(hold)
       await kill(a)
       const [first] = server.secrets().deviceCodes
@@ -976,7 +976,7 @@ for (const impl of impls) {
       server.apiDelayMs = 1500
       const id = uuid()
       const p = await r(home, ["post", `items/${id}/comments`, "--json", '{"text":"Done."}'], {
-        MIKUD_TEST_TIMEOUT_MS: "300",
+        ADIUTOR_TEST_TIMEOUT_MS: "300",
       })
       assert.equal(p.json?.error, "outcome_unknown", p.all)
       assert.equal(p.code, 1)
@@ -1009,7 +1009,7 @@ for (const impl of impls) {
       assert.equal((await r(home, ["get", "items"])).json?.error, "http_503")
     })
 
-    it("passes Mikud's refusal on with its code", async () => {
+    it("passes Adiutor's refusal on with its code", async () => {
       const home = fresh()
       await connected(home)
       server.apiError = { status: 409, code: "version_conflict", message: "Someone changed it." }
@@ -1019,13 +1019,13 @@ for (const impl of impls) {
       assert.match(p.json.message, /Someone changed it/)
     })
 
-    it("a key Mikud no longer accepts ends the connection", async () => {
+    it("a key Adiutor no longer accepts ends the connection", async () => {
       const home = fresh()
       await connected(home)
       for (const k of server.keys.values()) k.alive = false
       const g = await r(home, ["get", "items"])
       assert.equal(g.json?.error, "connection_ended", g.all)
-      assert.match(g.json.message, new RegExp(`mikud connect --url ${server.origin}$`))
+      assert.match(g.json.message, new RegExp(`adiutor connect --url ${server.origin}$`))
       assert.equal((await r(home, ["status"])).json.status, "not_connected")
       assert.equal((await r(home, ["connect", "--url", server.origin])).json?.status, "pending")
     })
@@ -1113,7 +1113,7 @@ for (const impl of impls) {
       assert.equal(f.json?.status, 201, f.all)
       assert.equal(f.json.data.body.text, "From a file, with 'quotes' and \"more\".")
       assert.equal(f.json.data.agent, "codex:review 2")
-      const e = await r(home, ["get", "items"], { MIKUD_AGENT_LABEL: "claude" })
+      const e = await r(home, ["get", "items"], { ADIUTOR_AGENT_LABEL: "claude" })
       assert.equal(e.json.data.agent, "claude")
       const none = await r(home, ["get", "items"])
       assert.equal(none.json.data.agent, null)
@@ -1121,7 +1121,7 @@ for (const impl of impls) {
         const x = await r(home, ["get", "items", "--as", label])
         assert.equal(x.json?.error, "bad_label", `${label}: ${x.all}`)
       }
-      assert.equal((await r(home, ["get", "items"], { MIKUD_AGENT_LABEL: "no/slash" })).json?.error, "bad_label")
+      assert.equal((await r(home, ["get", "items"], { ADIUTOR_AGENT_LABEL: "no/slash" })).json?.error, "bad_label")
       assert.equal((await r(home, ["post", "capture", "--json", "{nope"])).json?.error, "bad_json")
       assert.equal((await r(home, ["post", "capture"])).json?.error, "bad_json")
       assert.equal((await r(home, ["get", "items", "--json", "{}"])).json?.error, "bad_json")
@@ -1170,7 +1170,7 @@ for (const impl of impls) {
         "http://example.com",
         "http://192.0.2.10:8090",
         "ftp://example.com",
-        "https://example.com/mikud",
+        "https://example.com/adiutor",
         "https://user:pw@example.com",
         "https://example.com/?a=1",
         "not an address",
@@ -1187,7 +1187,7 @@ for (const impl of impls) {
     it("makes the temporary file private before anything secret is written", async () => {
       const home = fresh()
       const hold = path.join(root, `${impl}-temp-${n}`)
-      const p = r(home, ["connect", "--url", server.origin], { MIKUD_TEST_HOLD_TEMP: hold })
+      const p = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_TEMP: hold })
       await reached(hold)
       const tmp = fs.readdirSync(home).filter((f) => f.endsWith(".tmp"))
       assert.equal(tmp.length, 1)
@@ -1357,8 +1357,8 @@ for (const impl of impls) {
 // The sh version unsets every name it assigns before anything else runs: a name the caller exported keeps its export
 // when assigned, and would hand its value (a key, a device code) to curl, awk and every other program the script
 // starts. Read from the script itself, so a name added later cannot be forgotten.
-describe("mikud.sh unsets every name it assigns", () => {
-  const file = path.join(scripts, "mikud.sh")
+describe("adiutor.sh unsets every name it assigns", () => {
+  const file = path.join(scripts, "adiutor.sh")
   // Assigned and never unset, each only as a prefix of one command, with a constant value.
   const SAFE = new Map([
     ["IFS", /^\s*IFS= read /],
@@ -1401,7 +1401,7 @@ describe("mikud.sh unsets every name it assigns", () => {
     assert.ok(prefixes.has("C_") && prefixes.has("P_") && slots.size > 0)
 
     const missing = [...assigned].filter((name) => !unset.has(name) && !SAFE.has(name)).sort()
-    assert.deepEqual(missing, [], "assigned in mikud.sh but not unset at start-up")
+    assert.deepEqual(missing, [], "assigned in adiutor.sh but not unset at start-up")
     for (const p of prefixes)
       for (const field of ["key", "deviceCode"])
         assert.ok(unset.has(p + field), `${p + field} is not unset at start-up`)
@@ -1416,9 +1416,9 @@ describe("mikud.sh unsets every name it assigns", () => {
 
 // Two versions on one computer share one connection, one attempt and one lock: every ordered pair of them.
 const pairs = impls.flatMap((a) => impls.filter((b) => b !== a).map((b) => [a, b]))
-if (!pairs.length) describe.skip("mikud (two versions together): only one version runs here", () => {})
+if (!pairs.length) describe.skip("adiutor (two versions together): only one version runs here", () => {})
 for (const [first, second] of pairs) {
-  describe(`mikud (${first} and ${second} together)`, () => {
+  describe(`adiutor (${first} and ${second} together)`, () => {
     let server
     before(async () => {
       server = await startFakeServer()
@@ -1428,7 +1428,7 @@ for (const [first, second] of pairs) {
     it("finish each other's attempt, with its days and key name", async () => {
       const home = path.join(root, `together-${first}-${second}`, "home")
       const c = await run(first, home, ["connect", "--url", server.origin, "--days", "7"], {
-        MIKUD_AGENT_NAME: "first-version",
+        ADIUTOR_AGENT_NAME: "first-version",
       })
       assert.equal(c.json?.status, "pending", c.all)
       assert.equal((await run(second, home, ["connect"])).json.code, c.json.code)
@@ -1451,7 +1451,7 @@ const shell = win
   ? ["C:\\Program Files\\Git\\bin\\sh.exe", "C:\\Program Files\\Git\\usr\\bin\\sh.exe"].find((f) => fs.existsSync(f))
   : "sh"
 const launcher = shell ? describe : describe.skip
-launcher("mikud launcher", () => {
+launcher("adiutor launcher", () => {
   let server
   before(async () => {
     server = await startFakeServer()
@@ -1459,7 +1459,7 @@ launcher("mikud launcher", () => {
   after(() => server?.close())
   const launch = (home, args, env) =>
     new Promise((resolve) => {
-      const child = spawn(shell, [path.join(scripts, "mikud"), ...args], { env: baseEnv(home, env) })
+      const child = spawn(shell, [path.join(scripts, "adiutor"), ...args], { env: baseEnv(home, env) })
       let out = ""
       let err = ""
       child.stdout.on("data", (d) => {
@@ -1491,7 +1491,7 @@ launcher("mikud launcher", () => {
   )
   const withRecorder = (extra = {}) => ({ PATH: [recorder, process.env.PATH].join(path.delimiter), ...extra })
 
-  it("runs mikud.mjs with Node 20+, and keeps a query with & as it is", async () => {
+  it("runs adiutor.mjs with Node 20+, and keeps a query with & as it is", async () => {
     const home = path.join(root, "launcher", "home")
     const c = await run("node", home, ["connect", "--url", server.origin])
     assert.equal(c.json?.status, "pending", c.all)
@@ -1501,23 +1501,23 @@ launcher("mikud launcher", () => {
     const g = await launch(home, ["get", "items?q=a&status=todo"], withRecorder())
     assert.equal(g.json?.status, 200, g.all)
     assert.equal(g.json.data.query, "?q=a&status=todo")
-    assert.match(fs.readFileSync(recorded, "utf8"), /mikud\.mjs/)
+    assert.match(fs.readFileSync(recorded, "utf8"), /adiutor\.mjs/)
   })
 
-  it("hands over to mikud.sh with MIKUD_NO_NODE=1, never to node", {
-    skip: !present("sh") && "mikud.sh does not exist yet",
+  it("hands over to adiutor.sh with ADIUTOR_NO_NODE=1, never to node", {
+    skip: !present("sh") && "adiutor.sh does not exist yet",
   }, async () => {
     fs.rmSync(nodeCalled, { force: true })
     const s = await launch(path.join(root, "launcher-sh", "home"), ["status"], {
-      MIKUD_NO_NODE: "1",
+      ADIUTOR_NO_NODE: "1",
       PATH: [standin, process.env.PATH].join(path.delimiter),
     })
     assert.equal(s.json?.status, "not_connected", s.all)
     assert.equal(fs.existsSync(nodeCalled), false)
   })
 
-  it("hands over to mikud.sh when Node is older than 20", {
-    skip: !present("sh") && "mikud.sh does not exist yet",
+  it("hands over to adiutor.sh when Node is older than 20", {
+    skip: !present("sh") && "adiutor.sh does not exist yet",
   }, async () => {
     fs.rmSync(nodeCalled, { force: true })
     const s = await launch(path.join(root, "launcher-old", "home"), ["status"], {

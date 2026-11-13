@@ -1,5 +1,5 @@
 // The one filter bar of a list (v3 MP-6, TB-17, TB-7, SR-9, SR-10; n8n-ops' FilterBar, SearchBox, searchDraft
-// and firstRowReset in apps/web/src/components/filter-bar.tsx at 3d43b89, rebuilt on Mikud's ui- classes and its
+// and firstRowReset in apps/web/src/components/filter-bar.tsx at 3d43b89, rebuilt on Adiutor's ui- classes and its
 // own picker). The bar holds the search, the Filters button and the common pickers; the rarely used filters open
 // under it behind the Filters button, whose badge counts those in use. Under the bar one line holds the count
 // from the server (TB-18) and, while any filter differs from its start value, "Clear filters". A change of the

@@ -9,10 +9,10 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 REGISTRY="ghcr.io/shlomiporush"
-SOURCE_URL="https://github.com/ShlomiPorush/mikud"
+SOURCE_URL="https://github.com/ShlomiPorush/adiutor"
 # Dockerfile name under docker/ and image name under REGISTRY.
-DOCKERFILE="mikud"
-IMAGE="mikud"
+DOCKERFILE="adiutor"
+IMAGE="adiutor"
 TARGET=""
 BUMP=""
 EXPECT_SHA=""
@@ -26,7 +26,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verify --expect-sha SHA] [--dry-run]
 
-  --target ghcr     Required. Publish the image to ghcr.io/shlomiporush/mikud.
+  --target ghcr     Required. Publish the image to ghcr.io/shlomiporush/adiutor.
   --bump KIND       Required. Semantic version part to increase.
   --expect-sha SHA  Refuse unless main is exactly this commit (the one the workflow verified).
   --skip-verify     Do not run scripts/verify.sh. Only with --expect-sha.
@@ -212,7 +212,7 @@ publish_release() {
   notes="$(mktemp)"
   git_ show "$TAG:CHANGELOG.md" | release_notes "$VERSION" >"$notes"
   info "Creating the GitHub Release $TAG"
-  if ! gh release create "$TAG" --verify-tag --title "Mikud $VERSION" --notes-file "$notes"; then
+  if ! gh release create "$TAG" --verify-tag --title "Adiutor $VERSION" --notes-file "$notes"; then
     # The request may have succeeded with its answer lost.
     state="$(release_state "$TAG")"
     [ "$state" = present ] || die "creating the GitHub Release $TAG failed. Run the release again to finish it."

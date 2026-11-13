@@ -4,7 +4,7 @@ import { SETTINGS_DEFAULTS } from "../../shared/settings.ts"
 import { settings } from "./schema.ts"
 
 // One source of defaults (R7): the database's column defaults are the table Settings resets to, and both keep the
-// values Mikud has always had (the date default is dd/MM/yyyy, as in the schema).
+// values Adiutor has always had (the date default is dd/MM/yyyy, as in the schema).
 
 describe("the settings defaults", () => {
   it("keep today's values", () => {
