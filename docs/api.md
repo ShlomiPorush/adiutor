@@ -4,7 +4,7 @@ Status: implemented in `src/server/http/`, `src/server/auth/`, `src/server/setti
 
 ## Conventions
 
-- Base path `/api/v1`. JSON in and out (`Content-Type: application/json`). Bodies are limited to 512 KiB, sync snapshots to 16 MiB.
+- Base path `/api/v1`. JSON in and out (`Content-Type: application/json`). Bodies are limited to 512 KiB, sync snapshots to 16 MiB. The limits apply after authentication: a request without valid credentials is refused before the application reads its body.
 - Success: `{"data": ...}`. Paged lists: `{"data": [...], "nextCursor": "..." | null}`; pass `cursor=<nextCursor>` for the next page. `201` for a created resource, `204` (no body) for a delete.
 - Error: `{"error": {"code": "<code>", "message": "<for people>", ...details}}`. Branch on `code`, never on `message`.
 - Times are ISO 8601 strings in UTC. Ids are UUIDs, except T3 thread and project ids (opaque strings, up to 200 characters).

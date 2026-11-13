@@ -163,12 +163,14 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   const { ctx } = deps
   const api = new Hono<Env>()
 
+  // Credentials first: a request without a valid key or session is refused before the app reads its body.
+  // authenticate reads headers only.
+  api.use("*", authenticate(deps, { allowSession: true }))
+
   // Snapshots from the sync tool are large; everything else is small.
   const syncLimit = bodyLimit({ maxSize: 16 * 1024 * 1024, onError: tooLarge })
   const defaultLimit = bodyLimit({ maxSize: 512 * 1024, onError: tooLarge })
   api.use("*", (c, next) => (c.req.path.includes("/sync/") ? syncLimit : defaultLimit)(c, next))
-
-  api.use("*", authenticate(deps, { allowSession: true }))
 
   // --- Session and visits ---
   api.use("/session", noStore)
