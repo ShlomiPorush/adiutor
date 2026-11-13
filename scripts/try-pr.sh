@@ -100,9 +100,6 @@ ensure_auth_secret() {
       echo "$name=1:$(random_hex)" >>"$ENV_FILE"
     )
   done
-  if grep -qE '^ADIUTOR_(OWNER|AGENT)_TOKEN=' "$ENV_FILE"; then
-    echo "    $ENV_FILE still has ADIUTOR_OWNER_TOKEN or ADIUTOR_AGENT_TOKEN; they are no longer used"
-  fi
   chmod 600 "$ENV_FILE"
 }
 

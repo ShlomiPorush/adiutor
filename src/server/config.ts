@@ -56,9 +56,6 @@ export class ConfigError extends Error {
 /** Variables Better Auth would read on its own when its options lack a value: Adiutor refuses them (need 5). */
 const FOREIGN_AUTH_VARIABLES = /^(BETTER_AUTH_|AUTH_SECRET$)/
 
-/** Variables of earlier versions: only warned about. */
-const RETIRED = ["ADIUTOR_OWNER_TOKEN", "ADIUTOR_AGENT_TOKEN"] as const
-
 /** Splits a comma-separated list of domain names, normalized. */
 export function parseDomains(text: string): string[] {
   return text
@@ -116,7 +113,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   for (const name of Object.keys(env).sort())
     if (FOREIGN_AUTH_VARIABLES.test(name) && env[name] !== undefined)
       problems.push(`${name} is set: Better Auth would read it on its own; Adiutor uses ADIUTOR_AUTH_SECRETS only`)
-  for (const name of RETIRED) if (env[name]) warnings.push(`${name} is no longer used: remove it`)
 
   const databaseUrl = required("DATABASE_URL")
   const publicUrlText = required("ADIUTOR_PUBLIC_URL")

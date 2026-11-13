@@ -232,18 +232,4 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 
 5. Check `/healthz` (step 4) and open the board.
 
-**Upgrading to the readable sign-in e-mail (migration `0008_readable-email`).** Before `docker compose up -d`, rename an owner whose username starts or ends with a dot or has two dots in a row: the sign-in refuses such a name now, so the upgrade stops with `username "<name>" no longer meets the sign-in rule` and changes nothing. In the Adiutor database, with `<new>` in lowercase and following the rule of step 5: `update auth_user set username = '<new>', display_username = '<new>', email = '<new>@adiutor.local';`. Nothing in production is affected today: the current owner's name follows the rule.
-
-**Upgrading to Better Auth as it documents itself (from 0.x with `ADIUTOR_OWNER_TOKEN` and `ADIUTOR_AGENT_TOKEN`).** Before `docker compose up -d`:
-
-1. Add `ADIUTOR_AUTH_SECRETS=1:<your current ADIUTOR_AUTH_SECRET>` and keep `ADIUTOR_AUTH_SECRET` as it is: the TOTP secret was encrypted with it.
-2. Add `ADIUTOR_SETTINGS_KEYS=1:<openssl rand -hex 32>` and `ADIUTOR_TRUSTED_PROXIES` (step 2).
-3. Move `ADIUTOR_TELEGRAM_BOT_TOKEN`, `ADIUTOR_TELEGRAM_CHAT_ID` and `ADIUTOR_PRIVATE_DOMAINS` into Settings. While a variable is set, its field is locked, so the order matters:
-   1. Keep the three values somewhere safe (your password manager); you type them in again below.
-   2. Remove them from `.env` and run `docker compose up -d`. From now until step 3, Telegram is off (no bot, no morning message) and the secret check has no private domains.
-   3. Sign in and enter the values in Settings, Telegram and Settings, Secret check, then save. The bot and the morning message start at once, without a restart.
-4. Remove `ADIUTOR_OWNER_TOKEN` and `ADIUTOR_AGENT_TOKEN`; the server only warns about them. Agent tokens are not imported: connect the reconciler and the agents with `adiutor connect` (section 6).
-
-Every browser signs in once more (G14). Then save the backup codes: the Account page, "New backup codes".
-
 To go back to an earlier version, restore the backup from step 2, set the earlier `VERSION`, start it, and follow "Recovery and after any restore" (step 8).

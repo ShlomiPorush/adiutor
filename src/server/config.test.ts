@@ -83,14 +83,6 @@ describe("loadConfig", () => {
     expect(refusal({ ...valid, AUTH_SECRET: "x" })).toContain("AUTH_SECRET is set")
   })
 
-  it("only warns about the old token variables", () => {
-    const config = loadConfig({ ...valid, ADIUTOR_OWNER_TOKEN: "o".repeat(40), ADIUTOR_AGENT_TOKEN: "a".repeat(40) })
-    expect(config.warnings).toEqual([
-      "ADIUTOR_OWNER_TOKEN is no longer used: remove it",
-      "ADIUTOR_AGENT_TOKEN is no longer used: remove it",
-    ])
-  })
-
   it("reads the trusted proxies and refuses one that is not an address or range", () => {
     expect(loadConfig({ ...valid, ADIUTOR_TRUSTED_PROXIES: "192.0.2.10, 198.51.100.0/24" }).trustedProxies).toEqual([
       "192.0.2.10",
