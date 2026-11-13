@@ -319,7 +319,12 @@ describe("each opening of the overview", () => {
     await act(async () => {
       await router.navigate("/inbox")
     })
-    const afterPhone: Morning = { ...MORNING, now: "2026-11-02T07:05:00.000Z", since: "2026-11-02T07:01:00.000Z", new: [] }
+    const afterPhone: Morning = {
+      ...MORNING,
+      now: "2026-11-02T07:05:00.000Z",
+      since: "2026-11-02T07:01:00.000Z",
+      new: [],
+    }
     server = afterPhone
     requests.length = 0
 
