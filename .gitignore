@@ -26,3 +26,6 @@ test-results/
 *.log
 .DS_Store
 Thumbs.db
+
+# The local project map (an agent's status page, never committed)
+/.project-map/
