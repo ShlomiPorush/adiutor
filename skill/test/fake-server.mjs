@@ -2,12 +2,12 @@
 // its /api/v1 routes, strict like the real ones: an approved code is redeemed once, a session token works until it is
 // revoked, a key until it ends. Every code, token and key is generated here, new for every run. Tests drive it
 // through its state and a few switches.
-import { randomBytes, randomUUID } from "node:crypto"
+import { randomInt, randomUUID } from "node:crypto"
 import http from "node:http"
 
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 const USER_CODE = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-const pick = (alphabet, n) => [...randomBytes(n)].map((b) => alphabet[b % alphabet.length]).join("")
+const pick = (alphabet, n) => Array.from({ length: n }, () => alphabet[randomInt(alphabet.length)]).join("")
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
 /** A gate a test opens: requests wait at it until `open()`; `reached` resolves when the first one arrives. */
