@@ -23,7 +23,7 @@ type Reply = { status: number; body: unknown }
 let server: Server
 let baseUrl: string
 let received: Received[] = []
-let replies: Record<string, (request: Received) => Reply> = {}
+const replies = new Map<string, (request: Received) => Reply>()
 const temps: string[] = []
 
 beforeAll(async () => {
@@ -40,7 +40,8 @@ beforeAll(async () => {
         body: JSON.parse(text),
       }
       received.push(request)
-      const reply = replies[req.url ?? ""]?.(request) ?? { status: 200, body: { ok: true } }
+      const handler = replies.get(req.url ?? "")
+      const reply = typeof handler === "function" ? handler(request) : { status: 200, body: { ok: true } }
       res.writeHead(reply.status, { "content-type": "application/json" })
       res.end(JSON.stringify(reply.body))
     })
@@ -51,7 +52,7 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())))
 afterEach(() => {
   received = []
-  replies = {}
+  replies.clear()
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -175,7 +176,7 @@ describe("runSync", () => {
   })
 
   it("exits zero when one push succeeds and prints the server's error", async () => {
-    replies["/api/v1/sync/t3"] = () => ({ status: 500, body: { error: { code: "internal", message: "boom" } } })
+    replies.set("/api/v1/sync/t3", () => ({ status: 500, body: { error: { code: "internal", message: "boom" } } }))
     const { deps: d, output } = deps()
     expect(await runSync(run, d)).toBe(0)
     expect(output()).toContain('t3 sync: refused (HTTP 500) {"error":{"code":"internal","message":"boom"}}')
@@ -183,11 +184,9 @@ describe("runSync", () => {
   })
 
   it("exits non-zero when nothing could be pushed", async () => {
-    replies["/api/v1/sync/t3"] = () => ({
-      status: 401,
-      body: { error: { code: "unauthorized", message: "bad token" } },
-    })
-    replies["/api/v1/sync/security"] = replies["/api/v1/sync/t3"]
+    const refuse = () => ({ status: 401, body: { error: { code: "unauthorized", message: "bad token" } } })
+    replies.set("/api/v1/sync/t3", refuse)
+    replies.set("/api/v1/sync/security", refuse)
     const { deps: d } = deps()
     expect(await runSync(run, d)).toBe(1)
   })
@@ -218,11 +217,11 @@ describe("the agent token", () => {
     const dir = tempDir()
     const envFile = join(dir, "sync.env")
     writeFileSync(envFile, `MIKUD_URL=${baseUrl}\nMIKUD_AGENT_TOKEN=${token}\n`)
-    replies["/api/v1/sync/t3"] = (r) => ({
+    replies.set("/api/v1/sync/t3", (r) => ({
       status: 401,
       body: { error: { code: "unauthorized", message: `got ${r.auth}` } },
-    })
-    replies["/api/v1/sync/security"] = (r) => ({ status: 200, body: { echo: r.auth } })
+    }))
+    replies.set("/api/v1/sync/security", (r) => ({ status: 200, body: { echo: r.auth } }))
     const { deps: d, output } = deps({}, { MIKUD_URL: "", MIKUD_AGENT_TOKEN: "" })
 
     expect(await runSync({ ...run, envFile }, d)).toBe(0)
