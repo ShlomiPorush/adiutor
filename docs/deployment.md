@@ -94,9 +94,7 @@ Without `MIKUD_TRUSTED_PROXIES`, every request shares one bucket, which fails sa
 
 ## 4. Start and check
 
-1. Make the image pullable. After the first release, the `mikud` package on GHCR is private. Choose one:
-   - Make it public in the package's settings on GitHub (Package settings, Change visibility). GitHub does not let a public package become private again.
-   - Or, on the server, run `docker login ghcr.io` with your GitHub username and a classic personal access token that has only the `read:packages` scope.
+1. The image is public, like the repository: the Release workflow links the `mikud` package on GHCR to this repository, and the server pulls it without logging in. If the first `docker compose pull` answers `denied` or `unauthorized`, the package was created private: set it to Public once, in the package's settings on GitHub (Package settings, Change visibility), and pull again.
 
 2. In the deploy directory:
 
@@ -224,7 +222,7 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 1. Read the release notes of the new version on the repository's Releases page.
 2. Back up the Mikud database with your own tools. Migrations only move forward; the backup is the way back.
 3. Set `VERSION` in `.env` to the new version.
-4. Run the commands below. While the package is private, the server's `docker login ghcr.io` from step 4 must still be valid, or the pull fails; log in again with a token that has only `read:packages`.
+4. Run the commands below.
 
    ```bash
    docker compose pull
