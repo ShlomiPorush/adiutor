@@ -13,6 +13,8 @@ let app: ReturnType<typeof createApp>
 let core: TestCore
 /** The owner's signed-in browser (two-factor on), set up before each test. */
 let ownerBrowser: TestBrowser
+/** The owner's authenticator, for signing in a second browser. */
+let ownerSecret: string
 /** An agent key of the owner (Better Auth's api-key plugin). */
 let AGENT: string
 
@@ -35,7 +37,7 @@ beforeEach(async () => {
   await t.reset()
   app = build()
   ownerBrowser = new TestBrowser((request) => app.fetch(request), ORIGIN, { "x-forwarded-for": "198.51.100.1" })
-  await ownerBrowser.owner()
+  ownerSecret = await ownerBrowser.owner()
   AGENT = await createAgentKey(core)
 })
 
@@ -195,19 +197,11 @@ describe("browser sessions", () => {
     expect(mcp.status).toBe(401)
   })
 
-  it("gives the browser an identity cookie that never authenticates, and records visits for it", async () => {
+  it("sets no browser cookie of its own, and records visits for the signed-in owner only", async () => {
     const { owner } = await signedIn()
     const first = await owner.call("GET", "/api/v1/session")
-    const browserCookie = first.setCookies.find((c) => c.startsWith("adiutor_browser="))
-    expect(browserCookie).toMatch(/HttpOnly/)
-    expect(browserCookie).toMatch(/SameSite=Lax/)
-    expect(browserCookie).not.toMatch(/Secure/)
-    const browserId = first.json.data.browserId
-    // Alone, the identity cookie is nobody.
-    const alone = await call("/session", { cookie: `adiutor_browser=${browserId}` })
-    expect([alone.status, alone.json.error.code]).toEqual([401, "unauthorized"])
-    // The same browser keeps its identity.
-    expect((await owner.call("GET", "/api/v1/session")).json.data.browserId).toBe(browserId)
+    expect(first.setCookies.filter((c) => c.startsWith("adiutor_"))).toEqual([])
+    expect(Object.keys(first.json.data).sort()).toEqual(["actor", "expiresAt", "via"])
 
     const visit = await owner.call("POST", "/api/v1/visits")
     expect(visit.status).toBe(201)
@@ -243,6 +237,41 @@ describe("browser sessions", () => {
     const late = await owner.call("POST", "/api/v1/visits", { body: { at: future } })
     expect(new Date(late.json.data.at).getTime()).toBeLessThanOrEqual(t.ctx.clock().getTime())
     expect((await owner.call("GET", "/api/v1/morning?since=yesterday")).status).toBe(400)
+  })
+
+  it("shares the last visit across the owner's browsers: the next opening counts from it, an open page keeps its list", async () => {
+    const desktop = ownerBrowser
+    const phone = new TestBrowser((request) => app.fetch(request), ORIGIN, { "x-forwarded-for": "198.51.100.2" })
+    await phone.signIn(ownerSecret)
+    const titles = (view: { data: { new: { item: { title: string } }[] } }) => view.data.new.map((n) => n.item.title)
+    const morningOf = async (b: TestBrowser, since?: string) =>
+      (await b.call("GET", `/api/v1/morning${since ? `?since=${encodeURIComponent(since)}` : ""}`)).json
+
+    await call("/items", { method: "POST", token: AGENT, body: { type: "task", title: "Seen on the phone" } })
+    t.clock.travel(2 * VISIT_SAFETY_MARGIN_MS)
+    // The desktop opens the overview first and keeps it open.
+    const open = await morningOf(desktop)
+    expect(titles(open)).toContain("Seen on the phone")
+
+    // The phone opens it later and records its visit.
+    t.clock.travel(VISIT_SAFETY_MARGIN_MS)
+    const shown = await morningOf(phone)
+    expect(titles(shown)).toContain("Seen on the phone")
+    const visit = await phone.call("POST", "/api/v1/visits", { body: { at: shown.data.now } })
+    expect(visit.status).toBe(201)
+
+    // The open desktop page refreshes with its own boundary and keeps its list.
+    t.clock.travel(1000)
+    const refresh = await morningOf(desktop, open.data.since)
+    expect(refresh.data.since).toBe(open.data.since)
+    expect(titles(refresh)).toContain("Seen on the phone")
+
+    // The desktop's next opening counts from the phone's visit: what the owner saw there is no longer new.
+    const next = await morningOf(desktop)
+    expect(next.data.since).toBe(visit.json.data.at)
+    expect(titles(next)).not.toContain("Seen on the phone")
+    const desktopVisit = await desktop.call("POST", "/api/v1/visits", { body: { at: next.data.now } })
+    expect(desktopVisit.json.data.previous).toBe(visit.json.data.at)
   })
 })
 

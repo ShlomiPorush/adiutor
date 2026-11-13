@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { devices, items, securitySources, syncRuns } from "../db/schema.ts"
+import { items, securitySources, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { recordVisit, updateSettings } from "./admin.ts"
 import { addComment, captureItem, createItem, createItemTx, linkThread, updateItem } from "./items.ts"
@@ -10,12 +10,6 @@ import { applyT3Snapshot } from "./sync.ts"
 
 let t: TestDatabase
 
-/** A browser identity (the adiutor_browser cookie names one). */
-async function browser(label: string) {
-  const [device] = await t.ctx.db.insert(devices).values({ label }).returning()
-  if (!device) throw new Error("no browser row")
-  return { device }
-}
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
 
@@ -41,20 +35,20 @@ async function source(projectId: string, critical: number, high: number, asOf: D
 }
 
 describe("morning", () => {
-  it("uses the browser's previous visit as since, or 24 hours ago on its first visit", async () => {
-    const { device } = await browser("Phone")
-    const first = await morning(t.ctx, { deviceId: device.id })
+  it("uses the owner's previous visit in any browser as since, or 24 hours ago when there is none", async () => {
+    const first = await morning(t.ctx)
     expect(t.ctx.clock().getTime() - first.since.getTime()).toBeGreaterThanOrEqual(DAY - 1000)
-    const visit = await recordVisit(t.ctx, device.id)
+    const visit = await recordVisit(t.ctx)
     t.clock.travel(1000)
-    expect((await morning(t.ctx, { deviceId: device.id })).since.getTime()).toBe(visit.getTime())
-    // Another browser keeps its own boundary: a visit on one does not hide updates on the other.
-    const { device: desktop } = await browser("Desktop")
-    expect((await morning(t.ctx, { deviceId: desktop.id })).since.getTime()).toBeLessThan(visit.getTime())
+    expect((await morning(t.ctx)).since.getTime()).toBe(visit.getTime())
+    // The latest visit counts, whichever browser recorded it.
+    t.clock.travel(HOUR)
+    const later = await recordVisit(t.ctx)
+    t.clock.travel(1000)
+    expect((await morning(t.ctx)).since.getTime()).toBe(later.getTime())
   })
 
   it("shows a write as new on the next visit when its transaction was open across the read and the visit", async () => {
-    const { device } = await browser("Phone")
     const titles = (view: Awaited<ReturnType<typeof morning>>) => view.new.map((n) => n.item.title)
     let release = () => {}
     const held = new Promise<void>((resolve) => {
@@ -72,13 +66,13 @@ describe("morning", () => {
     })
     await inside
     t.clock.travel(5_000)
-    const shown = await morning(t.ctx, { deviceId: device.id })
+    const shown = await morning(t.ctx)
     expect(titles(shown)).not.toContain("Slow write")
-    await recordVisit(t.ctx, device.id, shown.now)
+    await recordVisit(t.ctx, shown.now)
     release()
     await writing
     t.clock.travel(5_000)
-    expect(titles(await morning(t.ctx, { deviceId: device.id }))).toContain("Slow write")
+    expect(titles(await morning(t.ctx))).toContain("Slow write")
   })
 
   it("lists waiting items and open stage proposals under waiting", async () => {

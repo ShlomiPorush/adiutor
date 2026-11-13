@@ -35,10 +35,15 @@ export function MorningPage() {
     queryFn: () => (since ? api.morningSince(since) : api.morning()),
     every: EVERY.live,
     keepPrevious: true,
+    freshOnMount: true,
   })
   const page = useRef<HTMLDivElement>(null)
   const visited = useRef(false)
-  const shown = morning.data
+  // Each opening starts from a read the server answered after it: the shell shares qk.morning, and its cached
+  // copy may predate a visit recorded in another browser (the last visit is the owner's, across browsers).
+  // Until then the page shows nothing it would freeze its boundary on or mark as seen.
+  const opened = since !== null || (morning.isFetchedAfterMount && morning.status === "success")
+  const shown = opened ? morning.data : undefined
 
   useEffect(() => {
     if (!shown) return
@@ -62,11 +67,11 @@ export function MorningPage() {
     <div className="ui-page" ref={page}>
       <div className="ui-section">
         <PageHead title={t("morning.title")} description={t("morning.description")} />
-        {morning.isPending ? <Loading label={t("morning.loading")} /> : null}
-        {morning.isError && !morning.data ? (
+        {!shown && !morning.isError ? <Loading label={t("morning.loading")} /> : null}
+        {morning.isError && !shown ? (
           <ErrorState title={t("morning.failed")} error={morning.error} onRetry={() => void morning.refetch()} />
         ) : null}
-        {morning.data ? <MorningBody morning={morning.data} refreshFailed={morning.isError} onJump={scrollTo} /> : null}
+        {shown ? <MorningBody morning={shown} refreshFailed={morning.isError} onJump={scrollTo} /> : null}
       </div>
     </div>
   )

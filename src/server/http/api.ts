@@ -180,23 +180,21 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
       data: {
         actor: auth.actor,
         via: auth.via,
-        browserId: auth.via === "session" ? auth.browserId : null,
         expiresAt: auth.via === "session" ? auth.expiresAt : null,
       },
     })
   })
   api.get("/morning", async (c) => {
     const { since } = query(c, morningQuery)
-    const auth = c.get("auth")
-    return c.json({ data: await morning(ctx, { deviceId: auth.via === "session" ? auth.browserId : null, since }) })
+    return c.json({ data: await morning(ctx, { since }) })
   })
   api.post("/visits", async (c) => {
     const auth = c.get("auth")
     if (auth.via !== "session") throw forbidden("Visits are recorded for signed-in browsers only.")
     // An empty body records the visit now; the UI sends the time of the read it showed.
     const { at } = (await c.req.text()).trim() ? await body(c, visitBody) : {}
-    const previous = await previousVisit(ctx, auth.browserId)
-    return c.json({ data: { at: await recordVisit(ctx, auth.browserId, at), previous } }, 201)
+    const previous = await previousVisit(ctx)
+    return c.json({ data: { at: await recordVisit(ctx, at), previous } }, 201)
   })
 
   // --- Projects ---

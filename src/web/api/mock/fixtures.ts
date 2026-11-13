@@ -103,7 +103,6 @@ export type MockState = {
   audit: AuditEntry[]
   notes: Note[]
   noteVersions: NoteVersion[]
-  browserId: string
   /** Better Auth's list-sessions, the current one first. */
   sessions: BrowserSession[]
   endedOthers: boolean
@@ -597,7 +596,6 @@ export function createState(): MockState {
     audit,
     notes,
     noteVersions,
-    browserId: uuid(),
     sessions,
     endedOthers: false,
     agentKeys,

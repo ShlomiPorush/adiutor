@@ -1,4 +1,4 @@
-import { and, desc, eq, lt } from "drizzle-orm"
+import { desc, eq, lt } from "drizzle-orm"
 import type { Language } from "../../shared/enums.ts"
 import { CLOSED_ITEM_DAYS_MAX, CLOSED_ITEM_DAYS_MIN } from "../../shared/settings.ts"
 import type { EnvOverrides } from "../config.ts"
@@ -120,45 +120,36 @@ export async function removeSuppression(ctx: Ctx, by: By, id: string): Promise<v
   })
 }
 
-// --- Visits ("new since your last visit", per browser: the adiutor_browser cookie names a devices row) ---
+// --- Visits ("new since your last visit": the owner's, across every browser and device) ---
 
 export const FIRST_VISIT_WINDOW_MS = 24 * 60 * 60 * 1000
 
-/** The browser's previous visit before now, or 24 hours ago on its first visit (and without a browser). */
-export async function previousVisit(ctx: Ctx, deviceId: string | null | undefined): Promise<Date> {
-  const now = ctx.clock()
-  if (deviceId) {
-    const [row] = await ctx.db
-      .select({ at: visits.at })
-      .from(visits)
-      .where(and(eq(visits.deviceId, deviceId), lt(visits.at, now)))
-      .orderBy(desc(visits.at))
-      .limit(1)
-    if (row) return row.at
-  }
-  return new Date(now.getTime() - FIRST_VISIT_WINDOW_MS)
-}
-
 /** The owner's latest visit in any browser before now, or null when there is none. */
-export async function lastVisitAnyDevice(ctx: Ctx): Promise<Date | null> {
+export async function lastVisit(ctx: Ctx, now = ctx.clock()): Promise<Date | null> {
   const [row] = await ctx.db
     .select({ at: visits.at })
     .from(visits)
-    .where(lt(visits.at, ctx.clock()))
+    .where(lt(visits.at, now))
     .orderBy(desc(visits.at))
     .limit(1)
   return row?.at ?? null
 }
 
+/** The owner's previous visit before now, in any browser, or 24 hours ago when there is none. */
+export async function previousVisit(ctx: Ctx): Promise<Date> {
+  const now = ctx.clock()
+  return (await lastVisit(ctx, now)) ?? new Date(now.getTime() - FIRST_VISIT_WINDOW_MS)
+}
+
 /**
- * Records that the owner saw the board in this browser: VISIT_SAFETY_MARGIN_MS before the start of the read that
+ * Records that the owner saw the board (in any browser): VISIT_SAFETY_MARGIN_MS before the start of the read that
  * was shown (never later than now; now when it is not given), so a write that committed after that read
  * still counts as new (see the invariant in db/client.ts). Bookkeeping, not a change: no audit row.
  */
-export async function recordVisit(ctx: Ctx, deviceId: string, shownAt?: Date): Promise<Date> {
+export async function recordVisit(ctx: Ctx, shownAt?: Date): Promise<Date> {
   const now = ctx.clock()
   const readAt = shownAt && shownAt.getTime() < now.getTime() ? shownAt : now
   const at = new Date(readAt.getTime() - VISIT_SAFETY_MARGIN_MS)
-  await ctx.db.insert(visits).values({ deviceId, at })
+  await ctx.db.insert(visits).values({ at })
   return at
 }

@@ -11,6 +11,7 @@ import postgres from "postgres"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
 import { resetOwnerPassword } from "../auth/recovery.ts"
+import { previousVisit } from "../services/admin.ts"
 import { ReloadableSecretScanner } from "../services/secrets.ts"
 import { TEST_AUTH_SECRET, testAuthBase, testCore } from "../testing/app.ts"
 import { TEST_ORIGIN, TEST_PASSWORD, TestBrowser } from "../testing/browser.ts"
@@ -290,4 +291,53 @@ describe("upgrading to the readable synthetic e-mail", () => {
       })
     },
   )
+})
+
+// 0011_visits-per-account and 0012_drop-devices: visits stop naming a browser (the `devices` row the adiutor_browser
+// cookie named) and the table goes. Every visit's time survives, and the latest one is the owner's last visit.
+
+const VISITS_PER_ACCOUNT = 11 // migrations 0000 to 0010
+
+describe("upgrading to visits per account", () => {
+  it("keeps every visit's time, drops the browser rows, and counts from the latest visit of any browser", async () => {
+    const dbName = `adiutor_upgrade_${randomBytes(4).toString("hex")}`
+    await admin.unsafe(`CREATE DATABASE "${dbName}"`)
+    const u = new URL(process.env.ADIUTOR_TEST_DATABASE_URL ?? "")
+    u.pathname = `/${dbName}`
+    const db = createDatabase(u.toString())
+    const folder = folderBefore(VISITS_PER_ACCOUNT)
+    try {
+      await db.migrate(folder)
+      const phone = new Date("2026-11-10T07:00:00Z")
+      const desktop = new Date("2026-11-12T19:30:00Z")
+      const unnamed = new Date("2026-11-11T12:00:00Z")
+      await db.db.execute(sql`
+        with phone as (insert into devices (label) values ('Phone') returning id),
+             desktop as (insert into devices (label) values ('Desktop') returning id)
+        insert into visits (device_id, at)
+        select id, ${phone.toISOString()}::timestamptz from phone
+        union all select id, ${desktop.toISOString()}::timestamptz from desktop
+        union all select null, ${unnamed.toISOString()}::timestamptz`)
+
+      await db.migrate(migrations)
+      const times = await db.db.execute<{ at: string }>(sql`select at::text as at from visits order by at`)
+      const asIso = (rows: { at: string }[]) => rows.map((r) => new Date(r.at).toISOString())
+      expect(asIso([...times])).toEqual([phone, unnamed, desktop].map((d) => d.toISOString()))
+      const tables = await db.db.execute<{ n: string }>(
+        sql`select count(*) as n from information_schema.tables where table_schema = 'public' and table_name = 'devices'`,
+      )
+      expect(Number(tables[0]?.n)).toBe(0)
+      const columns = await db.db.execute<{ column_name: string }>(
+        sql`select column_name from information_schema.columns where table_name = 'visits' order by column_name`,
+      )
+      expect([...columns].map((c) => c.column_name)).toEqual(["at", "id"])
+
+      const ctx = { db: db.db, secrets: new ReloadableSecretScanner(), clock: () => new Date("2026-11-13T06:00:00Z") }
+      expect((await previousVisit(ctx)).toISOString()).toBe(desktop.toISOString())
+    } finally {
+      await db.close()
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`)
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
 })

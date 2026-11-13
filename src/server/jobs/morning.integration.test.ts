@@ -11,13 +11,14 @@ import { BotApi } from "../telegram/api.ts"
 import { StandInBotApi } from "../testing/bot-api.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { testBotToken } from "../testing/secrets.ts"
-import { MorningJob, recoverInterrupted } from "./morning.ts"
+import { MorningJob, morningSummary, recoverInterrupted } from "./morning.ts"
 
 // New on every run (src/server/testing/secrets.ts).
 const TOKEN = testBotToken()
 const CHAT = "4242"
 const PUBLIC_URL = new URL("http://127.0.0.1:8090")
 const HOUR = 60 * 60 * 1000
+const DAY = 24 * HOUR
 
 // Asia/Jerusalem is UTC+2 in November. 2026-11-01 is a Sunday.
 const SUNDAY_0800 = new Date("2026-11-01T06:00:00Z")
@@ -182,7 +183,7 @@ describe("morning job", () => {
     now = new Date("2026-10-31T07:00:00Z")
     const waiting = await createItem(ctx, agent, { type: "decision", title: "Pick a <name>", status: "waiting_on_you" })
     now = new Date("2026-10-31T08:00:00Z")
-    await t.ctx.db.insert(visits).values({ deviceId: null, at: now })
+    await t.ctx.db.insert(visits).values({ at: now })
     now = new Date("2026-10-31T09:00:00Z")
     await createItem(ctx, agent, { type: "task", title: "Added after the visit" })
 
@@ -233,6 +234,33 @@ describe("morning job", () => {
     expect(standIn.sent[1]?.text.split("\n")[1]).toBe("New since your last visit: 1")
     const [sunday] = await t.ctx.db.select().from(jobRuns).where(eq(jobRuns.localDate, "2026-11-01"))
     expect(sunday?.coversUntil).toEqual(new Date(readAt.getTime() - VISIT_SAFETY_MARGIN_MS))
+  })
+
+  // Items four days, two days, ten hours and two hours old; the 24-hour window applies only without a boundary.
+  it.each([
+    { name: "no visit and no message: the last 24 hours", visit: null, message: null, count: 2 },
+    { name: "no visit and a message three days ago: since that message", visit: null, message: 3 * DAY, count: 3 },
+    { name: "a visit newer than the message: since the visit", visit: 5 * HOUR, message: 3 * DAY, count: 1 },
+    { name: "a message newer than the visit: since the message", visit: 3 * DAY, message: 12 * HOUR, count: 2 },
+  ])("counts new with $name", async ({ visit, message, count }) => {
+    for (const [title, age] of [
+      ["Four days old", 4 * DAY],
+      ["Two days old", 2 * DAY],
+      ["Ten hours old", 10 * HOUR],
+      ["Two hours old", 2 * HOUR],
+    ] as const) {
+      now = new Date(SUNDAY_0800.getTime() - age)
+      await createItem(ctx, agent, { type: "task", title })
+    }
+    now = SUNDAY_0800
+    if (visit !== null) await t.ctx.db.insert(visits).values({ at: new Date(now.getTime() - visit) })
+    if (message !== null) {
+      const coversUntil = new Date(now.getTime() - message)
+      await t.ctx.db
+        .insert(jobRuns)
+        .values({ job: "morning", localDate: "2026-10-01", state: "sent", at: coversUntil, coversUntil })
+    }
+    expect((await morningSummary(ctx)).summary.newCount).toBe(count)
   })
 
   it("counts from the send time of a message sent before covers_until was recorded", async () => {

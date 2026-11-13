@@ -43,7 +43,6 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
 export type Session = {
   actor: { kind: ActorKind; label: string }
   via: "token" | "session"
-  browserId: string | null
   /** When this browser's session ends unless the Better Auth client refreshes it first. */
   expiresAt: string | null
 }

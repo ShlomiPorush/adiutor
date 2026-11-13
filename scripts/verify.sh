@@ -88,9 +88,11 @@ run_checks() {
 
 # Fixed values only: neither a developer's .env.dev (real tokens), nor an interpolation file, nor the developer's
 # ADIUTOR_PUBLIC_URL reaches the verification stack. Its password and keys are new on every run
-# (stack.env in its temporary data directory). The tests' Origin is http://127.0.0.1:8090.
+# (stack.env in its temporary data directory). The tests' Origin is http://127.0.0.1:8090. Its PostgreSQL is
+# production's major version (TEST_POSTGRES_IMAGE), not the development stack's.
 stack() {
   env -u COMPOSE_ENV_FILES ADIUTOR_IMAGE_TAG=verify ADIUTOR_PORT=0 ADIUTOR_LOCAL_ENV_FILE=/dev/null \
+    ADIUTOR_POSTGRES_IMAGE="$TEST_POSTGRES_IMAGE" ADIUTOR_POSTGRES_DATA="$TEST_POSTGRES_DATA" \
     ADIUTOR_PUBLIC_URL=http://127.0.0.1:8090 ADIUTOR_STACK_ENV_FILE="${ADIUTOR_DATA_DIR:-/nonexistent}/stack.env" \
     docker compose --env-file /dev/null -p "$PROJECT" --project-directory "$REPO_ROOT" \
     -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
@@ -128,6 +130,17 @@ run_e2e() {
     npx --no-install playwright test --config config/playwright.config.ts
 }
 
+# The integration tests and the end-to-end stack share this server: it must be production's major version.
+check_postgres_major() {
+  local version
+  # shellcheck disable=SC2016 # expands inside the container
+  version="$(stack exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "show server_version"')" ||
+    fail_stack "cannot read the PostgreSQL version"
+  echo "    PostgreSQL $version"
+  [ "${version%%.*}" = "$TEST_POSTGRES_MAJOR" ] ||
+    fail_stack "the verification database runs PostgreSQL $version, not $TEST_POSTGRES_MAJOR"
+}
+
 run_integration() {
   ADIUTOR_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/adiutor-verify.XXXXXX")"
   export ADIUTOR_DATA_DIR
@@ -136,6 +149,7 @@ run_integration() {
 
   info "Integration: disposable PostgreSQL ($PROJECT)"
   stack up -d --remove-orphans --wait --wait-timeout 120 postgres || fail_stack "PostgreSQL did not become healthy"
+  check_postgres_major
   TOOLCHAIN_EXTRA_ARGS=(--network "${PROJECT}_default"
     -e ADIUTOR_TEST_DATABASE_URL="$(stack_db_url)")
   in_toolchain "pnpm test:integration" || die "integration tests failed"

@@ -341,26 +341,14 @@ export const telegramUpdates = pgTable(
   () => [check("telegram_updates_outcome_check", oneOf("outcome", TELEGRAM_OUTCOMES))],
 )
 
-// A browser's identity for "new since your last visit", named by the adiutor_browser cookie. Never a credential:
-// signing in is Better Auth's (auth_session). Rows from before sign-in existed were paired browsers; their
-// visits stay with them, and revoked_at is set only on those that were ended then.
-export const devices = pgTable("devices", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  label: text("label").notNull(),
-  createdAt: createdAt(),
-  lastSeenAt: at("last_seen_at"),
-  revokedAt: at("revoked_at"),
-})
-
-// One row per owner visit, per device, for "new since your last visit".
+// One row per owner visit, in any browser, for "new since your last visit": the last visit is the account's.
 export const visits = pgTable(
   "visits",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    deviceId: uuid("device_id").references(() => devices.id, { onDelete: "set null" }),
     at: at("at").notNull().defaultNow(),
   },
-  (t) => [index("visits_device_at_idx").on(t.deviceId, t.at)],
+  (t) => [index("visits_at_idx").on(t.at)],
 )
 
 // A single row (id 1). The morning time and days are fixed, not settings.

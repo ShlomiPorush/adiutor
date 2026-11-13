@@ -320,14 +320,14 @@ async function visibleItems(ctx: Ctx, closedItemDays: number): Promise<ItemRow[]
 }
 
 /**
- * The home screen. `since` is this device's previous visit, or 24 hours ago on its first visit, unless the
- * caller gives one (the morning message).
+ * The home screen. `since` is the owner's previous visit in any browser, or 24 hours ago when there is none,
+ * unless the caller gives one (the morning message, or the boundary the open page keeps).
  */
-export async function morning(ctx: Ctx, options: { deviceId?: string | null; since?: Date } = {}) {
+export async function morning(ctx: Ctx, options: { since?: Date } = {}) {
   // The time of this read, taken before anything is read: a visit recorded with it marks nothing newer seen.
   const now = ctx.clock()
   const settingsRow = await getSettings(ctx.db)
-  const since = options.since ?? (await previousVisit(ctx, options.deviceId))
+  const since = options.since ?? (await previousVisit(ctx))
   const allProjects = await ctx.db.select().from(projects).orderBy(asc(projects.name))
   const names = new Map(allProjects.map((p) => [p.id, p.name]))
   const visible = await visibleItems(ctx, settingsRow.closedItemDays)

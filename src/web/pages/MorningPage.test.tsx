@@ -261,3 +261,91 @@ describe("agent updates", () => {
     expect(document.querySelector("#updates")?.textContent).toContain("Garden agent")
   })
 })
+
+describe("each opening of the overview", () => {
+  it("reads the server again before it keeps a boundary, after a visit in another browser and with a fresh cache", async () => {
+    const requests: string[] = []
+    let server: Morning = MORNING
+    setTransport(async ({ method, path, body }: TransportRequest) => {
+      requests.push(`${method} ${path}${body ? ` ${JSON.stringify(body)}` : ""}`)
+      if (path.startsWith("/morning") && method === "GET") return { status: 200, body: { data: server } }
+      if (path === "/visits") return { status: 201, body: { data: { at: MORNING.now, previous: null } } }
+      return { status: 404, body: { error: { code: "not_found", message: "Not here." } } }
+    })
+    // As in main.tsx: a read stays fresh for ten seconds, so a remount alone would not read again.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } })
+    queryClient.setQueryData(qk.session, { actor: { kind: "owner", label: "owner.name" } })
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          element: (
+            <UnsavedProvider>
+              <MorningPage />
+              <ConfirmHost />
+              <ToastHost />
+            </UnsavedProvider>
+          ),
+        },
+        { path: "/inbox", element: <p>Inbox</p> },
+      ],
+      { initialEntries: ["/"] },
+    )
+    const host = document.createElement("div")
+    document.body.append(host)
+    const root = createRoot(host)
+    mounted = { root, host }
+    const settle = () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+      })
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <QueryClientProvider client={queryClient}>
+            <I18nProvider>
+              <RouterProvider router={router} />
+            </I18nProvider>
+          </QueryClientProvider>
+        </StrictMode>,
+      )
+    })
+    await settle()
+    const newTitles = () => document.querySelector("#new")?.textContent ?? ""
+    expect(newTitles()).toContain("Water the moss garden")
+    expect(queryClient.getQueryData(qk.morning)).toEqual(MORNING)
+
+    // Away from the overview, the phone records a visit: the server's boundary moves past the item.
+    await act(async () => {
+      await router.navigate("/inbox")
+    })
+    const afterPhone: Morning = {
+      ...MORNING,
+      now: "2026-11-02T07:05:00.000Z",
+      since: "2026-11-02T07:01:00.000Z",
+      new: [],
+    }
+    server = afterPhone
+    requests.length = 0
+
+    // Back on the overview while the cached read (still the first one) is fresh.
+    await act(async () => {
+      await router.navigate("/")
+    })
+    await settle()
+    expect(requests).toContain("GET /morning")
+    expect(newTitles()).not.toContain("Water the moss garden")
+    expect(requests.filter((r) => r.startsWith("POST /visits"))).toEqual([
+      `POST /visits ${JSON.stringify({ at: afterPhone.now })}`,
+    ])
+
+    // While the page stays open, its refreshes keep the boundary of this opening's first read.
+    requests.length = 0
+    await act(async () => {
+      await queryClient.refetchQueries({ type: "active" })
+    })
+    await settle()
+    expect(requests).toContain(`GET /morning?since=${encodeURIComponent(afterPhone.since)}`)
+    expect(requests.filter((r) => r.startsWith("POST /visits"))).toEqual([])
+  })
+})

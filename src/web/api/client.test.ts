@@ -40,10 +40,10 @@ describe("request and endpoints", () => {
   it("unwraps {data} and paged {data, nextCursor}", async () => {
     setTransport(
       answer(200, {
-        data: { actor: { kind: "owner", label: "owner" }, via: "session", browserId: "b1", clocks: null },
+        data: { actor: { kind: "owner", label: "owner" }, via: "session", expiresAt: "2026-11-13T08:00:00.000Z" },
       }),
     )
-    expect((await api.session()).browserId).toBe("b1")
+    expect((await api.session()).expiresAt).toBe("2026-11-13T08:00:00.000Z")
     const paged = answer(200, { data: [{ id: 1 }], nextCursor: "abc" })
     setTransport(paged)
     expect(await api.archive("first")).toEqual({ entries: [{ id: 1 }], nextCursor: "abc" })
