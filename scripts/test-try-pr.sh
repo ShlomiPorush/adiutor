@@ -98,6 +98,31 @@ older_env_gains_key() {
 }
 check "an older env file gains ADIUTOR_OAUTH_SECRETS and keeps its other lines" older_env_gains_key
 
+# The same file without a line break at its end: the key gets a line of its own, the address stays whole.
+unterminated_env_gains_key() {
+  local before
+  sed -i '/^ADIUTOR_OAUTH_SECRETS=/d' "$ENV_FILE"
+  truncate -s -1 "$ENV_FILE"
+  before="$(cat "$ENV_FILE")"
+  ensure_auth_secret >/dev/null
+  [ "$(head -n -1 "$ENV_FILE")" = "$before" ] && keys_generated &&
+    [ "$(sed -n 's/^ADIUTOR_PUBLIC_URL=//p' "$ENV_FILE")" = "$public_url" ]
+}
+check "an env file without a final line break gains the key on its own line" unterminated_env_gains_key
+
+# random_hex printing nothing: write_env stops and leaves the env file as it was.
+failing_generator_writes_nothing() {
+  local before
+  before="$(cat "$ENV_FILE")"
+  (
+    # shellcheck disable=SC2317 # called by write_env
+    random_hex() { :; }
+    write_env
+  ) >/dev/null 2>&1 && return 1
+  [ "$(cat "$ENV_FILE")" = "$before" ]
+}
+check "a failing generator leaves the env file as it was" failing_generator_writes_nothing
+
 # --- what is published and passed on ---
 
 (write_compose) || echo "      write_compose failed"

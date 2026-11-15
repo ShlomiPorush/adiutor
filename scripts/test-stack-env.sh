@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for ensure_stack_env (scripts/lib/common.sh) without Docker: a new stack.env holds every key, generated and
-# distinct, mode 600; an older one gains a key added later as one appended line and keeps every other line; a file
+# distinct, mode 600; an older one gains a key added later as one appended line and keeps every other line, also
+# when several runs start at once; a failing generator writes nothing; an empty or short key is not valid; a file
 # that is not mode 600 or is a link is never written to. Values are never printed. Run with the guards
 # (scripts/lib/guards.sh).
 set -uo pipefail
@@ -82,6 +83,57 @@ for ending in newline none; do
   ensure "$OLD"
   check "a second run changes nothing" test "$(cat "$OLD/stack.env")" = "$after"
 done
+
+# --- runs at once ---
+
+# Four runs at once on one older file, ten times: each file ends with exactly one ADIUTOR_OAUTH_SECRETS line.
+concurrent_runs_add_one_line() {
+  local round dir
+  for round in $(seq 1 10); do
+    dir="$WORK/race-$round"
+    older "$dir" newline
+    ensure "$dir" &
+    ensure "$dir" &
+    ensure "$dir" &
+    ensure "$dir" &
+    wait
+    [ "$(grep -c '^ADIUTOR_OAUTH_SECRETS=' "$dir/stack.env")" = 1 ] || return 1
+    keys_generated "$dir/stack.env" || return 1
+  done
+}
+check "four runs at once add exactly one ADIUTOR_OAUTH_SECRETS line" concurrent_runs_add_one_line
+
+# --- a generator that fails ---
+
+# random_hex printing nothing: no stack.env is created, and an older one is not written to.
+no_value_written() {
+  local before
+  (
+    random_hex() { :; }
+    ensure_stack_env "$WORK/broken-new"
+  ) >/dev/null 2>&1 && return 1
+  [ ! -e "$WORK/broken-new/stack.env" ] || return 1
+  older "$WORK/broken-old" newline
+  before="$(cat "$WORK/broken-old/stack.env")"
+  (
+    random_hex() { :; }
+    ensure_stack_env "$WORK/broken-old"
+  ) >/dev/null 2>&1 && return 1
+  [ "$(cat "$WORK/broken-old/stack.env")" = "$before" ]
+}
+check "a failing generator writes no key, new or appended" no_value_written
+
+# An empty or short key is not valid, so it is never kept as if it were one.
+short_keys_invalid() {
+  local value
+  for value in "" "1:" "1:$(new_hex | cut -c 1-31)"; do
+    grep -v '^ADIUTOR_OAUTH_SECRETS=' "$NEW/stack.env" >"$WORK/short.env"
+    echo "ADIUTOR_OAUTH_SECRETS=$value" >>"$WORK/short.env"
+    chmod 600 "$WORK/short.env"
+    ! stack_env_valid "$WORK/short.env" || return 1
+  done
+}
+check "an empty or short key is not valid" short_keys_invalid
 
 # --- files that are never written to ---
 

@@ -70,8 +70,11 @@ save_state() {
 }
 
 write_env() {
-  local password
-  password="$(random_hex)"
+  local password auth settings oauth
+  # Every value first, each checked: nothing is written unless all of them were generated.
+  if ! { password="$(new_hex)" && auth="$(new_hex)" && settings="$(new_hex)" && oauth="$(new_hex)"; }; then
+    die "could not generate the stack's password and keys; nothing was written"
+  fi
   (
     umask 077
     cat >"$ENV_FILE" <<EOF
@@ -81,9 +84,9 @@ POSTGRES_USER=adiutor
 POSTGRES_PASSWORD=$password
 POSTGRES_DB=adiutor
 DATABASE_URL=postgres://adiutor:$password@postgres:5432/adiutor
-ADIUTOR_AUTH_SECRETS=1:$(random_hex)
-ADIUTOR_SETTINGS_KEYS=1:$(random_hex)
-ADIUTOR_OAUTH_SECRETS=1:$(random_hex)
+ADIUTOR_AUTH_SECRETS=1:$auth
+ADIUTOR_SETTINGS_KEYS=1:$settings
+ADIUTOR_OAUTH_SECRETS=1:$oauth
 ADIUTOR_PUBLIC_URL=$(pr_url)
 EOF
   )
@@ -93,17 +96,13 @@ EOF
 # An older pr.env lacks the keys the server now requires: they are added. Its old token lines stay; the server
 # only warns about them.
 ensure_auth_secret() {
-  [ -f "$ENV_FILE" ] || return 0
+  if [ ! -f "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; then return 0; fi
   local name
-  for name in ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS ADIUTOR_OAUTH_SECRETS; do
-    grep -q "^$name=" "$ENV_FILE" && continue
-    info "Adding $name to $ENV_FILE"
-    (
-      umask 077
-      echo "$name=1:$(random_hex)" >>"$ENV_FILE"
-    )
-  done
   chmod 600 "$ENV_FILE"
+  # One appended line each, under a lock, after a line break when the file lacks one (scripts/lib/common.sh).
+  for name in "${STACK_KEY_NAMES[@]}"; do
+    add_missing_stack_key "$ENV_FILE" "$name"
+  done
 }
 
 write_compose() {
