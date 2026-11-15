@@ -116,7 +116,8 @@ describe("audit writes of agent calls", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(limits.deadlineMs + limits.deliveryMs + limits.auditMs)
     const logged = lines.filter((line) => line.includes("agent call rows still owed at shutdown"))
     expect(logged).toHaveLength(1)
-    expect(JSON.parse(logged[0] ?? "{}")).toMatchObject({ owed: expect.any(Number) })
+    // One call whose row is still being written: one call owes its row, one write runs (each counted once).
+    expect(JSON.parse(logged[0] ?? "{}")).toMatchObject({ callsUnsettled: 1, rowsWriting: 1 })
     // The slot stays held while its row may still be written.
     expect((await call("/api/v1/agent/endpoints")).status).toBe(200)
     expect((await call("/api/v1/agent/endpoints")).status).toBe(200)

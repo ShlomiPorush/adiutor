@@ -297,8 +297,11 @@ export function createAgentChannel(options: AgentChannelOptions) {
   const running = slots(limits)
   /** When `busy` was last recorded, per connection. */
   const busySeen = new Map<string, number>()
-  /** Audit writes not settled yet. */
+  /** What `drain` waits for: audit writes and calls not settled yet. */
   const pending = new Set<Promise<void>>()
+  /** For the shutdown log: audit writes begun and not settled, and calls whose work or row has not settled. */
+  let writing = 0
+  let unsettledCalls = 0
   const issuer = access.issuer ?? ""
   const metadata = (resource: AgentResource) =>
     `${issuer}/.well-known/oauth-protected-resource${resource === "mcp" ? "/mcp" : "/api/v1"}`
@@ -324,11 +327,15 @@ export function createAgentChannel(options: AgentChannelOptions) {
    * so a caller holding a slot gives it back only once its row is really written or failed.
    */
   async function audit(by: By, entry: Parameters<typeof writeAudit>[3], settled?: () => void): Promise<void> {
+    writing++
     const write = writeAudit(ctx, ctx.db, by, entry).catch((error: unknown) => {
       log.error("an agent call was not audited", errorFacts(error))
     })
     track(write)
-    void write.finally(() => settled?.())
+    void write.finally(() => {
+      writing--
+      settled?.()
+    })
     let timer: NodeJS.Timeout | undefined
     const gaveUp = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
@@ -471,9 +478,13 @@ export function createAgentChannel(options: AgentChannelOptions) {
     work.catch(() => undefined)
     // The call's row is owed from now on: `drain` waits for it, also while the work still runs after its client left.
     let owed = () => {}
+    unsettledCalls++
     track(
       new Promise<void>((resolve) => {
-        owed = resolve
+        owed = () => {
+          unsettledCalls--
+          resolve()
+        }
       }),
     )
     // The slot comes back once the work and its row have both settled.
@@ -756,7 +767,8 @@ export function createAgentChannel(options: AgentChannelOptions) {
         while (pending.size > 0) await Promise.allSettled([...pending])
       })()
       const done = await Promise.race([all, late]).finally(() => clearTimeout(timer))
-      if (done === "late") log.error("agent call rows still owed at shutdown", { owed: pending.size })
+      if (done === "late")
+        log.error("agent call rows still owed at shutdown", { callsUnsettled: unsettledCalls, rowsWriting: writing })
     },
     /** The routes of the agent router, for the exposure test. */
     restRoutes: rest.routes,
