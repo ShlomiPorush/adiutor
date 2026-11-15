@@ -36,7 +36,10 @@ const browserDetails = (): ConsentDetails => ({
 
 function respond(answer: Answer): Response {
   const type = answer.type ?? "application/json"
-  const text = type.includes("json") ? JSON.stringify(answer.body ?? {}) : String(answer.body ?? "")
+  // A JSON `null` body stays `null`, so the decision test can send it; only a missing body becomes `{}`.
+  const text = type.includes("json")
+    ? JSON.stringify(answer.body === undefined ? {} : answer.body)
+    : String(answer.body ?? "")
   return new Response(text, { status: answer.status, headers: { "content-type": type } })
 }
 
