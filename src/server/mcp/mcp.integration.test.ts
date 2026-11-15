@@ -7,8 +7,8 @@ import { createApp } from "../app.ts"
 import { RateLimiter } from "../http/auth.ts"
 import { createProject, updateProject } from "../services/projects.ts"
 import { createAgentKey, ownerBrowser, type TestCore, testCore } from "../testing/app.ts"
-import { DATA_SENTENCE, MCP_BODY_LIMIT } from "./server.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
+import { DATA_SENTENCE, MCP_BODY_LIMIT } from "./server.ts"
 
 let t: TestDatabase
 let core: TestCore
@@ -259,7 +259,10 @@ describe("MCP over Streamable HTTP", () => {
     const none = await send({})
     expect(none.status).toBe(200)
     // The body bound is the REST API's: over it, 413 before anything is parsed.
-    const large = await send({}, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(MCP_BODY_LIMIT) }))
+    const large = await send(
+      {},
+      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(MCP_BODY_LIMIT) }),
+    )
     expect(large.status).toBe(413)
   })
 
