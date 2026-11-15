@@ -78,6 +78,8 @@ export async function oauthHarness(
     observeStore?: StoreOptions["observe"]
     caps?: AgentCaps
     maxPending?: number
+    /** A built UI to serve as createApp's `web` (the consent page's own address). */
+    web?: { root: string }
   } = {},
 ): Promise<OAuthHarness> {
   const { server, origin, handle } = await listen()
@@ -100,6 +102,7 @@ export async function oauthHarness(
     checkDatabase: async () => true,
     core,
     agentOAuth: agentOAuthMount(access, limits, options.caps),
+    ...(options.web ? { web: options.web } : {}),
   })
   handle((request, env) => app.fetch(request, env))
   await access.start()

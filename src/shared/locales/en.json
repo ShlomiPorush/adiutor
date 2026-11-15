@@ -1249,5 +1249,177 @@
       "other": "Filters, {count} in use"
     },
     "clear": "Clear filters"
+  },
+  "agentPages": {
+    "codeTitle": "Connect an agent",
+    "codeLead": "Enter the code your agent shows.",
+    "code": "Code",
+    "continue": "Continue",
+    "wrongTitle": "That code did not work",
+    "wrongCode": "It is not valid, it expired or it was already used. Check the code in your agent, or start the connection again there.",
+    "limitedTitle": "Too many codes tried",
+    "limited": "Wait a few minutes, then open the link from your agent again.",
+    "failedTitle": "That did not work",
+    "failed": "Start the connection again in your agent.",
+    "notConnected": "Not connected",
+    "denied": "The connection was not approved. Nothing was shared with the agent. You can close this page.",
+    "confirmTitle": "Does your agent show this code?",
+    "confirmLead": "Compare it with the code in your agent before you continue.",
+    "nameTag": "Name supplied by agent",
+    "confirmText": "Continue only if you started this yourself and your agent shows the same code.",
+    "cancel": "Cancel",
+    "confirm": "Yes, continue",
+    "doneTitle": "Agent connected",
+    "doneText": "You can close this page and return to your agent.",
+    "errors": {
+      "access_denied": "The connection was not approved. You can close this page.",
+      "expired_token": "This code has expired. Start the connection again in your agent.",
+      "invalid_request": "This link is not valid any more. Start the connection again in your agent.",
+      "invalid_client": "This agent is not known here. Start the connection again in your agent.",
+      "invalid_target": "This agent asked for something Adiutor does not offer.",
+      "invalid_redirect_uri": "This agent asked to be sent back to an address it did not register.",
+      "other": "Something went wrong with this connection. Start it again in your agent."
+    }
+  },
+  "consent": {
+    "title": "Approve an agent",
+    "lead": "An agent asks to work in Adiutor for you. Check who asks, then choose what it may do.",
+    "loading": "Loading the request...",
+    "who": "Who is asking",
+    "nameTag": "Name supplied by agent",
+    "builtInTag": "Asks as Adiutor's skill or sync",
+    "builtInText": "It asks the way Adiutor's skill and the sync do, but any program can ask this way, and Adiutor cannot check which program really asks. The name is the one it gives itself. Approve only if you just started the Adiutor skill or the sync and compared its code.",
+    "otherText": "Any program can use this name. Approve only if you just started this connection.",
+    "via": "How it connected",
+    "viaCode": "With a code you compared on the previous page",
+    "viaBrowser": "Through this browser",
+    "resource": "What it connects to",
+    "resourceMcp": "Adiutor's MCP server",
+    "resourceRest": "Adiutor's REST API",
+    "returnsTo": "Returns to",
+    "loopback": "This computer",
+    "remote": "Another site",
+    "what": "What it may do",
+    "areas": {
+      "read": {
+        "name": "Read",
+        "hint": "Read items, projects and notes."
+      },
+      "write": {
+        "name": "Write",
+        "hint": "Add and update items, comments, notes and threads, and propose a project's stage."
+      },
+      "sync": {
+        "name": "Sync",
+        "hint": "Send the sync's snapshots of T3 threads and security checks."
+      }
+    },
+    "never": "Agents can never delete items, projects or notes, change a project's stage, or manage agents.",
+    "warnTitle": "Agents do not ask for another approval in Adiutor.",
+    "warnText": "Threads and notes can contain instructions that mislead an agent. Allow writing only to an agent that needs it.",
+    "noArea": "Choose at least one area, or choose Deny.",
+    "howLong": "For how long",
+    "lifetime": {
+      "one": "It ends after 1 day without use, or when you disconnect it.",
+      "other": "It ends after {count} days without use, or when you disconnect it."
+    },
+    "footnote": "Disconnect it at any time in Settings → Agent access.",
+    "signedInAs": "Signed in as {user}.",
+    "deny": "Deny",
+    "approve": "Approve",
+    "sending": "Sending...",
+    "approved": "Agent approved",
+    "denied": "Agent denied",
+    "returning": "Returning to the agent...",
+    "closeWindow": "You can close this window and go back to the agent.",
+    "unavailable": "Request unavailable",
+    "reason": {
+      "gone": "This request is no longer open: it expired or was already answered. Start the connection again in your agent.",
+      "not_configured": "Agents cannot connect here now: agent access is off, or the public address does not allow it. Check Settings → Agent access.",
+      "forbidden": "Adiutor refused this request. Open the link from your agent again in this browser.",
+      "network": "Adiutor could not be reached. Check your connection and reload the page.",
+      "other": "Adiutor could not read the request. Reload the page."
+    },
+    "failed": {
+      "validation": "Choose what the agent may do from the areas shown.",
+      "other": "Could not send your answer. Try again."
+    },
+    "toSettings": "Open Agent access",
+    "toBoard": "Go to the board",
+    "app": "An app on a device",
+    "unknownTitle": "Your answer may have been saved",
+    "unknownText": "No answer came back, so Adiutor may have recorded it. Check Settings → Agent access for this connection. If it is not there, start the connection again in your agent."
+  },
+  "agentAccess": {
+    "hint": "Agents and the sync connect once, and you approve each one in the browser. A connection ends after the idle days without use; disconnect one here when a computer is lost.",
+    "settingsTitle": "Agents",
+    "switch": "Let agents connect",
+    "switchHint": "Off ends every connection and every waiting request at once, and refuses new ones.",
+    "offTitle": "Turn agents off?",
+    "offMessage": "Every agent connection, waiting code and open approval ends now. Turning agents on again brings none back.",
+    "offConfirm": "Save and turn off",
+    "turnedOff": "Agents are off, and every connection ended",
+    "idleDays": "Idle days",
+    "idleHint": "A connection ends after this many days without a real request (1 to 365). Fewer days end every connection idle longer at once.",
+    "idleInvalid": "Enter a whole number from 1 to 365.",
+    "idleFewerTitle": "End idle connections?",
+    "idleFewerMessage": {
+      "one": "Connections not used for more than 1 day end now.",
+      "other": "Connections not used for more than {count} days end now."
+    },
+    "idleFewerConfirm": "Save and end",
+    "connectTitle": "How to connect",
+    "connectIntro": "You approve every connection in this browser when the agent asks.",
+    "mcpUrl": "MCP address",
+    "mcpHint": "For any agent that connects over MCP.",
+    "claude": "Claude Code",
+    "claudeHint": "Run it in a terminal. Claude Code opens Adiutor to approve the connection.",
+    "skill": "Tell the agent",
+    "skillHint": "For an agent with the adiutor skill. It shows a link and a code: open the link, check that the code matches, and approve.",
+    "offNote": "Agents are off. Turn them on above to connect one.",
+    "issuerTitle": "Agents cannot connect at this address",
+    "issuer": {
+      "invalid": "ADIUTOR_PUBLIC_URL is not an http or https address.",
+      "not_origin": "ADIUTOR_PUBLIC_URL has a path, a query or user information. Set it to the address alone, such as https://adiutor.example.com.",
+      "plain_http": "ADIUTOR_PUBLIC_URL uses plain http on a host other than localhost, 127.0.0.1 or [::1]. Serve Adiutor over https.",
+      "spelling": "ADIUTOR_PUBLIC_URL is written differently from how a browser writes it. Write it exactly as the browser's address bar shows it."
+    },
+    "issuerWhere": "Set ADIUTOR_PUBLIC_URL in the server's .env, then restart Adiutor.",
+    "listTitle": "Connected agents",
+    "loading": "Loading the agents...",
+    "failed": "Could not load the agents",
+    "empty": "No agent connected",
+    "emptyHint": "Connect one as shown above, then approve it in the browser.",
+    "via": {
+      "code": "Code",
+      "browser": "Browser"
+    },
+    "resource": {
+      "mcp": "MCP",
+      "rest": "REST API"
+    },
+    "approved": "Approved",
+    "lastUsed": "last used",
+    "never": "never",
+    "ends": "ends",
+    "disconnect": "Disconnect",
+    "disconnectTitle": "Disconnect {name}?",
+    "disconnectMessage": "Its next request is refused. To use it again, connect it again from the agent.",
+    "disconnected": "{name} was disconnected",
+    "disconnectFailed": "Could not disconnect {name}: {reason}",
+    "disconnectAll": "Disconnect all",
+    "disconnectAllTitle": "Disconnect all agents?",
+    "disconnectAllNone": "No agent is connected. Every waiting code and open approval ends now.",
+    "disconnectAllMessage": {
+      "one": "1 agent connection ends now, with every waiting code and open approval. The agent has to connect again.",
+      "other": "{count} agent connections end now, with every waiting code and open approval. Each agent has to connect again."
+    },
+    "disconnectedAll": {
+      "one": "1 agent connection ended",
+      "other": "{count} agent connections ended"
+    },
+    "disconnectedAllNone": "Every waiting request ended",
+    "disconnectAllFailed": "Could not disconnect all agents: {reason}",
+    "refreshFailed": "Could not refresh. What is shown may be out of date."
   }
 }

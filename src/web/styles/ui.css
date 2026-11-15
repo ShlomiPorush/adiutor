@@ -3122,6 +3122,59 @@ html.ui-layer-on .ui-page {
   width: auto;
 }
 
+/* The approval page of the authorization server (/connect/approve/<uid>), v3 FS-24: the name large, the facts, the areas. */
+.ui-consent-name {
+  margin: 0;
+  font-size: var(--ui-fs-section);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.ui-consent-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.ui-consent-facts > div {
+  display: grid;
+  gap: 2px;
+}
+.ui-consent-facts dt {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  font-weight: 600;
+}
+.ui-consent-facts dd {
+  margin: 0;
+}
+.ui-consent-host {
+  overflow-wrap: anywhere;
+}
+.ui-consent-areas {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ui-consent-area {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--ui-line);
+  cursor: pointer;
+}
+.ui-consent-area:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+.ui-consent-area > span {
+  display: grid;
+  gap: 2px;
+}
+
 /* ---------- Account (Settings) ---------- */
 
 .ui-account-actions {

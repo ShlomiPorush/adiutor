@@ -158,6 +158,8 @@ const NO_REFRESH: Record<string, string> = {
   SetupPage: "creates the owner and sets up TOTP; it reads the setup state once and after each step",
   ConnectDevicePage:
     "approves one agent request: it reads the request once (Better Auth allows 5 reads of a code), and only this page changes it",
+  ConsentPage:
+    "approves one agent request of the authorization server: its first read binds the request to this browser session, and only this page answers it",
 }
 /** Route elements that are not pages (Component is the element of each PAGES entry, checked by name above). */
 const NOT_PAGES = new Set(["Root", "Shell", "ItemLink", "Component"])

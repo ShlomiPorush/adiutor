@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { hostname } from "node:os"
 import { and, eq, isNull, like, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import he from "../../shared/locales/he.json"
 import { resetOwnerPassword } from "../auth/recovery.ts"
 import { agentConnections, agentConsent, agentIdentityChanges, audit, oauthStore } from "../db/schema.ts"
 import { TEST_AUTH_SECRET } from "../testing/app.ts"
@@ -814,7 +815,7 @@ describe("the authorization code page", () => {
     const page = await browserCall(h.owner, "/connect/code")
     const xsrf = /name="xsrf" value="([^"]+)"/.exec(page.text)?.[1] ?? ""
     const wrong = await browserCall(h.owner, "/connect/code", { form: { xsrf, user_code: "BBBB-BBBB" } })
-    expect(wrong.text).toContain("That code is not valid")
+    expect(wrong.text).toContain(he.agentPages.wrongTitle)
     expect(uidOf(wrong.location)).toBe("")
     expect((await browserCall(h.owner, "/oauth/authorize/")).status).toBe(404)
   })

@@ -22,12 +22,15 @@ export class ApiError extends Error {
   readonly serverMessage: string | null
   /** The error's other fields (docs/api.md, "Details"), such as `variable`, `field` or `issues`. */
   readonly details: Record<string, unknown>
+  /** Whether the code is the server's own (`{error: {code}}`), not one read from the status alone (a proxy's page). */
+  readonly fromServer: boolean
 
   constructor(
     status: number,
     code: ApiError["code"],
     serverMessage: string | null,
     details: Record<string, unknown> = {},
+    fromServer = false,
   ) {
     super(serverMessage ?? code)
     this.name = "ApiError"
@@ -35,6 +38,7 @@ export class ApiError extends Error {
     this.code = code
     this.serverMessage = serverMessage
     this.details = details
+    this.fromServer = fromServer
   }
 }
 
@@ -91,7 +95,7 @@ function errorFrom(status: number, body: unknown): ApiError {
   const message = typeof error?.message === "string" && error.message.trim() ? error.message.trim() : null
   if (code) {
     const { code: _code, message: _message, ...details } = error as Record<string, unknown>
-    return new ApiError(status, code, message, details)
+    return new ApiError(status, code, message, details, true)
   }
   if (status === 401) return new ApiError(status, "unauthorized", message)
   if (status === 403) return new ApiError(status, "forbidden", message)

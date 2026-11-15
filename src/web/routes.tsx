@@ -7,6 +7,7 @@ import { AccountPage } from "./pages/AccountPage.tsx"
 import { ActivityPage } from "./pages/ActivityPage.tsx"
 import { ArchivePage } from "./pages/ArchivePage.tsx"
 import { ConnectDevicePage } from "./pages/auth/ConnectDevicePage.tsx"
+import { ConsentPage } from "./pages/auth/ConsentPage.tsx"
 import { LoginPage } from "./pages/auth/LoginPage.tsx"
 import { SetupPage } from "./pages/auth/SetupPage.tsx"
 import { InboxPage } from "./pages/InboxPage.tsx"
@@ -53,6 +54,9 @@ export function createRouter() {
         { path: "/setup", element: <SetupPage /> },
         // Inside the session gate, outside the frame: a signed-out browser signs in and comes back with its code.
         { path: "/connect/device", element: <ConnectDevicePage /> },
+        // The approval page of the authorization server for agents (its API answers only where agent access is
+        // mounted; elsewhere the page says that agents cannot connect here).
+        { path: "/connect/approve/:uid", element: <ConsentPage /> },
         {
           element: <Shell />,
           children: [

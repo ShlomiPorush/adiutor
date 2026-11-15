@@ -1,5 +1,6 @@
 import { eq, isNull } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import he from "../../shared/locales/he.json"
 import { agentConnections, agentConsent, agentState, audit, oauthStore } from "../db/schema.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import {
@@ -412,7 +413,8 @@ describe("a script with a code", () => {
     const code = /name="user_code" value="([^"]+)"/.exec(page.text)?.[1] ?? ""
     expect(code).toBe(device.body.user_code)
     const confirm = await browserCall(h.owner, "/connect/code", { form: { xsrf, user_code: code } })
-    expect(confirm.text).toContain("Does your agent show this code?")
+    // In the owner's language, Hebrew by default (oauth/pages.integration.test.ts covers both languages).
+    expect(confirm.text).toContain(he.agentPages.confirmTitle)
     expect(confirm.text).toContain(device.body.user_code)
   })
 

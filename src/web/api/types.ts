@@ -6,6 +6,9 @@
 import type { DateFormat, TimeFormat } from "../../shared/datetime-formats.ts"
 import type {
   ActorKind,
+  AgentArea,
+  AgentConnectionMethod,
+  AgentResource,
   AuditSource,
   ItemStatus,
   ItemType,
@@ -69,6 +72,43 @@ export type AgentKey = {
   createdAt: Date | string
   expiresAt: Date | string | null
   lastRequest: Date | string | null
+}
+
+/** Why agents cannot connect at the public URL (GET /api/v1/agents/settings, `issuerProblem`). */
+export type IssuerProblem = "invalid" | "not_origin" | "plain_http" | "spelling"
+
+/** GET /api/v1/agents/settings: the switch, the idle days, and where agents connect (null with the reason why not). */
+export type AgentSettings = {
+  enabled: boolean
+  idleDays: number
+  issuer: string | null
+  issuerProblem: IssuerProblem | null
+  mcpUrl: string | null
+  restUrl: string | null
+}
+
+/** One live agent connection (GET /api/v1/agents/connections). `endsAt` is its end by the idle rule. */
+export type AgentConnection = {
+  id: string
+  name: string
+  via: AgentConnectionMethod
+  resource: AgentResource
+  areas: AgentArea[]
+  redirectHost: string | null
+  approvedAt: string
+  lastUsedAt: string | null
+  endsAt: string
+}
+
+/** GET /connect/approve/:uid/details: the request the consent page shows. */
+export type ConsentDetails = {
+  client: { name: string; builtIn: boolean; nameIsOwnWord: true }
+  via: AgentConnectionMethod
+  resource: AgentResource
+  /** Where the browser returns: its host (empty for an app's own scheme), whether it is this computer, its scheme. */
+  redirect: { host: string; loopback: boolean; scheme: string } | null
+  areas: AgentArea[]
+  idleDays: number
 }
 
 /** A setting the environment may set: then it is locked and names its variable. */

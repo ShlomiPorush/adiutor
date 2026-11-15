@@ -37,6 +37,9 @@ export type DraftField =
   | "botToken"
   | "chatId"
   | "privateDomains"
+  /** Agent access by approval (saved to /api/v1/agents/settings, only where it is mounted). */
+  | "agentsEnabled"
+  | "agentIdleDays"
 
 export const FIELD_SECTION: Record<DraftField, SettingsSection> = {
   language: "general",
@@ -48,6 +51,8 @@ export const FIELD_SECTION: Record<DraftField, SettingsSection> = {
   botToken: "telegram",
   chatId: "telegram",
   privateDomains: "secret-check",
+  agentsEnabled: "agents",
+  agentIdleDays: "agents",
 }
 
 /** The draft field a key of the save request comes from. */

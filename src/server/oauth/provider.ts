@@ -6,10 +6,10 @@ import Provider, {
   type JWK,
   type KoaContextWithOIDC,
 } from "oidc-provider"
-import { AGENT_AREAS, type AgentArea, type AgentResource } from "../../shared/enums.ts"
+import { AGENT_AREAS, type AgentArea, type AgentResource, type Language } from "../../shared/enums.ts"
 import { LOOPBACK_HOSTNAMES } from "./issuer.ts"
 import { cleanLabel } from "./label.ts"
-import type { ProviderPages } from "./pages.ts"
+import type { CodeProblem, ProviderPages } from "./pages.ts"
 
 /*
  * The authorization server through which agents connect (oidc-provider 9.14.0, used through its documented options and
@@ -145,6 +145,18 @@ export function agentName(clientId: string, clientName: string | undefined, labe
   return cleanLabel(clientName) ?? "Agent"
 }
 
+/**
+ * Why the code page is shown again: the owner cancelled on the comparison page (the library's AbortedError) or denied on
+ * the approval page (the device flow's resume then answers access_denied), a code that was not found, expired or already
+ * used (the library's errors that carry the code), or anything else.
+ */
+export function codeProblem(out: { error?: unknown } | undefined, err: Error | undefined): CodeProblem | undefined {
+  if (!err) return undefined
+  if (err.name === "AbortedError" || out?.error === "access_denied") return "denied"
+  if (err.name === "NoCodeError" || "userCode" in err) return "wrong"
+  return "other"
+}
+
 /** The label a device code was asked with, read from the code's documented `params` (D1-X 3). */
 function deviceLabel(ctx: KoaContextWithOIDC): unknown {
   return ctx.oidc.deviceCode?.params?.client_label
@@ -156,6 +168,8 @@ export type AgentProviderOptions = {
   /** ADIUTOR_OAUTH_SECRETS, newest first: the first signs the library's cookies, the others only verify. */
   cookieKeys: string[]
   pages: ProviderPages
+  /** The language of the pages above: the owner's language setting; never fails (the default instead). */
+  language: () => Promise<Language>
   /** Whether the owner's account still exists (the library refuses tokens for an account it cannot load). */
   accountExists: (accountId: string) => Promise<boolean>
   /** The installation's Ed25519 private JWK (oauth/signing-key.ts). */
@@ -163,7 +177,7 @@ export type AgentProviderOptions = {
 }
 
 export function createAgentProvider(options: AgentProviderOptions): Provider {
-  const { issuer, pages } = options
+  const { issuer, pages, language } = options
   if (options.cookieKeys.length === 0) throw new Error("the authorization server needs ADIUTOR_OAUTH_SECRETS")
   const resources = resourceUrls(issuer)
   const resourceOf = (indicator: string): AgentResource | null =>
@@ -238,26 +252,22 @@ export function createAgentProvider(options: AgentProviderOptions): Provider {
         enabled: true,
         charset: "base-20",
         mask: "****-****",
-        userCodeInputSource: (ctx, form, _out, err) => {
+        userCodeInputSource: async (ctx, form, out, err) => {
           ctx.type = "html"
-          ctx.body = pages.codeInput(
+          ctx.body = pages.codeInput(await language(), form, codeProblem(out, err))
+        },
+        userCodeConfirmSource: async (ctx, form, client, _deviceInfo, userCode) => {
+          ctx.type = "html"
+          ctx.body = pages.codeConfirm(
+            await language(),
             form,
-            !err
-              ? undefined
-              : err.name === "AbortedError"
-                ? "denied"
-                : err.name === "NoCodeError" || "userCode" in err
-                  ? "wrong"
-                  : "other",
+            userCode,
+            agentName(client.clientId, client.clientName, deviceLabel(ctx)),
           )
         },
-        userCodeConfirmSource: (ctx, form, client, _deviceInfo, userCode) => {
+        successSource: async (ctx) => {
           ctx.type = "html"
-          ctx.body = pages.codeConfirm(form, userCode, agentName(client.clientId, client.clientName, deviceLabel(ctx)))
-        },
-        successSource: (ctx) => {
-          ctx.type = "html"
-          ctx.body = pages.success()
+          ctx.body = pages.success(await language())
         },
       },
       resourceIndicators: {
@@ -318,7 +328,7 @@ export function createAgentProvider(options: AgentProviderOptions): Provider {
       (await options.accountExists(id)) ? { accountId: id, claims: async () => ({ sub: id }) } : undefined,
     renderError: async (ctx, out) => {
       ctx.type = "html"
-      ctx.body = pages.error(String(out.error ?? "server_error"))
+      ctx.body = pages.error(await language(), String(out.error ?? "server_error"))
     },
   }
   const provider = new Provider(issuer, configuration)
