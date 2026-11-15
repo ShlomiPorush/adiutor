@@ -27,7 +27,7 @@ import {
 } from "../testing/oauth.ts"
 import { totp } from "../testing/totp.ts"
 import { WindowLimit } from "./limits.ts"
-import { processStart } from "./process.ts"
+import { processStart, procfs } from "./process.ts"
 import { CLI_CLIENT_ID } from "./provider.ts"
 import { openDeviceRequests, roomForClient, sha256 } from "./store.ts"
 
@@ -523,6 +523,79 @@ describe("identity changes", () => {
       expect(left).toEqual([ids[0], ids[3], ids[4]].sort())
       await h.access.reconcile()
       expect((await t.ctx.db.select().from(agentIdentityChanges)).length).toBe(3)
+    } finally {
+      alive.kill()
+      await t.ctx.db.delete(agentIdentityChanges)
+    }
+  })
+})
+
+describe("stuck identity changes", () => {
+  const rowOfProcess = (id: string, pid: number, startedAt: string | null, host = hostname()) => ({
+    id,
+    startedAt: new Date(),
+    host,
+    pid,
+    processStartedAt: startedAt,
+  })
+
+  it("keeps a change whose process cannot be read (a read or parse failure), never counting it as gone", async () => {
+    const dead = await deadProcess()
+    const id = randomUUID()
+    await t.ctx.db.insert(agentIdentityChanges).values(rowOfProcess(id, dead.pid, dead.startedAt))
+    const original = procfs.readStat
+    const failures: (() => string)[] = [
+      () => {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" })
+      },
+      () => "1 (node) S 1 2 3",
+    ]
+    try {
+      for (const failure of failures) {
+        procfs.readStat = (pid) => (pid === dead.pid ? failure() : original(pid))
+        await h.access.sweep()
+        await h.access.reconcile()
+        expect((await t.ctx.db.select().from(agentIdentityChanges)).map((r) => r.id)).toEqual([id])
+      }
+      // Read normally again, the process is gone (ENOENT): finished.
+      procfs.readStat = original
+      await h.access.sweep()
+      expect(await t.ctx.db.select().from(agentIdentityChanges)).toEqual([])
+    } finally {
+      procfs.readStat = original
+      await t.ctx.db.delete(agentIdentityChanges)
+    }
+  })
+
+  it("are cleared by Disconnect all when no provably live process here owns them, never a live one's", async () => {
+    const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"])
+    try {
+      await new Promise((resolve) => alive.once("spawn", resolve))
+      const pid = alive.pid as number
+      const [foreign, unknown, owned] = [randomUUID(), randomUUID(), randomUUID()]
+      await t.ctx.db.insert(agentIdentityChanges).values([
+        // An earlier container, or a CLI run in another one.
+        rowOfProcess(foreign, pid, processStart(pid), "an-earlier-container"),
+        rowOfProcess(unknown, pid, null),
+        rowOfProcess(owned, pid, processStart(pid)),
+      ])
+      await h.access.sweep()
+      expect((await t.ctx.db.select().from(agentIdentityChanges)).length).toBe(3)
+      await h.access.disconnectAll(ownerBy)
+      expect((await t.ctx.db.select().from(agentIdentityChanges)).map((r) => r.id)).toEqual([owned])
+      const ends = await t.ctx.db.select().from(audit).where(eq(audit.action, "agent.end_all"))
+      expect(ends.some((r) => (r.after as { identityChangesCleared?: number }).identityChangesCleared === 2)).toBe(true)
+      // The live process's change still blocks approvals.
+      const uid = await confirmCode(h.owner, (await deviceRequest(h.issuer)).body.user_code)
+      expect((await answerConsent(h.owner, uid, { approve: true, areas: ["read"] })).decision.status).toBe(410)
+      // Once that process ends, the sweep finishes it and approvals work again.
+      const exited = new Promise((resolve) => alive.once("exit", resolve))
+      alive.kill()
+      await exited
+      await h.access.sweep()
+      expect(await t.ctx.db.select().from(agentIdentityChanges)).toEqual([])
+      await connectWithCode(h)
+      expect(await live()).toBe(1)
     } finally {
       alive.kill()
       await t.ctx.db.delete(agentIdentityChanges)

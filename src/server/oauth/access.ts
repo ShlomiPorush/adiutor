@@ -23,7 +23,7 @@ import {
 } from "./gate.ts"
 import { checkIssuer, type IssuerProblem, issuerFingerprint } from "./issuer.ts"
 import { defaultPages, type ProviderPages } from "./pages.ts"
-import { currentProcess, processGone } from "./process.ts"
+import { currentProcess, processGone, provablyLive } from "./process.ts"
 import {
   type AgentProvider,
   CLI_CLIENT_ID,
@@ -194,12 +194,14 @@ export async function createAgentAccess(options: AgentAccessOptions) {
    * Ends every connection and every request still waiting (codes, device requests, approvals), and starts a new
    * generation so a request that began before cannot be approved after. Under the exclusive gate, in one transaction;
    * `alsoIn` runs first in the same transaction, for a change that must hold exactly when everything ended (agents
-   * turned off, an identity change recorded as under way). Returns how many connections ended.
+   * turned off, an identity change recorded as under way); what it returns joins the audit row. Returns how many
+   * connections ended.
    */
-  async function endEverything(reason: AgentEndReason, by: By, alsoIn?: (tx: Tx) => Promise<void>): Promise<number> {
+  async function endEverything(reason: AgentEndReason, by: By, alsoIn?: (tx: Tx) => Promise<unknown>): Promise<number> {
     return db.transaction(async (tx) => {
       await gateExclusive(tx)
-      await alsoIn?.(tx)
+      const extra = await alsoIn?.(tx)
+      const details = extra && typeof extra === "object" ? (extra as Record<string, unknown>) : {}
       await nextGeneration(tx)
       const live = await tx
         .select({ id: agentConnections.id })
@@ -219,7 +221,7 @@ export async function createAgentAccess(options: AgentAccessOptions) {
         action: "agent.end_all",
         entityType: "agent_connection",
         entityId: null,
-        after: { count: live.length, reason },
+        after: { count: live.length, reason, ...details },
       })
       return live.length
     })
@@ -701,9 +703,27 @@ export async function createAgentAccess(options: AgentAccessOptions) {
     if (!ended) throw notFound("The connection")
   }
 
+  /**
+   * Ends every connection and every waiting request. In the same transaction it also clears every identity change that
+   * no provably live process on this host owns (another host, such as an earlier container or a CLI run in another one;
+   * no start time recorded; a process that is gone): the owner's way out of an approval block such a row would keep
+   * for ever. The change of a process that provably runs here is never cleared; the server's own stuck change ends
+   * with a restart of the container. The audit row names how many it cleared.
+   */
   async function disconnectAll(by: By): Promise<number> {
     requireOwner(by, "disconnect every agent")
-    return endEverything("all_disconnected", by)
+    return endEverything("all_disconnected", by, async (tx) => {
+      const rows = await tx.select().from(agentIdentityChanges)
+      const stale = rows.filter((r) => !provablyLive({ host: r.host, pid: r.pid, startedAt: r.processStartedAt }))
+      if (stale.length > 0)
+        await tx.delete(agentIdentityChanges).where(
+          inArray(
+            agentIdentityChanges.id,
+            stale.map((r) => r.id),
+          ),
+        )
+      return { identityChangesCleared: stale.length }
+    })
   }
 
   // --- The sweep (S20) ---
