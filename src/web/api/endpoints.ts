@@ -5,6 +5,8 @@ import type { AuditFilters } from "../../shared/api.ts"
 import type { Stage } from "../../shared/enums.ts"
 import { query, request } from "./client.ts"
 import type {
+  AgentConnection,
+  AgentSettings,
   AuditCounts,
   AuditEntry,
   AuditPage,
@@ -131,6 +133,16 @@ export const api = {
 
   suppressions: () => data<Suppression[]>("GET", "/suppressions"),
   deleteSuppression: (suppressionId: string) => request<null>("DELETE", `/suppressions/${id(suppressionId)}`),
+
+  // Agent access by approval (/api/v1/agents): answered without the {data} wrapper. Not mounted in production until
+  // the agent access release: there the settings read answers 404 (pages/settings/AgentAccessPanel.tsx).
+  agentSettings: () => request<AgentSettings>("GET", "/agents/settings"),
+  updateAgentSettings: (patch: { enabled?: boolean; idleDays?: number }) =>
+    request<AgentSettings>("PATCH", "/agents/settings", patch),
+  agentConnections: async () =>
+    (await request<{ connections: AgentConnection[] }>("GET", "/agents/connections")).connections,
+  disconnectAgent: (connectionId: string) => request<null>("DELETE", `/agents/connections/${id(connectionId)}`),
+  disconnectAllAgents: () => request<{ ended: number }>("POST", "/agents/connections/disconnect-all", {}),
 }
 
 /** Query keys, one place, so a change invalidates exactly what it changed. */
@@ -161,5 +173,7 @@ export const qk = {
   /** Better Auth's list of this owner's passkeys. */
   passkeys: ["passkeys"] as const,
   agentKeys: ["agent-keys"] as const,
+  agentSettings: ["agent-settings"] as const,
+  agentConnections: ["agent-connections"] as const,
   suppressions: ["suppressions"] as const,
 }

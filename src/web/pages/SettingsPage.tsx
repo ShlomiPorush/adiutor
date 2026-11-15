@@ -57,7 +57,7 @@ import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { useUnsaved } from "../ui/unsaved.tsx"
 import { useSignOutEverywhere } from "./AccountPage.tsx"
-import { AgentKeysSection } from "./settings/AgentKeysPanel.tsx"
+import { AgentsSection } from "./settings/AgentAccessPanel.tsx"
 import { Fact, Facts, Group, type ResetMark, Row, SwitchRow } from "./settings/parts.tsx"
 import { StatusSection, SuppressionsSection } from "./settings/SyncSections.tsx"
 import {
@@ -208,7 +208,7 @@ export function SettingsPage() {
     else if (query.isError)
       body = <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
     else body = <Loading label={t("settings.loading")} />
-  } else if (active === "agents") body = <AgentKeysSection />
+  } else if (active === "agents") body = <AgentsSection />
   else if (active === "status") body = <StatusSection />
   else body = <SuppressionsSection />
 
@@ -223,7 +223,8 @@ export function SettingsPage() {
             <h2 id={`${active}-title`} className="ui-set-title">
               {sectionTitle}
             </h2>
-            <p className="ui-set-tabdesc">{t(`settings.sections.${active}.hint`)}</p>
+            {/* Agent access says what it is for itself: which panel shows depends on the server. */}
+            {active === "agents" ? null : <p className="ui-set-tabdesc">{t(`settings.sections.${active}.hint`)}</p>}
             {body}
           </section>
         </div>
