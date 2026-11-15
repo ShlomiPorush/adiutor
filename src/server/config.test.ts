@@ -112,17 +112,26 @@ describe("loadConfig", () => {
   })
 
   describe("placeholders in every key family", () => {
-    // Refused values only: literal on purpose. Each is a whole placeholder, not a key that contains a word.
+    // Refused values only: literal on purpose. A placeholder word as a whole token, a `<...>` slot, or one character.
     const placeholders = [
       "changeme",
       "changeme-changeme-changeme-changeme",
       "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME",
+      "CHANGE_ME_to_a_long_random_value_0123",
+      "please-change-me-before-you-deploy-it",
+      "replace-me-with-32-random-bytes-0123456",
       "replace-me placeholder secret value here",
       "ReplaceMe",
+      "placeholder-placeholder-placeholder",
       "PLACEHOLDER-VALUE-HERE",
       "Example",
+      "an-Example-value-that-is-long-enough-0",
+      "example-key-for-the-docs-0123456789abcdef",
       "your-own-secret-goes-here-0123456789",
+      "your-secret-here-0123456789abcdefghijkl",
       "YOUR_SECRET",
+      "TODO: generate with openssl rand -hex 32",
+      "a-real-key-goes-here-FIXME-0123456789",
       "<32 random bytes from openssl rand -hex 32>",
       "a".repeat(40),
     ]
@@ -138,22 +147,24 @@ describe("loadConfig", () => {
       },
     )
 
-    it("accepts a random key that only contains a placeholder word", () => {
-      // Random on every run around a fixed word, so the case is always the same: the word inside, never the whole.
+    it("accepts a random key where a placeholder word sits inside letters or digits", () => {
+      // Random on every run around a fixed word with a letter or digit on each side, so the case is always the same:
+      // the word is never a token of its own (aBcExampleXyZ, Qyour-Z, xchangemex).
       const random = () => randomBytes(24).toString("base64url")
       for (const word of [
-        "your-",
-        "your_",
-        "Example",
-        "EXAMPLE",
-        "changeme",
-        "change-me",
-        "replace_me",
-        "<a>",
-        "secret",
+        "Qyour-Z",
+        "7your_4",
+        "aBcExampleXyZ",
+        "0EXAMPLE9",
+        "xchangemex",
+        "kchange-me2",
+        "Rreplace_meQ",
+        "9placeholder8",
+        "atodob",
+        "3FIXMEz",
+        "x<a>x",
       ]) {
-        for (const value of [`${random()}${word}${random()}`, `${random()}${word}`, `${word}${random()}`]) {
-          if (value.startsWith("your")) continue // a key that starts with your- or your_ is the template's form
+        for (const value of [`${random()}${word}${random()}`, `${word}${random()}`]) {
           expect(isPlaceholder(value), word).toBe(false)
           expect(loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: `1:${value}` }).oauthSecrets).toHaveLength(1)
         }

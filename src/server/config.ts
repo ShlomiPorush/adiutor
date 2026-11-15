@@ -73,22 +73,20 @@ export function parseDomains(text: string): string[] {
     .filter(Boolean)
 }
 
-/** Words an example or a template writes instead of a key, in any case. */
-const PLACEHOLDER_WORD = "change[-_ ]?me|replace[-_ ]?me|placeholder|example|secret|value|here"
-
 /**
- * A whole value an example or a template holds instead of a key: only placeholder words (`change-me`,
- * `CHANGE_ME_PLACEHOLDER`), a `<...>` slot, or `your-...` / `your_...`. Matched against the whole value, so a random
- * key that happens to contain one of these is never refused. Refused for every key family.
+ * A word an example or a template writes instead of a key, in any case, as a whole token: at the start or end of the
+ * value or next to a character that is not a letter or digit (`please-change-me-...`, `CHANGE_ME_to_...`,
+ * `your_secret`). Inside letters or digits it is part of a random key (`aBcExampleXyZ`, `Qyour-Z`) and passes.
  */
-const PLACEHOLDER = new RegExp(
-  `^(?:(?:${PLACEHOLDER_WORD})(?:[-_ .]+(?:${PLACEHOLDER_WORD}))*|<[^<>]*>|your[-_].*)$`,
-  "is",
-)
+const PLACEHOLDER_WORD =
+  /(?<![a-z0-9])(?:change[-_ ]?me|replace[-_ ]?me|placeholder|example|your|todo|fixme)(?![a-z0-9])/i
 
-/** An obvious placeholder: a whole value from an example (PLACEHOLDER), or one character repeated. */
+/** A whole value that is a `<...>` slot or one character repeated. */
+const PLACEHOLDER_WHOLE = /^(?:<[^<>]*>|(.)\1*)$/su
+
+/** An obvious placeholder, refused for every key family: a placeholder word as a token, a slot, or one character. */
 export function isPlaceholder(value: string): boolean {
-  return PLACEHOLDER.test(value) || /^(.)\1*$/su.test(value)
+  return PLACEHOLDER_WORD.test(value) || PLACEHOLDER_WHOLE.test(value)
 }
 
 /**
