@@ -57,9 +57,12 @@ p{margin:0;color:var(--ui-muted)}
 .banner{padding:12px 14px;border-radius:var(--ui-radius);color:var(--ui-ink);background:color-mix(in srgb,var(--ui-fail) 13%,transparent);border-inline-start:4px solid var(--ui-fail)}
 .banner.ok{background:color-mix(in srgb,var(--ui-ok) 13%,transparent);border-inline-start-color:var(--ui-ok)}
 .banner.plain{background:var(--ui-panel);border-inline-start-color:var(--ui-muted)}
-.banner b{display:block;margin-bottom:2px}
+.banner b{display:block;margin-bottom:2px;font-weight:700;color:var(--ui-fail)}
+.banner.ok b{color:var(--ui-ok)}
+.banner.plain b{color:var(--ui-ink)}
 .banner p{color:var(--ui-ink)}
 form{margin:0}
+.col>form{display:contents}
 form input[type=text]{display:block;width:100%;height:var(--ui-ctl-h);padding:0 10px;border:1px solid var(--ui-line);border-radius:var(--ui-radius-sm);background:var(--ui-bg);color:var(--ui-ink);font-family:var(--ui-mono);font-size:16px;letter-spacing:0.12em;text-align:center;text-transform:uppercase;direction:ltr}
 form input[type=text]::placeholder{color:transparent}
 form input[type=text]:focus{outline:none;border-color:var(--ui-accent)}
@@ -99,8 +102,9 @@ ${body}
 </html>`
 }
 
-const banner = (title: string, text: string, tone: "fail" | "ok" | "plain" = "fail") =>
-  `<div class="banner${tone === "fail" ? "" : ` ${tone}`}" role="${tone === "fail" ? "alert" : "status"}"><b>${html(title)}</b><p>${html(text)}</p></div>`
+/** A notice in its status colour; without a title where the page's own title already says it. */
+const banner = (title: string | null, text: string, tone: "fail" | "ok" | "plain" = "fail") =>
+  `<div class="banner${tone === "fail" ? "" : ` ${tone}`}" role="${tone === "fail" ? "alert" : "status"}">${title ? `<b>${html(title)}</b>` : ""}<p>${html(text)}</p></div>`
 
 /** The error pages' sentences, by the library's error code; any other code gets the general one. */
 const ERROR_CODES = [
@@ -115,7 +119,7 @@ const ERROR_CODES = [
 export const defaultPages: ProviderPages = {
   codeInput(language, form, problem) {
     const t = TEXTS[language]
-    if (problem === "denied") return page(language, t.notConnected, banner(t.notConnected, t.denied, "plain"))
+    if (problem === "denied") return page(language, t.notConnected, banner(null, t.denied, "plain"))
     const note =
       problem === "wrong"
         ? banner(t.wrongTitle, t.wrongCode)
@@ -158,11 +162,11 @@ ${form}
   },
   success(language) {
     const t = TEXTS[language]
-    return page(language, t.doneTitle, banner(t.doneTitle, t.doneText, "ok"))
+    return page(language, t.doneTitle, banner(null, t.doneText, "ok"))
   },
   error(language, code) {
     const t = TEXTS[language]
     const known = (ERROR_CODES as readonly string[]).includes(code) ? (code as (typeof ERROR_CODES)[number]) : null
-    return page(language, t.notConnected, banner(t.notConnected, known ? t.errors[known] : t.errors.other))
+    return page(language, t.notConnected, banner(null, known ? t.errors[known] : t.errors.other))
   },
 }
