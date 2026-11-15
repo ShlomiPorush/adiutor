@@ -49,6 +49,8 @@ export type ChannelLimits = {
   total: number
   /** An audit write gives up waiting after this long; the answer never waits longer for it. */
   auditMs: number
+  /** How long an answer may take to reach the client once it goes out; then the connection is closed (`unknown`). */
+  deliveryMs: number
   /** A `busy` refusal is recorded once per connection in this window. */
   busyWindowMs: number
   /** Invalid tokens per client address. */
@@ -63,6 +65,7 @@ export function channelLimits(now: () => number = Date.now): ChannelLimits {
     perConnection: 3,
     total: 6,
     auditMs: 5_000,
+    deliveryMs: 60_000,
     busyWindowMs: 60_000,
     badTokens: new WindowLimit(20, 60_000, now),
   }
@@ -112,6 +115,22 @@ export const REFUSALS = {
  * "id":,"result":}` and a batch's comma and brackets take under 40 bytes.
  */
 const ENVELOPE_BYTES = 64
+
+/** A tool's answer that carries one of the channel's own error bodies. */
+const failResult = (body: object): ToolResult => ({
+  content: [{ type: "text", text: JSON.stringify(body) }],
+  isError: true,
+})
+
+/** Every body a tool answer can be replaced with (toolGuard), for the room kept for one. */
+const replacementBodies = (cap: number): object[] => [
+  REFUSALS.busy,
+  REFUSALS.unknown,
+  REFUSALS.connectionEnded,
+  REFUSALS.areaNotGranted,
+  INTERNAL,
+  answerTooLarge(cap, "act"),
+]
 
 /** A failure whose outcome may be unknown (a 5xx after an action). */
 const INTERNAL = { error: "internal_error", message: "Something went wrong on the server." } as const
@@ -234,13 +253,30 @@ export async function readBody(
  * connection closed before (the response's `close` without `writableFinished`). Subscribe before the answer goes out.
  * Without a Node response (the app driven directly, in unit tests) it is whether the request was aborted.
  */
-export function deliveryOf(c: Context): Promise<boolean> {
+export function deliveryOf(c: Context): Delivery {
   const outgoing = (c.env as { outgoing?: ServerResponse } | undefined)?.outgoing
-  if (!outgoing) return Promise.resolve(!c.req.raw.signal.aborted)
-  if (outgoing.writableFinished) return Promise.resolve(true)
-  if (outgoing.destroyed) return Promise.resolve(false)
-  return new Promise((resolve) => outgoing.once("close", () => resolve(outgoing.writableFinished)))
+  if (!outgoing) return () => Promise.resolve(!c.req.raw.signal.aborted)
+  const closed: Promise<boolean> = outgoing.writableFinished
+    ? Promise.resolve(true)
+    : outgoing.destroyed
+      ? Promise.resolve(false)
+      : new Promise((resolve) => outgoing.once("close", () => resolve(outgoing.writableFinished)))
+  // A client that stops reading keeps the write from finishing: after `ms` the connection is closed, never delivered.
+  return (ms) => {
+    let timer: NodeJS.Timeout | undefined
+    const late = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => {
+        outgoing.destroy()
+        resolve(false)
+      }, ms)
+      timer.unref?.()
+    })
+    return Promise.race([closed, late]).finally(() => clearTimeout(timer))
+  }
 }
+
+/** Whether the answer reached the client, waiting at most `ms` for it to be written. */
+export type Delivery = (ms: number) => Promise<boolean>
 
 /** The same request with a body already read, for a handler that reads it again (its length no longer declared). */
 export function withBody(request: Request, bytes: Uint8Array): Request {
@@ -442,14 +478,24 @@ export function createAgentChannel(options: AgentChannelOptions) {
     work: Promise<T>,
     judge: (value: T) => Promise<{ outcome: Outcome; details?: Record<string, unknown> }>,
     /** Whether the answer reached the client (deliveryOf). */
-    delivered: Promise<boolean>,
+    delivered: Delivery,
   ): Promise<{ late: true } | { late: false; value: T }> {
     const id = call.connection.id
     work.catch(() => undefined)
+    // The call's row is owed from now on: `drain` waits for it, also while the work still runs after its client left.
+    let owed = () => {}
+    track(
+      new Promise<void>((resolve) => {
+        owed = resolve
+      }),
+    )
     // The slot comes back once the work and its row have both settled.
     let left = 2
     const release = () => {
-      if (--left === 0) running.give(id)
+      if (--left === 0) {
+        running.give(id)
+        owed()
+      }
     }
     void work.then(release, release)
     let done: Awaited<ReturnType<typeof within<T>>>
@@ -473,7 +519,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
     // An answer that broke off (the client left before it was written) never reached the agent: its outcome is unknown
     // to it. Tracked from now on, so `drain` waits for the row although it begins after the answer.
     track(
-      delivered.then((sent) =>
+      delivered(limits.deliveryMs).then((sent) =>
         sent
           ? record(call, judged.outcome, judged.details, release)
           : record(call, "unknown", { ...judged.details, disconnected: true }, release),
@@ -635,15 +681,32 @@ export function createAgentChannel(options: AgentChannelOptions) {
    * call may have waited, and the token been refused or the connection ended meanwhile; a real tool call counts as use,
    * get_access does not), the tool's area, then the tool under the deadline and the answer cap, with its audit entry.
    */
-  function toolGuard(found: AgentToken, by: By, delivered: Promise<boolean>): ToolGuard {
+  function toolGuard(
+    found: AgentToken,
+    by: By,
+    delivered: Delivery,
+    /** The request ids of the `tools/call` messages of this HTTP request (one, or a batch's). */
+    toolCallIds: readonly unknown[],
+  ): ToolGuard {
     const id = found.check.connection.id
-    /**
-     * What the tool answers of this HTTP request have put on the wire so far: one request may be a JSON-RPC batch, whose
-     * answers the SDK sends together, so the cap holds for their sum, each with the request id the SDK echoes.
-     */
-    let sent = 0
     const wire = (result: ToolResult, requestId: unknown) =>
       Buffer.byteLength(JSON.stringify(result)) + Buffer.byteLength(JSON.stringify(requestId ?? null)) + ENVELOPE_BYTES
+    /** The most a replacement answer of a tool call with this id takes on the wire. */
+    const replacement = (requestId: unknown) =>
+      Math.max(...replacementBodies(limits.answerBytes).map((body) => wire(failResult(body), requestId)))
+    /**
+     * The tool answers of this HTTP request go out together (one, or a JSON-RPC batch), so the cap holds for their sum,
+     * each with the request id the SDK echoes. `sent` is what the answers given so far take; `reserved` the room kept for
+     * a replacement answer (busy, a refusal, outcome_unknown, answer_too_large) of every tool call still to answer. A
+     * result goes out only while it leaves that room, so a replacement always fits: the sum stays within the cap, as long
+     * as the replacements of the request's ids fit at all (ids come from a body of at most 512 KiB).
+     */
+    let sent = 0
+    let reserved = toolCallIds.reduce<number>((n, requestId) => n + replacement(requestId), 0)
+    const answered = (requestId: unknown, size: number) => {
+      sent += size
+      reserved = Math.max(0, reserved - replacement(requestId))
+    }
     return async (tool, run, requestId) => {
       const rule = TOOLS[tool]
       const call: CallEntry = {
@@ -654,8 +717,8 @@ export function createAgentChannel(options: AgentChannelOptions) {
         kind: rule?.kind ?? null,
       }
       const fail = (body: object): ToolResult => {
-        const result: ToolResult = { content: [{ type: "text", text: JSON.stringify(body) }], isError: true }
-        sent += wire(result, requestId)
+        const result = failResult(body)
+        answered(requestId, wire(result, requestId))
         return result
       }
       if (!running.take(id)) {
@@ -692,8 +755,10 @@ export function createAgentChannel(options: AgentChannelOptions) {
           // What goes on the wire: the serialized result (its text escaped once more), the request id the SDK echoes
           // and its envelope, together with the other answers of the same HTTP request (a batch).
           const size = wire(ran.result, requestId)
-          tooLarge = sent + size > limits.answerBytes
-          if (!tooLarge) sent += size
+          // The room kept for the others' replacements, not this call's own (its result takes that place).
+          const others = Math.max(0, reserved - replacement(requestId))
+          tooLarge = sent + size + others > limits.answerBytes
+          if (!tooLarge) answered(requestId, size)
           return { outcome: tooLarge || ran.result.isError ? "error" : "ok" }
         },
         delivered,

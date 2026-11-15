@@ -469,6 +469,41 @@ describe("the answer cap on the wire", () => {
     expect(textOf(answer.json as never).error).toBe("answer_too_large")
   })
 
+  it("keeps room for the others' replacement answers: the whole batch stays within the cap", async () => {
+    const { token } = await connectMcp(["read", "write"])
+    const note = await createNote(t.ctx, owner, {
+      title: `Room ${randomUUID()}`,
+      body: "n".repeat(LIMITS.answerBytes - 2_000),
+    })
+    const item = await createItem(t.ctx, owner, { type: "task", title: "Room" })
+    // The second call waits for the item's row, so the first nearly fills the cap before the second is judged.
+    const row = await holdRow(t, "items", item.id)
+    let pending: ReturnType<typeof post> | undefined
+    try {
+      pending = post({ authorization: `Bearer ${token}` }, [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "adiutor_get_note", arguments: { noteId: note.id } },
+        },
+        {
+          jsonrpc: "2.0",
+          id: "i".repeat(3_000),
+          method: "tools/call",
+          params: { name: "adiutor_update_item", arguments: { itemId: item.id, version: 1, title: "Room, changed" } },
+        },
+      ])
+      await row.waiting()
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    } finally {
+      await row.release()
+    }
+    const answer = await pending
+    expect(answer?.status).toBe(200)
+    expect(Buffer.byteLength(answer?.text ?? "")).toBeLessThanOrEqual(LIMITS.answerBytes)
+  })
+
   it("counts the answers of one batch together: two that each pass alone do not pass together", async () => {
     const { token } = await connectMcp(["read"])
     const notes = await Promise.all(

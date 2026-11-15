@@ -333,6 +333,23 @@ export function mcpRoutes(deps: AuthDeps & { version: string }, agents?: AgentCh
   return app
 }
 
+/**
+ * The ids of the `tools/call` messages in a request's body, one message or a batch, read only to keep room in the
+ * answer cap for each (agents/channel.ts toolGuard); the SDK parses the body itself. Nothing when it is not JSON.
+ */
+function toolCallIds(bytes: Uint8Array): unknown[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes))
+  } catch {
+    return []
+  }
+  const messages = Array.isArray(parsed) ? parsed : [parsed]
+  return messages
+    .filter((m) => m && typeof m === "object" && (m as { method?: unknown }).method === "tools/call")
+    .map((m) => (m as { id?: unknown }).id)
+}
+
 type AgentMcpEnv = { Variables: Env["Variables"] & { agentToken: AgentToken } }
 type AgentToken = Exclude<Awaited<ReturnType<AgentChannel["authenticate"]>>, { refusal: Response }>
 
@@ -355,18 +372,20 @@ function agentMcpRoutes(app: Hono<Env>, deps: AuthDeps & { version: string }, ag
     const found = c.get("agentToken")
     const { connection, areas } = found.check
     let request = withoutPeoplesCredentials(c.req.raw)
+    let toolCalls: unknown[] = []
     // The body is read under the deadline and the shared cap before the SDK sees it, so a body sent slowly holds
     // nothing past the deadline; the SDK then reads it from memory, with its own cap and its own parsing.
     if (request.body) {
       const read = await readBody(request, agents.limits.bodyBytes.default, agents.limits.deadlineMs)
       if ("late" in read) return c.json(REFUSALS.tooSlow, 408)
       if ("tooLarge" in read) return c.json(REFUSALS.tooLarge, 413)
+      toolCalls = toolCallIds(read.bytes)
       request = withBody(request, read.bytes)
     }
     const by: By = { actor: { kind: "agent", label: agentLabel(c, connection.name) }, source: "mcp" }
     const server = buildMcpServer(deps.ctx, by, deps.version, {
       areas,
-      guard: agents.toolGuard(found, by, deliveryOf(c)),
+      guard: agents.toolGuard(found, by, deliveryOf(c), toolCalls),
       getAccess: () => agents.accessAnswer(found.check, "mcp"),
     })
     const transport = new WebStandardStreamableHTTPServerTransport({
