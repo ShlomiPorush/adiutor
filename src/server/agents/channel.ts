@@ -279,12 +279,11 @@ export function createAgentChannel(options: AgentChannelOptions) {
     const lines = headerLines(c, "authorization")
     const match = BEARER.exec(header)
     if (!match?.[1] || (lines !== null && lines !== 1)) return { refusal: challenge(c, resource, "invalid_request") }
+    // Counted before the first await, so requests sent at once cannot all pass (lesson 23); a valid token gives its
+    // place back, so only invalid ones stay counted. An address over the limit is refused before its token is read.
     const address = options.clientIp(c)
-    if (limits.badTokens.blocked(address))
-      return { refusal: c.json(REFUSALS.tooManyTokens, 429, { "Retry-After": "60", "Cache-Control": "no-store" }) }
-    const check = await access.checkToken(match[1], resource)
-    if (!check.ok) {
-      limits.badTokens.take(address)
+    if (!limits.badTokens.take(address)) {
+      // The first refusal of a window is logged and audited once (the block), never a token.
       if (limits.badTokens.firstOver(address)) {
         log.warn("agent tokens refused: too many invalid tokens from one address", { resource })
         await audit(SYSTEM, {
@@ -294,8 +293,11 @@ export function createAgentChannel(options: AgentChannelOptions) {
           after: { limit: resource === "mcp" ? "mcp_token" : "api_token", address },
         })
       }
-      return { refusal: challenge(c, resource, "invalid_token") }
+      return { refusal: c.json(REFUSALS.tooManyTokens, 429, { "Retry-After": "60", "Cache-Control": "no-store" }) }
     }
+    const check = await access.checkToken(match[1], resource)
+    if (!check.ok) return { refusal: challenge(c, resource, "invalid_token") }
+    limits.badTokens.give(address)
     return { token: match[1], check }
   }
 
@@ -560,7 +562,8 @@ export type AgentChannel = ReturnType<typeof createAgentChannel>
 
 /** An AppError as the agent contract has it (D9): `{error: code, message, ...details}`. */
 export function agentErrorBody(error: AppError) {
-  return { error: error.code, message: error.message, ...error.details }
+  // Details first: a detail can never stand in for the code or the message.
+  return { ...error.details, error: error.code, message: error.message }
 }
 
 /**

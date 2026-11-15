@@ -30,12 +30,6 @@ export class WindowLimit {
     return hit.count <= this.max
   }
 
-  /** Whether the key is over its limit in the current window, without counting anything. */
-  blocked(key: string): boolean {
-    const hit = this.hits.get(key)
-    return Boolean(hit && this.now() - hit.start < this.windowMs && hit.count > this.max)
-  }
-
   /** Gives one counted request back. */
   give(key: string): void {
     const hit = this.hits.get(key)

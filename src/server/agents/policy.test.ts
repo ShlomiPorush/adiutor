@@ -8,12 +8,13 @@ import { AGENT_AREAS, type AgentArea, RESOURCE_AREAS } from "../../shared/enums.
 import { createApp } from "../app.ts"
 import type { AuthHolder } from "../auth/auth.ts"
 import { ALLOWED_PATHS, OTP_PATHS } from "../auth/auth.ts"
+import { AppError } from "../errors.ts"
 import type { SettingsHandle } from "../http/api.ts"
 import { buildMcpServer } from "../mcp/server.ts"
 import type { AgentAccess } from "../oauth/access.ts"
 import { agentOAuthMount } from "../oauth/routes.ts"
 import type { Ctx } from "../services/context.ts"
-import { agentStatus, createAgentChannel } from "./channel.ts"
+import { agentErrorBody, agentStatus, createAgentChannel, withoutPeoplesCredentials } from "./channel.ts"
 import {
   AREAS,
   CLOSED,
@@ -49,11 +50,12 @@ const access = {
 const web = join(tmpdir(), `adiutor-policy-web-${process.pid}`)
 let appRoutes: string[] = []
 let agentRoutes: string[] = []
+let app: ReturnType<typeof createApp>
 
 beforeAll(() => {
   mkdirSync(web, { recursive: true })
   writeFileSync(join(web, "index.html"), "<html></html>")
-  const app = createApp({
+  app = createApp({
     checkDatabase: async () => true,
     core: {
       ctx,
@@ -218,10 +220,48 @@ describe("the endpoints listing", () => {
   })
 })
 
+describe("a bearer token outside the paths with checks of their own", () => {
+  it("never gets a page of the UI, the approval page included", async () => {
+    for (const path of [
+      "/",
+      "/projects",
+      "/connect/device",
+      "/connect/approve/abc",
+      "/connect/approve/abc/",
+      "/x.js",
+    ]) {
+      const page = await app.request(path)
+      expect([path, page.status]).toEqual([path, path === "/x.js" ? 404 : 200])
+      const agent = await app.request(path, { headers: { authorization: "Bearer abc", cookie: "a=b" } })
+      expect([path, agent.status]).toEqual([path, 403])
+      expect(await agent.json()).toEqual({ error: "forbidden", message: expect.any(String) })
+    }
+  })
+})
+
+describe("people's credentials", () => {
+  it("are removed from an agent request, and nothing else", async () => {
+    const url = "http://127.0.0.1:8090/api/v1/items"
+    const headers = { authorization: "Bearer t", cookie: "a=b", "x-api-key": "k", "x-adiutor-kind": "act" }
+    const post = withoutPeoplesCredentials(new Request(url, { method: "POST", headers, body: '{"title":"x"}' }))
+    expect([post.method, post.url, await post.text()]).toEqual(["POST", url, '{"title":"x"}'])
+    expect(post.headers.get("cookie")).toBeNull()
+    expect(post.headers.get("x-api-key")).toBeNull()
+    expect([post.headers.get("authorization"), post.headers.get("x-adiutor-kind")]).toEqual(["Bearer t", "act"])
+    const get = withoutPeoplesCredentials(new Request(url, { headers }))
+    expect([get.method, get.body, get.headers.get("cookie")]).toEqual(["GET", null, null])
+  })
+})
+
 describe("a route's own refusal never reads as a reserved one", () => {
   it("answers a route's 401 as 403 and its 429 as 409, and leaves every other status", () => {
     expect(agentStatus(401)).toBe(403)
     expect(agentStatus(429)).toBe(409)
     for (const s of [200, 201, 400, 403, 404, 409, 413, 422, 500, 502]) expect(agentStatus(s)).toBe(s)
+  })
+
+  it("keeps the code and the message of an error whatever its details hold", () => {
+    const error = new AppError("conflict", "Taken.", { error: "busy", message: "forged", itemId: "i" })
+    expect(agentErrorBody(error)).toEqual({ error: "conflict", message: "Taken.", itemId: "i" })
   })
 })

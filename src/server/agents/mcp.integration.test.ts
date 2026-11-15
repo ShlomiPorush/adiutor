@@ -24,7 +24,10 @@ import { DATA_SENTENCE, NEVER, TOOLS } from "./policy.ts"
 
 let t: TestDatabase
 let h: OAuthHarness
-const LIMITS = { ...channelLimits(), deadlineMs: 3_000, answerBytes: 64 * 1024 }
+/** A 64 KiB answer cap makes the large answer quick to test; the deadline is the real one. */
+const LIMITS = { ...channelLimits(), answerBytes: 64 * 1024 }
+/** A 3-second deadline, on a harness of its own ("the deadline of a tool call"), so no other call can run into it. */
+const SHORT = { ...channelLimits(), deadlineMs: 3_000 }
 
 beforeAll(async () => {
   t = await createTestDatabase("agents_mcp")
@@ -334,6 +337,36 @@ describe("each tool call", () => {
     })
   })
 
+  it("is refused by the SDK, before the policy core, when its arguments fail the tool's schema (no audit row)", async () => {
+    const { token, id } = await connectMcp(["read"])
+    const c = await client(token)
+    try {
+      const refused = await c.callTool({ name: "adiutor_get_item", arguments: { itemId: "not-a-uuid" } }).then(
+        (r) => Boolean((r as { isError?: boolean }).isError),
+        () => true,
+      )
+      expect(refused).toBe(true)
+    } finally {
+      await c.close()
+    }
+    expect(await toolCalls(id)).toEqual([])
+  })
+})
+
+describe("the deadline of a tool call", () => {
+  // Every helper above runs on `h` and `t`: here they are a harness with a 3-second deadline.
+  let main: { h: OAuthHarness; t: TestDatabase }
+  beforeAll(async () => {
+    main = { h, t }
+    t = await createTestDatabase("agents_mcp_deadline")
+    h = await oauthHarness(t, { channel: SHORT })
+  })
+  afterAll(async () => {
+    await h?.close()
+    await t?.close()
+    ;({ h, t } = main)
+  })
+
   it("answers outcome_unknown past the deadline and records it unknown, and busy beyond the connection's slots", async () => {
     const { token, id } = await connectMcp(["read", "write"])
     const item = await createItem(t.ctx, owner, { type: "task", title: "Slow tool" })
@@ -360,7 +393,9 @@ describe("each tool call", () => {
     expect(outcomes.filter((o) => o.outcome === "unknown")).toHaveLength(LIMITS.perConnection)
     expect(outcomes.filter((o) => o.refusal === "busy")).toHaveLength(1)
   })
+})
 
+describe("the limits of a tool call", () => {
   it("withholds an answer over the cap", async () => {
     const { token } = await connectMcp(["read", "write"])
     const note = await createNote(t.ctx, owner, { title: `Long ${randomUUID()}`, body: "z".repeat(70_000) })

@@ -82,10 +82,11 @@ const AGENT_API = /^\/api\/v1(\/|$)/
 /**
  * Where a request may carry a Bearer token for checks of its own (the agent-access standard, "Keep exceptions explicit,
  * by path"): /mcp (the MCP dispatcher's token check), Better Auth's routes (its own allow-list: the old agent approval
- * of `adiutor connect` until the agent access release), the authorization server and its documents, and the approval
- * pages (which refuse it themselves).
+ * of `adiutor connect` until the agent access release), the authorization server, its code page and its documents, and
+ * the approval API (which refuses it itself). The UI's own pages, the approval page included, are not among them.
  */
-const OWN_BEARER_CHECKS = /^(\/mcp(\/|$)|\/api\/auth\/|\/oauth\/|\/\.well-known\/|\/connect\/)/
+const OWN_BEARER_CHECKS =
+  /^(\/mcp(\/|$)|\/api\/auth\/|\/oauth\/|\/\.well-known\/|\/connect\/code(\/|$)|\/connect\/approve\/[^/]+\/(details|decision)$)/
 
 /**
  * Agent access mounted: a request to /api/v1 with an Authorization header is an agent's, answered by the agent router

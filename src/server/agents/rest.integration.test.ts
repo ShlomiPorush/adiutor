@@ -24,8 +24,10 @@ import { HEADERS, OPEN, REVISION } from "./policy.ts"
 let t: TestDatabase
 let h: OAuthHarness
 
-/** Short limits: a 3-second deadline and a 64 KiB answer cap make the slow and the large answer quick to test. */
-const LIMITS = { ...channelLimits(), deadlineMs: 3_000, answerBytes: 64 * 1024 }
+/** A 64 KiB answer cap makes the large answer quick to test; the deadline is the real one. */
+const LIMITS = { ...channelLimits(), answerBytes: 64 * 1024 }
+/** A 3-second deadline, on a harness of its own ("the deadline" below), so no other call can run into it. */
+const SHORT = { ...channelLimits(), deadlineMs: 3_000 }
 
 beforeAll(async () => {
   t = await createTestDatabase("agents_rest")
@@ -485,7 +487,7 @@ describe("invalid tokens", () => {
     const ip = "198.51.100.99"
     try {
       const max = LIMITS.badTokens.max
-      for (let i = 0; i <= max; i++) {
+      for (let i = 0; i < max; i++) {
         const r = await call(randomBytes(32).toString("base64url"), "GET", "/api/v1/items", {
           headers: { "x-test-ip": ip },
         })
@@ -503,9 +505,25 @@ describe("invalid tokens", () => {
     expect(lines.filter((l) => l.includes("too many invalid tokens"))).toHaveLength(1)
     const blockedRows = await t.ctx.db.select().from(audit).where(eq(audit.action, "agent.blocked"))
     expect(blockedRows.filter((r) => (r.after as { address?: string }).address === ip)).toHaveLength(1)
-    // Another address is not limited.
+    // Another address is not limited, and valid tokens give their place back.
     const { token } = await connect(["read"])
-    expect((await call(token, "GET", "/api/v1/items", { headers: { "x-test-ip": "198.51.100.98" } })).status).toBe(200)
+    for (let i = 0; i <= LIMITS.badTokens.max; i++)
+      expect((await call(token, "GET", "/api/v1/items", { headers: { "x-test-ip": "198.51.100.98" } })).status).toBe(
+        200,
+      )
+  })
+
+  it("are counted before the token is checked, so a burst sent at once cannot all be checked", async () => {
+    const max = LIMITS.badTokens.max
+    const answers = await Promise.all(
+      Array.from({ length: max + 5 }, () =>
+        call(randomBytes(32).toString("base64url"), "GET", "/api/v1/items", {
+          headers: { "x-test-ip": "198.51.100.97" },
+        }),
+      ),
+    )
+    expect(answers.filter((a) => a.status === 401)).toHaveLength(max)
+    expect(answers.filter((a) => a.status === 429)).toHaveLength(5)
   })
 })
 
@@ -536,6 +554,21 @@ describe("limits", () => {
     expect(act.body.message).toContain("The action ran")
     const [after] = await t.ctx.db.select().from(notes).where(eq(notes.id, note.id))
     expect(after?.title).toBe("Renamed long")
+  })
+})
+
+describe("the deadline", () => {
+  // Every helper above runs on `h` and `t`: here they are a harness with the short deadline.
+  let main: { h: OAuthHarness; t: TestDatabase }
+  beforeAll(async () => {
+    main = { h, t }
+    t = await createTestDatabase("agents_deadline")
+    h = await oauthHarness(t, { channel: SHORT })
+  })
+  afterAll(async () => {
+    await h?.close()
+    await t?.close()
+    ;({ h, t } = main)
   })
 
   it("answers a call past its deadline 504 outcome_unknown, records it unknown, and keeps its slot until it ends", async () => {
@@ -571,7 +604,9 @@ describe("limits", () => {
     ])
     expect(entries.filter((e) => e.status === 429)).toHaveLength(1)
   })
+})
 
+describe("calls at once", () => {
   it("counts calls in total across connections", async () => {
     const item = await anItem()
     const connections: Awaited<ReturnType<typeof connect>>[] = []
