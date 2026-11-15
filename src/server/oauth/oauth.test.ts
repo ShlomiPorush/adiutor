@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest"
+import en from "../../shared/locales/en.json"
+import he from "../../shared/locales/he.json"
 import { createApp } from "../app.ts"
 import { offeredAreas } from "./access.ts"
 import { checkIssuer, issuerFingerprint } from "./issuer.ts"
 import { cleanLabel } from "./label.ts"
 import { Mutex, WindowLimit } from "./limits.ts"
-import { agentName, CLI_CLIENT_ID, redirectKind } from "./provider.ts"
+import { defaultPages } from "./pages.ts"
+import { agentName, CLI_CLIENT_ID, codeProblem, redirectKind } from "./provider.ts"
 import { PROVIDER_PATHS } from "./routes.ts"
 
 describe("the issuer (S3)", () => {
@@ -159,6 +162,47 @@ describe("the provider's addresses", () => {
       "/oauth/authorize/a/b",
     ])
       expect(PROVIDER_PATHS.test(path), path).toBe(false)
+  })
+})
+
+describe("the library's pages (pages.ts)", () => {
+  const hostile = `<script>alert("x")</script>&'`
+  it("escape every value, add no script of their own, and set the direction of each language", () => {
+    for (const language of ["en", "he"] as const) {
+      const confirm = defaultPages.codeConfirm(language, "<form></form>", hostile, hostile)
+      expect(confirm).not.toContain("<script")
+      expect(confirm).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;&amp;&#39;")
+      expect(confirm).toContain(`<html lang="${language}" dir="${language === "he" ? "rtl" : "ltr"}">`)
+      for (const page of [
+        defaultPages.codeInput(language, "<form></form>"),
+        defaultPages.codeInput(language, "<form></form>", "wrong"),
+        defaultPages.codeInput(language, "", "limited"),
+        defaultPages.success(language),
+        defaultPages.error(language, hostile),
+      ])
+        expect(page).not.toMatch(/<script|alert\(/)
+    }
+  })
+
+  it("keep the library's form as it is, and leave the form out when there is none", () => {
+    const form = '<form id="op.deviceInputForm" method="post" action="/connect/code"></form>'
+    expect(defaultPages.codeInput("en", form)).toContain(form)
+    expect(defaultPages.codeInput("en", "", "limited")).not.toContain("op.deviceInputForm")
+  })
+
+  it("say each error in words, and an unknown code in the general sentence", () => {
+    expect(defaultPages.error("en", "invalid_client")).toContain(en.agentPages.errors.invalid_client)
+    expect(defaultPages.error("he", "server_error")).toContain(he.agentPages.errors.other)
+  })
+
+  it("tell a refused request from a wrong code and a failure", () => {
+    const named = (name: string, extra: object = {}) => Object.assign(new Error("x"), { name }, extra)
+    expect(codeProblem(undefined, undefined)).toBeUndefined()
+    expect(codeProblem({ error: "invalid_request" }, named("AbortedError"))).toBe("denied")
+    expect(codeProblem({ error: "access_denied" }, named("AccessDenied"))).toBe("denied")
+    expect(codeProblem({}, named("NotFoundError", { userCode: "BCDF-GHJK" }))).toBe("wrong")
+    expect(codeProblem({}, named("NoCodeError"))).toBe("wrong")
+    expect(codeProblem({ error: "server_error" }, named("Error"))).toBe("other")
   })
 })
 

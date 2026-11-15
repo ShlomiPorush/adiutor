@@ -172,13 +172,19 @@ export function agentRoutes(deps: AgentRouteDeps) {
 
   // --- The consent page's API, under the interaction's address so the library's cookie comes along (S11) ---
 
+  /**
+   * Every answer under the consent page's address: its API and the page itself, which the built UI (web.ts, mounted
+   * after these routes) serves as index.html. The page keeps the UI's whole Content-Security-Policy, which forbids
+   * framing too; the API's answers get `frame-ancestors 'none'` alone.
+   */
   const flowHeaders: MiddlewareHandler = async (c, next) => {
     await next()
     c.header("Cache-Control", "no-store")
     c.header("X-Frame-Options", "DENY")
-    c.header("Content-Security-Policy", "frame-ancestors 'none'")
+    if (!c.res.headers.has("Content-Security-Policy")) c.header("Content-Security-Policy", "frame-ancestors 'none'")
     c.header("Referrer-Policy", "no-referrer")
   }
+  app.use("/connect/approve/*", flowHeaders)
   const peopleOnly: MiddlewareHandler = async (c, next) => {
     if (PEOPLE_ONLY.some((h) => c.req.header(h) !== undefined))
       return c.json({ error: "forbidden", message: "Only the owner's signed-in browser answers an approval." }, 403)
@@ -250,7 +256,7 @@ export function agentRoutes(deps: AgentRouteDeps) {
     }
   }
 
-  app.get("/connect/approve/:uid/details", flowHeaders, peopleOnly, async (c) => {
+  app.get("/connect/approve/:uid/details", peopleOnly, async (c) => {
     const who = await ownerSession(c)
     if (who.refusal) return who.refusal
     if (!(await live())) return c.json(notConfigured, 404)
@@ -278,7 +284,7 @@ export function agentRoutes(deps: AgentRouteDeps) {
     })
     .strict()
 
-  app.post("/connect/approve/:uid/decision", flowHeaders, peopleOnly, async (c) => {
+  app.post("/connect/approve/:uid/decision", peopleOnly, async (c) => {
     // CSRF: the Origin must be the issuer exactly as a browser spells it, and a missing one is refused; JSON only.
     if (!issuer || c.req.header("origin") !== issuer)
       return c.json({ error: "forbidden", message: "The request does not come from the Adiutor page." }, 403)

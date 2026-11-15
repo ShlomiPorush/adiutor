@@ -3,8 +3,8 @@ import type { IncomingMessage } from "node:http"
 import { hostname } from "node:os"
 import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or, sql } from "drizzle-orm"
 import type { KoaContextWithOIDC } from "oidc-provider"
-import type { AgentArea, AgentConnectionMethod, AgentEndReason, AgentResource } from "../../shared/enums.ts"
-import { AGENT_IDLE_DAYS_MAX, AGENT_IDLE_DAYS_MIN } from "../../shared/settings.ts"
+import type { AgentArea, AgentConnectionMethod, AgentEndReason, AgentResource, Language } from "../../shared/enums.ts"
+import { AGENT_IDLE_DAYS_MAX, AGENT_IDLE_DAYS_MIN, SETTINGS_DEFAULTS } from "../../shared/settings.ts"
 import type { Db } from "../db/client.ts"
 import { agentConnections, agentConsent, agentIdentityChanges, authUser, settings } from "../db/schema.ts"
 import { invalid, notFound } from "../errors.ts"
@@ -371,6 +371,21 @@ export async function createAgentAccess(options: AgentAccessOptions) {
     return Boolean(row)
   }
 
+  /**
+   * The language of the library's pages: the owner's language setting, which the morning message and the bot use too
+   * and the app's own signed-out pages read from the browser's cached copy (a page without script cannot). Read only,
+   * and never a failure: the default instead.
+   */
+  async function pageLanguage(): Promise<Language> {
+    try {
+      const [row] = await db.select({ language: settings.language }).from(settings).where(eq(settings.id, 1))
+      return row?.language ?? SETTINGS_DEFAULTS.language
+    } catch {
+      return SETTINGS_DEFAULTS.language
+    }
+  }
+  const pages = options.pages ?? defaultPages
+
   const Adapter = storeAdapter(options.storeDb, {
     now: ctx.clock,
     ...(options.observeStore ? { observe: options.observeStore } : {}),
@@ -385,7 +400,8 @@ export async function createAgentAccess(options: AgentAccessOptions) {
         issuer,
         adapter: Adapter,
         cookieKeys: options.cookieKeys,
-        pages: options.pages ?? defaultPages,
+        pages,
+        language: pageLanguage,
         accountExists,
         signingKey: await loadSigningKey(db, options.cipher),
       })
@@ -447,7 +463,7 @@ export async function createAgentAccess(options: AgentAccessOptions) {
       k.status = 429
       k.set("Retry-After", "600")
       k.type = "html"
-      k.body = (options.pages ?? defaultPages).codeInput("", "other")
+      k.body = pages.codeInput(await pageLanguage(), "", "limited")
       return
     }
     const opens = opensApproval(path)
