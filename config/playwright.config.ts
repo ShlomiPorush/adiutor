@@ -2,11 +2,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { defineConfig, devices } from "@playwright/test"
+import { BASE_URL } from "../e2e/address.ts"
 
 // End-to-end tests of the web UI against a running Adiutor. scripts/verify.sh runs them in the
-// Playwright image on the verification stack's network, with E2E_TARGET=adiutor:8080; e2e/global-setup.ts
-// then forwards 127.0.0.1:8090 (the stack's ADIUTOR_PUBLIC_URL) to it, so the browser's Origin passes the
-// server's CSRF check. Without E2E_TARGET the tests use the development stack (scripts/local.sh).
+// Playwright image on the verification stack's network, with E2E_TARGET=adiutor:8080 and E2E_BASE_URL (the stack's
+// ADIUTOR_PUBLIC_URL, http://localhost:8090); e2e/global-setup.ts then forwards that address's port to it, so the
+// browser's Origin passes the server's CSRF check. Without E2E_TARGET the tests use the development stack
+// (scripts/local.sh) at E2E_BASE_URL, by default http://127.0.0.1:8090 (e2e/address.ts).
 // Better Auth keys its rate limits on X-Forwarded-For (no proxy trusted in these stacks): each project sends its own
 // documentation address, so the two projects never share a sign-in budget. The phone runs after the desktop, which
 // creates the owner.
@@ -21,7 +23,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   use: {
-    baseURL: "http://127.0.0.1:8090",
+    baseURL: BASE_URL,
     trace: "off",
     screenshot: "off",
   },

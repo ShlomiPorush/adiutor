@@ -1,11 +1,22 @@
 // Sign-in on Better Auth's routes: username and password, then the second factor: the code from the authenticator
-// app, a backup code, or (when the owner turned it on) a code sent to Telegram. `next` (a page of this app only) is
-// where it goes afterwards. A wrong password or code stays on its form.
+// app, a backup code, or (when the owner turned it on) a code sent to Telegram. Or a passkey alone, where the browser
+// supports them: a whole sign-in on its own. `next` (a page of this app only) is where it goes afterwards. A wrong
+// password or code stays on its form.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { KeyRound } from "lucide-react"
 import { type FormEvent, useId, useRef, useState } from "react"
 import { Navigate, useNavigate, useSearchParams } from "react-router"
-import { type AuthError, authClient, authFailure, FAILURE_TEXT } from "../../api/auth.ts"
+import {
+  type AuthError,
+  authClient,
+  authFailure,
+  FAILURE_TEXT,
+  isPasskeyFailure,
+  PASSKEY_FAILURE_TEXT,
+  passkeyFailure,
+  passkeysSupported,
+} from "../../api/auth.ts"
 import { api, qk } from "../../api/endpoints.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { safeNext } from "../../shell/Root.tsx"
@@ -33,6 +44,8 @@ export function LoginPage() {
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [busy, setBusy] = useState(false)
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
+  const [passkeyError, setPasskeyError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   usePageTitle(step === "code" ? t("login.codeTitle") : t("login.title"))
 
@@ -68,6 +81,7 @@ export function LoginPage() {
 
   const signIn = async (event: FormEvent) => {
     event.preventDefault()
+    setPasskeyError(null)
     if (!username || !password) {
       setError(t("auth.error.wrongPassword"))
       return
@@ -99,6 +113,32 @@ export function LoginPage() {
       setError(t("auth.error.network"))
     } finally {
       setBusy(false)
+    }
+  }
+
+  /** A passkey alone: the browser asks for it, Better Auth checks it and signs in. */
+  const passkeySignIn = async () => {
+    setPasskeyBusy(true)
+    setPasskeyError(null)
+    setError(null)
+    try {
+      const { error: answer } = await authClient.signIn.passkey()
+      if (answer) {
+        const failure = passkeyFailure(answer)
+        setPasskeyError(
+          isPasskeyFailure(failure)
+            ? t(PASSKEY_FAILURE_TEXT[failure])
+            : failure === "wrong_password"
+              ? t("auth.error.passkeyRefused")
+              : failureText(failure, answer),
+        )
+        return
+      }
+      await finish()
+    } catch {
+      setPasskeyError(t("auth.error.network"))
+    } finally {
+      setPasskeyBusy(false)
     }
   }
 
@@ -246,10 +286,22 @@ export function LoginPage() {
           invalid={Boolean(error)}
         />
         {error ? <FormError>{error}</FormError> : null}
-        <button type="submit" className="ui-btn ui-btn-primary" disabled={busy}>
+        <button type="submit" className="ui-btn ui-btn-primary" disabled={busy || passkeyBusy}>
           {busy ? t("login.signingIn") : t("login.submit")}
         </button>
       </form>
+      {passkeysSupported() ? (
+        <>
+          <p className="ui-auth-or">
+            <span>{t("login.or")}</span>
+          </p>
+          <button type="button" className="ui-btn" disabled={busy || passkeyBusy} onClick={() => void passkeySignIn()}>
+            <KeyRound aria-hidden="true" />
+            {passkeyBusy ? t("login.passkeyBusy") : t("login.passkey")}
+          </button>
+          {passkeyError ? <FormError>{passkeyError}</FormError> : null}
+        </>
+      ) : null}
       <div className="ui-auth-note">
         <p>{t("auth.recovery")}</p>
         <Copyable value={RECOVERY_COMMAND} />

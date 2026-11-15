@@ -1,11 +1,12 @@
-// The Better Auth client: sign-up, sign-in, two-factor, the password, the browser sessions, the agent keys and the
-// agent approvals (device authorization), all
+// The Better Auth client: sign-up, sign-in, two-factor, passkeys, the password, the browser sessions, the agent keys
+// and the agent approvals (device authorization), all
 // on Better Auth's own routes under /api/auth. Adiutor adds nothing to these requests: Better Auth checks the origin
 // itself. Its useSession is the only thing that extends a session (deferSessionRefresh on the server): it refreshes
 // when the page opens, comes back to the front or online, or another tab changes the session. Never call
 // getSession or useSession().refetch from background polling, and keep sessionOptions.refetchInterval at 0.
 
 import { apiKeyClient } from "@better-auth/api-key/client"
+import { passkeyClient } from "@better-auth/passkey/client"
 import { deviceAuthorizationClient, twoFactorClient, usernameClient } from "better-auth/client/plugins"
 import { createAuthClient } from "better-auth/react"
 
@@ -18,7 +19,7 @@ const mockFetch =
 
 export const authClient = createAuthClient({
   basePath: "/api/auth",
-  plugins: [usernameClient(), twoFactorClient(), apiKeyClient(), deviceAuthorizationClient()],
+  plugins: [usernameClient(), twoFactorClient(), passkeyClient(), apiKeyClient(), deviceAuthorizationClient()],
   sessionOptions: { refetchInterval: 0 },
   ...(mockFetch ? { fetchOptions: { customFetchImpl: mockFetch } } : {}),
 })
@@ -53,6 +54,55 @@ export function authFailure(error: AuthError, step: "password" | "code"): AuthFa
     return "wrong_password"
   return "other"
 }
+
+/** Whether this browser can create and use passkeys (WebAuthn). Listing, renaming and removing need no support. */
+export const passkeysSupported = () => typeof window !== "undefined" && typeof window.PublicKeyCredential === "function"
+
+export type PasskeyFailure =
+  | AuthFailure
+  | "passkey_cancelled"
+  | "passkey_registered"
+  | "passkey_address"
+  | "passkey_unsuitable"
+  | "passkey_failed"
+
+/**
+ * A passkey ceremony that failed in the browser: the plugin's client answers 400 with SimpleWebAuthn's code
+ * (`ERROR_...`) or AUTH_CANCELLED. A NotAllowedError (the prompt closed, or it timed out) comes through as
+ * ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY. Anything else is what authFailure says about the server's answer.
+ */
+export function passkeyFailure(error: AuthError): PasskeyFailure {
+  const code = (error?.code ?? "").toUpperCase()
+  if (error?.status === 400) {
+    if (["AUTH_CANCELLED", "ERROR_CEREMONY_ABORTED", "ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY"].includes(code))
+      return "passkey_cancelled"
+    if (code === "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED") return "passkey_registered"
+    if (code === "ERROR_INVALID_DOMAIN" || code === "ERROR_INVALID_RP_ID") return "passkey_address"
+    if (
+      code === "ERROR_AUTHENTICATOR_MISSING_USER_VERIFICATION_SUPPORT" ||
+      code === "ERROR_AUTHENTICATOR_MISSING_DISCOVERABLE_CREDENTIAL_SUPPORT"
+    )
+      return "passkey_unsuitable"
+    if (code.startsWith("ERROR_")) return "passkey_failed"
+  }
+  return authFailure(error, "password")
+}
+
+/**
+ * The locale key of a passkey failure the browser reported (the others use FAILURE_TEXT). Never the client's own
+ * message: the passkey client answers every failed sign-in prompt with "Auth cancelled", whatever happened.
+ */
+export const PASSKEY_FAILURE_TEXT = {
+  passkey_cancelled: "auth.error.passkeyCancelled",
+  passkey_registered: "account.passkeyAlready",
+  passkey_address: "auth.error.passkeyAddress",
+  passkey_unsuitable: "auth.error.passkeyUnsuitable",
+  passkey_failed: "auth.error.passkeyFailed",
+} as const
+
+/** Whether a failure is one the browser reported, with its own sentence in PASSKEY_FAILURE_TEXT. */
+export const isPasskeyFailure = (failure: PasskeyFailure): failure is keyof typeof PASSKEY_FAILURE_TEXT =>
+  failure in PASSKEY_FAILURE_TEXT
 
 /** The locale key of a failure's sentence (other failures say the server's reason). */
 export const FAILURE_TEXT: Record<Exclude<AuthFailure, "other">, string> = {

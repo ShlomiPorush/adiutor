@@ -33,8 +33,8 @@ export type TestCoreOptions = {
   authSettings?: Partial<AuthSettings>
   /** The bot as the status and test-message routes see it; the core's own Telegram service when absent. */
   telegram?: TelegramRuntime
-  /** Extra Better Auth options (trusted proxies, secrets). */
-  auth?: Partial<Pick<AuthOptions, "secrets" | "trustedProxies">>
+  /** Extra Better Auth options (trusted proxies, secrets, the passkey test pause). */
+  auth?: Partial<Pick<AuthOptions, "secrets" | "trustedProxies" | "afterPasskeyVerified">>
 }
 
 export type TestCore = Core & { auth: AuthHolder; runtime: SettingsRuntime; telegramService: TelegramService }
@@ -46,6 +46,7 @@ export function testAuthBase(t: TestDatabase, publicUrl: URL, extra: TestCoreOpt
     secrets: extra.secrets ?? [{ version: 1, value: TEST_AUTH_SECRET }],
     publicUrl,
     trustedProxies: extra.trustedProxies ?? [],
+    ...(extra.afterPasskeyVerified ? { afterPasskeyVerified: extra.afterPasskeyVerified } : {}),
   }
 }
 

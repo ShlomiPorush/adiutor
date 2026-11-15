@@ -3999,3 +3999,18 @@ button.ui-item-title {
 [dir] .ui-md [dir="auto"] {
   text-align: start;
 }
+/* "or" between the password form and the passkey button on the sign-in page. */
+.ui-auth-or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+}
+.ui-auth-or::before,
+.ui-auth-or::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--ui-line);
+}

@@ -3,13 +3,15 @@
 // default from the one table of defaults, Reset changing only the draft and a value put back as loaded leaving the
 // count; secrets and locked values without Changed, Reset or Clear; a locked secret, a locked chat id and Telegram
 // off; the password change in a dialog (open, the page's checks, success, failure, Escape and Back); the bulk
-// actions at the end of a list's head; and the private domains as value chips.
+// actions at the end of a list's head; the private domains as value chips; and the passkeys on Account, managed in a
+// browser that cannot add one.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, type ReactNode, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { createMemoryRouter, RouterProvider } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { PASSKEY_MAX } from "../../../shared/auth.ts"
 import en from "../../../shared/locales/en.json"
 import { SETTINGS_DEFAULTS } from "../../../shared/settings.ts"
 import { setTransport, type TransportRequest } from "../../api/client.ts"
@@ -27,6 +29,7 @@ import { removeEvery } from "./SyncSections.tsx"
 const auth = vi.hoisted(() => ({
   sessions: [] as unknown[],
   keys: [] as unknown[],
+  passkeys: [] as { id: string; name: string; createdAt: string }[],
   changePassword: null as null | ((body: unknown) => Promise<{ data: unknown; error: unknown }>),
   calls: [] as { route: string; body?: unknown }[],
 }))
@@ -55,6 +58,18 @@ vi.mock("../../api/auth.ts", async (importOriginal) => {
       changePassword: (body: unknown) => {
         auth.calls.push({ route: "change-password", body })
         return auth.changePassword ? auth.changePassword(body) : answer({ token: "t" })
+      },
+      passkey: {
+        listUserPasskeys: () => answer(auth.passkeys),
+        deletePasskey: (body: { id: string }) => {
+          auth.calls.push({ route: "passkey/delete-passkey", body })
+          auth.passkeys = auth.passkeys.filter((passkey) => passkey.id !== body.id)
+          return answer({ status: true })
+        },
+        updatePasskey: (body: { id: string; name: string }) => {
+          auth.calls.push({ route: "passkey/update-passkey", body })
+          return answer({ passkey: body })
+        },
       },
       apiKey: {
         list: () => answer({ apiKeys: auth.keys, total: auth.keys.length }),
@@ -218,6 +233,7 @@ beforeEach(() => {
   deleted = []
   auth.sessions = []
   auth.keys = []
+  auth.passkeys = []
   auth.changePassword = null
   auth.calls = []
   setTransport(transport)
@@ -699,5 +715,46 @@ describe("bulk actions at the end of a list's head (S-12, DS-20)", () => {
     })
     expect(seen).toEqual(["a", "b", "c"])
     expect(failed).toBe(1)
+  })
+})
+
+describe("passkeys on the Account page", () => {
+  const passkey = (id: string, name: string) => ({ id, name, createdAt: "2026-10-01T08:00:00.000Z" })
+  const group = () => document.getElementById("account-passkeys")
+  const support = (on: boolean) => {
+    if (on) (window as { PublicKeyCredential?: unknown }).PublicKeyCredential = function PublicKeyCredential() {}
+    else delete (window as { PublicKeyCredential?: unknown }).PublicKeyCredential
+  }
+  afterEach(() => support(false))
+
+  it("a browser that cannot add passkeys still lists, renames and removes them, and offers no Add", async () => {
+    support(false)
+    auth.passkeys = [passkey("p1", "Lost phone")]
+    await render("/account")
+    expect(plain(group()?.textContent)).toContain("Lost phone")
+    expect(plain(group()?.textContent)).toContain(en.account.passkeysUnsupported)
+    expect(button(en.account.passkeyAdd, group() as HTMLElement)).toBeUndefined()
+    expect(button(en.account.passkeyRename, group() as HTMLElement)).toBeTruthy()
+    await click(button(en.account.passkeyRemove, group() as HTMLElement))
+    expect(plain(question()?.textContent)).toContain(en.account.passkeyRemoveMessage)
+    await click(button(en.account.passkeyRemove, question() as HTMLElement))
+    await settle()
+    expect(auth.calls).toContainEqual({ route: "passkey/delete-passkey", body: { id: "p1" } })
+  })
+
+  it("offers Add where the browser supports passkeys", async () => {
+    support(true)
+    auth.passkeys = [passkey("p1", "Laptop")]
+    await render("/account")
+    expect(button(en.account.passkeyAdd, group() as HTMLElement)).toBeTruthy()
+    expect(plain(group()?.textContent)).not.toContain(en.account.passkeysUnsupported)
+  })
+
+  it(`offers no Add at ${PASSKEY_MAX} passkeys, and says why`, async () => {
+    support(true)
+    auth.passkeys = Array.from({ length: PASSKEY_MAX }, (_, i) => passkey(`p${i}`, `Key ${i}`))
+    await render("/account")
+    expect(button(en.account.passkeyAdd, group() as HTMLElement)).toBeUndefined()
+    expect(plain(group()?.textContent)).toContain(en.account.passkeysFull.replace("{max}", String(PASSKEY_MAX)))
   })
 })

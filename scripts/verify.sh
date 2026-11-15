@@ -7,6 +7,9 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 PROJECT="adiutor-verify"
+# The stack's public URL and the address the end-to-end browser opens. A host name, not 127.0.0.1: browsers refuse an
+# IP address as a passkey's domain. e2e/global-setup.ts forwards its port to the container.
+PUBLIC_URL="http://localhost:8090"
 CHANGED_BASE=""
 CHECKS=1
 E2E=1
@@ -88,12 +91,12 @@ run_checks() {
 
 # Fixed values only: neither a developer's .env.dev (real tokens), nor an interpolation file, nor the developer's
 # ADIUTOR_PUBLIC_URL reaches the verification stack. Its password and keys are new on every run
-# (stack.env in its temporary data directory). The tests' Origin is http://127.0.0.1:8090. Its PostgreSQL is
+# (stack.env in its temporary data directory). The tests' Origin is PUBLIC_URL. Its PostgreSQL is
 # production's major version (TEST_POSTGRES_IMAGE), not the development stack's.
 stack() {
   env -u COMPOSE_ENV_FILES ADIUTOR_IMAGE_TAG=verify ADIUTOR_PORT=0 ADIUTOR_LOCAL_ENV_FILE=/dev/null \
     ADIUTOR_POSTGRES_IMAGE="$TEST_POSTGRES_IMAGE" ADIUTOR_POSTGRES_DATA="$TEST_POSTGRES_DATA" \
-    ADIUTOR_PUBLIC_URL=http://127.0.0.1:8090 ADIUTOR_STACK_ENV_FILE="${ADIUTOR_DATA_DIR:-/nonexistent}/stack.env" \
+    ADIUTOR_PUBLIC_URL="$PUBLIC_URL" ADIUTOR_STACK_ENV_FILE="${ADIUTOR_DATA_DIR:-/nonexistent}/stack.env" \
     docker compose --env-file /dev/null -p "$PROJECT" --project-directory "$REPO_ROOT" \
     -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
 }
@@ -116,15 +119,15 @@ fail_stack() {
   die "$1"
 }
 
-# Runs e2e/ in the Playwright image on the stack's network, with the stack's database for e2e/session.spec.ts. e2e/global-setup.ts forwards 127.0.0.1:8090,
-# the stack's ADIUTOR_PUBLIC_URL, to the container, so the server's Origin check sees its own address.
+# Runs e2e/ in the Playwright image on the stack's network, with the stack's database for e2e/session.spec.ts. e2e/global-setup.ts forwards
+# PUBLIC_URL's port to the container, so the server's Origin check sees its own address.
 run_e2e() {
   local pinned
   pinned="$(sed -nE 's|.*"@playwright/test": "([^"]+)".*|\1|p' "$REPO_ROOT/package.json")"
   [ "v$pinned-noble" = "${PLAYWRIGHT_IMAGE##*:}" ] ||
     die "@playwright/test $pinned does not match $PLAYWRIGHT_IMAGE; keep both on one version"
   docker run --rm --ipc=host --network "${PROJECT}_default" \
-    --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=adiutor:8080 \
+    --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=adiutor:8080 -e E2E_BASE_URL="$PUBLIC_URL" \
     -e E2E_DATABASE_URL="$(stack_db_url)" \
     -v "$REPO_ROOT:/repo" -w /repo "$PLAYWRIGHT_IMAGE" \
     npx --no-install playwright test --config config/playwright.config.ts

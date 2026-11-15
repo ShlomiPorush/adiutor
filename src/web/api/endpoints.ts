@@ -158,6 +158,8 @@ export const qk = {
   setupStatus: ["setup-status"] as const,
   /** Better Auth's list of this owner's browsers. */
   account: ["account"] as const,
+  /** Better Auth's list of this owner's passkeys. */
+  passkeys: ["passkeys"] as const,
   agentKeys: ["agent-keys"] as const,
   suppressions: ["suppressions"] as const,
 }

@@ -686,7 +686,10 @@
       "session_connect": "gave adiutor connect its short session",
       "session_revoke": "ended a session",
       "account_totp_disable": "turned off two-factor authentication",
-      "account_backup_codes_new": "made new backup codes"
+      "account_backup_codes_new": "made new backup codes",
+      "account_passkey_add": "added a passkey",
+      "account_passkey_rename": "renamed a passkey",
+      "account_passkey_delete": "removed a passkey"
     },
     "field": {
       "status": "Status",
@@ -939,7 +942,12 @@
       "mismatch": "The passwords do not match.",
       "codeFormat": "Enter the 6 digits of the code.",
       "backupFormat": "Enter a backup code as you saved it.",
-      "accountLocked": "Too many wrong codes. Sign-in is locked for 15 minutes."
+      "accountLocked": "Too many wrong codes. Sign-in is locked for 15 minutes.",
+      "passkeyCancelled": "The passkey request was closed or timed out. Try again.",
+      "passkeyRefused": "That passkey was not accepted. Use another one, or sign in with your password.",
+      "passkeyAddress": "Passkeys work only at Adiutor's own address, a host name over HTTPS. Sign in with your password.",
+      "passkeyUnsuitable": "This device cannot keep a passkey that checks it is you with a PIN or biometrics. Use another device or password manager.",
+      "passkeyFailed": "The passkey did not work on this device. Try again, or sign in with your password."
     },
     "backupCode": "Backup code",
     "backupCodeHint": "One of the codes you saved when you set up two-factor. Each code works once."
@@ -961,7 +969,10 @@
     "otpSending": "Sending...",
     "useApp": "Use the authenticator app",
     "useBackup": "Use a backup code",
-    "useOtp": "Send a code to Telegram instead"
+    "useOtp": "Send a code to Telegram instead",
+    "passkey": "Sign in with a passkey",
+    "passkeyBusy": "Waiting for the passkey...",
+    "or": "or"
   },
   "setup": {
     "title": "Welcome to Adiutor",
@@ -994,7 +1005,7 @@
   },
   "account": {
     "title": "Account",
-    "description": "The browsers signed in to your account, your password, two-factor authentication and the way back in. Each action here takes effect at once.",
+    "description": "The browsers signed in to your account, your password, your passkeys, two-factor authentication and the way back in. Each action here takes effect at once.",
     "signedInAs": "Signed in as",
     "sessions": "Signed-in browsers",
     "sessionsHint": "Each browser where you are signed in, and when it is signed out unless you open Adiutor there again.",
@@ -1053,7 +1064,34 @@
     "codesHint": "New codes replace the ones you saved; the old ones stop working.",
     "authenticatorRow": "Authenticator app",
     "authenticatorHint": "A new authenticator app replaces the current one. Finish setting it up right away.",
-    "recoveryRow": "Reset the password on the server"
+    "recoveryRow": "Reset the password on the server",
+    "passkeys": "Passkeys",
+    "passkeysHint": "A passkey signs you in on its own, with your fingerprint, face or device PIN, without the password or the code. The password and the authenticator app keep working. After removing a lost passkey, also sign out the other browsers.",
+    "passkeysEmpty": "No passkeys yet.",
+    "passkeysUnsupported": "This browser cannot add passkeys. You can still rename and remove them here.",
+    "passkeysFull": "You have {max} passkeys, the most Adiutor keeps. Remove one to add another.",
+    "passkeysFailed": "Could not load the passkeys",
+    "passkeyAdded": "Added",
+    "passkeyAdd": "Add a passkey",
+    "passkeyAddTitle": "Add a passkey",
+    "passkeyAddHint": "Name it after the device or the password manager that keeps it. Your browser then asks for your fingerprint, face or device PIN.",
+    "passkeyName": "Name",
+    "passkeyNameInvalid": "Use 1 to {max} characters.",
+    "passkeyAddSubmit": "Continue",
+    "passkeyAddBusy": "Waiting for the passkey...",
+    "passkeyAddDone": "Passkey added. You can sign in with it now.",
+    "passkeyAddFailed": "Could not add the passkey: {reason}",
+    "passkeyAlready": "This device already holds a passkey for Adiutor.",
+    "passkeyRename": "Rename",
+    "passkeyRenameTitle": "Rename the passkey",
+    "passkeyRenameSubmit": "Save",
+    "passkeyRenameBusy": "Saving...",
+    "passkeyRenameDone": "The passkey was renamed",
+    "passkeyRemove": "Remove",
+    "passkeyRemoveTitle": "Remove {name}?",
+    "passkeyRemoveMessage": "It stops signing in at once. If the device is lost, also sign out the other browsers.",
+    "passkeyRemoveDone": "{name} was removed",
+    "passkeyFailed": "Could not change the passkey: {reason}"
   },
   "backupCodes": {
     "hint": "These {count} backup codes let you in without the authenticator app, once each. Adiutor shows them only now. Keep them somewhere safe, apart from this device.",

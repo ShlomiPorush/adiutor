@@ -1,8 +1,10 @@
 import { apiKey } from "@better-auth/api-key"
+import { passkey } from "@better-auth/passkey"
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
-import { APIError, createAuthMiddleware } from "better-auth/api"
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api"
 import { bearer, deviceAuthorization, twoFactor, username } from "better-auth/plugins"
+import { count, eq } from "drizzle-orm"
 import {
   AGENT_KEY_DAYS_MAX,
   AGENT_KEY_DAYS_MIN,
@@ -12,12 +14,15 @@ import {
   CONNECT_DEVICE_PATH,
   isValidUsername,
   ownerEmail,
+  PASSKEY_MAX,
+  PASSKEY_NAME_MAX,
 } from "../../shared/auth.ts"
 import type { VersionedKey } from "../config.ts"
 import {
   authAccount,
   authApiKey,
   authDeviceCode,
+  authPasskey,
   authRateLimit,
   authSession,
   authTwoFactor,
@@ -28,11 +33,12 @@ import { errorFacts, log } from "../log.ts"
 import type { By, Ctx } from "../services/context.ts"
 import { writeAudit } from "../services/context.ts"
 
-// Better Auth as it documents itself: its routes, its plugins (username, twoFactor, api-key, deviceAuthorization,
-// bearer), its options and its documented hooks. Adiutor does not wrap its handler. The hooks below only refuse (a
-// closed route, a second owner, a trusted device, an agent key or an agent approval without two-factor, an
-// Authorization header outside what `adiutor connect` needs) and write audit rows; Better Auth makes every decision
-// about passwords, sessions and codes. See "Security design" in docs/project-foundation.md for what this leaves open.
+// Better Auth as it documents itself: its routes, its plugins (username, twoFactor, passkey, api-key,
+// deviceAuthorization, bearer), its options and its documented hooks. Adiutor does not wrap its handler. The hooks
+// below only refuse (a closed route, a second owner, a trusted device, an agent key, an agent approval or a new passkey
+// without two-factor, an Authorization header outside what `adiutor connect` needs) and write audit rows; Better Auth
+// makes every decision about passwords, passkeys, sessions and codes. See "Security design" in
+// docs/project-foundation.md for what this leaves open.
 
 const DAY_S = 86_400
 const HOUR_S = 3_600
@@ -71,6 +77,14 @@ export const ALLOWED_PATHS = [
   "/device",
   "/device/approve",
   "/device/deny",
+  // Passkeys: added and managed on the Account page; a sign-in with one needs no session.
+  "/passkey/generate-register-options",
+  "/passkey/verify-registration",
+  "/passkey/list-user-passkeys",
+  "/passkey/update-passkey",
+  "/passkey/delete-passkey",
+  "/passkey/generate-authenticate-options",
+  "/passkey/verify-authentication",
 ] as const
 
 /**
@@ -110,7 +124,20 @@ const CREDENTIAL_PATHS = [
   "/two-factor/generate-backup-codes",
   "/change-password",
   ...OTP_PATHS,
+  // A passkey sign-in, and a new passkey: also bounds registrations that overlap in time (PASSKEY_MAX).
+  "/passkey/verify-authentication",
+  "/passkey/verify-registration",
 ]
+
+/** The routes that start a passkey ceremony: 20 per 5 minutes per address, as a cancelled prompt is common. */
+const PASSKEY_OPTIONS_PATHS = ["/passkey/generate-authenticate-options", "/passkey/generate-register-options"]
+const PASSKEY_OPTIONS_RULE = { window: 300, max: 20 }
+
+/** The routes that add a passkey: refused while the account has no two-factor or already has PASSKEY_MAX. */
+const PASSKEY_REGISTER_PATHS = new Set(["/passkey/generate-register-options", "/passkey/verify-registration"])
+
+/** The path of a passkey sign-in: a whole sign-in on its own, without the two-factor step. */
+export const PASSKEY_SIGN_IN_PATH = "/passkey/verify-authentication"
 
 /** New agent approval codes: 10 per 10 minutes per address. */
 const DEVICE_CODE_RULE = { window: 600, max: 10 }
@@ -150,6 +177,11 @@ export type AuthOptions = AuthSettings & {
   sendOtp?: (code: string) => Promise<void>
   /** The recovery CLI only: receives the reset token instead of sending it anywhere. */
   sendResetPassword?: (token: string) => Promise<void>
+  /**
+   * Tests only: the passkey plugin's documented `authentication.afterVerification`, which runs after a passkey's
+   * signature is checked and before the session is created (the integration test pins a library gap with it).
+   */
+  afterPasskeyVerified?: () => Promise<void>
 }
 
 type OwnerRow = { id: string; username: string; twoFactorEnabled: boolean }
@@ -170,10 +202,35 @@ async function readOwner(ctx: Ctx): Promise<OwnerRow | null> {
     : null
 }
 
+/** How many passkeys the owner has, read on Adiutor's own connection. */
+async function countPasskeys(ctx: Ctx, userId: string): Promise<number> {
+  const [row] = await ctx.db.select({ n: count() }).from(authPasskey).where(eq(authPasskey.userId, userId))
+  return row?.n ?? 0
+}
+
+/** One passkey's name and owner (for the audit row of a rename or removal), or null when it does not exist. */
+async function readPasskey(ctx: Ctx, id: string): Promise<{ name: string; userId: string } | null> {
+  const [row] = await ctx.db
+    .select({ name: authPasskey.name, userId: authPasskey.userId })
+    .from(authPasskey)
+    .where(eq(authPasskey.id, id))
+  return row ? { name: row.name ?? "", userId: row.userId } : null
+}
+
 type HookContext = { path?: string; request?: Request; context?: { session?: unknown } } | null | undefined
 
 const refuse = (status: "NOT_FOUND" | "FORBIDDEN" | "BAD_REQUEST", code: string, message: string) =>
   new APIError(status, { code, message })
+
+const passkeyLimit = () =>
+  refuse("FORBIDDEN", "PASSKEY_LIMIT", `Adiutor keeps at most ${PASSKEY_MAX} passkeys. Remove one first.`)
+
+/** A passkey's name: 1 to PASSKEY_NAME_MAX characters after trimming. */
+const validPasskeyName = (name: unknown) =>
+  typeof name === "string" && name.trim().length > 0 && name.trim().length <= PASSKEY_NAME_MAX
+
+const invalidPasskeyName = () =>
+  refuse("BAD_REQUEST", "INVALID_PASSKEY_NAME", `A passkey's name has 1 to ${PASSKEY_NAME_MAX} characters.`)
 
 /** The value of `Authorization: Bearer <value>`, or null for another scheme or none. */
 function bearerValue(header: string | null): string | null {
@@ -237,6 +294,39 @@ export function createAuth(options: AuthOptions) {
         throw refuse("FORBIDDEN", "TOTP_REQUIRED", "Set up two-factor authentication first.")
       if (path === "/device/approve") await audit(ownerBy(owner), "device.approve", "device_code")
       else if (path === "/device/deny") await audit(ownerBy(owner), "device.deny", "device_code")
+      return
+    }
+    if (http && path.startsWith("/passkey/")) {
+      const owner = await readOwner(ctx)
+      if (PASSKEY_REGISTER_PATHS.has(path)) {
+        if (!owner?.twoFactorEnabled)
+          throw refuse("FORBIDDEN", "TOTP_REQUIRED", "Set up two-factor authentication first.")
+        if (path === "/passkey/verify-registration") {
+          // The plugin's createSession would sign in outside the sign-in audit and its rate limit.
+          if (body.createSession)
+            throw refuse(
+              "BAD_REQUEST",
+              "PASSKEY_SESSION_UNSUPPORTED",
+              "Adding a passkey does not sign in; sign in with it afterwards.",
+            )
+          if (!validPasskeyName(body.name)) throw invalidPasskeyName()
+        }
+        if ((await countPasskeys(ctx, owner.id)) >= PASSKEY_MAX) throw passkeyLimit()
+        return
+      }
+      if (path === "/passkey/update-passkey" || path === "/passkey/delete-passkey") {
+        const id = typeof body.id === "string" ? body.id : ""
+        if (path === "/passkey/update-passkey" && !validPasskeyName(body.name)) throw invalidPasskeyName()
+        // Only a change the plugin will make gets a row: a signed-in session (read as the plugin's sessionMiddleware
+        // reads it, a GET that never extends the session, and kept for the route) and a passkey of that account. Any
+        // other request gets the plugin's own answer and no row.
+        const session = await getSessionFromCtx(c, { disableRefresh: true })
+        const passkey = session && id ? await readPasskey(ctx, id) : null
+        if (!session || !passkey || passkey.userId !== session.user.id) return
+        if (path === "/passkey/update-passkey")
+          await audit(ownerBy(owner), "account.passkey_rename", "account", { name: String(body.name).trim() }, id)
+        else await audit(ownerBy(owner), "account.passkey_delete", "account", { name: passkey.name }, id)
+      }
       return
     }
     if (path.startsWith("/api-key/")) {
@@ -317,6 +407,7 @@ export function createAuth(options: AuthOptions) {
         rateLimit: authRateLimit,
         apikey: authApiKey,
         deviceCode: authDeviceCode,
+        passkey: authPasskey,
       },
     }),
     emailAndPassword: {
@@ -347,6 +438,7 @@ export function createAuth(options: AuthOptions) {
       max: 100,
       customRules: {
         ...Object.fromEntries(CREDENTIAL_PATHS.map((p) => [p, { window: 300, max: 5 }])),
+        ...Object.fromEntries(PASSKEY_OPTIONS_PATHS.map((p) => [p, PASSKEY_OPTIONS_RULE])),
         "/device/code": DEVICE_CODE_RULE,
         "/device/token": DEVICE_TOKEN_RULE,
       },
@@ -400,9 +492,11 @@ export function createAuth(options: AuthOptions) {
             // Every session Better Auth creates after a password is recorded as the password stage, whatever the
             // account's two-factor flag says now: with two-factor on, the plugin turns it into a challenge, and a
             // sign-in racing enrolment (G6) keeps it. The second-factor routes record the second stage.
-            let after: { stage: "password" | "second_factor"; method?: string } | null = null
+            let after: { stage: "password" | "second_factor" | "passkey"; method?: string } | null = null
             if (path === "/sign-up/email" || path === "/sign-in/username") after = { stage: "password" }
             else if (SECOND_FACTOR[path] && !prior) after = { stage: "second_factor", method: SECOND_FACTOR[path] }
+            // A passkey is a whole sign-in on its own: the twoFactor plugin's hook covers only the password routes.
+            else if (path === PASSKEY_SIGN_IN_PATH) after = { stage: "passkey", method: "passkey" }
             if (!after) return
             const owner = await readOwner(ctx)
             const label = owner?.username ?? String((session as { userId?: string }).userId ?? "owner")
@@ -462,6 +556,28 @@ export function createAuth(options: AuthOptions) {
         requireName: true,
         maximumNameLength: AGENT_KEY_NAME_MAX,
         keyExpiration: { minExpiresIn: AGENT_KEY_DAYS_MIN, maxExpiresIn: AGENT_KEY_DAYS_MAX },
+      }),
+      // Passkeys belong to the public URL's host name (rpID), so a new host name makes every passkey useless and the
+      // owner signs in with the password and TOTP. Discoverable (sign-in without a username) and user verification
+      // required (PIN or biometrics), which the plugin enforces on both ceremonies: one passkey counts as two factors.
+      passkey({
+        rpName: "Adiutor",
+        rpID: publicUrl.hostname,
+        origin: publicUrl.origin,
+        authenticatorSelection: { residentKey: "required", userVerification: "required" },
+        registration: {
+          // After the attestation is verified and before the passkey is stored: the row of a passkey that will be
+          // added, and a refusal when it cannot be written.
+          afterVerification: async ({ ctx: c }) => {
+            const name = (c.body as { name?: unknown }).name
+            await audit(ownerBy(await readOwner(ctx)), "account.passkey_add", "account", {
+              name: typeof name === "string" ? name.trim() : null,
+            })
+          },
+        },
+        ...(options.afterPasskeyVerified
+          ? { authentication: { afterVerification: options.afterPasskeyVerified } }
+          : {}),
       }),
       // Agent approval in the browser: `adiutor connect` asks for a code, the owner approves it at /connect/device, and
       // the CLI receives a session token for that one approval. Its session lasts what every session lasts

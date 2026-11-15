@@ -10,12 +10,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
+import { BASE_URL } from "./address.ts"
 import { storageFile } from "./helpers.ts"
 
 test.describe.configure({ mode: "serial" })
 
 const COMMAND = "skill/adiutor/scripts/adiutor.mjs"
-const ORIGIN = "http://127.0.0.1:8090"
+const ORIGIN = BASE_URL
 let page: Page
 let dir = ""
 

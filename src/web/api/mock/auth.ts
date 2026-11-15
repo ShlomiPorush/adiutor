@@ -1,6 +1,6 @@
 // Better Auth's routes for the mock API (development and screenshots only; the production build drops it): the
-// session, the browsers, the password, the backup codes, the agent keys and agent approvals, over the mock's state.
-// The sign-in pages need the real server. Any password that is not empty is right: the mock holds none.
+// session, the browsers, the password, the backup codes, the passkeys (list, rename, remove), the agent keys and agent
+// approvals, over the mock's state. The sign-in pages and adding a passkey need the real server. Any password that is not empty is right: the mock holds none.
 
 import { ENDED_OTHERS_KEY, endedOthers, mockState as state } from "./transport.ts"
 
@@ -66,6 +66,17 @@ export async function mockAuthFetch(input: RequestInfo | URL, init?: RequestInit
     case "/device/approve":
     case "/device/deny":
       return json({ success: true })
+    case "/passkey/list-user-passkeys":
+      return json(state.passkeys)
+    case "/passkey/update-passkey": {
+      const passkey = state.passkeys.find((p) => p.id === body.id)
+      if (!passkey) return fail(404, "PASSKEY_NOT_FOUND", "Passkey not found")
+      passkey.name = String(body.name ?? "").trim()
+      return json({ passkey })
+    }
+    case "/passkey/delete-passkey":
+      state.passkeys = state.passkeys.filter((p) => p.id !== body.id)
+      return json({ status: true })
     case "/api-key/delete":
       state.agentKeys = state.agentKeys.filter((k) => k.id !== body.keyId)
       return json({ success: true })

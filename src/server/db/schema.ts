@@ -562,3 +562,31 @@ export const authDeviceCode = pgTable(
     uniqueIndex("auth_device_code_user_code_idx").on(t.userCode),
   ],
 )
+
+/**
+ * Passkeys of the @better-auth/passkey plugin (model `passkey`). Each one signs the owner in on its own, in place of
+ * the password and the TOTP code. `counter` is the authenticator's signature counter, an unsigned 32-bit number, so it
+ * needs more than an integer column.
+ */
+export const authPasskey = pgTable(
+  "auth_passkey",
+  {
+    id: text("id").primaryKey(),
+    name: text("name"),
+    publicKey: text("public_key").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    credentialID: text("credential_id").notNull(),
+    counter: bigint("counter", { mode: "number" }).notNull(),
+    deviceType: text("device_type").notNull(),
+    backedUp: boolean("backed_up").notNull(),
+    transports: text("transports"),
+    createdAt: at("created_at"),
+    aaguid: text("aaguid"),
+  },
+  (t) => [
+    uniqueIndex("auth_passkey_credential_id_idx").on(t.credentialID),
+    index("auth_passkey_user_id_idx").on(t.userId),
+  ],
+)
