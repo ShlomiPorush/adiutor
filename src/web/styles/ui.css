@@ -3175,17 +3175,6 @@ html.ui-layer-on .ui-page {
   gap: 2px;
 }
 
-/* A setting saved on its own, outside the save bar: its field and its Save button on one line. */
-.ui-set-pair {
-  display: flex;
-  gap: 8px;
-  margin: 0;
-}
-.ui-set-pair .ui-input {
-  flex: 1;
-  min-width: 0;
-}
-
 /* ---------- Account (Settings) ---------- */
 
 .ui-account-actions {

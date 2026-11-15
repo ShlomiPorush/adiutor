@@ -1,23 +1,25 @@
 // Settings, Agent access. Which panel shows depends on whether this Adiutor has agent access by approval mounted
-// (createApp's `agentOAuth`): the section reads GET /api/v1/agents/settings, and only a 404 `not_found` (an Adiutor
-// without it, as production is until the agent access release) shows today's panel of agent keys
-// (AgentKeysPanel.tsx). Any other failure shows the error with Try again, never the old panel.
+// (createApp's `agentOAuth`): the section reads GET /api/v1/agents/settings, and only a 404 `not_found` answer (an
+// Adiutor without it, as production is until the agent access release) shows today's panel of agent keys
+// (AgentKeysPanel.tsx). Any other failure shows the error with Try again, never the old panel; a refresh that fails
+// keeps what is shown and says so, with Try again.
 //
-// The new panel, in three groups: Agents (the on/off switch and the idle days, each saved at once outside the page's
-// save bar, after a question when it ends connections: turning agents off, or fewer idle days); How to connect (the
-// MCP address, the Claude Code command and the sentence for the agent skill, or the locked reason when the public URL
-// does not allow agents); Connected agents (name, how it connected, areas, approved, last used and when it ends, with
-// Disconnect, and Disconnect all at the end of the head, always there: it also ends waiting codes and open approvals).
+// The new panel, in three groups: Agents (the on/off switch and the idle days, part of the page's one draft and its
+// save bar, SV-1; the save asks first when it ends connections: agents turned off, or fewer idle days); How to connect
+// (the MCP address, the Claude Code command and the sentence for the agent skill, or the locked reason when the public
+// URL does not allow agents); Connected agents (name, how it connected, areas, approved, last used and when it ends,
+// with Disconnect, and Disconnect all at the end of the head, always there: it also ends waiting codes and open
+// approvals).
 
 import { useQueryClient } from "@tanstack/react-query"
-import { type ReactNode, useId, useState } from "react"
+import { type ReactNode, useState } from "react"
 import { AGENT_IDLE_DAYS_MAX, AGENT_IDLE_DAYS_MIN } from "../../../shared/settings.ts"
 import { ApiError } from "../../api/client.ts"
 import { api, qk } from "../../api/endpoints.ts"
 import type { AgentConnection, AgentSettings } from "../../api/types.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Copyable } from "../../ui/Copyable.tsx"
-import { confirmDialog } from "../../ui/confirm.tsx"
+import { type ConfirmOptions, confirmDialog } from "../../ui/confirm.tsx"
 import { EVERY, usePageQuery } from "../../ui/refresh.ts"
 import { Banner, Empty, ErrorState, errorReason, Loading, Locked } from "../../ui/states.tsx"
 import { Time } from "../../ui/Time.tsx"
@@ -36,6 +38,11 @@ async function readAgentSettings(): Promise<AgentSettings | null> {
   }
 }
 
+/** The agent settings as Settings reads them: the page's draft and this section share the one read. */
+export function useAgentSettings() {
+  return usePageQuery({ queryKey: qk.agentSettings, queryFn: readAgentSettings, every: EVERY.slow })
+}
+
 /** The command that adds Adiutor to Claude Code over MCP; Claude Code then opens Adiutor to approve it. */
 export function claudeCommand(mcpUrl: string): string {
   return `claude mcp add --transport http adiutor ${mcpUrl}`
@@ -49,13 +56,84 @@ export function idleDaysOf(typed: string): number | null {
   return value >= AGENT_IDLE_DAYS_MIN && value <= AGENT_IDLE_DAYS_MAX ? value : null
 }
 
-/** The Agent access section: the new panel where agent access is mounted, today's panel of agent keys otherwise. */
-export function AgentsSection() {
+/** The agent fields of the Settings draft, as typed. */
+export type AgentDraft = { agentsEnabled?: boolean; agentIdleDays?: string }
+
+/** What a save of the agent fields sends: only what differs from the stored settings (SV-2). */
+export function agentChanges(
+  saved: AgentSettings | null | undefined,
+  draft: AgentDraft,
+): { enabled?: boolean; idleDays?: number } {
+  if (!saved) return {}
+  const patch: { enabled?: boolean; idleDays?: number } = {}
+  if (draft.agentsEnabled !== undefined && draft.agentsEnabled !== saved.enabled) patch.enabled = draft.agentsEnabled
+  if (draft.agentIdleDays !== undefined) {
+    const text = draft.agentIdleDays.trim()
+    const value = text === "" ? Number.NaN : Number(text)
+    if (value !== saved.idleDays) patch.idleDays = value
+  }
+  return patch
+}
+
+/** The question a save asks first when it ends connections: agents turned off, or fewer idle days. */
+export function endingQuestion(
+  saved: AgentSettings,
+  patch: { enabled?: boolean; idleDays?: number },
+  t: (key: string) => string,
+  tc: (key: string, count: number) => string,
+): ConfirmOptions | null {
+  if (patch.enabled === false)
+    return {
+      title: t("agentAccess.offTitle"),
+      message: t("agentAccess.offMessage"),
+      confirmText: t("agentAccess.offConfirm"),
+      danger: true,
+    }
+  const on = patch.enabled ?? saved.enabled
+  if (on && patch.idleDays !== undefined && patch.idleDays < saved.idleDays)
+    return {
+      title: t("agentAccess.idleFewerTitle"),
+      message: tc("agentAccess.idleFewerMessage", patch.idleDays),
+      confirmText: t("agentAccess.idleFewerConfirm"),
+      danger: true,
+    }
+  return null
+}
+
+/** The parts of the Settings draft this section edits (SettingsPage's form). */
+export type AgentForm = {
+  draft: AgentDraft
+  set(change: AgentDraft): void
+  ids: { agentsEnabled: string; agentIdleDays: string }
+  fieldError(field: "agentIdleDays"): ReactNode
+  invalid(field: "agentIdleDays"): Record<string, unknown>
+}
+
+/** A refresh that failed: what is shown stays, and the notice offers Try again. */
+function RefreshFailed({ onRetry }: { onRetry: () => void }) {
   const { t } = useI18n()
-  const query = usePageQuery({ queryKey: qk.agentSettings, queryFn: readAgentSettings, every: EVERY.slow })
+  return (
+    <Banner
+      tone="warn"
+      title={t("agentAccess.refreshFailed")}
+      action={
+        <button type="button" className="ui-btn ui-btn-sm" onClick={onRetry}>
+          {t("common.tryAgain")}
+        </button>
+      }
+    />
+  )
+}
+
+/** The Agent access section: the new panel where agent access is mounted, today's panel of agent keys otherwise. */
+export function AgentsSection({ form }: { form: AgentForm }) {
+  const { t } = useI18n()
+  const query = useAgentSettings()
+  const retry = () => void query.refetch()
   if (query.isPending) return <Loading label={t("agentAccess.loading")} />
-  if (query.isError && query.data === undefined)
-    return <ErrorState title={t("agentAccess.failed")} error={query.error} onRetry={() => void query.refetch()} />
+  // A failure never shows the old panel: only a 404 answer does, and a failure after it is shown as a failure.
+  if (query.isError && !query.data)
+    return <ErrorState title={t("agentAccess.failed")} error={query.error} onRetry={retry} />
   if (query.data === null || query.data === undefined)
     return (
       <>
@@ -66,118 +144,40 @@ export function AgentsSection() {
   return (
     <>
       <p className="ui-set-tabdesc">{t("agentAccess.hint")}</p>
-      <AgentAccessSection settings={query.data} />
-    </>
-  )
-}
-
-function AgentAccessSection({ settings }: { settings: AgentSettings }) {
-  return (
-    <>
-      <SettingsGroup settings={settings} />
-      <ConnectGroup settings={settings} />
+      {query.isError ? <RefreshFailed onRetry={retry} /> : null}
+      <SettingsGroup settings={query.data} form={form} />
+      <ConnectGroup settings={query.data} />
       <ConnectionsGroup />
     </>
   )
 }
 
-/** The switch and the idle days, each saved at once; a change that ends connections asks first. */
-function SettingsGroup({ settings }: { settings: AgentSettings }) {
-  const { t, tc, language } = useI18n()
-  const queryClient = useQueryClient()
-  const daysId = useId()
-  const errorId = useId()
-  const [busy, setBusy] = useState(false)
-  // What the owner typed, until it is saved; the stored value shows otherwise, so a refresh never replaces typing.
-  const [typed, setTyped] = useState<string | null>(null)
-  const shown = typed ?? String(settings.idleDays)
-  const days = idleDaysOf(shown)
-  const invalid = typed !== null && days === null
-
-  const save = async (patch: { enabled?: boolean; idleDays?: number }, done: string) => {
-    setBusy(true)
-    try {
-      await api.updateAgentSettings(patch)
-      showToast(done, "success")
-      if (patch.idleDays !== undefined) setTyped(null)
-    } catch (error) {
-      showToast(t("agentAccess.saveFailed", { reason: errorReason(language, error) }), "error")
-    } finally {
-      setBusy(false)
-    }
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: qk.agentSettings }),
-      queryClient.invalidateQueries({ queryKey: qk.agentConnections }),
-    ])
-  }
-
-  const flip = async (enabled: boolean) => {
-    if (!enabled) {
-      const ok = await confirmDialog({
-        title: t("agentAccess.offTitle"),
-        message: t("agentAccess.offMessage"),
-        confirmText: t("agentAccess.offConfirm"),
-        danger: true,
-      })
-      if (!ok) return
-    }
-    await save({ enabled }, t(enabled ? "agentAccess.turnedOn" : "agentAccess.turnedOff"))
-  }
-
-  const saveDays = async () => {
-    if (days === null || days === settings.idleDays) return
-    if (days < settings.idleDays) {
-      const ok = await confirmDialog({
-        title: t("agentAccess.idleFewerTitle"),
-        message: tc("agentAccess.idleFewerMessage", days),
-        confirmText: t("agentAccess.idleFewerConfirm"),
-        danger: true,
-      })
-      if (!ok) return
-    }
-    await save({ idleDays: days }, tc("agentAccess.idleSaved", days))
-  }
-
+/** The switch and the idle days: fields of the page's one draft, saved with the save bar. */
+function SettingsGroup({ settings, form }: { settings: AgentSettings; form: AgentForm }) {
+  const { t } = useI18n()
+  const { draft, set, ids, fieldError, invalid } = form
   return (
     <Group id="settings-agents" title={t("agentAccess.settingsTitle")}>
       <SwitchRow
+        id={ids.agentsEnabled}
         label={t("agentAccess.switch")}
         hint={t("agentAccess.switchHint")}
-        checked={settings.enabled}
-        disabled={busy}
-        onChange={(next) => void flip(next)}
+        checked={draft.agentsEnabled ?? settings.enabled}
+        onChange={(next) => set({ agentsEnabled: next })}
       />
-      <Row label={t("agentAccess.idleDays")} hint={t("agentAccess.idleHint")} htmlFor={daysId}>
-        <form
-          className="ui-set-pair"
-          noValidate
-          onSubmit={(event) => {
-            event.preventDefault()
-            void saveDays()
-          }}
-        >
-          <input
-            id={daysId}
-            className="ui-input"
-            type="number"
-            inputMode="numeric"
-            min={AGENT_IDLE_DAYS_MIN}
-            max={AGENT_IDLE_DAYS_MAX}
-            value={shown}
-            disabled={busy}
-            aria-invalid={invalid || undefined}
-            aria-describedby={invalid ? errorId : undefined}
-            onChange={(event) => setTyped(event.target.value)}
-          />
-          <button type="submit" className="ui-btn" disabled={busy || days === null || days === settings.idleDays}>
-            {t("agentAccess.idleSave")}
-          </button>
-        </form>
-        {invalid ? (
-          <p id={errorId} className="ui-field-error" role="alert">
-            {t("agentAccess.idleInvalid")}
-          </p>
-        ) : null}
+      <Row label={t("agentAccess.idleDays")} hint={t("agentAccess.idleHint")} htmlFor={ids.agentIdleDays}>
+        <input
+          id={ids.agentIdleDays}
+          className="ui-input"
+          type="number"
+          inputMode="numeric"
+          min={AGENT_IDLE_DAYS_MIN}
+          max={AGENT_IDLE_DAYS_MAX}
+          value={draft.agentIdleDays ?? String(settings.idleDays)}
+          {...invalid("agentIdleDays")}
+          onChange={(event) => set({ agentIdleDays: event.target.value })}
+        />
+        {fieldError("agentIdleDays")}
       </Row>
     </Group>
   )
@@ -291,6 +291,7 @@ function ConnectionsGroup() {
       {query.isError && !query.data ? (
         <ErrorState title={t("agentAccess.failed")} error={query.error} onRetry={() => void query.refetch()} />
       ) : null}
+      {query.isError && query.data ? <RefreshFailed onRetry={() => void query.refetch()} /> : null}
       {query.data && connections.length === 0 ? (
         <Empty title={t("agentAccess.empty")} hint={t("agentAccess.emptyHint")} />
       ) : null}

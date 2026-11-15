@@ -9,7 +9,9 @@ import type { ConsentDetails } from "./types.ts"
 /**
  * Why the page cannot go on: sign in first, set up two-factor first, the request is no longer open (expired, answered,
  * or opened in another browser session), agents cannot connect here (agents off, or the public URL does not allow it,
- * or an Adiutor without agent access), refused, an answer the page cannot use, or no answer at all.
+ * or an Adiutor without agent access: 404), refused, another refusal of the request, or an answer that may not be the
+ * server's own (a server error, or not JSON: lost on its way, so the request may have been carried out), or no answer
+ * at all.
  */
 export type ConsentFailure =
   | "unauthorized"
@@ -19,6 +21,7 @@ export type ConsentFailure =
   | "forbidden"
   | "validation"
   | "other"
+  | "lost"
   | "network"
 
 export class ConsentError extends Error {
@@ -53,14 +56,15 @@ async function call<T>(path: string, init: RequestInit): Promise<T> {
   } catch {
     throw new ConsentError("network")
   }
-  // An Adiutor without agent access answers this address with the app's own page: nothing to approve here.
-  if (!(response.headers.get("content-type") ?? "").includes("application/json"))
-    throw new ConsentError(response.ok ? "not_configured" : consentFailure(response.status, null))
+  // A server error, or an answer that is not the API's JSON (a proxy's page, a cut connection), says nothing about
+  // whether the request was carried out.
+  if (response.status >= 500 || !(response.headers.get("content-type") ?? "").includes("application/json"))
+    throw new ConsentError("lost")
   let body: unknown
   try {
     body = await response.json()
   } catch {
-    throw new ConsentError("other")
+    throw new ConsentError("lost")
   }
   if (!response.ok) throw new ConsentError(consentFailure(response.status, (body as { error?: unknown })?.error))
   return body as T

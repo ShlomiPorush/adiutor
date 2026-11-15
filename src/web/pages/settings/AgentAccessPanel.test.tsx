@@ -1,21 +1,26 @@
 // @vitest-environment happy-dom
-// Settings, Agent access: today's panel of agent keys where agent access by approval is not mounted (the settings read
-// answers 404), the error state for any other failure, and the new panel where it is: the switch and the idle days
-// (turning off and fewer days ask first), how to connect or why agents cannot, the connections with Disconnect, and
-// Disconnect all, there even with no connection.
+// Settings, Agent access: today's panel of agent keys only where the settings read answers 404 not_found, the error
+// for any other failure (also after a 404 was shown), a failed refresh said with Try again while the data stays, and
+// the new panel: the switch and the idle days in the page's one draft and save bar (the save asks first when it ends
+// connections), how to connect or why agents cannot, the connections with Disconnect, and Disconnect all, there even
+// with no connection.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act } from "react"
+import { act, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { MemoryRouter } from "react-router"
+import { createMemoryRouter, RouterProvider } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import en from "../../../shared/locales/en.json"
+import { SETTINGS_DEFAULTS } from "../../../shared/settings.ts"
 import { setTransport, type TransportRequest, type TransportResponse } from "../../api/client.ts"
-import type { AgentConnection, AgentSettings } from "../../api/types.ts"
+import { qk } from "../../api/endpoints.ts"
+import type { AgentConnection, AgentSettings, Settings } from "../../api/types.ts"
 import { I18nProvider } from "../../i18n/i18n.tsx"
 import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
-import { AgentsSection, claudeCommand, idleDaysOf } from "./AgentAccessPanel.tsx"
+import { UnsavedProvider } from "../../ui/unsaved.tsx"
+import { forgetSettingsVisit, SettingsPage } from "../SettingsPage.tsx"
+import { agentChanges, claudeCommand, idleDaysOf } from "./AgentAccessPanel.tsx"
 import { skillSentence } from "./AgentKeysPanel.tsx"
 
 vi.mock("../../api/auth.ts", async (importOriginal) => {
@@ -26,11 +31,27 @@ vi.mock("../../api/auth.ts", async (importOriginal) => {
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const ISSUER = "https://adiutor.example.com"
-let settings: AgentSettings | null
-let settingsStatus: number
+const SAVED: Settings = {
+  id: "s1",
+  ...SETTINGS_DEFAULTS,
+  language: "en",
+  updatedAt: "2026-11-01T08:00:00.000Z",
+  telegram: {
+    botToken: { set: true, readable: true, locked: false, variable: null },
+    chatId: { value: "4242", locked: false, variable: null },
+    state: "on",
+    missing: [],
+  },
+  privateDomains: { value: ["corp.example"], locked: false, variable: null },
+}
+
+let agents: AgentSettings
+let agentsStatus: number
+let connectionsStatus: number
 let connections: AgentConnection[]
 let requests: TransportRequest[]
 let mounted: { root: Root; host: HTMLElement } | null = null
+let client: QueryClient
 
 const connection = (id: string, name: string): AgentConnection => ({
   id,
@@ -44,21 +65,24 @@ const connection = (id: string, name: string): AgentConnection => ({
   endsAt: "2027-01-30T08:00:00.000Z",
 })
 
+const failure = (status: number): TransportResponse =>
+  status === 404
+    ? { status: 404, body: { error: { code: "not_found", message: "Nothing is here." } } }
+    : { status, body: { error: { code: "internal_error", message: "Down." } } }
+
 async function transport(request: TransportRequest): Promise<TransportResponse> {
   requests.push(request)
   const { method, path, body } = request
-  if (path === "/agents/settings" && method === "GET") {
-    if (settingsStatus === 404)
-      return { status: 404, body: { error: { code: "not_found", message: "Nothing is here." } } }
-    if (settingsStatus !== 200)
-      return { status: settingsStatus, body: { error: { code: "internal_error", message: "Down." } } }
-    return { status: 200, body: settings }
-  }
+  if (path === "/settings" && method === "GET") return { status: 200, body: { data: SAVED } }
+  if (path === "/settings" && method === "PATCH") return { status: 200, body: { data: SAVED } }
+  if (path === "/agents/settings" && method === "GET")
+    return agentsStatus === 200 ? { status: 200, body: agents } : failure(agentsStatus)
   if (path === "/agents/settings" && method === "PATCH") {
-    settings = { ...(settings as AgentSettings), ...(body as object) }
-    return { status: 200, body: { enabled: settings.enabled, idleDays: settings.idleDays } }
+    agents = { ...agents, ...(body as object) }
+    return { status: 200, body: { enabled: agents.enabled, idleDays: agents.idleDays } }
   }
-  if (path === "/agents/connections" && method === "GET") return { status: 200, body: { connections } }
+  if (path === "/agents/connections" && method === "GET")
+    return connectionsStatus === 200 ? { status: 200, body: { connections } } : failure(connectionsStatus)
   if (path.startsWith("/agents/connections/") && method === "DELETE") {
     connections = connections.filter((c) => !path.endsWith(c.id))
     return { status: 204, body: null }
@@ -68,13 +92,14 @@ async function transport(request: TransportRequest): Promise<TransportResponse> 
     connections = []
     return { status: 200, body: { ended } }
   }
-  return { status: 404, body: { error: { code: "not_found", message: "Not here." } } }
+  return failure(404)
 }
 
 beforeEach(() => {
+  forgetSettingsVisit()
   localStorage.clear()
   localStorage.setItem("adiutor.language", "en")
-  settings = {
+  agents = {
     enabled: true,
     idleDays: 90,
     issuer: ISSUER,
@@ -82,10 +107,20 @@ beforeEach(() => {
     mcpUrl: `${ISSUER}/mcp`,
     restUrl: `${ISSUER}/api/v1`,
   }
-  settingsStatus = 200
+  agentsStatus = 200
+  connectionsStatus = 200
   connections = []
   requests = []
   setTransport(transport)
+  vi.spyOn(window, "matchMedia").mockImplementation(
+    (query: string) =>
+      ({
+        matches: query === "(min-width: 761px)",
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }) as unknown as MediaQueryList,
+  )
 })
 
 afterEach(async () => {
@@ -95,6 +130,7 @@ afterEach(async () => {
     await act(async () => root.unmount())
     host.remove()
   }
+  vi.restoreAllMocks()
 })
 
 async function settle(ms = 40): Promise<void> {
@@ -103,21 +139,32 @@ async function settle(ms = 40): Promise<void> {
   })
 }
 
-async function render(): Promise<void> {
+async function render(path = "/settings/agents"): Promise<void> {
   const host = document.createElement("div")
   document.body.append(host)
   const root = createRoot(host)
   mounted = { root, host }
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client.setQueryData(qk.session, { actor: { kind: "owner", label: "owner.name" } })
+  const frame = (page: ReactNode) => (
+    <UnsavedProvider>
+      {page}
+      <ConfirmHost />
+      <ToastHost />
+    </UnsavedProvider>
+  )
+  const router = createMemoryRouter(
+    [
+      { path: "/settings/:section?", element: frame(<SettingsPage />) },
+      { path: "/", element: frame(<p data-testid="board">board</p>) },
+    ],
+    { initialEntries: [path] },
+  )
   await act(async () => {
     root.render(
-      <QueryClientProvider client={queryClient}>
+      <QueryClientProvider client={client}>
         <I18nProvider>
-          <MemoryRouter>
-            <AgentsSection />
-            <ConfirmHost />
-            <ToastHost />
-          </MemoryRouter>
+          <RouterProvider router={router} />
         </I18nProvider>
       </QueryClientProvider>,
     )
@@ -131,9 +178,16 @@ const buttons = (scope: ParentNode = document) => Array.from(scope.querySelector
 const button = (name: string, scope: ParentNode = document) =>
   buttons(scope).find((element) => plain(element.textContent) === name)
 const question = () => document.querySelector<HTMLElement>('[role="alertdialog"]')
-const switchBox = () => document.querySelector<HTMLInputElement>('input[role="switch"]')
+const switchBox = () => document.querySelector<HTMLInputElement>('#settings-agents input[role="switch"]')
 const daysField = () => document.querySelector<HTMLInputElement>('#settings-agents input[type="number"]')
+const unsaved = () => plain(document.querySelector(".ui-savebar-count")?.textContent) || null
 const writes = () => requests.filter((r) => r.method !== "GET")
+const refetch = async (key: readonly string[]) => {
+  await act(async () => {
+    await client.refetchQueries({ queryKey: key })
+  })
+  await settle()
+}
 
 async function click(element: Element | null | undefined): Promise<void> {
   expect(element).toBeTruthy()
@@ -153,21 +207,59 @@ async function type(input: HTMLInputElement | null, value: string): Promise<void
 }
 
 describe("which panel shows", () => {
-  it("shows today's panel of agent keys where agent access is not mounted (404)", async () => {
-    settingsStatus = 404
+  it("shows today's panel of agent keys where agent access is not mounted (404 not_found)", async () => {
+    agentsStatus = 404
     await render()
     expect(page()).toContain(en.agentKeys.howTitle)
     expect(page()).toContain(en.settings.sections.agents.hint)
     expect(page()).not.toContain(en.agentAccess.switch)
-    expect(requests.map((r) => r.path)).toEqual(["/agents/settings"])
   })
 
   it("shows the failure with Try again for any other answer, never the old panel", async () => {
-    settingsStatus = 500
+    agentsStatus = 500
     await render()
     expect(page()).toContain(en.agentAccess.failed)
     expect(button(en.common.tryAgain)).toBeTruthy()
     expect(page()).not.toContain(en.agentKeys.howTitle)
+  })
+
+  it("shows a failure after a 404 as a failure, not as the old panel", async () => {
+    agentsStatus = 404
+    await render()
+    expect(page()).toContain(en.agentKeys.howTitle)
+    agentsStatus = 500
+    await refetch(qk.agentSettings)
+    expect(page()).toContain(en.agentAccess.failed)
+    expect(page()).not.toContain(en.agentKeys.howTitle)
+  })
+})
+
+describe("a refresh that fails", () => {
+  it("keeps the panel and the list, says so, and Try again reads again", async () => {
+    connections = [connection("c1", "Laptop sync")]
+    await render()
+    agentsStatus = 500
+    connectionsStatus = 500
+    await refetch(qk.agentSettings)
+    await refetch(qk.agentConnections)
+    expect(switchBox()).not.toBeNull()
+    expect(document.querySelectorAll("[data-testid=agent-connection]")).toHaveLength(1)
+    const notices = Array.from(document.querySelectorAll(".ui-banner")).filter((b) =>
+      plain(b.textContent).includes(en.agentAccess.refreshFailed),
+    )
+    expect(notices).toHaveLength(2)
+    agentsStatus = 200
+    connectionsStatus = 200
+    for (const notice of notices) await click(button(en.common.tryAgain, notice))
+    expect(page()).not.toContain(en.agentAccess.refreshFailed)
+  })
+
+  it("never shows a stale empty list without saying so", async () => {
+    await render()
+    expect(page()).toContain(en.agentAccess.empty)
+    connectionsStatus = 500
+    await refetch(qk.agentConnections)
+    expect(page()).toContain(en.agentAccess.refreshFailed)
   })
 })
 
@@ -215,53 +307,81 @@ describe("the new panel", () => {
     expect(plain(question()?.textContent)).toContain(en.agentAccess.disconnectAllNone)
   })
 
-  it("turns agents off only after a question, and on at once", async () => {
-    await render()
-    await click(switchBox())
-    expect(plain(question()?.textContent)).toContain(en.agentAccess.offMessage)
-    await click(button(en.common.cancel, question() as HTMLElement))
-    expect(writes()).toEqual([])
-    await click(switchBox())
-    await click(button(en.agentAccess.offConfirm, question() as HTMLElement))
-    expect(writes()).toEqual([{ method: "PATCH", path: "/agents/settings", body: { enabled: false } }])
-    expect(switchBox()?.checked).toBe(false)
-    expect(page()).toContain(en.agentAccess.offNote)
-    await click(switchBox())
-    expect(question()).toBeNull()
-    expect(writes()[1]).toEqual({ method: "PATCH", path: "/agents/settings", body: { enabled: true } })
-  })
-
-  it("saves more idle days at once, asks before fewer, and refuses a number outside 1 to 365", async () => {
-    await render()
-    const save = () => button(en.agentAccess.idleSave)
-    expect(save()?.disabled).toBe(true)
-    await type(daysField(), "400")
-    expect(page()).toContain(en.agentAccess.idleInvalid)
-    expect(save()?.disabled).toBe(true)
-    await type(daysField(), "120")
-    await click(save())
-    expect(writes()).toEqual([{ method: "PATCH", path: "/agents/settings", body: { idleDays: 120 } }])
-    await settle()
-    expect(daysField()?.value).toBe("120")
-    await type(daysField(), "30")
-    await click(save())
-    expect(plain(question()?.textContent)).toContain(en.agentAccess.idleFewerMessage.other.replace("{count}", "30"))
-    await click(button(en.agentAccess.idleFewerConfirm, question() as HTMLElement))
-    expect(writes()[1]).toEqual({ method: "PATCH", path: "/agents/settings", body: { idleDays: 30 } })
-  })
-
   it("replaces how to connect with the reason when the public URL does not allow agents", async () => {
-    settings = {
-      ...(settings as AgentSettings),
-      issuer: null,
-      issuerProblem: "plain_http",
-      mcpUrl: null,
-      restUrl: null,
-    }
+    agents = { ...agents, issuer: null, issuerProblem: "plain_http", mcpUrl: null, restUrl: null }
     await render()
     expect(page()).toContain(en.agentAccess.issuerTitle)
     expect(page()).toContain(en.agentAccess.issuer.plain_http)
     expect(page()).not.toContain("claude mcp add")
+  })
+})
+
+describe("the switch and the idle days in the page's draft (SV-1)", () => {
+  it("holds a change in the save bar, guarded against leaving, until Save", async () => {
+    await render()
+    await type(daysField(), "120")
+    expect(writes()).toEqual([])
+    expect(unsaved()).not.toBeNull()
+    expect(document.querySelector('.ui-set-nav a[href="/settings/agents"] .ui-set-dot')).not.toBeNull()
+    await click(button(en.savebar.discard))
+    expect(daysField()?.value).toBe("90")
+    expect(unsaved()).toBeNull()
+    await type(daysField(), "120")
+    await click(button(en.savebar.save))
+    expect(question()).toBeNull()
+    expect(writes()).toEqual([{ method: "PATCH", path: "/agents/settings", body: { idleDays: 120 } }])
+    expect(unsaved()).toBeNull()
+    expect(daysField()?.value).toBe("120")
+  })
+
+  it("asks before a save that turns agents off; Cancel keeps the draft and sends nothing", async () => {
+    await render()
+    await click(switchBox())
+    expect(switchBox()?.checked).toBe(false)
+    expect(writes()).toEqual([])
+    await click(button(en.savebar.save))
+    expect(plain(question()?.textContent)).toContain(en.agentAccess.offMessage)
+    await click(button(en.common.cancel, question() as HTMLElement))
+    expect(writes()).toEqual([])
+    expect(unsaved()).not.toBeNull()
+    await click(button(en.savebar.save))
+    await click(button(en.agentAccess.offConfirm, question() as HTMLElement))
+    expect(writes()).toEqual([{ method: "PATCH", path: "/agents/settings", body: { enabled: false } }])
+    expect(switchBox()?.checked).toBe(false)
+    expect(page()).toContain(en.agentAccess.offNote)
+  })
+
+  it("asks before fewer idle days, refuses a number outside 1 to 365 with the field marked, and saves both settings", async () => {
+    await render()
+    await type(daysField(), "400")
+    await click(button(en.savebar.save))
+    expect(writes()).toEqual([])
+    expect(daysField()?.getAttribute("aria-invalid")).toBe("true")
+    expect(page()).toContain(en.agentAccess.idleInvalid)
+    await type(daysField(), "30")
+    await click(switchBox())
+    await click(switchBox())
+    await click(button(en.savebar.save))
+    expect(plain(question()?.textContent)).toContain(en.agentAccess.idleFewerMessage.other.replace("{count}", "30"))
+    await click(button(en.agentAccess.idleFewerConfirm, question() as HTMLElement))
+    expect(writes()).toEqual([{ method: "PATCH", path: "/agents/settings", body: { idleDays: 30 } }])
+  })
+})
+
+describe("what a save of the agent fields sends", () => {
+  it("only what differs from the stored settings", () => {
+    const saved = {
+      enabled: true,
+      idleDays: 90,
+      issuer: ISSUER,
+      issuerProblem: null,
+      mcpUrl: null,
+      restUrl: null,
+    } as const
+    expect(agentChanges(saved, {})).toEqual({})
+    expect(agentChanges(saved, { agentsEnabled: true, agentIdleDays: " 90 " })).toEqual({})
+    expect(agentChanges(saved, { agentsEnabled: false, agentIdleDays: "7" })).toEqual({ enabled: false, idleDays: 7 })
+    expect(agentChanges(null, { agentsEnabled: false })).toEqual({})
   })
 })
 

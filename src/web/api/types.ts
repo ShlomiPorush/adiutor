@@ -105,7 +105,8 @@ export type ConsentDetails = {
   client: { name: string; builtIn: boolean; nameIsOwnWord: true }
   via: AgentConnectionMethod
   resource: AgentResource
-  redirect: { host: string; loopback: boolean } | null
+  /** Where the browser returns: its host (empty for an app's own scheme), whether it is this computer, its scheme. */
+  redirect: { host: string; loopback: boolean; scheme: string } | null
   areas: AgentArea[]
   idleDays: number
 }

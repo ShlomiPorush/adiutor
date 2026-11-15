@@ -1287,8 +1287,8 @@
     "loading": "Loading the request...",
     "who": "Who is asking",
     "nameTag": "Name supplied by agent",
-    "builtInTag": "Adiutor's skill or sync",
-    "builtInText": "The name is the one the script gives itself. Approve only if you just started the Adiutor skill or the sync and compared its code.",
+    "builtInTag": "Asks as Adiutor's skill or sync",
+    "builtInText": "It asks the way Adiutor's skill and the sync do, but any program can ask this way, and Adiutor cannot check which program really asks. The name is the one it gives itself. Approve only if you just started the Adiutor skill or the sync and compared its code.",
     "otherText": "Any program can use this name. Approve only if you just started this connection.",
     "via": "How it connected",
     "viaCode": "With a code you compared on the previous page",
@@ -1342,11 +1342,13 @@
     },
     "failed": {
       "validation": "Choose what the agent may do from the areas shown.",
-      "network": "Could not send your answer. Check your connection and try again.",
       "other": "Could not send your answer. Try again."
     },
     "toSettings": "Open Agent access",
-    "toBoard": "Go to the board"
+    "toBoard": "Go to the board",
+    "app": "An app on a device",
+    "unknownTitle": "Your answer may have been saved",
+    "unknownText": "No answer came back, so Adiutor may have recorded it. Check Settings → Agent access for this connection. If it is not there, start the connection again in your agent."
   },
   "agentAccess": {
     "hint": "Agents and the sync connect once, and you approve each one in the browser. A connection ends after the idle days without use; disconnect one here when a computer is lost.",
@@ -1355,18 +1357,12 @@
     "switchHint": "Off ends every connection and every waiting request at once, and refuses new ones.",
     "offTitle": "Turn agents off?",
     "offMessage": "Every agent connection, waiting code and open approval ends now. Turning agents on again brings none back.",
-    "offConfirm": "Turn off",
-    "turnedOn": "Agents can connect",
+    "offConfirm": "Save and turn off",
     "turnedOff": "Agents are off, and every connection ended",
     "saveFailed": "Could not save the agent settings: {reason}",
     "idleDays": "Idle days",
     "idleHint": "A connection ends after this many days without a real request (1 to 365). Fewer days end every connection idle longer at once.",
     "idleInvalid": "Enter a whole number from 1 to 365.",
-    "idleSave": "Save",
-    "idleSaved": {
-      "one": "Connections now end after 1 day without use",
-      "other": "Connections now end after {count} days without use"
-    },
     "idleFewerTitle": "End idle connections?",
     "idleFewerMessage": {
       "one": "Connections not used for more than 1 day end now.",
@@ -1424,6 +1420,7 @@
       "other": "{count} agent connections ended"
     },
     "disconnectedAllNone": "Every waiting request ended",
-    "disconnectAllFailed": "Could not disconnect all agents: {reason}"
+    "disconnectAllFailed": "Could not disconnect all agents: {reason}",
+    "refreshFailed": "Could not refresh. What is shown may be out of date."
   }
 }

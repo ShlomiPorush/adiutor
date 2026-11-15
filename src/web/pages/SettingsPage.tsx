@@ -34,7 +34,7 @@ import { LANGUAGES } from "../../shared/enums.ts"
 import { CLOSED_ITEM_DAYS_MAX, CLOSED_ITEM_DAYS_MIN, SETTINGS_DEFAULTS } from "../../shared/settings.ts"
 import { ApiError } from "../api/client.ts"
 import { api, qk } from "../api/endpoints.ts"
-import type { DateFormat, Settings, SettingsPatch, TimeFormat } from "../api/types.ts"
+import type { AgentSettings, DateFormat, Settings, SettingsPatch, TimeFormat } from "../api/types.ts"
 import {
   APP_TIME_ZONE,
   DATE_FORMATS,
@@ -49,6 +49,7 @@ import { formatNumber } from "../format/number.ts"
 import { type Language, useI18n } from "../i18n/i18n.tsx"
 import { PageHead } from "../shell/chrome.tsx"
 import { usePageMeta } from "../shell/pageMeta.tsx"
+import { confirmDialog } from "../ui/confirm.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
 import { SaveBar } from "../ui/SaveBar.tsx"
 import { ErrorState, errorReason, Loading, Locked } from "../ui/states.tsx"
@@ -57,7 +58,14 @@ import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
 import { useUnsaved } from "../ui/unsaved.tsx"
 import { useSignOutEverywhere } from "./AccountPage.tsx"
-import { AgentsSection } from "./settings/AgentAccessPanel.tsx"
+import {
+  type AgentDraft,
+  AgentsSection,
+  agentChanges,
+  endingQuestion,
+  idleDaysOf,
+  useAgentSettings,
+} from "./settings/AgentAccessPanel.tsx"
 import { Fact, Facts, Group, type ResetMark, Row, SwitchRow } from "./settings/parts.tsx"
 import { StatusSection, SuppressionsSection } from "./settings/SyncSections.tsx"
 import {
@@ -80,7 +88,7 @@ const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
 /** The bot token in the form: kept as stored, replaced by a typed one, or removed on save (v3 FS-3). */
 type TokenDraft = { mode: "replace"; value: string } | { mode: "remove" }
 
-type Draft = {
+type Draft = AgentDraft & {
   language?: Language
   dateFormat?: DateFormat
   timeFormat?: TimeFormat
@@ -177,7 +185,9 @@ export function SettingsPage() {
   const sectionTitle = t(`settings.sections.${active}.title`)
   usePageMeta(t("settings.title"), [], { label: sectionTitle, pageTo: "/settings" })
   const query = usePageQuery({ queryKey: qk.settings, queryFn: api.settings, every: EVERY.slow })
-  const form = useSettingsDraft(query.data, active)
+  // Agent access's own settings join the one draft where it is mounted (null where the server answers 404).
+  const agents = useAgentSettings()
+  const form = useSettingsDraft(query.data, agents.data, active)
 
   const pageRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -208,7 +218,7 @@ export function SettingsPage() {
     else if (query.isError)
       body = <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
     else body = <Loading label={t("settings.loading")} />
-  } else if (active === "agents") body = <AgentsSection />
+  } else if (active === "agents") body = <AgentsSection form={form} />
   else if (active === "status") body = <StatusSection />
   else body = <SuppressionsSection />
 
@@ -532,8 +542,12 @@ export function keepRevealed(
 type FieldError = { field: DraftField; text: string }
 
 /** The one settings draft for every section, its save bar and its guard (SV-1, R2). */
-function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) {
-  const { t, language, setLanguage } = useI18n()
+function useSettingsDraft(
+  saved: Settings | undefined,
+  agentSaved: AgentSettings | null | undefined,
+  active: SettingsSection,
+) {
+  const { t, tc, language, setLanguage } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const signOutEverywhere = useSignOutEverywhere()
@@ -548,6 +562,8 @@ function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) 
     botToken: `${base}-token`,
     chatId: `${base}-chat`,
     privateDomains: `${base}-domain`,
+    agentsEnabled: `${base}-agents`,
+    agentIdleDays: `${base}-agent-days`,
   }
   const errorId = `${base}-error`
   const [draft, setDraft] = useState<Draft>({})
@@ -555,7 +571,9 @@ function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) 
   const [error, setError] = useState<FieldError | null>(null)
   const [focusing, setFocusing] = useState<DraftField | null>(null)
   const patch = saved ? changedFields(saved, draft) : {}
-  const count = Object.keys(patch).length
+  // Agent access is saved to its own route, and only where it is mounted (agentSaved is null where it is not).
+  const agentPatch = agentChanges(agentSaved, draft)
+  const count = Object.keys(patch).length + Object.keys(agentPatch).length
   useUnsaved("settings", { count, kind: "leave", keeps: (next) => isSettingsPath(next.pathname) })
 
   const set = (change: Partial<Draft>) => {
@@ -595,18 +613,34 @@ function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) 
       return refuse("botToken", t("telegramSettings.botToken"), t("telegramSettings.tokenInvalid"))
     if (typeof patch.telegramChatId === "string" && !CHAT_ID.test(patch.telegramChatId))
       return refuse("chatId", t("telegramSettings.chatId"), t("telegramSettings.chatInvalid"))
+    if (agentPatch.idleDays !== undefined && idleDaysOf(draft.agentIdleDays ?? "") === null)
+      return refuse("agentIdleDays", t("agentAccess.idleDays"), t("agentAccess.idleInvalid"))
+    // A save that ends agent connections (agents off, fewer idle days) asks first; Cancel keeps the draft.
+    const question = agentSaved ? endingQuestion(agentSaved, agentPatch, t, tc) : null
+    if (question && !(await confirmDialog(question))) return
     setError(null)
     setBusy(true)
     try {
-      const next = await api.updateSettings(patch)
-      queryClient.setQueryData(qk.settings, next)
-      setFormatPrefs({ dateFormat: next.dateFormat, timeFormat: next.timeFormat })
-      if (next.language !== language) setLanguage(next.language)
-      setDraft({})
-      await queryClient.invalidateQueries({ queryKey: qk.morning })
-      await queryClient.invalidateQueries({ queryKey: qk.telegram })
+      const settingsChanged = Object.keys(patch).length > 0
+      if (settingsChanged) {
+        const next = await api.updateSettings(patch)
+        queryClient.setQueryData(qk.settings, next)
+        setFormatPrefs({ dateFormat: next.dateFormat, timeFormat: next.timeFormat })
+        if (next.language !== language) setLanguage(next.language)
+        // The agent fields stay until their own save below succeeds.
+        setDraft(({ agentsEnabled, agentIdleDays }) => ({ agentsEnabled, agentIdleDays }))
+        await queryClient.invalidateQueries({ queryKey: qk.morning })
+        await queryClient.invalidateQueries({ queryKey: qk.telegram })
+      }
+      if (Object.keys(agentPatch).length > 0) {
+        await api.updateAgentSettings(agentPatch)
+        setDraft(({ agentsEnabled: _on, agentIdleDays: _days, ...rest }) => rest)
+        await queryClient.invalidateQueries({ queryKey: qk.agentSettings })
+        await queryClient.invalidateQueries({ queryKey: qk.agentConnections })
+      }
       // A shorter length leaves browsers already signed in with the time they had (G2): offer to sign out everywhere.
-      if (patch.sessionIdleDays !== undefined && patch.sessionIdleDays < saved.sessionIdleDays)
+      if (agentPatch.enabled === false) showToast(t("agentAccess.turnedOff"), "success")
+      else if (patch.sessionIdleDays !== undefined && patch.sessionIdleDays < saved.sessionIdleDays)
         showToast(t("settings.session.shortened"), "success", {
           action: { label: t("account.endAll"), onAction: () => void signOutEverywhere() },
           duration: 10_000,
@@ -668,7 +702,7 @@ function useSettingsDraft(saved: Settings | undefined, active: SettingsSection) 
     count,
     busy,
     error,
-    changed: changedSections(patch),
+    changed: Object.keys(agentPatch).length > 0 ? changedSections(patch).add("agents") : changedSections(patch),
   }
 }
 

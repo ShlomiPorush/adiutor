@@ -28,7 +28,7 @@ const browserDetails = (): ConsentDetails => ({
   client: { name: "Claude Code", builtIn: false, nameIsOwnWord: true },
   via: "browser",
   resource: "mcp",
-  redirect: { host: "127.0.0.1:33418", loopback: true },
+  redirect: { host: "127.0.0.1:33418", loopback: true, scheme: "http" },
   areas: ["read", "write"],
   idleDays: 90,
 })
@@ -163,9 +163,35 @@ describe("what the page shows", () => {
   })
 
   it("names another site as such", async () => {
-    details = { status: 200, body: { ...browserDetails(), redirect: { host: "agent.example.com", loopback: false } } }
+    details = {
+      status: 200,
+      body: { ...browserDetails(), redirect: { host: "agent.example.com", loopback: false, scheme: "https" } },
+    }
     await render()
     expect(page()).toContain(en.consent.remote)
+  })
+
+  it("names an app's own scheme, which has no host, as an app on a device", async () => {
+    details = {
+      status: 200,
+      body: { ...browserDetails(), redirect: { host: "", loopback: false, scheme: "com.example.agent" } },
+    }
+    await render()
+    expect(plain(document.querySelector("[data-testid=consent-host]")?.textContent)).toBe("com.example.agent:")
+    expect(page()).toContain(en.consent.app)
+    expect(page()).not.toContain(en.consent.remote)
+  })
+
+  it("marks the built-in client as asking like Adiutor's skill or sync, with a warning, not as proof", async () => {
+    details = {
+      status: 200,
+      body: { ...browserDetails(), client: { name: "Laptop sync", builtIn: true, nameIsOwnWord: true } },
+    }
+    await render()
+    const tag = document.querySelector(".ui-consent-id .ui-tag")
+    expect(plain(tag?.textContent)).toBe(en.consent.builtInTag)
+    expect(tag?.classList.contains("ui-tag-warn")).toBe(true)
+    expect(en.consent.builtInText).toContain("cannot check")
   })
 
   it("warns while writing is chosen, and not for reading alone", async () => {
@@ -226,6 +252,35 @@ describe("the answer", () => {
     expect(page()).toContain(en.consent.unavailable)
     expect(page()).toContain(en.consent.reason.gone)
   })
+
+  it("lets the owner answer again after a refusal that proves nothing was decided", async () => {
+    decision = { status: 415, body: { error: "unsupported_media_type", message: "x" } }
+    await render()
+    await click(button(en.consent.approve))
+    expect(page()).toContain(en.consent.failed.other)
+    expect(button(en.consent.approve)?.disabled).toBe(false)
+  })
+
+  for (const [name, lost] of [
+    ["no answer", null],
+    ["a server error", { status: 502, body: "<html>Bad gateway</html>", type: "text/html" }],
+    ["an answer that is not JSON", { status: 200, body: "", type: "text/plain" }],
+    ["the server's own error", { status: 500, body: { error: { code: "internal_error" } } }],
+  ] as const)
+    it(`says the outcome is unknown, without a retry, after ${name}`, async () => {
+      await render()
+      if (lost === null)
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => Promise.reject(new TypeError("connection reset"))),
+        )
+      else decision = lost as Answer
+      await click(button(en.consent.approve))
+      expect(page()).toContain(en.consent.unknownTitle)
+      expect(page()).toContain(en.consent.unknownText)
+      expect(button(en.consent.approve)).toBeUndefined()
+      expect(document.querySelector('a[href="/settings/agents"]')).not.toBeNull()
+    })
 })
 
 describe("a request the page cannot show", () => {
@@ -245,9 +300,15 @@ describe("a request the page cannot show", () => {
     ["gone", { status: 410, body: { error: "gone" } }, en.consent.reason.gone],
     ["not configured", { status: 404, body: { error: "not_configured" } }, en.consent.reason.not_configured],
     [
-      "an Adiutor without agent access",
-      { status: 200, body: "<!doctype html>", type: "text/html" },
+      "an Adiutor without agent access (the app's own 404)",
+      { status: 404, body: { error: { code: "not_found", message: "Nothing is here." } } },
       en.consent.reason.not_configured,
+    ],
+    // Not the API's answer: the page no longer reads an HTML page as "agents cannot connect".
+    [
+      "an answer that is not the API's",
+      { status: 200, body: "<!doctype html>", type: "text/html" },
+      en.consent.reason.other,
     ],
     ["refused", { status: 403, body: { error: "forbidden" } }, en.consent.reason.forbidden],
     ["broken", { status: 500, body: { error: { code: "internal_error" } } }, en.consent.reason.other],

@@ -97,8 +97,10 @@ function Request({ uid, here, details }: { uid: string; here: string; details: C
   const me = useQuery({ queryKey: qk.session, queryFn: api.session, staleTime: Number.POSITIVE_INFINITY })
   const [chosen, setChosen] = useState<AgentArea[]>(details.areas)
   const [busy, setBusy] = useState(false)
-  const [problem, setProblem] = useState<"noArea" | "validation" | "network" | "other" | null>(null)
+  const [problem, setProblem] = useState<"noArea" | "validation" | "other" | null>(null)
   const [ended, setEnded] = useState<ConsentFailure | null>(null)
+  // The answer was sent and none came back: the server may have recorded it, and the request is then gone.
+  const [unknown, setUnknown] = useState(false)
   const [answered, setAnswered] = useState<{ outcome: "approved" | "denied"; leaving: boolean } | null>(null)
 
   const { client, via, resource, redirect, idleDays } = details
@@ -122,13 +124,26 @@ function Request({ uid, here, details }: { uid: string; here: string; details: C
       if (next) away.go(next)
     } catch (error) {
       const reason = reasonOf(error)
-      if (reason === "validation" || reason === "network" || reason === "other") {
+      // Only a refusal proves that nothing was decided, so only then may the owner answer again.
+      if (reason === "network" || reason === "lost") setUnknown(true)
+      else if (reason === "validation" || reason === "other") {
         setProblem(reason)
         setBusy(false)
       } else setEnded(reason)
     }
   }
 
+  if (unknown)
+    return (
+      <AuthFrame title={t("consent.title")}>
+        <Banner tone="warn" title={t("consent.unknownTitle")}>
+          {t("consent.unknownText")}
+        </Banner>
+        <Link className="ui-btn" to="/settings/agents">
+          {t("consent.toSettings")}
+        </Link>
+      </AuthFrame>
+    )
   if (ended) {
     const to = authRedirect(ended, here)
     return to ? <Navigate to={to} replace /> : <Unavailable reason={ended} />
@@ -155,9 +170,7 @@ function Request({ uid, here, details }: { uid: string; here: string; details: C
           <bdi dir="auto">{client.name}</bdi>
         </p>
         <p className="ui-consent-id">
-          <Tag tone={client.builtIn ? "info" : "warn"}>
-            {client.builtIn ? t("consent.builtInTag") : t("consent.nameTag")}
-          </Tag>{" "}
+          <Tag tone="warn">{client.builtIn ? t("consent.builtInTag") : t("consent.nameTag")}</Tag>{" "}
           {client.builtIn ? t("consent.builtInText") : t("consent.otherText")}
         </p>
         <dl className="ui-consent-facts">
@@ -173,11 +186,12 @@ function Request({ uid, here, details }: { uid: string; here: string; details: C
             <div>
               <dt>{t("consent.returnsTo")}</dt>
               <dd>
+                {/* An app's own scheme (com.example.app:/callback) has no host: the scheme names it. */}
                 <bdi className="ui-mono ui-consent-host" dir="ltr" data-testid="consent-host">
-                  {redirect.host}
+                  {redirect.host || `${redirect.scheme}:`}
                 </bdi>{" "}
                 <Tag tone={redirect.loopback ? "ok" : "warn"}>
-                  {t(redirect.loopback ? "consent.loopback" : "consent.remote")}
+                  {t(redirect.loopback ? "consent.loopback" : redirect.host ? "consent.remote" : "consent.app")}
                 </Tag>
               </dd>
             </div>
