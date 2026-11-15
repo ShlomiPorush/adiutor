@@ -83,6 +83,7 @@ POSTGRES_DB=adiutor
 DATABASE_URL=postgres://adiutor:$password@postgres:5432/adiutor
 ADIUTOR_AUTH_SECRETS=1:$(random_hex)
 ADIUTOR_SETTINGS_KEYS=1:$(random_hex)
+ADIUTOR_OAUTH_SECRETS=1:$(random_hex)
 ADIUTOR_PUBLIC_URL=$(pr_url)
 EOF
   )
@@ -94,7 +95,7 @@ EOF
 ensure_auth_secret() {
   [ -f "$ENV_FILE" ] || return 0
   local name
-  for name in ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS; do
+  for name in ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS ADIUTOR_OAUTH_SECRETS; do
     grep -q "^$name=" "$ENV_FILE" && continue
     info "Adding $name to $ENV_FILE"
     (

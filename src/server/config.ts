@@ -10,6 +10,12 @@ export type ServerConfig = {
   authSecrets: VersionedKey[]
   /** ADIUTOR_SETTINGS_KEYS ("2:new,1:old"): encrypts the secrets stored in Settings. Never an auth secret. */
   settingsKeys: VersionedKey[]
+  /**
+   * ADIUTOR_OAUTH_SECRETS ("2:new,1:old"): the cookie keys of the authorization server for agents, in the order
+   * listed (newest first: the first signs, the others only verify). Never an auth secret or a settings key. Null
+   * while it is not set: optional until the release that switches agents to it.
+   */
+  oauthSecrets: VersionedKey[] | null
   /** ADIUTOR_TRUSTED_PROXIES: the proxy addresses or CIDR ranges in front of Adiutor (Traefik), comma-separated. */
   trustedProxies: string[]
   /** The URL the owner opens; browsers' Origin must match it. */
@@ -67,9 +73,17 @@ export function parseDomains(text: string): string[] {
     .filter(Boolean)
 }
 
+/** Text an example or a template holds instead of a key, in any case: refused for every key family. */
+const PLACEHOLDER = /changeme|change-me|change_me|replace-me|replaceme|placeholder|example|your-|<[^>]*>/i
+
+/** An obvious placeholder: a word from an example, a `<...>` slot, or one character repeated. */
+export function isPlaceholder(value: string): boolean {
+  return PLACEHOLDER.test(value) || /^(.)\1*$/su.test(value)
+}
+
 /**
- * Reads "2:new,1:old": versions are distinct non-negative integers, each value at least MIN_SECRET_BYTES bytes.
- * Problems name the variable and the position, never a value.
+ * Reads "2:new,1:old": versions are distinct non-negative integers, each value at least MIN_SECRET_BYTES bytes and
+ * not a placeholder. Problems name the variable and the position, never a value.
  */
 function parseKeys(name: string, text: string, problems: string[]): VersionedKey[] {
   const keys: VersionedKey[] = []
@@ -88,6 +102,8 @@ function parseKeys(name: string, text: string, problems: string[]): VersionedKey
     seen.add(version)
     if (Buffer.byteLength(value, "utf8") < MIN_SECRET_BYTES)
       problems.push(`${name} entry ${index + 1} must be at least ${MIN_SECRET_BYTES} bytes (use 32 random bytes)`)
+    if (isPlaceholder(value))
+      problems.push(`${name} entry ${index + 1} looks like an example placeholder (use 32 random bytes)`)
     keys.push({ version, value })
   })
   return keys
@@ -125,6 +141,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const authValues = new Set(authSecrets.map((k) => k.value))
   if (settingsKeys.some((k) => authValues.has(k.value)))
     problems.push("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
+  // Optional until the release that switches agents to the authorization server: empty is the same as unset.
+  const oauthSecretsText = env.ADIUTOR_OAUTH_SECRETS?.trim() ?? ""
+  const oauthSecrets = oauthSecretsText ? parseKeys("ADIUTOR_OAUTH_SECRETS", oauthSecretsText, problems) : null
+  const settingsValues = new Set(settingsKeys.map((k) => k.value))
+  if (oauthSecrets?.some((k) => authValues.has(k.value) || settingsValues.has(k.value)))
+    problems.push("ADIUTOR_OAUTH_SECRETS must differ from every auth secret and settings key")
 
   let publicUrl: URL | undefined
   if (publicUrlText) {
@@ -159,6 +181,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     databaseUrl,
     authSecrets,
     settingsKeys,
+    oauthSecrets,
     trustedProxies,
     publicUrl,
     migrationsDir: env.MIGRATIONS_DIR || "drizzle",

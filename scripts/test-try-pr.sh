@@ -73,6 +73,31 @@ seed_origin() {
 }
 check "the seed's origin is the public address" seed_origin
 
+# --- the keys (never printed) ---
+
+KEY_NAMES=(ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS ADIUTOR_OAUTH_SECRETS)
+# Succeeds when the env file holds exactly one 1:<64 hex> line per key, each value different.
+keys_generated() {
+  local name values=()
+  for name in "${KEY_NAMES[@]}"; do
+    [ "$(grep -cE "^$name=1:[0-9a-f]{64}$" "$ENV_FILE")" = 1 ] || return 1
+    values+=("$(sed -n "s/^$name=//p" "$ENV_FILE")")
+  done
+  [ "$(printf '%s\n' "${values[@]}" | sort -u | wc -l)" = "${#KEY_NAMES[@]}" ]
+}
+check "the stack's env file holds each key family, generated and distinct" keys_generated
+check "the stack's env file is mode 600" test "$(stat -c %a "$ENV_FILE")" = 600
+
+# An older pr.env without ADIUTOR_OAUTH_SECRETS: the key is appended and every other line stays as it was.
+older_env_gains_key() {
+  local before
+  sed -i '/^ADIUTOR_OAUTH_SECRETS=/d' "$ENV_FILE"
+  before="$(cat "$ENV_FILE")"
+  ensure_auth_secret >/dev/null
+  [ "$(head -n -1 "$ENV_FILE")" = "$before" ] && keys_generated && [ "$(stat -c %a "$ENV_FILE")" = 600 ]
+}
+check "an older env file gains ADIUTOR_OAUTH_SECRETS and keeps its other lines" older_env_gains_key
+
 # --- what is published and passed on ---
 
 (write_compose) || echo "      write_compose failed"

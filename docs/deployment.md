@@ -47,14 +47,15 @@ These notes are for the owner, who deploys production himself. Agents never depl
 
 1. Copy `docker-compose.yml` and `.env.example` from the release's tag into a deploy directory on the server, and rename the copy to `.env`.
 2. Restrict it: `chmod 600 .env`.
-3. Generate the two keys. Run the command twice; the server refuses to start when a value is shorter than 32 bytes or the two are equal:
+3. Generate the keys. Run the command once per key; the server refuses to start when a value is shorter than 32 bytes, looks like an example placeholder, or is shared between two keys:
 
    ```bash
    openssl rand -hex 32   # ADIUTOR_AUTH_SECRETS, written as 1:<value>
    openssl rand -hex 32   # ADIUTOR_SETTINGS_KEYS, written as 1:<value>
+   openssl rand -hex 32   # ADIUTOR_OAUTH_SECRETS, written as 1:<value>
    ```
 
-   Generate both keys and the database password (step 1) new, on the server, with these `openssl rand` commands. Never reuse a value from the development stack's `stack.env` or `.env.dev` in production: the first launch starts with a new, empty database, so nothing needs the development keys.
+   Generate the keys and the database password (step 1) new, on the server, with these `openssl rand` commands. Never reuse a value from the development stack's `stack.env` or `.env.dev` in production: the first launch starts with a new, empty database, so nothing needs the development keys.
 
 4. Fill in every value; `.env.example` explains each one:
    - `VERSION`: the release to run, for example `0.1.0`.
@@ -63,10 +64,36 @@ These notes are for the owner, who deploys production himself. Agents never depl
    - `ADIUTOR_PUBLIC_URL`: exactly the origin the browser's address bar shows: `https://` and `DOMAIN`, plus `:<port>` when the proxy's entry point is not on 443. Any difference makes every browser change fail with 403 (invalid origin), sign-in included. Telegram links use it, and the same value goes into every `--url` of `adiutor connect` (section 6). Passkeys belong to its host name: a new host name makes every passkey stop working, and you sign in with the password and the authenticator, then add new ones. Write the full value, for example `https://adiutor.example.com`, instead of the example's `https://${DOMAIN}`, and check that the server gets it resolved: `docker compose config` shows the environment the container receives.
    - `ADIUTOR_AUTH_SECRETS`: `1:<value>` from step 3. Better Auth signs the sign-in cookies and encrypts the TOTP secret and the backup codes with it. To rotate, put a new version first and keep the old one (`2:<new>,1:<old>`): every browser signs in again, and the stored TOTP secret stays readable while the old version is listed.
    - `ADIUTOR_SETTINGS_KEYS`: `1:<value>` from step 3. It encrypts the secrets you store in Settings (the Telegram bot token), and must differ from the auth secret. Rotate it the same way; a stored value whose version is no longer listed must be entered again in Settings.
+   - `ADIUTOR_OAUTH_SECRETS`: `1:<value>` from step 3. The cookie keys of the authorization server that agents will connect through; it must differ from the other two keys. Optional for now, and checked when set; a later release requires it (see "Add `ADIUTOR_OAUTH_SECRETS` to an existing `.env`" below).
    - `ADIUTOR_TRUSTED_PROXIES`: the address (or CIDR range) Traefik uses to reach `adiutor` on the `traefik` network, for example the network's subnet from `docker network inspect traefik`. Better Auth then reads the client address from `X-Forwarded-For` (step 3). Prefer Traefik's own fixed address when you can give it one: the whole subnet trusts every container on that network, and any of them can reach `adiutor:8080` directly and forge `X-Forwarded-For`. That weakens only the per-address rate limits; sign-in and agent keys are still required.
    - Keep backups of `.env` with the database backup: with other keys every browser is signed out, the TOTP secret cannot be read, and the stored bot token must be entered again.
 
    Everything else you manage in Adiutor itself, in Settings: the Telegram bot token and chat id, sending sign-in codes to Telegram, the private domains of the secret check, the connected agents and how long a browser stays signed in. `ADIUTOR_TELEGRAM_BOT_TOKEN`, `ADIUTOR_TELEGRAM_CHAT_ID` and `ADIUTOR_PRIVATE_DOMAINS` may still be set here: each then overrides its field, and Settings shows that field locked. Leave `TELEGRAM_API_URL` empty. Never set a `BETTER_AUTH_*` variable: the server refuses to start with one, because Better Auth would read it on its own. It refuses `ADIUTOR_AUTH_SECRET` too, even empty: that variable is no longer used, and `ADIUTOR_AUTH_SECRETS` holds the auth keys.
+
+### Add `ADIUTOR_OAUTH_SECRETS` to an existing `.env`
+
+`ADIUTOR_OAUTH_SECRETS` holds the cookie keys of the authorization server that agents will connect through, versioned like `ADIUTOR_AUTH_SECRETS`. Today it is optional: when it is set, the server checks it at start and refuses a malformed or short value, an example placeholder, or a value shared with `ADIUTOR_AUTH_SECRETS` or `ADIUTOR_SETTINGS_KEYS`. A later release requires it and refuses to start without it, so add it before you deploy that release.
+
+Run this in the deploy directory. It writes a new random key at the end of `.env` and never prints it. It changes nothing when `.env` is missing, when `openssl` fails, or when `.env` already has an `ADIUTOR_OAUTH_SECRETS` line, even an empty one; in that last case keep a value that is there, or delete the empty line and run it again.
+
+```bash
+(
+  set -eu
+  test -f .env
+  if grep -qE '^[[:space:]]*(export[[:space:]]+)?ADIUTOR_OAUTH_SECRETS[[:space:]]*=' .env; then
+    echo "ADIUTOR_OAUTH_SECRETS is already in .env; nothing changed" >&2
+    exit 1
+  fi
+  value="$(openssl rand -hex 32)"
+  [ "${#value}" -eq 64 ]
+  [ -z "$(tail -c 1 .env)" ] || echo >>.env
+  printf 'ADIUTOR_OAUTH_SECRETS=1:%s\n' "$value" >>.env
+  chmod 600 .env
+  echo "ADIUTOR_OAUTH_SECRETS added to .env"
+)
+```
+
+Then run `docker compose up -d` and check that the container is healthy (step 4): a value the server refuses stops it at start, with a message that names the variable. Keep the key with the backup of `.env`, like the other two.
 
 ## 3. Fit the network
 

@@ -137,7 +137,8 @@ require_outside_repo() {
 # --- Stack secrets ---
 # The development and verification stacks' database password and keys are generated on this machine into
 # <data dir>/stack.env (0600), next to the database they open. The repository holds none of them.
-STACK_ENV_NAMES=(POSTGRES_USER POSTGRES_DB POSTGRES_PASSWORD DATABASE_URL ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS)
+STACK_ENV_NAMES=(POSTGRES_USER POSTGRES_DB POSTGRES_PASSWORD DATABASE_URL ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS
+  ADIUTOR_OAUTH_SECRETS)
 
 random_hex() {
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
@@ -153,8 +154,21 @@ stack_env_valid() {
   done
 }
 
-# Creates <data dir>/stack.env once, before PostgreSQL first starts, and never rewrites it. A database without
-# its file is refused: new keys would not open it.
+# Appends a key a stack.env written before it existed lacks, as one new line: no other line changes, so the keys
+# that open the database stay as they are. Only a regular file of mode 600 that is not a link is touched.
+add_missing_stack_key() {
+  local file="$1" name="$2"
+  if [ ! -f "$file" ] || [ -L "$file" ] || [ "$(stat -c %a "$file")" != 600 ]; then return 0; fi
+  grep -qE "^$name=" "$file" && return 0
+  info "Adding $name to $file"
+  # A file that does not end with a line break gets one first, so the new line stands on its own.
+  [ -z "$(tail -c 1 "$file")" ] || printf '\n' >>"$file"
+  printf '%s=1:%s\n' "$name" "$(random_hex)" >>"$file"
+}
+
+# Creates <data dir>/stack.env once, before PostgreSQL first starts, and never rewrites it; a key added to Adiutor
+# later is appended to an existing file (add_missing_stack_key). A database without its file is refused: new keys
+# would not open it.
 ensure_stack_env() {
   local dir="$1" file="$1/stack.env" tmp contents password
   require_linux_dir "$dir"
@@ -175,6 +189,7 @@ POSTGRES_PASSWORD=$password
 DATABASE_URL=postgres://adiutor:$password@postgres:5432/adiutor
 ADIUTOR_AUTH_SECRETS=1:$(random_hex)
 ADIUTOR_SETTINGS_KEYS=1:$(random_hex)
+ADIUTOR_OAUTH_SECRETS=1:$(random_hex)
 EOF
     chmod 600 "$tmp"
     stack_env_valid "$tmp" || {
@@ -185,6 +200,7 @@ EOF
     ln "$tmp" "$file" 2>/dev/null || true
     rm -f "$tmp"
   fi
+  add_missing_stack_key "$file" ADIUTOR_OAUTH_SECRETS
   stack_env_valid "$file" || die "$file is incomplete or not mode 600. Fix or restore it; new keys would not open the database"
 }
 

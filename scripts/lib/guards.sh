@@ -179,4 +179,7 @@ bash scripts/test-release-workflow.sh || fail=1
 echo "--- Pull request stack: its address, what it publishes and its status, without Docker"
 bash scripts/test-try-pr.sh || fail=1
 
+echo "--- Stack secrets: a new stack.env, and a key added to an older one, without Docker"
+bash scripts/test-stack-env.sh || fail=1
+
 exit "$fail"
