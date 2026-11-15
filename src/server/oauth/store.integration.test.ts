@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { eq } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
-import { agentConnections, oauthStore } from "../db/schema.ts"
+import { agentConnections, authUser, oauthStore } from "../db/schema.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import {
   agentCall,
@@ -167,4 +167,18 @@ describe("spent values after their expiry (D1k)", () => {
         expect(row?.endReason).toBe("refresh_reused")
       })
     })
+})
+
+// Last in this file: it removes the owner.
+describe("the owner", () => {
+  it("is checked on every call: a connection whose owner is gone ends for good, and the library issues nothing more", async () => {
+    const c = await connectWithCode(h)
+    const check = await h.access.checkToken(c.tokens.body.access_token, "rest")
+    if (!check.ok) throw new Error("not connected")
+    await t.ctx.db.delete(authUser)
+    expect((await h.access.checkToken(c.tokens.body.access_token, "rest")).ok).toBe(false)
+    const [row] = await t.ctx.db.select().from(agentConnections).where(eq(agentConnections.id, check.connection.id))
+    expect(row?.endReason).toBe("person_changed")
+    expect((await refresh(h.issuer, CLI_CLIENT_ID, c.tokens.body.refresh_token)).status).toBe(400)
+  })
 })
