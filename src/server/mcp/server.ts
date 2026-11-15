@@ -13,7 +13,14 @@ import {
   severitySchema,
   stageSchema,
 } from "../../shared/enums.ts"
-import { type AgentChannel, agentErrorBody, REFUSALS, withoutPeoplesCredentials } from "../agents/channel.ts"
+import {
+  type AgentChannel,
+  agentErrorBody,
+  REFUSALS,
+  readBody,
+  withBody,
+  withoutPeoplesCredentials,
+} from "../agents/channel.ts"
 import { DATA_SENTENCE, mayCall, NEVER, TOOLS } from "../agents/policy.ts"
 import { AppError, errorBody, forbidden } from "../errors.ts"
 import { type AuthDeps, agentLabel, authenticate, type Env } from "../http/auth.ts"
@@ -343,10 +350,19 @@ function agentMcpRoutes(app: Hono<Env>, deps: AuthDeps & { version: string }, ag
   mcp.all("/", async (c) => {
     const found = c.get("agentToken")
     const { connection, areas } = found.check
+    let request = withoutPeoplesCredentials(c.req.raw)
+    // The body is read under the deadline and the shared cap before the SDK sees it, so a body sent slowly holds
+    // nothing past the deadline; the SDK then reads it from memory, with its own cap and its own parsing.
+    if (request.body) {
+      const read = await readBody(request, agents.limits.bodyBytes.default, agents.limits.deadlineMs)
+      if ("late" in read) return c.json(REFUSALS.tooSlow, 408)
+      if ("tooLarge" in read) return c.json(REFUSALS.tooLarge, 413)
+      request = withBody(request, read.bytes)
+    }
     const by: By = { actor: { kind: "agent", label: agentLabel(c, connection.name) }, source: "mcp" }
     const server = buildMcpServer(deps.ctx, by, deps.version, {
       areas,
-      guard: agents.toolGuard(found, by),
+      guard: agents.toolGuard(found, by, c.req.raw.signal),
       getAccess: () => agents.accessAnswer(found.check, "mcp"),
     })
     const transport = new WebStandardStreamableHTTPServerTransport({
@@ -355,7 +371,7 @@ function agentMcpRoutes(app: Hono<Env>, deps: AuthDeps & { version: string }, ag
       maxRequestBodySize: agents.limits.bodyBytes.default,
     })
     await server.connect(transport)
-    return transport.handleRequest(withoutPeoplesCredentials(c.req.raw), {
+    return transport.handleRequest(request, {
       authInfo: {
         token: found.token,
         clientId: found.check.clientId,

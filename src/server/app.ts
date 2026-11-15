@@ -3,7 +3,7 @@ import { type Context, Hono, type MiddlewareHandler } from "hono"
 import { bodyLimit } from "hono/body-limit"
 import { HTTPException } from "hono/http-exception"
 import { type AgentChannel, createAgentChannel, REFUSALS } from "./agents/channel.ts"
-import type { AuthHolder } from "./auth/auth.ts"
+import { type AuthHolder, BEARER_PATHS } from "./auth/auth.ts"
 import type { ServerConfig } from "./config.ts"
 import { AppError, errorBody } from "./errors.ts"
 import { apiRoutes, type SettingsHandle } from "./http/api.ts"
@@ -80,24 +80,28 @@ const AUTH_BODY_LIMIT = 16 * 1024
 /** The agent channel of /api/v1: every request there with an Authorization header. */
 const AGENT_API = /^\/api\/v1(\/|$)/
 /**
- * Where a request may carry a Bearer token for checks of its own (the agent-access standard, "Keep exceptions explicit,
- * by path"): /mcp (the MCP dispatcher's token check), Better Auth's routes (its own allow-list: the old agent approval
- * of `adiutor connect` until the agent access release), the authorization server, its code page and its documents, and
- * the approval API (which refuses it itself). The UI's own pages, the approval page included, are not among them.
+ * The only paths where a request may carry a Bearer token for a check of their own (the agent-access standard, "Keep
+ * exceptions explicit, by path"): /mcp (the MCP dispatcher's token check), the two Better Auth routes whose own
+ * allow-list takes one (`BEARER_PATHS`: the old agent approval of `adiutor connect`, until the agent access release),
+ * and the approval API (which refuses it itself).
  */
-const OWN_BEARER_CHECKS =
-  /^(\/mcp(\/|$)|\/api\/auth\/|\/oauth\/|\/\.well-known\/|\/connect\/code(\/|$)|\/connect\/approve\/[^/]+\/(details|decision)$)/
+const BETTER_AUTH_BEARER = new Set<string>(BEARER_PATHS.map((p) => `/api/auth${p}`))
+const ownBearerCheck = (path: string) =>
+  /^\/mcp(\/|$)/.test(path) ||
+  BETTER_AUTH_BEARER.has(path) ||
+  /^\/connect\/approve\/[^/]+\/(details|decision)$/.test(path)
 
 /**
  * Agent access mounted: a request to /api/v1 with an Authorization header is an agent's, answered by the agent router
  * (people's credentials removed, the token checked, then the policy core). A Bearer token anywhere else but the paths
- * with checks of their own is refused before any route runs, so a page or file of the app never answers one.
+ * with checks of their own is refused before any route runs, the health check, the authorization server, its documents
+ * and every page or file of the app included.
  */
 function agentGate(agents: AgentChannel): MiddlewareHandler {
   return async (c, next) => {
     const authorization = c.req.header("authorization")
     if (authorization !== undefined && AGENT_API.test(c.req.path)) return agents.fetchRest(c)
-    if (authorization !== undefined && /bearer/i.test(authorization) && !OWN_BEARER_CHECKS.test(c.req.path))
+    if (authorization !== undefined && /bearer/i.test(authorization) && !ownBearerCheck(c.req.path))
       return c.json(REFUSALS.closed, 403)
     await next()
   }
@@ -105,6 +109,23 @@ function agentGate(agents: AgentChannel): MiddlewareHandler {
 
 export function createApp(deps: AppDeps) {
   const app = new Hono()
+
+  // Agent access by approval: agents' requests go through the agent channel's policy core (agents/channel.ts), before
+  // any other route of the app. Without it (production until the agent access release) nothing here changes.
+  const agents =
+    deps.core && deps.agentOAuth
+      ? createAgentChannel({
+          ctx: deps.core.ctx,
+          access: deps.agentOAuth.access,
+          version: deps.core.config.version,
+          clientIp: deps.core.clientIp ?? socketAddress,
+          ...(deps.agentOAuth.channel ? { limits: deps.agentOAuth.channel } : {}),
+        })
+      : undefined
+  if (agents) {
+    deps.agentOAuth?.attach(agents)
+    app.use("*", agentGate(agents))
+  }
 
   // Container health: the process serves and the database answers. No token: it reveals nothing.
   app.get("/healthz", async (c) => {
@@ -124,18 +145,6 @@ export function createApp(deps: AppDeps) {
       telegram: deps.core.telegram,
       settings: deps.core.settings,
     }
-    // Agent access by approval: agents' requests go through the agent channel's policy core (agents/channel.ts), before
-    // any other route of the app. Without it (production until the agent access release) nothing here changes.
-    const agents = deps.agentOAuth
-      ? createAgentChannel({
-          ctx,
-          access: deps.agentOAuth.access,
-          version: config.version,
-          clientIp: shared.clientIp,
-          ...(deps.agentOAuth.channel ? { limits: deps.agentOAuth.channel } : {}),
-        })
-      : undefined
-    if (agents) app.use("*", agentGate(agents))
     // Better Auth as it is: its own handler, read from the holder on each request (Settings may rebuild it).
     app.use(
       "/api/auth/*",

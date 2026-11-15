@@ -849,3 +849,95 @@ describe("without agent access", () => {
     expect(access.status).toBe(404)
   })
 })
+
+describe("a call whose client left", () => {
+  it("is recorded unknown when its answer could not reach the agent, also when the action then finished", async () => {
+    const { token, id } = await connect(["read", "write"], "Left")
+    const item = await anItem()
+    const row = await holdRow("items", item.id)
+    const url = new URL(h.issuer)
+    const body = JSON.stringify({ version: 1, title: "Finished alone" })
+    const req = httpRequest({
+      host: url.hostname,
+      port: Number(url.port),
+      path: `/api/v1/items/${item.id}`,
+      method: "PATCH",
+      agent: false,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(body)),
+        [HEADERS.policy]: REVISION,
+        [HEADERS.kind]: "act",
+      },
+    })
+    req.on("error", () => undefined)
+    req.end(body)
+    try {
+      await row.waiting()
+      // The client leaves while the act waits for the row.
+      req.destroy()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    } finally {
+      await row.release()
+    }
+    await vi.waitFor(async () => {
+      expect((await calls(id)).length).toBe(1)
+    })
+    expect((await calls(id))[0]?.after).toMatchObject({
+      route: "PATCH /api/v1/items/{id}",
+      outcome: "unknown",
+      disconnected: true,
+    })
+    const [after] = await t.ctx.db.select().from(items).where(eq(items.id, item.id))
+    expect(after?.title).toBe("Finished alone")
+  })
+})
+
+describe("a sync push whose run failed", () => {
+  it("is recorded as an error, whole or in part, though it answers 200", async () => {
+    const { token, id } = await connect(["sync"], "Sync run")
+    const now = new Date().toISOString()
+    const future = new Date(Date.now() + 3_600_000).toISOString()
+    const thread = (threadId: string, updatedAt: string) => ({
+      threadId,
+      t3ProjectId: null,
+      title: `Thread ${threadId}`,
+      status: "running",
+      settled: false,
+      updatedAt,
+    })
+    const failed = await call(token, "POST", "/api/v1/sync/t3", {
+      json: { collectedAt: now, projects: [], threads: [thread(`t-${randomUUID()}`, future)] },
+    })
+    expect([failed.status, failed.body.data.outcome]).toEqual([200, "failed"])
+    const partial = await call(token, "POST", "/api/v1/sync/t3", {
+      json: {
+        collectedAt: now,
+        projects: [],
+        threads: [thread(`t-${randomUUID()}`, now), thread(`t-${randomUUID()}`, future)],
+      },
+    })
+    expect([partial.status, partial.body.data.outcome]).toEqual([200, "partial"])
+    const whole = await call(token, "POST", "/api/v1/sync/t3", {
+      json: { collectedAt: now, projects: [], threads: [] },
+    })
+    expect([whole.status, whole.body.data.outcome]).toEqual([200, "succeeded"])
+    expect((await calls(id)).map((e) => (e.after as { outcome: string }).outcome)).toEqual(["error", "error", "ok"])
+  })
+})
+
+describe("a body the limit refused", () => {
+  it("is not use: the route never ran", async () => {
+    const { token, id } = await connect(["read", "write"], "Too large")
+    const r = await rawCall(
+      "POST",
+      "/api/v1/notes",
+      ["authorization", `Bearer ${token}`, HEADERS.policy, REVISION, HEADERS.kind, "act"],
+      JSON.stringify({ title: "Large", body: "x".repeat(LIMITS.bodyBytes.default + 1) }),
+    )
+    expect(r.status).toBe(413)
+    const [row] = await t.ctx.db.select().from(agentConnections).where(eq(agentConnections.id, id))
+    expect(row?.lastUsedAt).toBeNull()
+  })
+})

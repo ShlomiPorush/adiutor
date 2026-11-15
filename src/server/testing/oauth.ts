@@ -62,6 +62,8 @@ export type OAuthHarness = {
   limits: AgentLimits
   /** The app's server, for tests that close it while a call runs. */
   server: Server
+  /** Agent access as createApp mounted it (its `drain` waits for the agent calls' audit rows). */
+  mount: ReturnType<typeof agentOAuthMount>
   /** The owner's signed-in browser (two-factor on). */
   owner: TestBrowser
   /** The owner's TOTP secret, to sign in another browser. */
@@ -107,10 +109,11 @@ export async function oauthHarness(
     ...(options.clientIp ? { clientIp: options.clientIp } : {}),
   })
   const limits = options.limits ?? wideLimits()
+  const mount = agentOAuthMount(access, limits, options.caps, options.channel)
   const app = createApp({
     checkDatabase: async () => true,
     core,
-    agentOAuth: agentOAuthMount(access, limits, options.caps, options.channel),
+    agentOAuth: mount,
     ...(options.web ? { web: options.web } : {}),
   })
   handle((request, env) => app.fetch(request, env))
@@ -126,6 +129,7 @@ export async function oauthHarness(
     storeDb,
     limits,
     server,
+    mount,
     owner,
     ownerSecret,
     async close() {

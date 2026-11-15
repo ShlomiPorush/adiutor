@@ -101,7 +101,14 @@ export const REFUSALS = {
   },
   connectionEnded: { error: "connection_ended", message: "This connection has ended. Connect again." },
   tooLarge: { error: "too_large", message: "The request body is too large." },
+  tooSlow: {
+    error: "request_timeout",
+    message: "The request body did not arrive in time. Nothing ran; send it again.",
+  },
 } as const
+
+/** Room for the JSON-RPC envelope around a tool's result (`jsonrpc`, `id`, `result`): far more than it takes. */
+const ENVELOPE_BYTES = 1024
 
 /** A failure whose outcome may be unknown (a 5xx after an action). */
 const INTERNAL = { error: "internal_error", message: "Something went wrong on the server." } as const
@@ -181,6 +188,52 @@ function headerLines(c: Context, name: string): number | null {
 /** An RFC 6750 token after exactly one `Bearer` and one space. */
 const BEARER = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i
 
+/**
+ * Reads a request's body under a deadline and a cap, so a client that sends it slowly or without end holds nothing past
+ * the deadline: `late` once the deadline passed (the read is cancelled), `tooLarge` past the cap.
+ */
+export async function readBody(
+  raw: Request,
+  maxBytes: number,
+  ms: number,
+): Promise<{ bytes: Uint8Array } | { late: true } | { tooLarge: true }> {
+  const reader = raw.body?.getReader()
+  if (!reader) return { bytes: new Uint8Array() }
+  const chunks: Uint8Array[] = []
+  const read = (async (): Promise<{ bytes: Uint8Array } | { tooLarge: true }> => {
+    let size = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > maxBytes) return { tooLarge: true }
+      chunks.push(value)
+    }
+    const bytes = new Uint8Array(size)
+    let at = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, at)
+      at += chunk.byteLength
+    }
+    return { bytes }
+  })()
+  read.catch(() => undefined)
+  const done = await within(read, ms)
+  if (done.late || "tooLarge" in done.value) {
+    void reader.cancel().catch(() => undefined)
+    return done.late ? { late: true } : done.value
+  }
+  return done.value
+}
+
+/** The same request with a body already read, for a handler that reads it again (its length no longer declared). */
+export function withBody(request: Request, bytes: Uint8Array): Request {
+  const headers = new Headers(request.headers)
+  headers.delete("content-length")
+  headers.delete("transfer-encoding")
+  return new Request(request.url, { method: request.method, headers, signal: request.signal, body: bytes })
+}
+
 /** A request whose headers people's credentials were removed from: the Cookie and any API key header. */
 export function withoutPeoplesCredentials(raw: Request): Request {
   const headers = new Headers(raw.headers)
@@ -203,7 +256,10 @@ export function createAgentChannel(options: AgentChannelOptions) {
   const { ctx, access } = options
   const limits = options.limits ?? channelLimits()
   const running = slots(limits)
-  const busySeen = new Map<string, number>()
+  /** When a refusal was last recorded, per connection and reason. */
+  const seen = new Map<string, number>()
+  /** Audit writes not settled yet. */
+  const pending = new Set<Promise<void>>()
   const issuer = access.issuer ?? ""
   const metadata = (resource: AgentResource) =>
     `${issuer}/.well-known/oauth-protected-resource${resource === "mcp" ? "/mcp" : "/api/v1"}`
@@ -223,10 +279,19 @@ export function createAgentChannel(options: AgentChannelOptions) {
     return c.json(body, 401)
   }
 
-  /** Writes an audit row; never throws, never waits longer than its own deadline. */
-  async function audit(by: By, entry: Parameters<typeof writeAudit>[3]): Promise<void> {
+  /**
+   * Writes an audit row; never throws, and the answer never waits longer than the row's own deadline. The write itself
+   * goes on: it stays in `pending` until it settles (`drain` waits for every one on shutdown), and `settled` runs then,
+   * so a caller holding a slot gives it back only once its row is really written or failed.
+   */
+  async function audit(by: By, entry: Parameters<typeof writeAudit>[3], settled?: () => void): Promise<void> {
     const write = writeAudit(ctx, ctx.db, by, entry).catch((error: unknown) => {
       log.error("an agent call was not audited", errorFacts(error))
+    })
+    pending.add(write)
+    void write.finally(() => {
+      pending.delete(write)
+      settled?.()
     })
     let timer: NodeJS.Timeout | undefined
     const gaveUp = new Promise<void>((resolve) => {
@@ -239,30 +304,53 @@ export function createAgentChannel(options: AgentChannelOptions) {
     await Promise.race([write, gaveUp]).finally(() => clearTimeout(timer))
   }
 
-  /** The one audit entry of an agent call, with its outcome. */
-  function record(call: CallEntry, outcome: Outcome, details: Record<string, unknown> = {}): Promise<void> {
-    return audit(call.by, {
-      action: call.channel === "rest" ? "agent.api_call" : "agent.tool_call",
-      entityType: "agent_connection",
-      entityId: call.connection.id,
-      after: {
-        name: call.connection.name,
-        ...(call.channel === "rest" ? { route: call.name, method: call.method } : { tool: call.name }),
-        kind: call.kind,
-        outcome,
-        ...details,
+  /** The one audit entry of an agent call, with its outcome; `settled` runs once the row is written or failed. */
+  function record(
+    call: CallEntry,
+    outcome: Outcome,
+    details: Record<string, unknown> = {},
+    settled?: () => void,
+  ): Promise<void> {
+    return audit(
+      call.by,
+      {
+        action: call.channel === "rest" ? "agent.api_call" : "agent.tool_call",
+        entityType: "agent_connection",
+        entityId: call.connection.id,
+        after: {
+          name: call.connection.name,
+          ...(call.channel === "rest" ? { route: call.name, method: call.method } : { tool: call.name }),
+          kind: call.kind,
+          outcome,
+          ...details,
+        },
       },
-    })
+      settled,
+    )
   }
 
-  /** `busy` is recorded once per window per connection. */
-  function busyOnce(connectionId: string): boolean {
+  /** True once per window for a connection and a reason. */
+  function once(connectionId: string, reason: string): boolean {
+    const key = `${connectionId} ${reason}`
     const now = Date.now()
-    const last = busySeen.get(connectionId)
+    const last = seen.get(key)
     if (last !== undefined && now - last < limits.busyWindowMs) return false
-    busySeen.set(connectionId, now)
-    if (busySeen.size > 10_000) for (const [k, at] of busySeen) if (now - at >= limits.busyWindowMs) busySeen.delete(k)
+    seen.set(key, now)
+    if (seen.size > 10_000) for (const [k, at] of seen) if (now - at >= limits.busyWindowMs) seen.delete(k)
     return true
+  }
+
+  /**
+   * The entry of a call refused before its route ran (area, revision or kind, a closed route, busy), with the same
+   * bound as every other entry: in a slot of the connection, given back once the row settled. When the connection has
+   * no free slot, the refusal is recorded once per window per connection and reason (as `busy` is), else not at all,
+   * so a burst of refusals can never write more rows at once than the slots allow plus one per reason. The answer is
+   * the same either way, so the order of the refusals stays the standard's.
+   */
+  async function recordRefusal(call: CallEntry, reason: string, details: Record<string, unknown>): Promise<void> {
+    const id = call.connection.id
+    if (running.take(id)) return record(call, "denied", details, () => running.give(id))
+    if (once(id, reason)) return record(call, "denied", details)
   }
 
   /**
@@ -333,31 +421,38 @@ export function createAgentChannel(options: AgentChannelOptions) {
     call: CallEntry,
     work: Promise<T>,
     judge: (value: T) => Promise<{ outcome: Outcome; details?: Record<string, unknown> }>,
+    /** The request's signal: aborted when the client left before its answer was written. */
+    signal?: AbortSignal,
   ): Promise<{ late: true } | { late: false; value: T }> {
     const id = call.connection.id
     work.catch(() => undefined)
+    // The slot comes back once the work and its row have both settled.
+    let left = 2
+    const release = () => {
+      if (--left === 0) running.give(id)
+    }
+    void work.then(release, release)
     let done: Awaited<ReturnType<typeof within<T>>>
     try {
       done = await within(work, limits.deadlineMs)
     } catch (error) {
-      await record(call, "error")
-      running.give(id)
+      await record(call, "error", {}, release)
       throw error
     }
     if (done.late) {
-      await record(call, "unknown")
-      void work.then(
-        () => running.give(id),
-        () => running.give(id),
-      )
+      await record(call, "unknown", {}, release)
       return done
     }
+    let judged: { outcome: Outcome; details?: Record<string, unknown> }
     try {
-      const { outcome, details } = await judge(done.value)
-      await record(call, outcome, details)
-    } finally {
-      running.give(id)
+      judged = await judge(done.value)
+    } catch (error) {
+      await record(call, "error", {}, release)
+      throw error
     }
+    // An answer that broke off (the client left meanwhile) never reached the agent: its outcome is unknown to it.
+    if (signal?.aborted) await record(call, "unknown", { ...judged.details, disconnected: true }, release)
+    else await record(call, judged.outcome, judged.details, release)
     return done
   }
 
@@ -375,7 +470,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
   }
 
   type AgentCall = { token: string; check: Extract<TokenCheck, { ok: true }>; by: By }
-  type AgentEnv = { Variables: Env["Variables"] & { agent: AgentCall } }
+  type AgentEnv = { Variables: Env["Variables"] & { agent: AgentCall; ended?: boolean } }
   const callOf = (c: Context) => (c as Context<AgentEnv>).get("agent")
 
   /** The policy check of one open route, then its code under the limits, and its audit entry. */
@@ -392,44 +487,62 @@ export function createAgentChannel(options: AgentChannelOptions) {
         kind: route.kind,
       }
       if (!mayCall(check.areas, route.area)) {
-        await record(call, "denied", { status: 403 })
+        await recordRefusal(call, "area", { status: 403 })
         return c.json({ ...REFUSALS.areaNotGranted, area: route.area }, 403)
       }
       if (!route.exempt) {
         const revision = c.req.header(HEADERS.policy)
         const kind = c.req.header(HEADERS.kind)
-        const once = (name: string) => {
+        const single = (name: string) => {
           const lines = headerLines(c, name)
           return lines === null || lines === 1
         }
-        if (revision !== REVISION || kind !== route.kind || !once(HEADERS.policy) || !once(HEADERS.kind)) {
-          await record(call, "denied", { status: 409 })
+        if (revision !== REVISION || kind !== route.kind || !single(HEADERS.policy) || !single(HEADERS.kind)) {
+          await recordRefusal(call, "policy", { status: 409 })
           return c.json(REFUSALS.policyChanged, 409)
         }
       }
       if (!running.take(check.connection.id)) {
-        if (busyOnce(check.connection.id)) await record(call, "denied", { status: 429 })
+        await recordRefusal(call, "busy", { status: 429 })
         return c.json(REFUSALS.busy, 429)
       }
-      const work = (async () => {
-        // A real call counts as use (the idle rule); `access` and `endpoints` do not. A connection that ended since its
-        // token was checked runs nothing.
-        if (!route.exempt && !(await access.recordUse(check.connection))) return "ended" as const
-        await next()
-        return "ran" as const
-      })()
+      // The body limit, the use (counted) and the route's code (agentUse below), under the deadline.
+      const work = next()
       let tooLarge = false
-      const done = await guarded(call, work, async (ran) => {
-        if (ran === "ended") return { outcome: "denied", details: { status: 401 } }
-        const status = c.res.status
-        tooLarge = (await c.res.clone().arrayBuffer()).byteLength > limits.answerBytes
-        if (tooLarge) return { outcome: "error", details: { status, answerTooLarge: true } }
-        return { outcome: status < 400 ? "ok" : "error", details: { status } }
-      })
+      const done = await guarded(
+        call,
+        work,
+        async () => {
+          if (c.get("ended")) return { outcome: "denied", details: { status: 401 } }
+          const status = c.res.status
+          const answer = await c.res.clone().arrayBuffer()
+          tooLarge = answer.byteLength > limits.answerBytes
+          if (tooLarge) return { outcome: "error", details: { status, answerTooLarge: true } }
+          // A 2xx answer that says it failed: a sync run whose records failed, in part or whole.
+          const failed = status < 400 && route.area === "sync" && syncFailed(answer)
+          return { outcome: status < 400 && !failed ? "ok" : "error", details: { status } }
+        },
+        c.req.raw.signal,
+      )
       if (done.late) return c.json(REFUSALS.unknown, 504)
-      if (done.value === "ended") return challenge(c, "rest", "invalid_token")
+      if (c.get("ended")) return
       if (tooLarge) replace(c, answerTooLarge(limits.answerBytes, route.kind), 422)
       else if (c.res.status === 401 || c.res.status === 429) c.res = reservedSafe(c.res, c)
+    }
+
+  /**
+   * After the body limit and before the route's own code: a real call counts as use (the idle rule; `access` and
+   * `endpoints` do not, and a body the limit refused never gets here). A connection that ended since its token was
+   * checked runs nothing (401).
+   */
+  const agentUse =
+    (route: OpenRoute): MiddlewareHandler<AgentEnv> =>
+    async (c, next) => {
+      if (!route.exempt && !(await access.recordUse(c.get("agent").check.connection))) {
+        c.set("ended", true)
+        return challenge(c, "rest", "invalid_token")
+      }
+      await next()
     }
 
   const tooLarge = (c: Context) => c.json(REFUSALS.tooLarge, 413)
@@ -452,13 +565,13 @@ export function createAgentChannel(options: AgentChannelOptions) {
     const handler = handlers[`${route.method} ${route.path}`]
     if (!handler) throw new Error(`no handler for the open route ${route.method} ${route.path}`)
     const limit = route.area === "sync" ? syncLimit : defaultLimit
-    rest.on(route.method, honoPath(route.path), policy(route), limit, handler as never)
+    rest.on(route.method, honoPath(route.path), policy(route), limit, agentUse(route), handler as never)
   }
   // Anything else is closed to agents: the router picked no open route.
   const closed = async (c: Context<AgentEnv>) => {
     const agent = c.get("agent")
     if (agent)
-      await record(
+      await recordRefusal(
         {
           connection: agent.check.connection,
           by: agent.by,
@@ -467,7 +580,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
           method: c.req.method,
           kind: null,
         },
-        "denied",
+        "closed",
         { status: 403 },
       )
     return c.json(REFUSALS.closed, 403)
@@ -488,7 +601,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
    * call may have waited, and the token been refused or the connection ended meanwhile; a real tool call counts as use,
    * get_access does not), the tool's area, then the tool under the deadline and the answer cap, with its audit entry.
    */
-  function toolGuard(found: AgentToken, by: By): ToolGuard {
+  function toolGuard(found: AgentToken, by: By, signal?: AbortSignal): ToolGuard {
     const id = found.check.connection.id
     return async (tool, run) => {
       const rule = TOOLS[tool]
@@ -504,39 +617,47 @@ export function createAgentChannel(options: AgentChannelOptions) {
         isError: true,
       })
       if (!running.take(id)) {
-        if (busyOnce(id)) await record(call, "denied", { refusal: "busy" })
+        await recordRefusal(call, "busy", { refusal: "busy" })
         return fail(REFUSALS.busy)
       }
-      const refuse = async (refusal: string, body: object) => {
+      type Ran = { refusal: string; body: object } | { result: ToolResult }
+      // The check again and the tool, both under the deadline, in the slot.
+      const work = (async (): Promise<Ran> => {
+        let again: TokenCheck
         try {
-          await record(call, "denied", { refusal })
-        } finally {
-          running.give(id)
+          again = await access.checkToken(found.token, "mcp", { use: tool !== "get_access" })
+        } catch (error) {
+          log.error("an agent's connection could not be checked", errorFacts(error))
+          return { refusal: "check_failed", body: INTERNAL }
         }
-        return fail(body)
-      }
-      let again: TokenCheck
-      try {
-        again = await access.checkToken(found.token, "mcp", { use: tool !== "get_access" })
-      } catch (error) {
-        log.error("an agent's connection could not be checked", errorFacts(error))
-        return refuse("check_failed", INTERNAL)
-      }
-      if (!again.ok || again.connection.id !== id) return refuse("connection_ended", REFUSALS.connectionEnded)
-      if (!rule || !mayCall(again.areas, rule.area)) return refuse("area_not_granted", REFUSALS.areaNotGranted)
-      const work = run().catch((error: unknown): ToolResult => {
-        // Never the error's message: it may hold a query or the owner's text.
-        log.error("an agent's tool call failed", { tool, ...errorFacts(error) })
-        return fail(INTERNAL)
-      })
+        if (!again.ok || again.connection.id !== id)
+          return { refusal: "connection_ended", body: REFUSALS.connectionEnded }
+        if (!rule || !mayCall(again.areas, rule.area))
+          return { refusal: "area_not_granted", body: REFUSALS.areaNotGranted }
+        const result = await run().catch((error: unknown): ToolResult => {
+          // Never the error's message: it may hold a query or the owner's text.
+          log.error("an agent's tool call failed", { tool, ...errorFacts(error) })
+          return fail(INTERNAL)
+        })
+        return { result }
+      })()
       let tooLarge = false
-      const done = await guarded(call, work, async (result) => {
-        tooLarge = result.content.reduce((n, part) => n + Buffer.byteLength(part.text), 0) > limits.answerBytes
-        return { outcome: tooLarge || result.isError ? "error" : "ok" }
-      })
+      const done = await guarded(
+        call,
+        work,
+        async (ran) => {
+          if ("refusal" in ran) return { outcome: "denied", details: { refusal: ran.refusal } }
+          // What goes on the wire: the serialized result (its text escaped once more), with room for the JSON-RPC
+          // envelope the SDK puts around it.
+          tooLarge = Buffer.byteLength(JSON.stringify(ran.result)) + ENVELOPE_BYTES > limits.answerBytes
+          return { outcome: tooLarge || ran.result.isError ? "error" : "ok" }
+        },
+        signal,
+      )
       if (done.late) return fail(REFUSALS.unknown)
-      if (tooLarge) return fail(answerTooLarge(limits.answerBytes, rule.kind))
-      return done.value
+      if ("refusal" in done.value) return fail(done.value.body)
+      if (tooLarge) return fail(answerTooLarge(limits.answerBytes, call.kind ?? "act"))
+      return done.value.result
     }
   }
 
@@ -548,9 +669,12 @@ export function createAgentChannel(options: AgentChannelOptions) {
     authenticate,
     accessAnswer,
     record,
-    busyOnce,
     guarded,
     challenge,
+    /** Waits until every audit write begun so far has settled: on shutdown, before the database closes. */
+    async drain(): Promise<void> {
+      while (pending.size > 0) await Promise.allSettled([...pending])
+    },
     /** The routes of the agent router, for the exposure test. */
     restRoutes: rest.routes,
     /** Answers an agent request to /api/v1 (one with an Authorization header), people's credentials removed first. */
@@ -585,6 +709,16 @@ function reservedSafe(res: Response, c: Context): Response {
   headers.delete("www-authenticate")
   c.res = undefined as unknown as Response
   return new Response(res.body, { status: agentStatus(res.status), headers })
+}
+
+/** Whether a sync route's 2xx answer says its run failed, in part or whole (`data.outcome`, services/sync.ts). */
+function syncFailed(answer: ArrayBuffer): boolean {
+  try {
+    const outcome = (JSON.parse(new TextDecoder().decode(answer)) as { data?: { outcome?: unknown } }).data?.outcome
+    return outcome !== "succeeded"
+  } catch {
+    return true
+  }
 }
 
 /** Replaces the route's answer after it ran with an answer of the channel's own (the previous one dropped whole). */

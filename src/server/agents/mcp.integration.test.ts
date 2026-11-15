@@ -1,9 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { request as httpRequest } from "node:http"
+import { connect } from "node:net"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { and, eq, sql } from "drizzle-orm"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { agentConnections, audit, items } from "../db/schema.ts"
 import { AGENT_INSTRUCTIONS } from "../mcp/server.ts"
 import { createItem } from "../services/items.ts"
@@ -367,6 +368,55 @@ describe("the deadline of a tool call", () => {
     ;({ h, t } = main)
   })
 
+  it("answers a body that does not arrive within the deadline 408, nothing run, while the client still sends", async () => {
+    const { token } = await connectMcp(["read"])
+    const url = new URL(h.issuer)
+    const answer = await new Promise<{ status: number; stillSending: boolean } | null>((resolve, reject) => {
+      const socket = connect(Number(url.port), url.hostname)
+      let received = ""
+      const timer = setTimeout(() => {
+        socket.destroy()
+        resolve(null)
+      }, SHORT.deadlineMs + 3_000)
+      socket.setEncoding("utf8")
+      socket.on("data", (chunk: string) => {
+        received += chunk
+        if (received.includes("\r\n\r\n")) {
+          clearTimeout(timer)
+          resolve({ status: Number(received.split(" ")[1]), stillSending: socket.writable })
+          socket.destroy()
+        }
+      })
+      socket.on("error", (error) => reject(error))
+      socket.write(
+        `POST /mcp HTTP/1.1\r\nHost: ${url.host}\r\nAuthorization: Bearer ${token}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: 1000\r\n\r\n{"jsonrpc":`,
+      )
+    })
+    expect(answer).toEqual({ status: 408, stillSending: true })
+  })
+
+  it("keeps the connection's check again under the deadline", async () => {
+    const { token, id } = await connectMcp(["read"])
+    const c = await client(token)
+    try {
+      // The check again waits to record the use behind the held row, past the deadline.
+      const row = await holdRow(t, "agent_connections", id)
+      let answer: ToolAnswer | "hung"
+      try {
+        answer = await Promise.race([
+          tool(c, "adiutor_list_projects"),
+          new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), SHORT.deadlineMs + 3_000)),
+        ])
+      } finally {
+        await row.release()
+      }
+      expect(answer).toEqual({ isError: true, body: { error: "outcome_unknown", message: expect.any(String) } })
+    } finally {
+      await c.close()
+    }
+    expect((await toolCalls(id)).map((e) => (e.after as { outcome: string }).outcome)).toEqual(["unknown"])
+  })
+
   it("answers outcome_unknown past the deadline and records it unknown, and busy beyond the connection's slots", async () => {
     const { token, id } = await connectMcp(["read", "write"])
     const item = await createItem(t.ctx, owner, { type: "task", title: "Slow tool" })
@@ -396,6 +446,65 @@ describe("the deadline of a tool call", () => {
 })
 
 describe("the limits of a tool call", () => {
+  it("measures what is sent: text full of escapes below the cap as text, above it once serialized, is withheld", async () => {
+    const { token } = await connectMcp(["read"])
+    // Each `"` is 2 bytes in the tool's text and 4 once the result is serialized.
+    const note = await createNote(t.ctx, owner, { title: `Quotes ${randomUUID()}`, body: '"'.repeat(24_000) })
+    const c = await client(token)
+    try {
+      const read = await tool(c, "adiutor_get_note", { noteId: note.id })
+      expect(read.isError).toBe(true)
+      expect(read.body.error).toBe("answer_too_large")
+    } finally {
+      await c.close()
+    }
+  })
+
+  it("records a tool call whose client left as unknown, also when the action then finished", async () => {
+    const { token, id } = await connectMcp(["read", "write"])
+    const item = await createItem(t.ctx, owner, { type: "task", title: "MCP left" })
+    const row = await holdRow(t, "items", item.id)
+    const url = new URL(h.issuer)
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "adiutor_update_item", arguments: { itemId: item.id, version: 1, title: "MCP finished alone" } },
+    })
+    const req = httpRequest({
+      host: url.hostname,
+      port: Number(url.port),
+      path: "/mcp",
+      method: "POST",
+      agent: false,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "content-length": String(Buffer.byteLength(body)),
+      },
+    })
+    req.on("error", () => undefined)
+    req.end(body)
+    try {
+      await row.waiting()
+      req.destroy()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    } finally {
+      await row.release()
+    }
+    await vi.waitFor(async () => {
+      expect((await toolCalls(id)).length).toBe(1)
+    })
+    expect((await toolCalls(id))[0]?.after).toMatchObject({
+      tool: "adiutor_update_item",
+      outcome: "unknown",
+      disconnected: true,
+    })
+    const [after] = await t.ctx.db.select().from(items).where(eq(items.id, item.id))
+    expect(after?.title).toBe("MCP finished alone")
+  })
+
   it("withholds an answer over the cap", async () => {
     const { token } = await connectMcp(["read", "write"])
     const note = await createNote(t.ctx, owner, { title: `Long ${randomUUID()}`, body: "z".repeat(70_000) })

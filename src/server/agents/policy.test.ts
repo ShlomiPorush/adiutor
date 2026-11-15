@@ -136,8 +136,30 @@ describe("the closed route table", () => {
     for (const area of AGENT_AREAS) expect(AREAS[area].sentence.length).toBeGreaterThan(20)
   })
 
-  it("classifies by effect: every open route that changes something is an act, every one that only reads a read", () => {
-    for (const r of OPEN) expect([r.path, r.kind], r.path).toEqual([r.path, r.method === "GET" ? "read" : "act"])
+  it("classifies by effect: each open route has the kind decided for what it does", () => {
+    // Decided one by one: the reads change nothing; every other route writes (the sync pushes write its snapshots).
+    const decided: Record<string, "read" | "act"> = {
+      "GET /api/v1/agent/access": "read",
+      "GET /api/v1/agent/endpoints": "read",
+      "GET /api/v1/items": "read",
+      "GET /api/v1/items/{id}": "read",
+      "GET /api/v1/projects": "read",
+      "GET /api/v1/notes": "read",
+      "GET /api/v1/notes/{id}": "read",
+      "POST /api/v1/threads/start": "act",
+      "POST /api/v1/items": "act",
+      "PATCH /api/v1/items/{id}": "act",
+      "POST /api/v1/items/{id}/comments": "act",
+      "POST /api/v1/items/{id}/threads": "act",
+      "POST /api/v1/capture": "act",
+      "PATCH /api/v1/projects/{id}": "act",
+      "POST /api/v1/projects/{id}/stage-proposals": "act",
+      "POST /api/v1/notes": "act",
+      "PATCH /api/v1/notes/{id}": "act",
+      "POST /api/v1/sync/t3": "act",
+      "POST /api/v1/sync/security": "act",
+    }
+    expect(Object.fromEntries(OPEN.map((r) => [`${r.method} ${r.path}`, r.kind]))).toEqual(decided)
     for (const r of OPEN.filter((x) => x.area !== null)) expect(AREAS[r.area as AgentArea].kinds).toContain(r.kind)
   })
 
@@ -236,6 +258,30 @@ describe("a bearer token outside the paths with checks of their own", () => {
       expect([path, agent.status]).toEqual([path, 403])
       expect(await agent.json()).toEqual({ error: "forbidden", message: expect.any(String) })
     }
+  })
+})
+
+describe("the gate in front of every route", () => {
+  it("refuses a bearer on the health check, the authorization server, its documents and any other path", async () => {
+    for (const path of [
+      "/healthz",
+      "/.well-known/unknown",
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-authorization-server",
+      "/oauth/token",
+      "/connect/code",
+      "/api/auth/get-session",
+      "/api/setup/status",
+    ]) {
+      const agent = await app.request(path, { headers: { authorization: "Bearer abc" } })
+      expect([path, agent.status]).toEqual([path, 403])
+    }
+    expect((await app.request("/healthz")).status).toBe(200)
+  })
+
+  it("leaves production without agent access unchanged: the health check answers a bearer as before", async () => {
+    const plain = createApp({ checkDatabase: async () => true })
+    expect((await plain.request("/healthz", { headers: { authorization: "Bearer abc" } })).status).toBe(200)
   })
 })
 
