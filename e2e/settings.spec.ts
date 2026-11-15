@@ -7,6 +7,7 @@
 // password change replaces this browser's session.
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
+import { BASE_URL } from "./address.ts"
 import { password, storageFile } from "./helpers.ts"
 
 test.describe.configure({ mode: "serial" })
@@ -265,11 +266,9 @@ test("Agent access has no manual key: it shows how to connect an agent and the s
   await page.goto("/settings/agents")
   const panel = page.locator("#agents")
   await expect(panel.getByRole("heading", { name: he.agentKeys.howTitle })).toBeVisible()
-  await expect(panel).toContainText("Connect Adiutor at http://127.0.0.1:8090")
+  await expect(panel).toContainText(`Connect Adiutor at ${BASE_URL}`)
   await expect(panel.getByRole("heading", { name: he.agentKeys.bundleTitle })).toBeVisible()
-  await expect(panel).toContainText(
-    "node dist/sync/adiutor-sync.js connect --url http://127.0.0.1:8090 --name sync --for sync",
-  )
+  await expect(panel).toContainText(`node dist/sync/adiutor-sync.js connect --url ${BASE_URL} --name sync --for sync`)
   await expect(panel).toContainText("--name claude --for claude")
   await expect(panel).toContainText("--name codex --for codex")
 })

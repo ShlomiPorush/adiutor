@@ -4,6 +4,7 @@
 // locale file (the default language).
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
+import { BASE_URL_PATTERN } from "./address.ts"
 import { storageFile } from "./helpers.ts"
 
 test.describe.configure({ mode: "serial" })
@@ -163,7 +164,7 @@ test("Account from the menu takes the menu's Back step: one Back returns, the ne
   await page.goBack()
   await expect(page).toHaveURL(/\/projects$/)
   await page.goBack()
-  await expect(page).toHaveURL(/127\.0\.0\.1:8090\/$/)
+  await expect(page).toHaveURL(new RegExp(`^${BASE_URL_PATTERN}/$`))
 })
 
 /** A request from the page itself: the browser sends the session cookie and the Origin. */
@@ -201,7 +202,7 @@ test("a critical security row in the bell opens its project in place of the bell
   await page.goBack()
   await expect(page).toHaveURL(/\/projects$/)
   await page.goBack()
-  await expect(page).toHaveURL(/127\.0\.0\.1:8090\/$/)
+  await expect(page).toHaveURL(new RegExp(`^${BASE_URL_PATTERN}/$`))
 })
 
 test("More closes when the window grows past 760px: no layer, nothing inert, its Back step given back", async () => {
@@ -225,7 +226,7 @@ test("More closes when the window grows past 760px: no layer, nothing inert, its
     await expect(page).toHaveURL(/\/projects$/)
     // The sheet's entry is gone: one Back leaves Projects.
     await page.goBack()
-    await expect(page).toHaveURL(/127\.0\.0\.1:8090\/$/)
+    await expect(page).toHaveURL(new RegExp(`^${BASE_URL_PATTERN}/$`))
   } finally {
     await page.setViewportSize({ width: 1440, height: 900 })
   }

@@ -686,7 +686,10 @@
       "session_connect": "נתן ל-adiutor connect חיבור קצר",
       "session_revoke": "סיים חיבור",
       "account_totp_disable": "כיבה את האימות הדו-שלבי",
-      "account_backup_codes_new": "יצר קודי גיבוי חדשים"
+      "account_backup_codes_new": "יצר קודי גיבוי חדשים",
+      "account_passkey_add": "הוסיף מפתח גישה",
+      "account_passkey_rename": "שינה שם של מפתח גישה",
+      "account_passkey_delete": "הסיר מפתח גישה"
     },
     "field": {
       "status": "סטטוס",
@@ -939,7 +942,9 @@
       "mismatch": "הסיסמאות לא זהות.",
       "codeFormat": "צריך להזין את 6 הספרות של הקוד.",
       "backupFormat": "צריך להזין קוד גיבוי כפי שנשמר.",
-      "accountLocked": "יותר מדי קודים שגויים. הכניסה נעולה ל-15 דקות."
+      "accountLocked": "יותר מדי קודים שגויים. הכניסה נעולה ל-15 דקות.",
+      "passkeyCancelled": "בקשת מפתח הגישה נסגרה או שפג הזמן שלה. אפשר לנסות שוב.",
+      "passkeyRefused": "מפתח הגישה הזה לא התקבל. אפשר להשתמש במפתח אחר, או להיכנס עם הסיסמה."
     },
     "backupCode": "קוד גיבוי",
     "backupCodeHint": "אחד הקודים ששמרת בהגדרת האימות הדו-שלבי. כל קוד עובד פעם אחת."
@@ -961,7 +966,10 @@
     "otpSending": "שולח...",
     "useApp": "כניסה עם אפליקציית האימות",
     "useBackup": "כניסה עם קוד גיבוי",
-    "useOtp": "קוד בטלגרם במקום זה"
+    "useOtp": "קוד בטלגרם במקום זה",
+    "passkey": "כניסה עם מפתח גישה",
+    "passkeyBusy": "ממתין למפתח הגישה...",
+    "or": "או"
   },
   "setup": {
     "title": "ברוכים הבאים ל-Adiutor",
@@ -1053,7 +1061,34 @@
     "codesHint": "קודים חדשים מחליפים את אלה ששמרת, והישנים מפסיקים לעבוד.",
     "authenticatorRow": "אפליקציית אימות",
     "authenticatorHint": "אפליקציית אימות חדשה מחליפה את הקיימת. צריך להשלים את ההגדרה מיד.",
-    "recoveryRow": "איפוס הסיסמה בשרת"
+    "recoveryRow": "איפוס הסיסמה בשרת",
+    "passkeys": "מפתחות גישה",
+    "passkeysHint": "מפתח גישה מכניס אותך בעצמו, עם טביעת אצבע, זיהוי פנים או קוד המכשיר, בלי סיסמה ובלי קוד. הסיסמה ואפליקציית האימות ממשיכות לעבוד. אחרי הסרה של מפתח שאבד, כדאי לנתק גם את שאר הדפדפנים.",
+    "passkeysEmpty": "עדיין אין מפתחות גישה.",
+    "passkeysUnsupported": "הדפדפן הזה לא יכול להוסיף מפתחות גישה. אפשר עדיין לשנות להם שם ולהסיר אותם כאן.",
+    "passkeysFull": "יש לך {max} מפתחות גישה, המספר המרבי ש-Adiutor שומר. צריך להסיר מפתח כדי להוסיף אחר.",
+    "passkeysFailed": "לא הצלחתי לטעון את מפתחות הגישה",
+    "passkeyAdded": "נוסף",
+    "passkeyAdd": "הוספת מפתח גישה",
+    "passkeyAddTitle": "הוספת מפתח גישה",
+    "passkeyAddHint": "כדאי לקרוא לו על שם המכשיר או מנהל הסיסמאות ששומר אותו. אחר כך הדפדפן יבקש טביעת אצבע, זיהוי פנים או את קוד המכשיר.",
+    "passkeyName": "שם",
+    "passkeyNameInvalid": "צריך 1 עד {max} תווים.",
+    "passkeyAddSubmit": "המשך",
+    "passkeyAddBusy": "ממתין למפתח הגישה...",
+    "passkeyAddDone": "מפתח הגישה נוסף. אפשר להיכנס איתו מעכשיו.",
+    "passkeyAddFailed": "לא הצלחתי להוסיף את מפתח הגישה: {reason}",
+    "passkeyAlready": "במכשיר הזה כבר יש מפתח גישה ל-Adiutor.",
+    "passkeyRename": "שינוי שם",
+    "passkeyRenameTitle": "שינוי שם של מפתח הגישה",
+    "passkeyRenameSubmit": "שמירה",
+    "passkeyRenameBusy": "שומר...",
+    "passkeyRenameDone": "השם של מפתח הגישה שונה",
+    "passkeyRemove": "הסרה",
+    "passkeyRemoveTitle": "להסיר את {name}?",
+    "passkeyRemoveMessage": "הוא מפסיק להכניס מיד. אם המכשיר אבד, כדאי לנתק גם את שאר הדפדפנים.",
+    "passkeyRemoveDone": "{name} הוסר",
+    "passkeyFailed": "לא הצלחתי לשנות את מפתח הגישה: {reason}"
   },
   "backupCodes": {
     "hint": "{count} קודי הגיבוי האלה מאפשרים להיכנס בלי אפליקציית האימות, כל קוד פעם אחת. Adiutor מציג אותם רק עכשיו. כדאי לשמור אותם במקום בטוח, לא במכשיר הזה.",

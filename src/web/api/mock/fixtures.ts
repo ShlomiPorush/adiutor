@@ -92,6 +92,8 @@ function mockSettings(): Settings {
 
 export type MockGoal = { id: string; projectId: string; text: string; createdAt: string; closedAt: string | null }
 
+export type MockPasskey = { id: string; name: string; createdAt: string }
+
 export type MockState = {
   projects: Project[]
   goals: MockGoal[]
@@ -107,6 +109,8 @@ export type MockState = {
   sessions: BrowserSession[]
   endedOthers: boolean
   agentKeys: AgentKey[]
+  /** Better Auth's list-user-passkeys (the fields the Account page reads). */
+  passkeys: MockPasskey[]
   suppressions: Suppression[]
   settings: Settings
   previousVisit: string
@@ -574,6 +578,10 @@ export function createState(): MockState {
       lastRequest: ago(3),
     },
   ]
+  const passkeys: MockPasskey[] = [
+    { id: uuid(), name: "Work laptop", createdAt: ago(24 * 14) },
+    { id: uuid(), name: "Phone", createdAt: ago(24 * 2) },
+  ]
   const suppressions: Suppression[] = [
     {
       id: uuid(),
@@ -599,6 +607,7 @@ export function createState(): MockState {
     sessions,
     endedOthers: false,
     agentKeys,
+    passkeys,
     suppressions,
     settings: mockSettings(),
     previousVisit: ago(14),

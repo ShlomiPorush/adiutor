@@ -81,6 +81,15 @@ export const AGENT_KEY_NAME_MAX = 32
 export const AGENT_KEY_DAYS_MIN = 1
 export const AGENT_KEY_DAYS_MAX = 365
 
+// --- Passkeys (Better Auth's @better-auth/passkey plugin) ---
+
+/**
+ * The most passkeys the owner keeps. The plugin's list answers at most 100 rows; staying far below that keeps every
+ * passkey on the Account page. Registrations that overlap in time can each pass the count (see AGENTS.md).
+ */
+export const PASSKEY_MAX = 20
+export const PASSKEY_NAME_MAX = 32
+
 // --- Agent approval in the browser (Better Auth's core deviceAuthorization plugin) ---
 
 /** The one client id the device plugin accepts (validateClient); the CLI also sends it as its User-Agent. */

@@ -1,5 +1,5 @@
 // The Account page, /account, opened from the account menu: v3 rows in groups (S-6, FS-8), Signed in, Browsers,
-// Password, Two-factor and Recovery. It is the owner's own account, not a setting of the board, so it has a page of its
+// Password, Passkeys, Two-factor and Recovery. It is the owner's own account, not a setting of the board, so it has a page of its
 // own outside Settings and its draft. Everything here is Better Auth's own routes through its client, and acts at once, outside the save bar: the
 // signed-in browsers (and a session `adiutor connect` left behind) with Sign out per browser and, at the end of the
 // list's head, Sign out other browsers and Sign out everywhere (S-12); the password changed in a dialog (FS-22, DS-9:
@@ -27,6 +27,7 @@ import { ErrorState, errorReason, Loading } from "../ui/states.tsx"
 import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Tag } from "../ui/tags.tsx"
+import { PasskeysGroup } from "./AccountPasskeys.tsx"
 import { describeAgent } from "./agent.ts"
 import { RECOVERY_COMMAND } from "./auth/LoginPage.tsx"
 import { BackupCodes, FormError, PasswordField } from "./auth/parts.tsx"
@@ -194,6 +195,7 @@ function AccountSection() {
           </button>
         </Row>
       </Group>
+      <PasskeysGroup />
       <Group id="account-two-factor" heading="h2" title={t("account.twoFactor")}>
         <Row label={t("account.codesRow")} hint={t("account.codesHint")}>
           <button type="button" className="ui-btn" onClick={() => setDialog("codes")}>

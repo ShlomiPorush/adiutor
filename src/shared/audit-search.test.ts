@@ -37,7 +37,14 @@ describe("auditCodesMatching", () => {
   it("finds the actions and entity types whose Hebrew label holds the text", () => {
     expect(auditCodesMatching("he", he.audit.action.item_create).actions).toEqual(["item.create"])
     expect(auditCodesMatching("he", CHANGED_HE).actions.sort()).toEqual(
-      ["account.password_change", "item.update", "note.update", "project.update", "settings.update"].sort(),
+      [
+        "account.passkey_rename",
+        "account.password_change",
+        "item.update",
+        "note.update",
+        "project.update",
+        "settings.update",
+      ].sort(),
     )
     expect(auditCodesMatching("he", he.audit.entity.project).entityTypes).toEqual(["project"])
   })

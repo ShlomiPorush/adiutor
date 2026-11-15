@@ -1,11 +1,12 @@
-// The Better Auth client: sign-up, sign-in, two-factor, the password, the browser sessions, the agent keys and the
-// agent approvals (device authorization), all
+// The Better Auth client: sign-up, sign-in, two-factor, passkeys, the password, the browser sessions, the agent keys
+// and the agent approvals (device authorization), all
 // on Better Auth's own routes under /api/auth. Adiutor adds nothing to these requests: Better Auth checks the origin
 // itself. Its useSession is the only thing that extends a session (deferSessionRefresh on the server): it refreshes
 // when the page opens, comes back to the front or online, or another tab changes the session. Never call
 // getSession or useSession().refetch from background polling, and keep sessionOptions.refetchInterval at 0.
 
 import { apiKeyClient } from "@better-auth/api-key/client"
+import { passkeyClient } from "@better-auth/passkey/client"
 import { deviceAuthorizationClient, twoFactorClient, usernameClient } from "better-auth/client/plugins"
 import { createAuthClient } from "better-auth/react"
 
@@ -18,7 +19,7 @@ const mockFetch =
 
 export const authClient = createAuthClient({
   basePath: "/api/auth",
-  plugins: [usernameClient(), twoFactorClient(), apiKeyClient(), deviceAuthorizationClient()],
+  plugins: [usernameClient(), twoFactorClient(), passkeyClient(), apiKeyClient(), deviceAuthorizationClient()],
   sessionOptions: { refetchInterval: 0 },
   ...(mockFetch ? { fetchOptions: { customFetchImpl: mockFetch } } : {}),
 })
@@ -52,6 +53,19 @@ export function authFailure(error: AuthError, step: "password" | "code"): AuthFa
   if (code === "INVALID_PASSWORD" || code === "INVALID_USERNAME_OR_PASSWORD" || error.status === 401)
     return "wrong_password"
   return "other"
+}
+
+/** Whether this browser can create and use passkeys (WebAuthn). Listing, renaming and removing need no support. */
+export const passkeysSupported = () => typeof window !== "undefined" && typeof window.PublicKeyCredential === "function"
+
+/**
+ * A passkey ceremony that failed: closed, timed out or refused in the browser (the client answers 400 with a WebAuthn
+ * code, or AUTH_CANCELLED), else what authFailure says.
+ */
+export function passkeyFailure(error: AuthError): AuthFailure | "passkey_cancelled" {
+  const code = (error?.code ?? "").toUpperCase()
+  if (error?.status === 400 && (code === "AUTH_CANCELLED" || code.startsWith("ERROR_"))) return "passkey_cancelled"
+  return authFailure(error, "password")
 }
 
 /** The locale key of a failure's sentence (other failures say the server's reason). */
