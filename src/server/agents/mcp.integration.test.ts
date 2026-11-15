@@ -96,6 +96,8 @@ async function post(headers: Record<string, string>, body: unknown = initialize)
 }
 
 async function toolCalls(connectionId: string) {
+  // A call's row is written once its answer went out: wait for every row begun.
+  await h.mount.drain()
   return t.ctx.db
     .select()
     .from(audit)
@@ -442,6 +444,48 @@ describe("the deadline of a tool call", () => {
     const outcomes = (await toolCalls(id)).map((e) => e.after as { outcome: string; refusal?: string })
     expect(outcomes.filter((o) => o.outcome === "unknown")).toHaveLength(LIMITS.perConnection)
     expect(outcomes.filter((o) => o.refusal === "busy")).toHaveLength(1)
+  })
+})
+
+describe("the answer cap on the wire", () => {
+  /** One JSON-RPC message or a batch, posted as is; the parsed answer. */
+  async function rpc(token: string, message: unknown) {
+    const r = await post({ authorization: `Bearer ${token}` }, message)
+    return { status: r.status, json: JSON.parse(r.text) as unknown }
+  }
+  const textOf = (answer: { result?: { content?: { text: string }[] } }) =>
+    JSON.parse(answer.result?.content?.[0]?.text ?? "null") as { error?: string }
+
+  it("counts the request id the answer echoes: a long id brings a small result over the cap", async () => {
+    const { token } = await connectMcp(["read"])
+    const id = "i".repeat(LIMITS.answerBytes - 1_000)
+    const answer = await rpc(token, {
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name: "get_access", arguments: {} },
+    })
+    expect(answer.status).toBe(200)
+    expect(textOf(answer.json as never).error).toBe("answer_too_large")
+  })
+
+  it("counts the answers of one batch together: two that each pass alone do not pass together", async () => {
+    const { token } = await connectMcp(["read"])
+    const notes = await Promise.all(
+      [1, 2].map((n) => createNote(t.ctx, owner, { title: `Batch ${n} ${randomUUID()}`, body: "b".repeat(35_000) })),
+    )
+    const callNote = (noteId: string, n: number) => ({
+      jsonrpc: "2.0",
+      id: n,
+      method: "tools/call",
+      params: { name: "adiutor_get_note", arguments: { noteId } },
+    })
+    const alone = await rpc(token, callNote(notes[0]?.id ?? "", 1))
+    expect(textOf(alone.json as never).error).toBeUndefined()
+    const batch = await rpc(token, [callNote(notes[0]?.id ?? "", 1), callNote(notes[1]?.id ?? "", 2)])
+    expect(batch.status).toBe(200)
+    const errors = (batch.json as never[]).map((a) => textOf(a).error)
+    expect(errors.sort()).toEqual(["answer_too_large", undefined].sort())
   })
 })
 

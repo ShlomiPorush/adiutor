@@ -1,4 +1,4 @@
-import type { IncomingMessage } from "node:http"
+import type { IncomingMessage, ServerResponse } from "node:http"
 import { type Context, Hono, type MiddlewareHandler } from "hono"
 import { bodyLimit } from "hono/body-limit"
 import { HTTPException } from "hono/http-exception"
@@ -107,8 +107,11 @@ export const REFUSALS = {
   },
 } as const
 
-/** Room for the JSON-RPC envelope around a tool's result (`jsonrpc`, `id`, `result`): far more than it takes. */
-const ENVELOPE_BYTES = 1024
+/**
+ * Room for the JSON-RPC envelope around one tool answer, besides its id (counted on its own): `{"jsonrpc":"2.0",
+ * "id":,"result":}` and a batch's comma and brackets take under 40 bytes.
+ */
+const ENVELOPE_BYTES = 64
 
 /** A failure whose outcome may be unknown (a 5xx after an action). */
 const INTERNAL = { error: "internal_error", message: "Something went wrong on the server." } as const
@@ -226,6 +229,19 @@ export async function readBody(
   return done.value
 }
 
+/**
+ * Whether the answer to this request reached the client: true once Node's response was written whole, false when the
+ * connection closed before (the response's `close` without `writableFinished`). Subscribe before the answer goes out.
+ * Without a Node response (the app driven directly, in unit tests) it is whether the request was aborted.
+ */
+export function deliveryOf(c: Context): Promise<boolean> {
+  const outgoing = (c.env as { outgoing?: ServerResponse } | undefined)?.outgoing
+  if (!outgoing) return Promise.resolve(!c.req.raw.signal.aborted)
+  if (outgoing.writableFinished) return Promise.resolve(true)
+  if (outgoing.destroyed) return Promise.resolve(false)
+  return new Promise((resolve) => outgoing.once("close", () => resolve(outgoing.writableFinished)))
+}
+
 /** The same request with a body already read, for a handler that reads it again (its length no longer declared). */
 export function withBody(request: Request, bytes: Uint8Array): Request {
   const headers = new Headers(request.headers)
@@ -256,8 +272,8 @@ export function createAgentChannel(options: AgentChannelOptions) {
   const { ctx, access } = options
   const limits = options.limits ?? channelLimits()
   const running = slots(limits)
-  /** When a refusal was last recorded, per connection and reason. */
-  const seen = new Map<string, number>()
+  /** When `busy` was last recorded, per connection. */
+  const busySeen = new Map<string, number>()
   /** Audit writes not settled yet. */
   const pending = new Set<Promise<void>>()
   const issuer = access.issuer ?? ""
@@ -288,11 +304,8 @@ export function createAgentChannel(options: AgentChannelOptions) {
     const write = writeAudit(ctx, ctx.db, by, entry).catch((error: unknown) => {
       log.error("an agent call was not audited", errorFacts(error))
     })
-    pending.add(write)
-    void write.finally(() => {
-      pending.delete(write)
-      settled?.()
-    })
+    track(write)
+    void write.finally(() => settled?.())
     let timer: NodeJS.Timeout | undefined
     const gaveUp = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
@@ -329,28 +342,34 @@ export function createAgentChannel(options: AgentChannelOptions) {
     )
   }
 
-  /** True once per window for a connection and a reason. */
-  function once(connectionId: string, reason: string): boolean {
-    const key = `${connectionId} ${reason}`
+  /**
+   * `busy`, the one refusal made without a slot, is recorded once per window per connection (the standard allows
+   * thinning it alone); every other refusal is made and recorded inside the call's slot.
+   */
+  async function recordBusy(call: CallEntry, details: Record<string, unknown>): Promise<void> {
+    const id = call.connection.id
     const now = Date.now()
-    const last = seen.get(key)
-    if (last !== undefined && now - last < limits.busyWindowMs) return false
-    seen.set(key, now)
-    if (seen.size > 10_000) for (const [k, at] of seen) if (now - at >= limits.busyWindowMs) seen.delete(k)
-    return true
+    const last = busySeen.get(id)
+    if (last !== undefined && now - last < limits.busyWindowMs) return
+    busySeen.set(id, now)
+    if (busySeen.size > 10_000) for (const [k, at] of busySeen) if (now - at >= limits.busyWindowMs) busySeen.delete(k)
+    await record(call, "denied", details)
   }
 
-  /**
-   * The entry of a call refused before its route ran (area, revision or kind, a closed route, busy), with the same
-   * bound as every other entry: in a slot of the connection, given back once the row settled. When the connection has
-   * no free slot, the refusal is recorded once per window per connection and reason (as `busy` is), else not at all,
-   * so a burst of refusals can never write more rows at once than the slots allow plus one per reason. The answer is
-   * the same either way, so the order of the refusals stays the standard's.
-   */
-  async function recordRefusal(call: CallEntry, reason: string, details: Record<string, unknown>): Promise<void> {
+  /** A refusal made in the call's slot: its row is written there, and the slot comes back once the row settled. */
+  function recordInSlot(call: CallEntry, details: Record<string, unknown>): Promise<void> {
     const id = call.connection.id
-    if (running.take(id)) return record(call, "denied", details, () => running.give(id))
-    if (once(id, reason)) return record(call, "denied", details)
+    return record(call, "denied", details, () => running.give(id))
+  }
+
+  /** Waits for `work` before `drain` may finish. */
+  function track(work: Promise<unknown>): void {
+    const settled = work.then(
+      () => undefined,
+      () => undefined,
+    )
+    pending.add(settled)
+    void settled.finally(() => pending.delete(settled))
   }
 
   /**
@@ -413,16 +432,17 @@ export function createAgentChannel(options: AgentChannelOptions) {
   }
 
   /**
-   * Runs one call under the limits: a slot (taken by the caller), the deadline and the audit entry, written once before
-   * the answer leaves; the slot is given back once both the work and the entry are done. A call past its deadline is
-   * recorded `unknown` and answered at once; its work goes on in its slot.
+   * Runs one call under the limits: a slot (taken by the caller), the deadline and the audit entry; the slot is given
+   * back once both the work and the entry are done. The answer goes out first, and the entry is written once its fate is
+   * known (`delivered`): written whole to the client, the judged outcome; the client gone first, `unknown`. A call past
+   * its deadline is recorded `unknown` and answered at once; its work goes on in its slot.
    */
   async function guarded<T>(
     call: CallEntry,
     work: Promise<T>,
     judge: (value: T) => Promise<{ outcome: Outcome; details?: Record<string, unknown> }>,
-    /** The request's signal: aborted when the client left before its answer was written. */
-    signal?: AbortSignal,
+    /** Whether the answer reached the client (deliveryOf). */
+    delivered: Promise<boolean>,
   ): Promise<{ late: true } | { late: false; value: T }> {
     const id = call.connection.id
     work.catch(() => undefined)
@@ -450,9 +470,15 @@ export function createAgentChannel(options: AgentChannelOptions) {
       await record(call, "error", {}, release)
       throw error
     }
-    // An answer that broke off (the client left meanwhile) never reached the agent: its outcome is unknown to it.
-    if (signal?.aborted) await record(call, "unknown", { ...judged.details, disconnected: true }, release)
-    else await record(call, judged.outcome, judged.details, release)
+    // An answer that broke off (the client left before it was written) never reached the agent: its outcome is unknown
+    // to it. Tracked from now on, so `drain` waits for the row although it begins after the answer.
+    track(
+      delivered.then((sent) =>
+        sent
+          ? record(call, judged.outcome, judged.details, release)
+          : record(call, "unknown", { ...judged.details, disconnected: true }, release),
+      ),
+    )
     return done
   }
 
@@ -486,8 +512,13 @@ export function createAgentChannel(options: AgentChannelOptions) {
         method: c.req.method,
         kind: route.kind,
       }
+      // A slot first, so every refusal below is recorded inside it like any call; without one, nothing runs: busy.
+      if (!running.take(check.connection.id)) {
+        await recordBusy(call, { status: 429 })
+        return c.json(REFUSALS.busy, 429)
+      }
       if (!mayCall(check.areas, route.area)) {
-        await recordRefusal(call, "area", { status: 403 })
+        await recordInSlot(call, { status: 403 })
         return c.json({ ...REFUSALS.areaNotGranted, area: route.area }, 403)
       }
       if (!route.exempt) {
@@ -498,14 +529,12 @@ export function createAgentChannel(options: AgentChannelOptions) {
           return lines === null || lines === 1
         }
         if (revision !== REVISION || kind !== route.kind || !single(HEADERS.policy) || !single(HEADERS.kind)) {
-          await recordRefusal(call, "policy", { status: 409 })
+          await recordInSlot(call, { status: 409 })
           return c.json(REFUSALS.policyChanged, 409)
         }
       }
-      if (!running.take(check.connection.id)) {
-        await recordRefusal(call, "busy", { status: 429 })
-        return c.json(REFUSALS.busy, 429)
-      }
+      // Subscribed before the answer goes out: whether it reached the client.
+      const delivered = deliveryOf(c)
       // The body limit, the use (counted) and the route's code (agentUse below), under the deadline.
       const work = next()
       let tooLarge = false
@@ -522,7 +551,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
           const failed = status < 400 && route.area === "sync" && syncFailed(answer)
           return { outcome: status < 400 && !failed ? "ok" : "error", details: { status } }
         },
-        c.req.raw.signal,
+        delivered,
       )
       if (done.late) return c.json(REFUSALS.unknown, 504)
       if (c.get("ended")) return
@@ -531,13 +560,15 @@ export function createAgentChannel(options: AgentChannelOptions) {
     }
 
   /**
-   * After the body limit and before the route's own code: a real call counts as use (the idle rule; `access` and
-   * `endpoints` do not, and a body the limit refused never gets here). A connection that ended since its token was
-   * checked runs nothing (401).
+   * After the body limit and right before the route's own code: the whole body is read first (under the limit and the
+   * deadline; the route reads it again from Hono's cache), then a real call counts as use (the idle rule; `access` and
+   * `endpoints` do not, and a body the limit refused never gets here) and the connection is read again. A connection
+   * that ended since its token was checked, also while its body was still arriving, runs nothing (401).
    */
   const agentUse =
     (route: OpenRoute): MiddlewareHandler<AgentEnv> =>
     async (c, next) => {
+      if (c.req.method !== "GET" && c.req.method !== "HEAD") await c.req.arrayBuffer()
       if (!route.exempt && !(await access.recordUse(c.get("agent").check.connection))) {
         c.set("ended", true)
         return challenge(c, "rest", "invalid_token")
@@ -570,19 +601,22 @@ export function createAgentChannel(options: AgentChannelOptions) {
   // Anything else is closed to agents: the router picked no open route.
   const closed = async (c: Context<AgentEnv>) => {
     const agent = c.get("agent")
-    if (agent)
-      await recordRefusal(
-        {
-          connection: agent.check.connection,
-          by: agent.by,
-          channel: "rest",
-          name: null,
-          method: c.req.method,
-          kind: null,
-        },
-        "closed",
-        { status: 403 },
-      )
+    if (agent) {
+      const call: CallEntry = {
+        connection: agent.check.connection,
+        by: agent.by,
+        channel: "rest",
+        name: null,
+        method: c.req.method,
+        kind: null,
+      }
+      // As for an open route: a slot first, then the refusal recorded in it.
+      if (!running.take(agent.check.connection.id)) {
+        await recordBusy(call, { status: 429 })
+        return c.json(REFUSALS.busy, 429)
+      }
+      await recordInSlot(call, { status: 403 })
+    }
     return c.json(REFUSALS.closed, 403)
   }
   rest.all("*", closed)
@@ -601,9 +635,16 @@ export function createAgentChannel(options: AgentChannelOptions) {
    * call may have waited, and the token been refused or the connection ended meanwhile; a real tool call counts as use,
    * get_access does not), the tool's area, then the tool under the deadline and the answer cap, with its audit entry.
    */
-  function toolGuard(found: AgentToken, by: By, signal?: AbortSignal): ToolGuard {
+  function toolGuard(found: AgentToken, by: By, delivered: Promise<boolean>): ToolGuard {
     const id = found.check.connection.id
-    return async (tool, run) => {
+    /**
+     * What the tool answers of this HTTP request have put on the wire so far: one request may be a JSON-RPC batch, whose
+     * answers the SDK sends together, so the cap holds for their sum, each with the request id the SDK echoes.
+     */
+    let sent = 0
+    const wire = (result: ToolResult, requestId: unknown) =>
+      Buffer.byteLength(JSON.stringify(result)) + Buffer.byteLength(JSON.stringify(requestId ?? null)) + ENVELOPE_BYTES
+    return async (tool, run, requestId) => {
       const rule = TOOLS[tool]
       const call: CallEntry = {
         connection: found.check.connection,
@@ -612,12 +653,13 @@ export function createAgentChannel(options: AgentChannelOptions) {
         name: tool,
         kind: rule?.kind ?? null,
       }
-      const fail = (body: object): ToolResult => ({
-        content: [{ type: "text", text: JSON.stringify(body) }],
-        isError: true,
-      })
+      const fail = (body: object): ToolResult => {
+        const result: ToolResult = { content: [{ type: "text", text: JSON.stringify(body) }], isError: true }
+        sent += wire(result, requestId)
+        return result
+      }
       if (!running.take(id)) {
-        await recordRefusal(call, "busy", { refusal: "busy" })
+        await recordBusy(call, { refusal: "busy" })
         return fail(REFUSALS.busy)
       }
       type Ran = { refusal: string; body: object } | { result: ToolResult }
@@ -637,7 +679,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
         const result = await run().catch((error: unknown): ToolResult => {
           // Never the error's message: it may hold a query or the owner's text.
           log.error("an agent's tool call failed", { tool, ...errorFacts(error) })
-          return fail(INTERNAL)
+          return { content: [{ type: "text", text: JSON.stringify(INTERNAL) }], isError: true }
         })
         return { result }
       })()
@@ -647,12 +689,14 @@ export function createAgentChannel(options: AgentChannelOptions) {
         work,
         async (ran) => {
           if ("refusal" in ran) return { outcome: "denied", details: { refusal: ran.refusal } }
-          // What goes on the wire: the serialized result (its text escaped once more), with room for the JSON-RPC
-          // envelope the SDK puts around it.
-          tooLarge = Buffer.byteLength(JSON.stringify(ran.result)) + ENVELOPE_BYTES > limits.answerBytes
+          // What goes on the wire: the serialized result (its text escaped once more), the request id the SDK echoes
+          // and its envelope, together with the other answers of the same HTTP request (a batch).
+          const size = wire(ran.result, requestId)
+          tooLarge = sent + size > limits.answerBytes
+          if (!tooLarge) sent += size
           return { outcome: tooLarge || ran.result.isError ? "error" : "ok" }
         },
-        signal,
+        delivered,
       )
       if (done.late) return fail(REFUSALS.unknown)
       if ("refusal" in done.value) return fail(done.value.body)

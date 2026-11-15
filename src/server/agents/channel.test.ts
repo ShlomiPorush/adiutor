@@ -58,21 +58,27 @@ function app(writes: ReturnType<typeof heldWrites>, auditMs: number) {
 }
 
 describe("audit writes of agent calls", () => {
-  it("bound a burst of refusals by the slots: no more writes at once than the slots and one per reason", async () => {
+  it("record every refusal that was answered 403 or 409 inside a slot; a burst beyond the slots is busy", async () => {
     const writes = heldWrites()
     const { limits, call } = app(writes, 20)
     const answers = await Promise.all(
-      Array.from({ length: 20 }, () => call("/api/v1/items", { [HEADERS.policy]: "stale" })),
+      Array.from({ length: 20 }, (_, i) =>
+        call(i % 2 ? "/api/v1/items" : "/api/v1/audit", { [HEADERS.policy]: "stale" }),
+      ),
     )
-    expect(answers.map((a) => a.status)).toEqual(Array(20).fill(409))
-    expect(writes.begun()).toBe(limits.perConnection + 1)
+    const statuses = answers.map((a) => a.status)
+    const refused = statuses.filter((s) => s === 403 || s === 409)
+    // Each 403 or 409 ran in a slot of its own and has its row; the rest ran nothing and are busy, recorded once.
+    expect(refused).toHaveLength(limits.perConnection)
+    expect(statuses.filter((s) => s === 429)).toHaveLength(20 - limits.perConnection)
+    expect(writes.begun()).toBe(refused.length + 1)
     writes.release()
   })
 
   it("keep a call's slot until its row settles, and drain waits for every row before the database may close", async () => {
     const writes = heldWrites()
     const { channel, limits, call } = app(writes, 20)
-    // Each answers once its row gave up waiting; the rows are still being written, and hold their slots.
+    // Each is answered; their rows are still being written, and hold their slots.
     for (let i = 0; i < limits.perConnection; i++) expect((await call("/api/v1/agent/endpoints")).status).toBe(200)
     expect((await call("/api/v1/agent/endpoints")).status).toBe(429)
     let drained = false

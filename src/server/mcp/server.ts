@@ -16,6 +16,7 @@ import {
 import {
   type AgentChannel,
   agentErrorBody,
+  deliveryOf,
   REFUSALS,
   readBody,
   withBody,
@@ -63,7 +64,7 @@ function json(value: unknown): ToolResult {
 }
 
 /** Runs one tool call of an agent connected by approval under the policy core and the limits (agents/channel.ts). */
-export type ToolGuard = (tool: string, run: () => Promise<ToolResult>) => Promise<ToolResult>
+export type ToolGuard = (tool: string, run: () => Promise<ToolResult>, requestId?: unknown) => Promise<ToolResult>
 
 /**
  * An agent connected by approval: only the tools of its areas are listed and registered (TOOLS in agents/policy.ts),
@@ -110,7 +111,9 @@ export function buildMcpServer(ctx: Ctx, by: By, version: string, agent?: AgentM
           openWorldHint: false,
         },
       },
-      (async (args: Args) => (agent ? agent.guard(name, () => once(args)) : once(args))) as never,
+      // The SDK hands every tool its request's id (`extra.requestId`), which its answer echoes.
+      (async (args: Args, extra: { requestId?: unknown }) =>
+        agent ? agent.guard(name, () => once(args), extra?.requestId) : once(args)) as never,
     )
   }
 
@@ -122,7 +125,8 @@ export function buildMcpServer(ctx: Ctx, by: By, version: string, agent?: AgentM
         inputSchema: {},
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       },
-      (async () => agent.guard("get_access", async () => json(await agent.getAccess()))) as never,
+      (async (_args: unknown, extra: { requestId?: unknown }) =>
+        agent.guard("get_access", async () => json(await agent.getAccess()), extra?.requestId)) as never,
     )
 
   tool(
@@ -362,7 +366,7 @@ function agentMcpRoutes(app: Hono<Env>, deps: AuthDeps & { version: string }, ag
     const by: By = { actor: { kind: "agent", label: agentLabel(c, connection.name) }, source: "mcp" }
     const server = buildMcpServer(deps.ctx, by, deps.version, {
       areas,
-      guard: agents.toolGuard(found, by, c.req.raw.signal),
+      guard: agents.toolGuard(found, by, deliveryOf(c)),
       getAccess: () => agents.accessAnswer(found.check, "mcp"),
     })
     const transport = new WebStandardStreamableHTTPServerTransport({

@@ -716,7 +716,14 @@ export async function createAgentAccess(options: AgentAccessOptions) {
    */
   async function recordUse(row: Connection): Promise<Connection | null> {
     const now = ctx.clock()
-    if (row.lastUsedAt && now.getTime() - row.lastUsedAt.getTime() < USE_WRITE_MS) return row
+    if (row.lastUsedAt && now.getTime() - row.lastUsedAt.getTime() < USE_WRITE_MS) {
+      // Used within the minute: no write, but always a fresh read that it has not ended since it was checked.
+      const [live] = await db
+        .select()
+        .from(agentConnections)
+        .where(and(eq(agentConnections.id, row.id), isNull(agentConnections.endedAt)))
+      return live ?? null
+    }
     const [touched] = await db
       .update(agentConnections)
       .set({ lastUsedAt: now })

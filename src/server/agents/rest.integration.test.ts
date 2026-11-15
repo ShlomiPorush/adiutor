@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { request as httpRequest } from "node:http"
+import { connect as netConnect } from "node:net"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
@@ -10,7 +11,14 @@ import { createProject } from "../services/projects.ts"
 import { createAgentKey } from "../testing/app.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { holdRow as holdRowIn } from "../testing/locks.ts"
-import { browserCall, connectBrowser, connectWithCode, type OAuthHarness, oauthHarness } from "../testing/oauth.ts"
+import {
+  browserCall,
+  connectBrowser,
+  connectWithCode,
+  type OAuthHarness,
+  oauthHarness,
+  ownerBy,
+} from "../testing/oauth.ts"
 import { channelLimits } from "./channel.ts"
 import { HEADERS, OPEN, REVISION } from "./policy.ts"
 
@@ -134,6 +142,8 @@ function rawCall(method: string, path: string, headers: string[], body?: string)
 
 /** The agent call entries of a connection, oldest first. */
 async function calls(connectionId: string) {
+  // A call's row is written once its answer went out: wait for every row begun.
+  await h.mount.drain()
   return t.ctx.db
     .select()
     .from(audit)
@@ -764,6 +774,7 @@ describe("the audit of every call", () => {
       const r = await call(token, "GET", "/api/v1/items")
       expect(r.status).toBe(200)
       expect(Array.isArray(r.body.data)).toBe(true)
+      await h.mount.drain()
     } finally {
       spy.mockRestore()
       await t.ctx.db.execute(sql`alter table audit drop constraint test_no_agent_calls`)
@@ -819,6 +830,8 @@ describe("the audit of every call", () => {
       await holder
       expect((await pending).status).toBe(200)
       await closed
+      // The agent access release's shutdown: drain before the database closes.
+      await h2.mount.drain()
       const rows = await t2.ctx.db
         .select()
         .from(audit)
@@ -939,5 +952,81 @@ describe("a body the limit refused", () => {
     expect(r.status).toBe(413)
     const [row] = await t.ctx.db.select().from(agentConnections).where(eq(agentConnections.id, id))
     expect(row?.lastUsedAt).toBeNull()
+  })
+})
+
+describe("the answer before its row", () => {
+  it("goes out before the row is written, and the row says ok once the answer was delivered, though the client left", async () => {
+    const { token, id } = await connect(["read"], "Delivered")
+    // The audit table locked in a transaction of its own: the call's row waits until it is released.
+    let release = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let locked = () => {}
+    const isLocked = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    const holder = t.ctx.db.transaction(async (tx) => {
+      await tx.execute(sql`lock table audit in exclusive mode`)
+      locked()
+      await released
+    })
+    await isLocked
+    let answer: Res | "hung"
+    try {
+      // The whole answer arrives, and the client's connection closes, while the row is still held.
+      answer = await Promise.race([
+        rawCall("GET", "/api/v1/items", [
+          "authorization",
+          `Bearer ${token}`,
+          HEADERS.policy,
+          REVISION,
+          HEADERS.kind,
+          "read",
+        ]),
+        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 2_000)),
+      ])
+    } finally {
+      release()
+      await holder
+    }
+    expect(answer === "hung" ? "hung" : answer.status).toBe(200)
+    expect((await calls(id)).map((e) => (e.after as { outcome: string }).outcome)).toEqual(["ok"])
+  })
+})
+
+describe("a connection that ended while its body arrived", () => {
+  it("runs nothing: the connection is read again once the whole body is in, also when it was used within the minute", async () => {
+    const { token, id } = await connect(["read", "write"], "Slow body")
+    // Used now: the next use writes nothing for a minute.
+    expect((await call(token, "GET", "/api/v1/items")).status).toBe(200)
+    const title = `Slow body ${randomUUID()}`
+    const body = JSON.stringify({ type: "task", title })
+    const url = new URL(h.issuer)
+    const socket = netConnect(Number(url.port), url.hostname)
+    let received = ""
+    const answered = new Promise<number>((resolve, reject) => {
+      socket.setEncoding("utf8")
+      socket.on("data", (chunk: string) => {
+        received += chunk
+        if (received.includes("\r\n\r\n")) resolve(Number(received.split(" ")[1]))
+      })
+      socket.on("error", reject)
+    })
+    const chunk = (text: string) => `${Buffer.byteLength(text).toString(16)}\r\n${text}\r\n`
+    socket.write(
+      `POST /api/v1/items HTTP/1.1\r\nHost: ${url.host}\r\nAuthorization: Bearer ${token}\r\nContent-Type: application/json\r\n${HEADERS.policy}: ${REVISION}\r\n${HEADERS.kind}: act\r\nTransfer-Encoding: chunked\r\n\r\n${chunk(body.slice(0, 10))}`,
+    )
+    try {
+      // The head is in and checked; the owner disconnects the agent while the rest of the body is on its way.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      await h.access.disconnect(ownerBy, id)
+      socket.write(`${chunk(body.slice(10))}0\r\n\r\n`)
+      expect(await answered).toBe(401)
+    } finally {
+      socket.destroy()
+    }
+    expect(await t.ctx.db.select().from(items).where(eq(items.title, title))).toEqual([])
   })
 })
