@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import en from "../../shared/locales/en.json" with { type: "json" }
-import { authFailure, FAILURE_TEXT, passkeyFailure } from "./auth.ts"
+import { authFailure, FAILURE_TEXT, isPasskeyFailure, PASSKEY_FAILURE_TEXT, passkeyFailure } from "./auth.ts"
 
 describe("authFailure", () => {
   it("sorts failed sign-in answers by what the owner can do next", () => {
@@ -38,5 +38,28 @@ describe("passkeyFailure", () => {
     expect(passkeyFailure({ status: 401, code: "PASSKEY_NOT_FOUND" })).toBe("wrong_password")
     expect(passkeyFailure({ status: 429 })).toBe("rate_limited")
     expect(passkeyFailure(null)).toBe("network")
+  })
+})
+
+describe("the sentence of a passkey failure", () => {
+  // What the passkey client answers when the authenticator fails: SimpleWebAuthn's code, and "Auth cancelled" as the
+  // message whatever happened (client.mjs of @better-auth/passkey 1.7.19).
+  const lookup = (key: string) => key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], en)
+
+  it("says the device failed, not that the prompt was cancelled", () => {
+    const failure = passkeyFailure({
+      status: 400,
+      code: "ERROR_AUTHENTICATOR_GENERAL_ERROR",
+      message: "Auth cancelled",
+    })
+    expect(isPasskeyFailure(failure)).toBe(true)
+    if (!isPasskeyFailure(failure)) return
+    const text = String(lookup(PASSKEY_FAILURE_TEXT[failure]))
+    expect(text).toBe(en.auth.error.passkeyFailed)
+    expect(text.toLowerCase()).not.toContain("cancel")
+  })
+
+  it("has a sentence in both languages for every failure the browser reports", () => {
+    for (const key of Object.values(PASSKEY_FAILURE_TEXT)) expect(typeof lookup(key)).toBe("string")
   })
 })

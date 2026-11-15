@@ -88,13 +88,21 @@ export function passkeyFailure(error: AuthError): PasskeyFailure {
   return authFailure(error, "password")
 }
 
-/** The locale key of a passkey failure the browser reported (the others use FAILURE_TEXT). */
+/**
+ * The locale key of a passkey failure the browser reported (the others use FAILURE_TEXT). Never the client's own
+ * message: the passkey client answers every failed sign-in prompt with "Auth cancelled", whatever happened.
+ */
 export const PASSKEY_FAILURE_TEXT = {
   passkey_cancelled: "auth.error.passkeyCancelled",
   passkey_registered: "account.passkeyAlready",
   passkey_address: "auth.error.passkeyAddress",
   passkey_unsuitable: "auth.error.passkeyUnsuitable",
+  passkey_failed: "auth.error.passkeyFailed",
 } as const
+
+/** Whether a failure is one the browser reported, with its own sentence in PASSKEY_FAILURE_TEXT. */
+export const isPasskeyFailure = (failure: PasskeyFailure): failure is keyof typeof PASSKEY_FAILURE_TEXT =>
+  failure in PASSKEY_FAILURE_TEXT
 
 /** The locale key of a failure's sentence (other failures say the server's reason). */
 export const FAILURE_TEXT: Record<Exclude<AuthFailure, "other">, string> = {

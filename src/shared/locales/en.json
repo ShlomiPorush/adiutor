@@ -946,7 +946,8 @@
       "passkeyCancelled": "The passkey request was closed or timed out. Try again.",
       "passkeyRefused": "That passkey was not accepted. Use another one, or sign in with your password.",
       "passkeyAddress": "Passkeys work only at Adiutor's own address, a host name over HTTPS. Sign in with your password.",
-      "passkeyUnsuitable": "This device cannot keep a passkey that checks it is you with a PIN or biometrics. Use another device or password manager."
+      "passkeyUnsuitable": "This device cannot keep a passkey that checks it is you with a PIN or biometrics. Use another device or password manager.",
+      "passkeyFailed": "The passkey did not work on this device. Try again, or sign in with your password."
     },
     "backupCode": "Backup code",
     "backupCodeHint": "One of the codes you saved when you set up two-factor. Each code works once."
