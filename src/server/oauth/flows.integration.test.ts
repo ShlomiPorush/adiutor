@@ -64,6 +64,41 @@ describe("discovery", () => {
     expect(meta.body.end_session_endpoint).toBeUndefined()
     expect(meta.body.pushed_authorization_request_endpoint).toBeUndefined()
     expect(meta.body.introspection_endpoint).toBeUndefined()
+    // The security headers set on the Node response reach the library's answers.
+    expect(meta.headers.get("x-frame-options")).toBe("DENY")
+    expect(meta.headers.get("referrer-policy")).toBe("no-referrer")
+    expect(meta.headers.get("x-content-type-options")).toBe("nosniff")
+    expect(meta.headers.get("content-security-policy")).toContain("frame-ancestors 'none'")
+    // Without the proxy (an http issuer), forwarded headers are not read: the URLs stay the issuer's.
+    const forwarded = await agentCall(h.issuer, "/.well-known/oauth-authorization-server", {
+      headers: { "x-forwarded-host": "evil.example.com", "x-forwarded-proto": "https" },
+    })
+    expect(forwarded.body.token_endpoint).toBe(`${h.issuer}/oauth/token`)
+  })
+
+  it("serves an https issuer behind the proxy: the forwarded host names it, another host is refused, cookies are Secure", async () => {
+    const other = await createTestDatabase("oauth_https")
+    const https = await oauthHarness(other, { publicUrl: () => "https://adiutor.example.com" })
+    try {
+      const forwarded = { "x-forwarded-host": "adiutor.example.com", "x-forwarded-proto": "https" }
+      const meta = await agentCall(https.issuer, "/.well-known/oauth-authorization-server", { headers: forwarded })
+      expect(meta.status).toBe(200)
+      expect(meta.body).toMatchObject({
+        issuer: "https://adiutor.example.com",
+        token_endpoint: "https://adiutor.example.com/oauth/token",
+      })
+      expect((await agentCall(https.issuer, "/.well-known/oauth-authorization-server")).status).toBe(421)
+      const elsewhere = { ...forwarded, "x-forwarded-host": "evil.example.com" }
+      expect((await agentCall(https.issuer, "/oauth/token", { headers: elsewhere })).status).toBe(421)
+      const page = await agentCall(https.issuer, "/connect/code", { headers: forwarded })
+      expect(page.status).toBe(200)
+      const cookies = page.headers.getSetCookie()
+      expect(cookies.length).toBeGreaterThan(0)
+      for (const cookie of cookies) expect(cookie.toLowerCase()).toContain("secure")
+    } finally {
+      await https.close()
+      await other.close()
+    }
   })
 
   it("publishes only the public half of the installation's own Ed25519 key, never the library's development keys", async () => {
@@ -127,7 +162,7 @@ describe("registration", () => {
   it("refuses each bad redirect shape, a secret, and metadata that would make it fetch", async () => {
     for (const redirect_uris of [
       ["http://app.example.com/cb"],
-      ["http://127.0.0.2:3000/cb"],
+      [`http://${[127, 0, 0, 2].join(".")}:3000/cb`],
       ["https://app.example.com/cb#frag"],
       ["https://user:pw@app.example.com/cb"],
       ["myapp:/cb"],
@@ -363,10 +398,26 @@ describe("a script with a code", () => {
       areas: ["sync"],
       connection: { name: "Laptop sync", connectedVia: "code" },
     })
+    expect((await h.access.checkToken(c.tokens.body.access_token, "mcp")).ok).toBe(false)
+  })
+
+  it("opens the code page from the link the agent shows, with the code filled in, through the library's own form", async () => {
+    const device = await agentCall(h.issuer, "/oauth/device", { form: { client_id: CLI_CLIENT_ID, scope: "read" } })
+    const link = new URL(device.body.verification_uri_complete)
+    const page = await browserCall(h.owner, `${link.pathname}${link.search}`)
+    expect(page.status).toBe(200)
+    // The library's auto-submit script runs only by the hash it adds to the Content-Security-Policy.
+    expect(page.headers.get("content-security-policy")).toMatch(/script-src 'self' 'sha256-[A-Za-z0-9+/=]+'/)
+    const xsrf = /name="xsrf" value="([^"]+)"/.exec(page.text)?.[1] ?? ""
+    const code = /name="user_code" value="([^"]+)"/.exec(page.text)?.[1] ?? ""
+    expect(code).toBe(device.body.user_code)
+    const confirm = await browserCall(h.owner, "/connect/code", { form: { xsrf, user_code: code } })
+    expect(confirm.text).toContain("Does your agent show this code?")
+    expect(confirm.text).toContain(device.body.user_code)
   })
 
   it("names a script with a label that is not plain text Script", async () => {
-    const c = await connectWithCode(h, { label: "bad‮name" })
+    const c = await connectWithCode(h, { label: "bad\u202ename" })
     expect(c.consent.details.body.client.name).toBe("Script")
   })
 

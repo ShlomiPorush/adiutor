@@ -89,7 +89,11 @@ function koaOrigin(incoming: IncomingMessage, proxy: boolean): string {
   return `${protocol}://${host}`
 }
 
-export type AgentRouteDeps = AuthDeps & { access: AgentAccess; limits?: AgentLimits }
+/** The caps on stored registrations and open device requests (S5, S9). */
+export type AgentCaps = { clients: number; deviceRequests: number }
+export const AGENT_CAPS: AgentCaps = { clients: MAX_CLIENTS, deviceRequests: MAX_DEVICE_REQUESTS }
+
+export type AgentRouteDeps = AuthDeps & { access: AgentAccess; limits?: AgentLimits; caps?: AgentCaps }
 
 /**
  * Agent access over HTTP: the protected resource documents (RFC 9728), the approval API of the consent page, the
@@ -101,6 +105,7 @@ export function agentRoutes(deps: AgentRouteDeps) {
   const app = new Hono<Env>()
   const issuer = access.issuer
   const limits = deps.limits ?? agentLimits()
+  const caps = deps.caps ?? AGENT_CAPS
   const provider = access.provider
 
   access.hooks.devicePollAnswered = (req) => {
@@ -404,11 +409,11 @@ export function agentRoutes(deps: AgentRouteDeps) {
     // request (its middleware, oauth/access.ts), whether it stored the record, failed, or its client left meanwhile.
     const capped =
       c.req.method === "POST" && raw === PROVIDER_ROUTES.registration
-        ? { lock: registering, room: () => roomForClient(ctx.db, MAX_CLIENTS) }
+        ? { lock: registering, room: () => roomForClient(ctx.db, caps.clients) }
         : c.req.method === "POST" && raw === PROVIDER_ROUTES.device_authorization
           ? {
               lock: requesting,
-              room: async () => (await openDeviceRequests(ctx.db, ctx.clock())) < MAX_DEVICE_REQUESTS,
+              room: async () => (await openDeviceRequests(ctx.db, ctx.clock())) < caps.deviceRequests,
             }
           : null
     if (capped) {
@@ -461,7 +466,7 @@ export function agentRoutes(deps: AgentRouteDeps) {
  * What createApp mounts when it is given `agentOAuth`: built by the caller, so the app module never loads the
  * authorization server unless it is mounted (index.ts does not mount it until the agent access release).
  */
-export function agentOAuthMount(access: AgentAccess, limits?: AgentLimits) {
-  return { access, routes: (deps: AuthDeps) => agentRoutes({ ...deps, access, limits }) }
+export function agentOAuthMount(access: AgentAccess, limits?: AgentLimits, caps?: AgentCaps) {
+  return { access, routes: (deps: AuthDeps) => agentRoutes({ ...deps, access, limits, caps }) }
 }
 export type AgentOAuthMount = ReturnType<typeof agentOAuthMount>

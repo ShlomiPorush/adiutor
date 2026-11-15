@@ -501,6 +501,22 @@ describe("limits", () => {
     }
   })
 
+  it("holds both caps under parallel requests: registrations evict the oldest unapproved, device requests are refused", async () => {
+    const other = await createTestDatabase("oauth_caps")
+    const capped = await oauthHarness(other, { caps: { clients: 3, deviceRequests: 2 } })
+    try {
+      const registrations = await Promise.all(Array.from({ length: 8 }, () => register(capped.issuer)))
+      expect(registrations.every((r) => r.status === 201)).toBe(true)
+      expect(await other.ctx.db.select().from(oauthStore).where(eq(oauthStore.type, "Client"))).toHaveLength(3)
+      const devices = await Promise.all(Array.from({ length: 5 }, () => deviceRequest(capped.issuer)))
+      expect(devices.filter((d) => d.status === 200)).toHaveLength(2)
+      expect(devices.filter((d) => d.status === 429)).toHaveLength(3)
+    } finally {
+      await capped.close()
+      await other.close()
+    }
+  })
+
   it("makes room for a registration by evicting the oldest one nobody approved, never an approved one", async () => {
     await h.access.disconnectAll(ownerBy)
     await t.ctx.db.delete(oauthStore).where(eq(oauthStore.type, "Client"))

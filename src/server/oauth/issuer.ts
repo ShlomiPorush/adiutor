@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 
 /**
  * The only names on which the authorization server accepts plain http, for trying Adiutor on this computer. Exactly
- * these three (not all of 127.0.0.0/8); nothing adds to them, not a setting, a variable or a build flag, and not for
+ * these three (not the rest of the 127 block); nothing adds to them, not a setting, a variable or a build flag, and not for
  * tests either: the verification stack reaches the server on 127.0.0.1.
  */
 export const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"] as const

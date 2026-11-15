@@ -7,7 +7,7 @@ import { createDatabase, type Database } from "../db/client.ts"
 import { type AgentAccess, createAgentAccess } from "../oauth/access.ts"
 import { WindowLimit } from "../oauth/limits.ts"
 import { CLI_CLIENT_ID } from "../oauth/provider.ts"
-import { type AgentLimits, agentLimits, agentOAuthMount } from "../oauth/routes.ts"
+import { type AgentCaps, type AgentLimits, agentLimits, agentOAuthMount } from "../oauth/routes.ts"
 import type { StoreOptions } from "../oauth/store.ts"
 import type { By } from "../services/context.ts"
 import { createSettingsCipher } from "../settings/crypto.ts"
@@ -76,6 +76,7 @@ export async function oauthHarness(
     agentsOn?: boolean
     publicUrl?: (origin: string) => string
     observeStore?: StoreOptions["observe"]
+    caps?: AgentCaps
   } = {},
 ): Promise<OAuthHarness> {
   const { server, origin, handle } = await listen()
@@ -93,7 +94,11 @@ export async function oauthHarness(
     auth: { identityChanges: access.identity },
   })
   const limits = options.limits ?? wideLimits()
-  const app = createApp({ checkDatabase: async () => true, core, agentOAuth: agentOAuthMount(access, limits) })
+  const app = createApp({
+    checkDatabase: async () => true,
+    core,
+    agentOAuth: agentOAuthMount(access, limits, options.caps),
+  })
   handle((request, env) => app.fetch(request, env))
   await access.start()
   if (options.agentsOn !== false) await access.saveSettings(ownerBy, { enabled: true })
