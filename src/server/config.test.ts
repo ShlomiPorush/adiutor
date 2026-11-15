@@ -165,11 +165,15 @@ describe("loadConfig", () => {
       }
     })
 
-    it.each(families)("%s accepts the same values as an older key behind a random current one", (name) => {
-      // Shorter values are refused for their length, as any older key would be.
-      for (const value of [...likely, unlucky].filter((v) => Buffer.byteLength(v) >= 32)) {
-        const current = testSecret()
-        expect(loadConfig({ ...valid, [name]: `2:${current},1:${value}` }), value).toBeDefined()
+    it.each(families)("%s accepts a likely placeholder as an older key behind a random current one", (name) => {
+      // Every accepted value is new on each run: a placeholder word followed by a random key, a random run of fewer
+      // than eight distinct characters (`x` keeps it from being one repeated character), and `unlucky`. Each still
+      // looks like a placeholder, so only its place as an older key lets it through.
+      const fewDistinct = `x${randomBytes(3).toString("hex")}`.repeat(6)
+      const withWord = likely.filter((v) => !/^(abc)+$/.test(v)).map((v) => `${v}-${testSecret()}`)
+      for (const value of [...withWord, fewDistinct, unlucky]) {
+        expect(looksLikePlaceholder(value), value).toBe(true)
+        expect(loadConfig({ ...valid, [name]: `2:${testSecret()},1:${value}` }), value).toBeDefined()
       }
     })
 
