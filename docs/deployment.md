@@ -246,6 +246,8 @@ A `docker-compose-dev.yml` copied before these changes is refused: copy `docker/
 docker compose exec adiutor node dist/server/cli.js reset-password
 ```
 
+Run it with `docker compose exec`, in the running container, never with `docker compose run`: once agents connect through the authorization server, the reset is recorded under the container it runs in, and one from another container cannot be told apart from a leftover.
+
 It runs Better Auth's own password reset: it prints the username and a new random password once, signs out every browser, and records the reset in the activity log (actor "system", source "server command"). Two-factor and passkeys stay: sign in with the new password and the authenticator, a saved backup code or a passkey, then change the password on the Account page. If someone else may hold one of your passkeys, remove it on the Account page and sign out the other browsers. A sign-in that someone started before the reset with your old password and a current code can still finish within 3 minutes (G3); check the browsers list afterwards.
 
 **Lost a device with a passkey:** sign in (with another passkey, or the password and the authenticator), remove that passkey on the Account page, then choose "Sign out other browsers": a sign-in that was already under way with the passkey when you removed it can still finish (the passkey plugin does not read it again).

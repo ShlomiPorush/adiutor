@@ -689,6 +689,12 @@ export const agentState = pgTable(
     id: integer("id").primaryKey().default(1),
     generation: integer("generation").notNull().default(0),
     issuerFingerprint: text("issuer_fingerprint"),
+    /**
+     * The authorization server's one signing key (an Ed25519 private JWK), encrypted with ADIUTOR_SETTINGS_KEYS:
+     * generated with a CSPRNG at the first start that needs it and never regenerated. Nothing is signed with it (opaque
+     * tokens, openid never granted); the library refuses every client without a key it could sign with.
+     */
+    signingKeyEnc: text("signing_key_enc"),
   },
   (t) => [check("agent_state_single_row_check", sql`${t.id} = 1`)],
 )
@@ -710,3 +716,20 @@ export const agentConsent = pgTable(
   },
   (t) => [index("agent_consent_expires_idx").on(t.expiresAt)],
 )
+
+/**
+ * An identity change under way (the owner's password, a disabled two-factor, the recovery command's reset): one row per
+ * change, written in the transaction that ends every connection before Better Auth writes the change, and removed in
+ * the one that ends them again after it. While any row exists no approval is answered. The row names the process that
+ * makes the change (host, pid and that process's start time, oauth/process.ts): the start and the sweep finish only a
+ * row whose process is certainly gone. A row whose change ended without either of Better Auth's after hooks (a failure
+ * that is not an APIError) in a process that still runs stays, and approvals stay closed until that process ends: a
+ * gap the owner accepted (D7a in docs/project-foundation.md, Security design).
+ */
+export const agentIdentityChanges = pgTable("agent_identity_changes", {
+  id: uuid("id").primaryKey(),
+  startedAt: at("started_at").notNull(),
+  host: text("host").notNull(),
+  pid: integer("pid").notNull(),
+  processStartedAt: text("process_started_at"),
+})

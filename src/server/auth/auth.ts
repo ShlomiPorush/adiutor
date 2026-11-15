@@ -32,13 +32,15 @@ import {
 import { errorFacts, log } from "../log.ts"
 import type { By, Ctx } from "../services/context.ts"
 import { writeAudit } from "../services/context.ts"
+import { type IdentityChanges, identityChangeTracker } from "./identity.ts"
 
 // Better Auth as it documents itself: its routes, its plugins (username, twoFactor, passkey, api-key,
 // deviceAuthorization, bearer), its options and its documented hooks. Adiutor does not wrap its handler. The hooks
 // below only refuse (a closed route, a second owner, a trusted device, an agent key, an agent approval or a new passkey
-// without two-factor, an Authorization header outside what `adiutor connect` needs) and write audit rows; Better Auth
-// makes every decision about passwords, passkeys, sessions and codes. See "Security design" in
-// docs/project-foundation.md for what this leaves open.
+// without two-factor, an Authorization header outside what `adiutor connect` needs), write audit rows and, where agent
+// access is mounted, end agent connections around an identity change; Better Auth makes every decision about
+// passwords, passkeys, sessions and codes. See "Security design" in docs/project-foundation.md for what this leaves
+// open.
 
 const DAY_S = 86_400
 const HOUR_S = 3_600
@@ -149,6 +151,9 @@ const DEVICE_CODE_RULE = { window: 600, max: 10 }
  */
 const DEVICE_TOKEN_RULE = { window: 900, max: 300 }
 
+/** The routes that change the owner's identity for agent access (D7). */
+const IDENTITY_CHANGE_PATHS = new Set(["/change-password", "/two-factor/disable", "/reset-password"])
+
 /** Paths whose session deletions are ended sessions (one audit row each). Sign-out is audited after the fact. */
 const SESSION_END_PATHS = new Set(["/revoke-other-sessions", "/revoke-sessions", "/reset-password"])
 
@@ -166,8 +171,15 @@ export type AuthSettings = {
   otpViaTelegram: boolean
 }
 
+export type { IdentityChanges }
+
 export type AuthOptions = AuthSettings & {
   ctx: Ctx
+  /**
+   * Only where the authorization server for agents is mounted (createApp's `agentOAuth`); absent until the agent access
+   * release, so a password or two-factor change does nothing more than before.
+   */
+  identityChanges?: IdentityChanges
   /** ADIUTOR_AUTH_SECRETS: Better Auth's versioned `secrets`. */
   secrets: VersionedKey[]
   publicUrl: URL
@@ -365,6 +377,9 @@ export function createAuth(options: AuthOptions) {
    * of `adiutor connect` alive: both are recorded after the fact, and this hook never throws.
    */
   const auditAfterTheFact = createAuthMiddleware(async (c) => {
+    // An identity change the endpoint refused with an APIError after it began (its database after hook never ran). In
+    // Better Auth 1.7.19 with Adiutor's configuration no such APIError can be thrown (auth/identity.ts cites where).
+    if (IDENTITY_CHANGE_PATHS.has(c.path)) await finishIdentityChanges(c)
     if (c.path !== "/sign-out" && c.path !== "/revoke-session") return
     const returned = (c.context as { returned?: unknown }).returned
     if (returned instanceof APIError || returned instanceof Error) return
@@ -382,6 +397,11 @@ export function createAuth(options: AuthOptions) {
 
   const pathOf = (context: HookContext) => context?.path ?? ""
   const viaHttp = (context: HookContext) => Boolean(context?.request)
+
+  // Identity changes for agent access (D7): see auth/identity.ts.
+  const identityChanges = identityChangeTracker(options.identityChanges, async () => ownerBy(await readOwner(ctx)))
+  const beginIdentityChange = identityChanges.begin
+  const finishIdentityChanges = identityChanges.release
 
   return betterAuth({
     appName: "Adiutor",
@@ -464,13 +484,18 @@ export function createAuth(options: AuthOptions) {
           },
         },
         update: {
-          // Only the audit row of a two-factor change; a refusal leaves the factor as it was.
+          // The audit row of a two-factor change; a refusal leaves the factor as it was. Turning it off is an identity
+          // change for agent access.
           before: async (data, context) => {
             if (!("twoFactorEnabled" in data) || data.twoFactorEnabled === undefined) return
             const owner = await readOwner(ctx)
             if (!owner || owner.twoFactorEnabled === Boolean(data.twoFactorEnabled)) return
+            if (!data.twoFactorEnabled) await beginIdentityChange(context)
             const by = viaHttp(context) ? ownerBy(owner) : { actor: { kind: "system", label: "system" }, source: "api" }
             await audit(by as By, data.twoFactorEnabled ? "account.totp_enable" : "account.totp_disable", "account")
+          },
+          after: async (_user, context) => {
+            await finishIdentityChanges(context)
           },
         },
       },
@@ -520,6 +545,7 @@ export function createAuth(options: AuthOptions) {
         update: {
           before: async (data, context) => {
             if (!(data as { password?: string }).password) return
+            await beginIdentityChange(context)
             const path = pathOf(context)
             if (path === "/reset-password")
               await audit(
@@ -528,6 +554,9 @@ export function createAuth(options: AuthOptions) {
                 "account",
               )
             else await audit(ownerBy(await readOwner(ctx)), "account.password_change", "account")
+          },
+          after: async (_account, context) => {
+            await finishIdentityChanges(context)
           },
         },
       },

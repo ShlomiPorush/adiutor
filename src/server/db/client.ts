@@ -48,8 +48,12 @@ export function migrationFailure(error: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export function createDatabase(url: string): Database {
-  const sql = postgres(url, { max: 10, onnotice: () => {}, connection: POOL_CONNECTION_SETTINGS })
+/**
+ * The app's pool: 10 connections. `max` makes a smaller pool of its own, such as the authorization server's storage
+ * (oauth/store.ts), which must never wait for a connection of a pool that an approval's transaction holds.
+ */
+export function createDatabase(url: string, { max = 10 }: { max?: number } = {}): Database {
+  const sql = postgres(url, { max, onnotice: () => {}, connection: POOL_CONNECTION_SETTINGS })
   const db = drizzle(sql, { schema })
   return {
     db,

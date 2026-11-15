@@ -689,7 +689,13 @@
       "account_backup_codes_new": "made new backup codes",
       "account_passkey_add": "added a passkey",
       "account_passkey_rename": "renamed a passkey",
-      "account_passkey_delete": "removed a passkey"
+      "account_passkey_delete": "removed a passkey",
+      "agent_approve": "approved an agent",
+      "agent_deny": "denied an agent",
+      "agent_end": "ended an agent connection",
+      "agent_end_all": "ended every agent connection",
+      "agent_blocked": "blocked agent requests after too many attempts",
+      "agent_settings_update": "updated the agent settings"
     },
     "field": {
       "status": "Status",
@@ -719,7 +725,8 @@
       "session": "A session",
       "account": "The account",
       "api_key": "An agent key",
-      "device_code": "An agent approval"
+      "device_code": "An agent approval",
+      "agent_connection": "An agent connection"
     },
     "source": {
       "ui": "Board",
