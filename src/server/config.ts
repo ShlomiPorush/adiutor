@@ -74,12 +74,12 @@ export function parseDomains(text: string): string[] {
 }
 
 /**
- * A word an example or a template writes instead of a key, in any case, as a whole token: at the start or end of the
- * value or next to a character that is not a letter or digit (`please-change-me-...`, `CHANGE_ME_to_...`,
- * `your_secret`). Inside letters or digits it is part of a random key (`aBcExampleXyZ`, `Qyour-Z`) and passes.
+ * A word an example or a template writes instead of a key, in any case, as a token: after the start of the value or
+ * a character that is not a letter or digit, and before the end or a character that is not a letter, so a digit ends
+ * it (`please-change-me-...`, `CHANGE_ME_to_...`, `your_secret`, `ReplaceMe0123...`, `Example2-key`). After a letter
+ * or digit it is part of a random key (`aBcExampleXyZ`, `Qyour-Z`, `9placeholder8`) and passes.
  */
-const PLACEHOLDER_WORD =
-  /(?<![a-z0-9])(?:change[-_ ]?me|replace[-_ ]?me|placeholder|example|your|todo|fixme)(?![a-z0-9])/i
+const PLACEHOLDER_WORD = /(?<![a-z0-9])(?:change[-_ ]?me|replace[-_ ]?me|placeholder|example|your|todo|fixme)(?![a-z])/i
 
 /** A whole value that is a `<...>` slot or one character repeated. */
 const PLACEHOLDER_WHOLE = /^(?:<[^<>]*>|(.)\1*)$/su

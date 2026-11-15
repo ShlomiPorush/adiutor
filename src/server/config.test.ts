@@ -122,11 +122,14 @@ describe("loadConfig", () => {
       "replace-me-with-32-random-bytes-0123456",
       "replace-me placeholder secret value here",
       "ReplaceMe",
+      "ReplaceMe0123456789012345678901234567",
+      "your-secret-1",
       "placeholder-placeholder-placeholder",
       "PLACEHOLDER-VALUE-HERE",
       "Example",
       "an-Example-value-that-is-long-enough-0",
       "example-key-for-the-docs-0123456789abcdef",
+      "Example2-key-for-docs-0123456789abcdef",
       "your-own-secret-goes-here-0123456789",
       "your-secret-here-0123456789abcdefghijkl",
       "YOUR_SECRET",
@@ -147,9 +150,9 @@ describe("loadConfig", () => {
       },
     )
 
-    it("accepts a random key where a placeholder word sits inside letters or digits", () => {
-      // Random on every run around a fixed word with a letter or digit on each side, so the case is always the same:
-      // the word is never a token of its own (aBcExampleXyZ, Qyour-Z, xchangemex).
+    it("accepts a random key where a letter or digit comes right before a placeholder word", () => {
+      // Random on every run around a fixed word with a letter or digit on its left, so the case is always the same:
+      // the word is never a token of its own (aBcExampleXyZ, Qyour-Z, 0EXAMPLE9).
       const random = () => randomBytes(24).toString("base64url")
       for (const word of [
         "Qyour-Z",
