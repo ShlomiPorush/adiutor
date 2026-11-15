@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import en from "../../shared/locales/en.json" with { type: "json" }
+import he from "../../shared/locales/he.json" with { type: "json" }
 import { authFailure, FAILURE_TEXT, isPasskeyFailure, PASSKEY_FAILURE_TEXT, passkeyFailure } from "./auth.ts"
 
 describe("authFailure", () => {
@@ -44,7 +45,8 @@ describe("passkeyFailure", () => {
 describe("the sentence of a passkey failure", () => {
   // What the passkey client answers when the authenticator fails: SimpleWebAuthn's code, and "Auth cancelled" as the
   // message whatever happened (client.mjs of @better-auth/passkey 1.7.19).
-  const lookup = (key: string) => key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], en)
+  const lookup = (key: string, locale: object = en) =>
+    key.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], locale)
 
   it("says the device failed, not that the prompt was cancelled", () => {
     const failure = passkeyFailure({
@@ -60,6 +62,7 @@ describe("the sentence of a passkey failure", () => {
   })
 
   it("has a sentence in both languages for every failure the browser reports", () => {
-    for (const key of Object.values(PASSKEY_FAILURE_TEXT)) expect(typeof lookup(key)).toBe("string")
+    for (const key of Object.values(PASSKEY_FAILURE_TEXT))
+      for (const locale of [en, he]) expect([key, typeof lookup(key, locale)]).toEqual([key, "string"])
   })
 })
