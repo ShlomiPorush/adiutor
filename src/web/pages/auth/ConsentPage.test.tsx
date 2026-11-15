@@ -13,7 +13,7 @@ import en from "../../../shared/locales/en.json"
 import { qk } from "../../api/endpoints.ts"
 import type { ConsentDetails } from "../../api/types.ts"
 import { I18nProvider } from "../../i18n/i18n.tsx"
-import { away, ConsentPage } from "./ConsentPage.tsx"
+import { away, ConsentPage, forgetSentAnswers } from "./ConsentPage.tsx"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -43,6 +43,7 @@ function respond(answer: Answer): Response {
 beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
+  forgetSentAnswers()
   localStorage.setItem("adiutor.language", "en")
   details = { status: 200, body: browserDetails() }
   decision = { status: 200, body: { outcome: "approved", redirectTo: `${window.location.origin}/oauth/authorize/u1` } }
@@ -234,14 +235,31 @@ describe("the answer", () => {
     expect(page()).toContain(en.consent.noArea)
   })
 
-  it("never follows an address of another origin, and says what happened instead", async () => {
-    decision = { status: 200, body: { outcome: "approved", redirectTo: "https://elsewhere.example.com/x" } }
+  it("says what happened when the answer names no next address", async () => {
+    decision = { status: 200, body: { outcome: "approved" } }
     await render()
     await click(button(en.consent.approve))
     expect(gone).toEqual([])
     expect(page()).toContain(en.consent.approved)
     expect(page()).toContain(en.consent.closeWindow)
   })
+
+  for (const [name, body] of [
+    ["null", null],
+    ["{}", {}],
+    ["an unknown outcome", { outcome: "maybe" }],
+    ["another site's address", { outcome: "approved", redirectTo: "https://elsewhere.example.com/x" }],
+    ["an address that is not text", { outcome: "approved", redirectTo: 7 }],
+  ] as const)
+    it(`counts an answer that breaks the contract (${name}) as lost, keeping the record`, async () => {
+      decision = { status: 200, body }
+      await render()
+      await click(button(en.consent.approve))
+      expect(gone).toEqual([])
+      expect(page()).toContain(en.consent.unknownTitle)
+      expect(button(en.consent.approve)).toBeUndefined()
+      expect(sessionStorage.getItem("adiutor.consent.sent.u1")).toBe("unknown")
+    })
 
   it("keeps the form after a refused or failed answer, and ends on a request that is gone", async () => {
     decision = { status: 400, body: { error: "validation_failed", message: "x" } }
@@ -274,19 +292,47 @@ describe("the answer", () => {
     await settle()
     expect(page()).toContain(en.consent.unknownTitle)
     expect(button(en.consent.approve)).toBeUndefined()
-    // A reload: a new page with the same tab's storage reads nothing and offers nothing.
+    // A reload: a new app with the same tab's storage reads nothing and offers nothing.
     await act(async () => mounted?.root.unmount())
     mounted?.host.remove()
     mounted = null
     calls = []
+    forgetSentAnswers()
     await render()
     expect(page()).toContain(en.consent.unknownTitle)
     expect(button(en.consent.approve)).toBeUndefined()
     expect(calls).toEqual([])
   })
 
+  it("keeps a lost answer for the app's whole life when storage is blocked, past the query cache's clean-up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const blocked = () => {
+      throw new Error("blocked")
+    }
+    vi.stubGlobal("sessionStorage", { getItem: blocked, setItem: blocked, removeItem: blocked, clear: blocked })
+    try {
+      decision = { status: 200, body: null, type: "text/plain" }
+      await render()
+      await click(button(en.consent.approve))
+      expect(page()).toContain(en.consent.unknownTitle)
+      await click(document.querySelector('a[href="/settings/agents"]'))
+      // Well past the query cache's 5 minutes for data no page shows.
+      await act(async () => {
+        vi.advanceTimersByTime(6 * 60_000)
+      })
+      await act(async () => {
+        await router.navigate(-1)
+      })
+      await settle()
+      expect(page()).toContain(en.consent.unknownTitle)
+      expect(button(en.consent.approve)).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("shows what became of an answer that came back, after Back, instead of the form", async () => {
-    decision = { status: 200, body: { outcome: "denied", redirectTo: "https://elsewhere.example.com/x" } }
+    decision = { status: 200, body: { outcome: "denied" } }
     await render()
     await click(button(en.consent.deny))
     expect(page()).toContain(en.consent.denied)

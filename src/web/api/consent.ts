@@ -75,13 +75,32 @@ const base = (uid: string) => `/connect/approve/${encodeURIComponent(uid)}`
 export const consentApi = {
   /** Binds the request to this browser session the first time, and says what it asks for. */
   details: (uid: string) => call<ConsentDetails>(`${base(uid)}/details`, { headers: { Accept: "application/json" } }),
-  /** Answers the request once; `redirectTo` is where the browser goes next. */
-  decide: (uid: string, approve: boolean, areas: AgentArea[]) =>
-    call<{ outcome: "approved" | "denied"; redirectTo?: string }>(`${base(uid)}/decision`, {
+  /**
+   * Answers the request once; `redirectTo` is where the browser goes next, an address of this origin. An answer that
+   * breaks this contract (no known outcome, another address) may hide a decision that was recorded, so it is lost.
+   */
+  decide: async (uid: string, approve: boolean, areas: AgentArea[]): Promise<Decision> => {
+    const answer = await call<unknown>(`${base(uid)}/decision`, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ approve, areas: approve ? areas : [] }),
-    }),
+    })
+    const decision = decisionOf(answer, window.location.origin)
+    if (!decision) throw new ConsentError("lost")
+    return decision
+  },
+}
+
+export type Decision = { outcome: "approved" | "denied"; redirectTo?: string }
+
+/** The decision API's answer as its contract has it, or null: a known outcome, and no address or one of `origin`. */
+export function decisionOf(answer: unknown, origin: string): Decision | null {
+  if (typeof answer !== "object" || answer === null) return null
+  const { outcome, redirectTo } = answer as { outcome?: unknown; redirectTo?: unknown }
+  if (outcome !== "approved" && outcome !== "denied") return null
+  if (redirectTo === undefined) return { outcome }
+  if (typeof redirectTo !== "string" || sameOrigin(redirectTo, origin) === null) return null
+  return { outcome, redirectTo }
 }
 
 /** Only an address of this origin is followed: the server answers the authorization server's own resume address. */

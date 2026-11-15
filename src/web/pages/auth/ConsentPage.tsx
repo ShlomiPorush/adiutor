@@ -6,7 +6,7 @@
 // top, where the owner checks who asks, so Approve is pressed on purpose. After the answer the browser follows the
 // server's address (back to the agent, or the code flow's done page); without one the page says what happened.
 
-import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { type ReactNode, useId, useState } from "react"
 import { Link, Navigate, useLocation, useParams } from "react-router"
 import type { AgentArea } from "../../../shared/enums.ts"
@@ -35,16 +35,22 @@ function authRedirect(reason: ConsentFailure, here: string): string | null {
 
 /**
  * An answer sent for a request: its outcome, or unknown while it is on its way and after one whose reply was lost.
- * Kept per uid in the query cache and this tab's sessionStorage, so Back, another page of the app or a reload never
- * offers a second answer for the same request.
+ * Kept per uid in memory for as long as the app runs (never dropped by a cache's clean-up), and in this tab's
+ * sessionStorage as the backup across a reload, so Back, another page of the app or a reload never offers a second
+ * answer for the same request.
  */
 type Sent = "unknown" | "approved" | "denied"
-const sentKey = (uid: string) => ["consent-sent", uid] as const
+const sentAnswers = new Map<string, Sent>()
 const storedKey = (uid: string) => `adiutor.consent.sent.${uid}`
 
-function readSent(queryClient: QueryClient, uid: string): Sent | null {
-  const cached = queryClient.getQueryData<Sent>(sentKey(uid))
-  if (cached) return cached
+/** Forgets the answers sent in memory (tests: a new app). */
+export function forgetSentAnswers(): void {
+  sentAnswers.clear()
+}
+
+function readSent(uid: string): Sent | null {
+  const kept = sentAnswers.get(uid)
+  if (kept) return kept
   try {
     const stored = sessionStorage.getItem(storedKey(uid))
     return stored === "unknown" || stored === "approved" || stored === "denied" ? stored : null
@@ -53,14 +59,14 @@ function readSent(queryClient: QueryClient, uid: string): Sent | null {
   }
 }
 
-function writeSent(queryClient: QueryClient, uid: string, sent: Sent | null): void {
-  if (sent) queryClient.setQueryData(sentKey(uid), sent)
-  else queryClient.removeQueries({ queryKey: sentKey(uid), exact: true })
+function writeSent(uid: string, sent: Sent | null): void {
+  if (sent) sentAnswers.set(uid, sent)
+  else sentAnswers.delete(uid)
   try {
     if (sent) sessionStorage.setItem(storedKey(uid), sent)
     else sessionStorage.removeItem(storedKey(uid))
   } catch {
-    // Storage blocked: the query cache still keeps it while this tab runs the app.
+    // Storage blocked: memory still keeps it while this tab runs the app.
   }
 }
 
@@ -68,12 +74,11 @@ export function ConsentPage() {
   const { t } = useI18n()
   const { uid = "" } = useParams()
   const location = useLocation()
-  const queryClient = useQueryClient()
   const here = `${location.pathname}${location.search}`
   usePageTitle(t("consent.title"))
   // Read once per request when the page opens: an answer this page sends later is shown by the form's own states.
   const [opened] = useState(() => new Map<string, Sent | null>())
-  if (!opened.has(uid)) opened.set(uid, readSent(queryClient, uid))
+  if (!opened.has(uid)) opened.set(uid, readSent(uid))
   const sent = opened.get(uid) ?? null
   const request = useQuery({
     queryKey: ["consent", uid],
@@ -154,7 +159,6 @@ function Section({ id, title, children }: { id: string; title: string; children:
 
 function Request({ uid, here, details }: { uid: string; here: string; details: ConsentDetails }) {
   const { t, tc } = useI18n()
-  const queryClient = useQueryClient()
   const areasId = useId()
   const me = useQuery({ queryKey: qk.session, queryFn: api.session, staleTime: Number.POSITIVE_INFINITY })
   const [chosen, setChosen] = useState<AgentArea[]>(details.areas)
@@ -176,14 +180,14 @@ function Request({ uid, here, details }: { uid: string; here: string; details: C
     setBusy(true)
     setProblem(null)
     // Marked as sent before it leaves, so nothing on this tab offers a second answer meanwhile or after.
-    writeSent(queryClient, uid, "unknown")
+    writeSent(uid, "unknown")
     try {
       const result = await consentApi.decide(
         uid,
         approve,
         details.areas.filter((area) => chosen.includes(area)),
       )
-      writeSent(queryClient, uid, result.outcome)
+      writeSent(uid, result.outcome)
       const next = sameOrigin(result.redirectTo, window.location.origin)
       setAnswered({ outcome: result.outcome, leaving: next !== null })
       if (next) away.go(next)
@@ -192,7 +196,7 @@ function Request({ uid, here, details }: { uid: string; here: string; details: C
       // Only a refusal proves that nothing was decided, so only then may the owner answer again.
       if (reason === "network" || reason === "lost") setUnknown(true)
       else {
-        writeSent(queryClient, uid, null)
+        writeSent(uid, null)
         if (reason === "validation" || reason === "other") {
           setProblem(reason)
           setBusy(false)
