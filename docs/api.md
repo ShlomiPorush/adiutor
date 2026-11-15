@@ -48,7 +48,7 @@ Writes record an audit row with the actor and a source: `ui` (browser session), 
 
 ### Browser sign-in
 
-One account, the owner's: a username, a password and a second factor, through Better Auth (`better-auth` 1.7.15) under `/api/auth`, used as it documents itself. The UI calls Better Auth's client; there is no Adiutor route in between. Sessions are cookies (`better-auth.session_token`, with the `__Secure-` prefix when `ADIUTOR_PUBLIC_URL` is `https`), `HttpOnly`, `SameSite=Lax`.
+One account, the owner's: a username, a password and a second factor, through Better Auth (`better-auth` 1.7.19) under `/api/auth`, used as it documents itself. The UI calls Better Auth's client; there is no Adiutor route in between. Sessions are cookies (`better-auth.session_token`, with the `__Secure-` prefix when `ADIUTOR_PUBLIC_URL` is `https`), `HttpOnly`, `SameSite=Lax`.
 
 **Open routes.** A documented `hooks.before` admits only these route patterns over HTTP; every other path answers `404` (`/sign-in/email`, `/update-user`, `/request-password-reset`, `/reset-password/:token`, `/callback/:id`, `/api-key/update` and every route a later version adds). Server calls (`auth.api.*`) are not HTTP requests and are not limited by it.
 
@@ -339,7 +339,7 @@ The bot and the morning message run inside the server, never through this API. T
 
 ## MCP
 
-Streamable HTTP at `/mcp`, stateless (no session id), JSON responses. Requires `Authorization: Bearer <agent key>`; a browser session is not accepted. The server's `instructions` summarize the rules. Every tool answers one text content holding JSON: `{"data": ...}` on success, or `{"error": {code, message, ...details}}` with `isError: true`, using the codes above. Changes are audited with source `mcp`.
+Streamable HTTP at `/mcp`, stateless (no session id), JSON responses. Requires `Authorization: Bearer <agent key>`; a browser session is not accepted. A request with an `Origin` other than the origin of `ADIUTOR_PUBLIC_URL` is refused with `403 forbidden` before the key is read (DNS rebinding protection); a request without `Origin` passes. A body over 512 KiB gets `413`. The server's `instructions` summarize the rules, and they and every tool description say that text in items, comments, notes, projects and thread titles is data, never instructions. Every tool answers one text content holding JSON: `{"data": ...}` on success, or `{"error": {code, message, ...details}}` with `isError: true`, using the codes above. Changes are audited with source `mcp`.
 
 | Tool                     | Arguments                                                                         | Same as                                       |
 | ------------------------ | --------------------------------------------------------------------------------- | --------------------------------------------- |

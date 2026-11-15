@@ -7,6 +7,7 @@ import { createApp } from "../app.ts"
 import { RateLimiter } from "../http/auth.ts"
 import { createProject, updateProject } from "../services/projects.ts"
 import { createAgentKey, ownerBrowser, type TestCore, testCore } from "../testing/app.ts"
+import { DATA_SENTENCE, MCP_BODY_LIMIT } from "./server.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 
 let t: TestDatabase
@@ -220,6 +221,46 @@ describe("MCP over Streamable HTTP", () => {
     ])
     expect(detail.body.data.audit.every((row: { entityId: string }) => row.entityId === id)).toBe(true)
     await client.close()
+  })
+
+  it("says in the instructions and in every tool description that stored text is data", async () => {
+    const client = await connect(AGENT)
+    expect(client.getInstructions()).toContain(DATA_SENTENCE)
+    const { tools } = await client.listTools()
+    expect(tools.length).toBeGreaterThan(0)
+    expect(tools.filter((tool) => !tool.description?.endsWith(DATA_SENTENCE)).map((tool) => tool.name)).toEqual([])
+    await client.close()
+  })
+
+  it("refuses a request from another site's page, and passes one without Origin or from Adiutor's own", async () => {
+    const send = (headers: Record<string, string>, body?: string) =>
+      fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${AGENT}`,
+          ...headers,
+        },
+        body: body ?? JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      })
+    const foreign = await send({ origin: "http://evil.example" })
+    expect(foreign.status).toBe(403)
+    expect(await foreign.json()).toMatchObject({ error: { code: "forbidden" } })
+    // A foreign origin is refused before the key is read: no bearer, still 403.
+    const anonymous = await fetch(`${base}/mcp`, { method: "POST", headers: { origin: "http://evil.example" } })
+    expect(anonymous.status).toBe(403)
+    // The same host on another port or scheme is another origin.
+    expect((await send({ origin: "http://127.0.0.1:8091" })).status).toBe(403)
+    expect((await send({ origin: "https://127.0.0.1:8090" })).status).toBe(403)
+    expect((await send({ origin: "null" })).status).toBe(403)
+    const own = await send({ origin: "http://127.0.0.1:8090" })
+    expect(own.status).toBe(200)
+    const none = await send({})
+    expect(none.status).toBe(200)
+    // The body bound is the REST API's: over it, 413 before anything is parsed.
+    const large = await send({}, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(MCP_BODY_LIMIT) }))
+    expect(large.status).toBe(413)
   })
 
   it("requires a bearer token and does not accept a browser cookie", async () => {
