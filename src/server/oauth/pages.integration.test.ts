@@ -229,6 +229,73 @@ describe("the consent page's address", () => {
   })
 })
 
+describe("where the browser returns", () => {
+  it("names an app's own scheme, which has no host, next to a loopback address with its host", async () => {
+    const shown = async (redirect: string) => {
+      const reg = await register(h.issuer, { redirect_uris: [redirect] })
+      const { challenge } = pkce()
+      const authorize = await browserCall(
+        h.owner,
+        `/oauth/authorize?${new URLSearchParams({
+          client_id: String(reg.body.client_id),
+          redirect_uri: redirect,
+          response_type: "code",
+          scope: "read",
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+        })}`,
+      )
+      return (await browserCall(h.owner, `/connect/approve/${uidOf(authorize.location)}/details`)).body.redirect
+    }
+    expect(await shown("com.example.agent:/callback")).toEqual({
+      host: "",
+      loopback: false,
+      scheme: "com.example.agent",
+    })
+    expect(await shown("http://127.0.0.1:33418/callback")).toEqual({
+      host: "127.0.0.1:33418",
+      loopback: true,
+      scheme: "http",
+    })
+  })
+})
+
+describe("refusals before the hand-off to the library", () => {
+  it("carry the flow headers: agents off, an address the library does not serve, another host", async () => {
+    const other = h.issuer.replace("127.0.0.1", "localhost")
+    for (const [what, answer, status] of [
+      ["unknown address", await agentCall(h.issuer, "/oauth/token/"), 404],
+      ["another host, code page", await agentCall(other, "/connect/code"), 421],
+      ["another host, token", await agentCall(other, "/oauth/token", { form: { grant_type: "x" } }), 421],
+    ] as const) {
+      expect(answer.status, what).toBe(status)
+      expectFlowHeaders(answer, what)
+    }
+    await h.access.saveSettings(ownerBy, { enabled: false })
+    for (const path of ["/connect/code", "/connect/code/some-uid", "/oauth/authorize", "/oauth/register"]) {
+      const answer = await agentCall(h.issuer, path, path === "/oauth/register" ? { json: {} } : {})
+      expect(answer.status, path).toBe(404)
+      expect(answer.body.error, path).toBe("not_configured")
+      expectFlowHeaders(answer, `agents off: ${path}`)
+    }
+  })
+
+  it("carry the flow headers when the public URL is not an issuer agents may use", async () => {
+    const t3 = await createTestDatabase("oauth_pages_issuer")
+    const h3 = await oauthHarness(t3, { publicUrl: () => "http://adiutor.example.com" })
+    try {
+      for (const path of ["/connect/code", "/oauth/token"]) {
+        const answer = await agentCall(h3.issuer, path, path === "/oauth/token" ? { form: { grant_type: "x" } } : {})
+        expect(answer.status, path).toBe(404)
+        expectFlowHeaders(answer, `no issuer: ${path}`)
+      }
+    } finally {
+      await h3.close()
+      await t3.close()
+    }
+  })
+})
+
 describe("production before the agent access release", () => {
   it("answers 404 not_found on the owner's agent settings without agentOAuth, which shows the old Agent access panel", async () => {
     const withoutAgents = createApp({ checkDatabase: async () => true, core: h.core })
@@ -244,7 +311,14 @@ describe("production before the agent access release", () => {
 describe("too many codes", () => {
   it("answers 429 with the code page's note in the owner's language, and the flow headers", async () => {
     const t2 = await createTestDatabase("oauth_pages_limit")
-    const h2 = await oauthHarness(t2, { limits: { ...wideLimits(), codeSession: new WindowLimit(1, 600_000) } })
+    const h2 = await oauthHarness(t2, {
+      limits: {
+        ...wideLimits(),
+        code: new WindowLimit(3, 600_000),
+        codeSession: new WindowLimit(1, 600_000),
+        token: new WindowLimit(1, 600_000),
+      },
+    })
     try {
       await getSettings(t2.ctx.db)
       await t2.ctx.db.update(settings).set({ language: "en" }).where(eq(settings.id, 1))
@@ -256,6 +330,14 @@ describe("too many codes", () => {
       expectPage(limited, "en", "limited")
       expect(limited.text).toContain(escaped(en.agentPages.limitedTitle))
       expect(limited.text).not.toContain("<form")
+      // The address limits answer before the library: the code page's, and the token endpoint's.
+      const byAddress = await browserCall(h2.owner, "/connect/code")
+      expect(byAddress.status).toBe(429)
+      expectFlowHeaders(byAddress, "address limit on the code page")
+      expect((await agentCall(h2.issuer, "/oauth/revoke", { form: { token: "x" } })).status).not.toBe(429)
+      const token = await agentCall(h2.issuer, "/oauth/revoke", { form: { token: "x" } })
+      expect(token.status).toBe(429)
+      expectFlowHeaders(token, "address limit on the token endpoint")
     } finally {
       await h2.close()
       await t2.close()

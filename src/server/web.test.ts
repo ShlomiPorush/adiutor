@@ -48,4 +48,22 @@ describe("web UI serving", () => {
     expect((await app.request("/mcp")).headers.get("content-type")).not.toContain("text/html")
     expect(await (await app.request("/healthz")).json()).toMatchObject({ status: "ok" })
   })
+
+  it("answers 404 for the approval API without agent access, and serves the approval page itself", async () => {
+    for (const [method, path] of [
+      ["GET", "/connect/approve/some-uid/details"],
+      ["HEAD", "/connect/approve/some-uid/details"],
+      ["POST", "/connect/approve/some-uid/decision"],
+    ] as const) {
+      const answer = await app.request(path, { method })
+      expect(answer.status, `${method} ${path}`).toBe(404)
+      expect(answer.headers.get("content-type") ?? "", `${method} ${path}`).not.toContain("text/html")
+    }
+    expect(await (await app.request("/connect/approve/some-uid/details")).json()).toMatchObject({
+      error: { code: "not_found" },
+    })
+    const page = await app.request("/connect/approve/some-uid")
+    expect(page.status).toBe(200)
+    expect(await page.text()).toContain("<title>Adiutor</title>")
+  })
 })

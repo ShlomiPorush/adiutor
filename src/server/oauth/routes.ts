@@ -173,18 +173,21 @@ export function agentRoutes(deps: AgentRouteDeps) {
   // --- The consent page's API, under the interaction's address so the library's cookie comes along (S11) ---
 
   /**
-   * Every answer under the consent page's address: its API and the page itself, which the built UI (web.ts, mounted
-   * after these routes) serves as index.html. The page keeps the UI's whole Content-Security-Policy, which forbids
-   * framing too; the API's answers get `frame-ancestors 'none'` alone.
+   * Every answer on the flow's addresses: the consent page's API and the page itself, which the built UI (web.ts,
+   * mounted after these routes) serves as index.html, and every refusal before the hand-off to the library (not
+   * configured, another host, a limit). The page keeps the UI's whole Content-Security-Policy, which forbids framing
+   * too; other answers get `frame-ancestors 'none'` alone. An answer the library wrote itself got them before the
+   * hand-off (below) and is left alone.
    */
   const flowHeaders: MiddlewareHandler = async (c, next) => {
     await next()
+    if (c.res === RESPONSE_ALREADY_SENT) return
     c.header("Cache-Control", "no-store")
     c.header("X-Frame-Options", "DENY")
     if (!c.res.headers.has("Content-Security-Policy")) c.header("Content-Security-Policy", "frame-ancestors 'none'")
     c.header("Referrer-Policy", "no-referrer")
   }
-  app.use("/connect/approve/*", flowHeaders)
+  for (const path of ["/connect/approve/*", "/connect/code", "/connect/code/*", "/oauth/*"]) app.use(path, flowHeaders)
   const peopleOnly: MiddlewareHandler = async (c, next) => {
     if (PEOPLE_ONLY.some((h) => c.req.header(h) !== undefined))
       return c.json({ error: "forbidden", message: "Only the owner's signed-in browser answers an approval." }, 403)
@@ -245,6 +248,7 @@ export function agentRoutes(deps: AgentRouteDeps) {
         redirect: redirectUri
           ? {
               host: redirectUri.host,
+              scheme: redirectUri.protocol.slice(0, -1),
               loopback:
                 redirectUri.protocol === "http:" &&
                 (LOOPBACK_HOSTNAMES as readonly string[]).includes(redirectUri.hostname),

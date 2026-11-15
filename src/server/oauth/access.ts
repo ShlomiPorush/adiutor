@@ -66,7 +66,8 @@ export type PendingRequest = {
   via: AgentConnectionMethod
   resource: AgentResource
   /** Where the browser returns after approval; none for a code. */
-  redirect: { host: string; loopback: boolean } | null
+  /** Where the browser returns: its host (empty for a private-use scheme), whether it is this computer, its scheme. */
+  redirect: { host: string; loopback: boolean; scheme: string } | null
   /** The one set of areas shown, and the only ones that can be granted. */
   areas: AgentArea[]
   /** The device code's own value, for the request's generation record; null for an MCP client. */
