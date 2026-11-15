@@ -723,8 +723,8 @@ export const agentConsent = pgTable(
  * the one that ends them again after it. While any row exists no approval is answered. The row names the process that
  * makes the change (host, pid and that process's start time, oauth/process.ts): the start and the sweep finish only a
  * row whose process is certainly gone. A row whose change ended without either of Better Auth's after hooks (a failure
- * that is not an APIError) in a process that still runs stays, and approvals stay closed until that process ends: an
- * open gap pending the owner's decision (docs/project-foundation.md, Security design).
+ * that is not an APIError) in a process that still runs stays, and approvals stay closed until that process ends: a
+ * gap the owner accepted (D7a in docs/project-foundation.md, Security design).
  */
 export const agentIdentityChanges = pgTable("agent_identity_changes", {
   id: uuid("id").primaryKey(),

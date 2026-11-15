@@ -22,7 +22,7 @@ type HookContext = { path?: string; request?: Request; context?: { session?: unk
  * refused there (fail closed). `release` runs in the matching database after hook (after the write commits) and in
  * hooks.after. A failure that is not an APIError runs neither: the change's record stays and approvals stay closed
  * until its process is certainly gone and the next start, sweep or Disconnect all finishes it (Disconnect all also
- * clears a change of another host) (an open gap pending the owner's decision, see the foundation plan). Changes are
+ * clears a change of another host) (a gap the owner accepted, D7a in the foundation plan). Changes are
  * tracked per call: by its request, or for a server call by its per-call auth context.
  *
  * The release in hooks.after is the path for an APIError thrown after `begin` and before the database after hook. In
