@@ -6,6 +6,7 @@ import type { Interaction } from "oidc-provider"
 import { z } from "zod"
 import { AGENT_AREAS, type AgentResource } from "../../shared/enums.ts"
 import { AGENT_IDLE_DAYS_MAX, AGENT_IDLE_DAYS_MIN } from "../../shared/settings.ts"
+import type { AgentChannel, ChannelLimits } from "../agents/channel.ts"
 import { AppError, errorBody, invalid, notFound } from "../errors.ts"
 import { type AuthDeps, authenticate, byOf, cookieOnly, type Env, requireOwnerAuth } from "../http/auth.ts"
 import { errorFacts, log } from "../log.ts"
@@ -476,7 +477,30 @@ export function agentRoutes(deps: AgentRouteDeps) {
  * What createApp mounts when it is given `agentOAuth`: built by the caller, so the app module never loads the
  * authorization server unless it is mounted (index.ts does not mount it until the agent access release).
  */
-export function agentOAuthMount(access: AgentAccess, limits?: AgentLimits, caps?: AgentCaps) {
-  return { access, routes: (deps: AuthDeps) => agentRoutes({ ...deps, access, limits, caps }) }
+export function agentOAuthMount(
+  access: AgentAccess,
+  limits?: AgentLimits,
+  caps?: AgentCaps,
+  /** The agent channel's limits (agents/channel.ts); tests pass shorter ones. */
+  channel?: ChannelLimits,
+) {
+  /** The agent channels createApp built on this mount (one per app). */
+  const channels: AgentChannel[] = []
+  return {
+    access,
+    channel,
+    routes: (deps: AuthDeps) => agentRoutes({ ...deps, access, limits, caps }),
+    /** createApp hands over the agent channel it built. */
+    attach(built: AgentChannel) {
+      channels.push(built)
+    },
+    /**
+     * Waits for every agent call's audit row still being written. The caller that owns shutdown runs it after the
+     * server stopped taking requests and before the database closes (index.ts, once it mounts agent access).
+     */
+    async drain() {
+      for (const built of channels) await built.drain()
+    },
+  }
 }
 export type AgentOAuthMount = ReturnType<typeof agentOAuthMount>

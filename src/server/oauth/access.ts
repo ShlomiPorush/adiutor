@@ -51,9 +51,12 @@ const AGENT_END: By = { actor: { kind: "agent", label: "agent" }, source: "api" 
 
 export type Connection = typeof agentConnections.$inferSelect
 
-/** What the per-call check of PR 4 answers for an access token (S17). */
+/**
+ * What the per-call check answers for an access token (S17): the connection, the areas the token holds, and the
+ * token's client and expiry (seconds since the epoch, as the MCP SDK's AuthInfo has them).
+ */
 export type TokenCheck =
-  | { ok: true; connection: Connection; areas: AgentArea[] }
+  | { ok: true; connection: Connection; areas: AgentArea[]; clientId: string; expiresAt: number }
   | { ok: false; reason: "agents_off" | "invalid" }
 
 /** A pending approval as the consent page shows it (oauth/routes.ts reads it from the library's interaction). */
@@ -691,17 +694,42 @@ export async function createAgentAccess(options: AgentAccessOptions) {
       return refused
     }
     let connection = row
-    if (use && (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() >= USE_WRITE_MS)) {
-      const [touched] = await db
-        .update(agentConnections)
-        .set({ lastUsedAt: now })
-        .where(and(eq(agentConnections.id, row.id), isNull(agentConnections.endedAt)))
-        .returning()
+    if (use) {
+      const touched = await recordUse(row)
       if (!touched) return refused
       connection = touched
     }
     const granted = String(at.scope ?? "").split(" ")
-    return { ok: true, connection, areas: row.areas.filter((a) => granted.includes(a)) }
+    return {
+      ok: true,
+      connection,
+      areas: row.areas.filter((a) => granted.includes(a)),
+      clientId: String(at.clientId ?? ""),
+      expiresAt: Number(at.exp ?? 0),
+    }
+  }
+
+  /**
+   * A real API or MCP call of a connection that passed the check counts as use (the idle rule), written at most once a
+   * minute. Null when the connection ended meanwhile. `access`, `endpoints`, `tools/list` and refused calls never
+   * count (agents/channel.ts decides).
+   */
+  async function recordUse(row: Connection): Promise<Connection | null> {
+    const now = ctx.clock()
+    if (row.lastUsedAt && now.getTime() - row.lastUsedAt.getTime() < USE_WRITE_MS) {
+      // Used within the minute: no write, but always a fresh read that it has not ended since it was checked.
+      const [live] = await db
+        .select()
+        .from(agentConnections)
+        .where(and(eq(agentConnections.id, row.id), isNull(agentConnections.endedAt)))
+      return live ?? null
+    }
+    const [touched] = await db
+      .update(agentConnections)
+      .set({ lastUsedAt: now })
+      .where(and(eq(agentConnections.id, row.id), isNull(agentConnections.endedAt)))
+      .returning()
+    return touched ?? null
   }
 
   // --- The owner's management ---
@@ -814,6 +842,7 @@ export async function createAgentAccess(options: AgentAccessOptions) {
     saveSettings,
     reconcile,
     checkToken,
+    recordUse,
     bindRequest,
     decide,
     end,

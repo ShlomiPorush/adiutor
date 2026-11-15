@@ -41,6 +41,11 @@ export const AGENT_AREAS = ["read", "write", "sync"] as const
 export const AGENT_CONNECTION_METHODS = ["code", "browser"] as const
 /** The resource a connection's tokens are for: `/mcp` or `/api/v1`. */
 export const AGENT_RESOURCES = ["mcp", "rest"] as const
+/** The areas a resource offers: `sync` belongs to the REST API alone (D3). */
+export const RESOURCE_AREAS: Record<(typeof AGENT_RESOURCES)[number], readonly (typeof AGENT_AREAS)[number][]> = {
+  mcp: ["read", "write"],
+  rest: AGENT_AREAS,
+}
 /**
  * Why a connection ended: the owner disconnected it, disconnected all, or turned agents off; it went unused for the
  * idle days; a spent refresh token or code came back; the owner's password or two-factor changed; the public URL
@@ -114,6 +119,9 @@ export const AUDIT_ACTIONS = [
   "agent.end_all",
   "agent.blocked",
   "agent.settings_update",
+  // One row per call of an agent connected by approval, reads included (agents/channel.ts).
+  "agent.api_call",
+  "agent.tool_call",
   // Older rows only.
   "device.pair",
   "device.revoke",

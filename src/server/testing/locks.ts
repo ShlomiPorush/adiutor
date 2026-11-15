@@ -4,6 +4,51 @@ import type { TestDatabase } from "./db.ts"
 
 const WAIT_LIMIT_MS = 5_000
 
+type Tx = Parameters<Parameters<TestDatabase["ctx"]["db"]["transaction"]>[0]>[0]
+
+/**
+ * Holds `select ... for update` on one row of `table` in a transaction of its own until `release`: a call that changes
+ * the row waits behind it, a controlled slow call. `waiting(n)` resolves once `n` backends of this database really wait
+ * for a lock (pg_blocking_pids), never on a timer. `release(last)` runs `last` in the holding transaction first, so a
+ * change commits exactly when the lock goes.
+ */
+export async function holdRow(t: TestDatabase, table: "items" | "notes" | "agent_connections", id: string) {
+  let release: (last?: (tx: Tx) => Promise<unknown>) => void = () => {}
+  const released = new Promise<((tx: Tx) => Promise<unknown>) | undefined>((resolve) => {
+    release = resolve
+  })
+  let locked = () => {}
+  const isLocked = new Promise<void>((resolve) => {
+    locked = resolve
+  })
+  const holder = t.ctx.db.transaction(async (tx) => {
+    await tx.execute(sql`select 1 from ${sql.raw(table)} where id = ${id} for update`)
+    locked()
+    const last = await released
+    await last?.(tx)
+  })
+  await isLocked
+  return {
+    async waiting(n = 1): Promise<void> {
+      const until = Date.now() + 10_000
+      while (Date.now() < until) {
+        const [row] = [
+          ...(await t.ctx.db.execute<{ n: number }>(sql`
+            select count(*)::int as n from pg_stat_activity
+            where datname = current_database() and cardinality(pg_blocking_pids(pid)) > 0`)),
+        ]
+        if ((row?.n ?? 0) >= n) return
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      throw new Error(`fewer than ${n} backends waited for the held row`)
+    },
+    async release(last?: (tx: Tx) => Promise<unknown>) {
+      release(last)
+      await holder
+    },
+  }
+}
+
 /**
  * Runs `work` while another transaction holds the link structure lock, and checks that `work` takes that
  * lock as the first statement of its transaction: it must wait for the lock, and while it waits its

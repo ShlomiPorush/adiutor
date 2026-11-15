@@ -695,7 +695,9 @@
       "agent_end": "ended an agent connection",
       "agent_end_all": "ended every agent connection",
       "agent_blocked": "blocked agent requests after too many attempts",
-      "agent_settings_update": "updated the agent settings"
+      "agent_settings_update": "updated the agent settings",
+      "agent_api_call": "called the API",
+      "agent_tool_call": "used an MCP tool"
     },
     "field": {
       "status": "Status",
