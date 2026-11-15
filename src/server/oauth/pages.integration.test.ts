@@ -113,6 +113,11 @@ describe("the library's pages", () => {
       expect(uid).not.toBe("")
       expectFlowHeaders(toConsent, "redirect to the consent page")
 
+      // The link the agent shows: the library's own page that posts the code on, with its script hash in the policy.
+      const link = await browserCall(h.owner, `/connect/code?user_code=${encodeURIComponent(device.body.user_code)}`)
+      expect(link.status).toBe(200)
+      expectFlowHeaders(link, "the code link")
+
       const details = await browserCall(h.owner, `/connect/approve/${uid}/details`)
       const decision = await browserCall(h.owner, `/connect/approve/${uid}/decision`, {
         json: { approve: true, areas: details.body.areas },
