@@ -6,7 +6,7 @@
 // top, where the owner checks who asks, so Approve is pressed on purpose. After the answer the browser follows the
 // server's address (back to the agent, or the code flow's done page); without one the page says what happened.
 
-import { useQuery } from "@tanstack/react-query"
+import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query"
 import { type ReactNode, useId, useState } from "react"
 import { Link, Navigate, useLocation, useParams } from "react-router"
 import type { AgentArea } from "../../../shared/enums.ts"
@@ -33,21 +33,59 @@ function authRedirect(reason: ConsentFailure, here: string): string | null {
   return null
 }
 
+/**
+ * An answer sent for a request: its outcome, or unknown while it is on its way and after one whose reply was lost.
+ * Kept per uid in the query cache and this tab's sessionStorage, so Back, another page of the app or a reload never
+ * offers a second answer for the same request.
+ */
+type Sent = "unknown" | "approved" | "denied"
+const sentKey = (uid: string) => ["consent-sent", uid] as const
+const storedKey = (uid: string) => `adiutor.consent.sent.${uid}`
+
+function readSent(queryClient: QueryClient, uid: string): Sent | null {
+  const cached = queryClient.getQueryData<Sent>(sentKey(uid))
+  if (cached) return cached
+  try {
+    const stored = sessionStorage.getItem(storedKey(uid))
+    return stored === "unknown" || stored === "approved" || stored === "denied" ? stored : null
+  } catch {
+    return null
+  }
+}
+
+function writeSent(queryClient: QueryClient, uid: string, sent: Sent | null): void {
+  if (sent) queryClient.setQueryData(sentKey(uid), sent)
+  else queryClient.removeQueries({ queryKey: sentKey(uid), exact: true })
+  try {
+    if (sent) sessionStorage.setItem(storedKey(uid), sent)
+    else sessionStorage.removeItem(storedKey(uid))
+  } catch {
+    // Storage blocked: the query cache still keeps it while this tab runs the app.
+  }
+}
+
 export function ConsentPage() {
   const { t } = useI18n()
   const { uid = "" } = useParams()
   const location = useLocation()
+  const queryClient = useQueryClient()
   const here = `${location.pathname}${location.search}`
   usePageTitle(t("consent.title"))
+  // Read once per request when the page opens: an answer this page sends later is shown by the form's own states.
+  const [opened] = useState(() => new Map<string, Sent | null>())
+  if (!opened.has(uid)) opened.set(uid, readSent(queryClient, uid))
+  const sent = opened.get(uid) ?? null
   const request = useQuery({
     queryKey: ["consent", uid],
     queryFn: () => consentApi.details(uid),
+    enabled: sent === null,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   })
 
+  if (sent) return <Decided sent={sent} />
   if (request.isPending) return <Loading label={t("consent.loading")} />
   if (request.isError) {
     const reason = reasonOf(request.error)
@@ -80,6 +118,29 @@ function Unavailable({ reason }: { reason: ConsentFailure }) {
   )
 }
 
+/** An answer was sent: what became of it, never the form again. */
+function Decided({ sent }: { sent: Sent }) {
+  const { t } = useI18n()
+  if (sent === "unknown")
+    return (
+      <AuthFrame title={t("consent.title")}>
+        <Banner tone="warn" title={t("consent.unknownTitle")}>
+          {t("consent.unknownText")}
+        </Banner>
+        <Link className="ui-btn" to="/settings/agents">
+          {t("consent.toSettings")}
+        </Link>
+      </AuthFrame>
+    )
+  return (
+    <AuthFrame title={t("consent.title")}>
+      <Banner tone={sent === "approved" ? "ok" : "info"} title={t(`consent.${sent}`)}>
+        {t("consent.closeWindow")}
+      </Banner>
+    </AuthFrame>
+  )
+}
+
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section className="ui-consent-sec" aria-labelledby={id}>
@@ -93,6 +154,7 @@ function Section({ id, title, children }: { id: string; title: string; children:
 
 function Request({ uid, here, details }: { uid: string; here: string; details: ConsentDetails }) {
   const { t, tc } = useI18n()
+  const queryClient = useQueryClient()
   const areasId = useId()
   const me = useQuery({ queryKey: qk.session, queryFn: api.session, staleTime: Number.POSITIVE_INFINITY })
   const [chosen, setChosen] = useState<AgentArea[]>(details.areas)
@@ -113,12 +175,15 @@ function Request({ uid, here, details }: { uid: string; here: string; details: C
     }
     setBusy(true)
     setProblem(null)
+    // Marked as sent before it leaves, so nothing on this tab offers a second answer meanwhile or after.
+    writeSent(queryClient, uid, "unknown")
     try {
       const result = await consentApi.decide(
         uid,
         approve,
         details.areas.filter((area) => chosen.includes(area)),
       )
+      writeSent(queryClient, uid, result.outcome)
       const next = sameOrigin(result.redirectTo, window.location.origin)
       setAnswered({ outcome: result.outcome, leaving: next !== null })
       if (next) away.go(next)
@@ -126,37 +191,23 @@ function Request({ uid, here, details }: { uid: string; here: string; details: C
       const reason = reasonOf(error)
       // Only a refusal proves that nothing was decided, so only then may the owner answer again.
       if (reason === "network" || reason === "lost") setUnknown(true)
-      else if (reason === "validation" || reason === "other") {
-        setProblem(reason)
-        setBusy(false)
-      } else setEnded(reason)
+      else {
+        writeSent(queryClient, uid, null)
+        if (reason === "validation" || reason === "other") {
+          setProblem(reason)
+          setBusy(false)
+        } else setEnded(reason)
+      }
     }
   }
 
-  if (unknown)
-    return (
-      <AuthFrame title={t("consent.title")}>
-        <Banner tone="warn" title={t("consent.unknownTitle")}>
-          {t("consent.unknownText")}
-        </Banner>
-        <Link className="ui-btn" to="/settings/agents">
-          {t("consent.toSettings")}
-        </Link>
-      </AuthFrame>
-    )
+  if (unknown) return <Decided sent="unknown" />
   if (ended) {
     const to = authRedirect(ended, here)
     return to ? <Navigate to={to} replace /> : <Unavailable reason={ended} />
   }
   if (answered?.leaving) return <Loading label={t("consent.returning")} />
-  if (answered)
-    return (
-      <AuthFrame title={t("consent.title")}>
-        <Banner tone={answered.outcome === "approved" ? "ok" : "info"} title={t(`consent.${answered.outcome}`)}>
-          {t("consent.closeWindow")}
-        </Banner>
-      </AuthFrame>
-    )
+  if (answered) return <Decided sent={answered.outcome} />
 
   const toggle = (area: AgentArea, on: boolean) => {
     setProblem(null)

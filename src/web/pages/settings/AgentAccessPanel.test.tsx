@@ -46,7 +46,10 @@ const SAVED: Settings = {
 }
 
 let agents: AgentSettings
-let agentsStatus: number
+let agentsStatus: number | "proxy404"
+let settingsStatus: number
+/** While set, a PATCH of the agent settings waits for it (a save still on its way). */
+let agentPatchGate: Promise<void> | null
 let connectionsStatus: number
 let connections: AgentConnection[]
 let requests: TransportRequest[]
@@ -73,11 +76,16 @@ const failure = (status: number): TransportResponse =>
 async function transport(request: TransportRequest): Promise<TransportResponse> {
   requests.push(request)
   const { method, path, body } = request
-  if (path === "/settings" && method === "GET") return { status: 200, body: { data: SAVED } }
+  if (path === "/settings" && method === "GET")
+    return settingsStatus === 200 ? { status: 200, body: { data: SAVED } } : failure(settingsStatus)
   if (path === "/settings" && method === "PATCH") return { status: 200, body: { data: SAVED } }
-  if (path === "/agents/settings" && method === "GET")
+  if (path === "/agents/settings" && method === "GET") {
+    // A proxy's own 404 page: no JSON, so the client reads only the status.
+    if (agentsStatus === "proxy404") return { status: 404, body: null }
     return agentsStatus === 200 ? { status: 200, body: agents } : failure(agentsStatus)
+  }
   if (path === "/agents/settings" && method === "PATCH") {
+    if (agentPatchGate) await agentPatchGate
     agents = { ...agents, ...(body as object) }
     return { status: 200, body: { enabled: agents.enabled, idleDays: agents.idleDays } }
   }
@@ -108,6 +116,8 @@ beforeEach(() => {
     restUrl: `${ISSUER}/api/v1`,
   }
   agentsStatus = 200
+  settingsStatus = 200
+  agentPatchGate = null
   connectionsStatus = 200
   connections = []
   requests = []
@@ -223,6 +233,22 @@ describe("which panel shows", () => {
     expect(page()).not.toContain(en.agentKeys.howTitle)
   })
 
+  it("treats a 404 that is not Adiutor's own answer (a proxy's page) as a failure, also on a refresh", async () => {
+    agentsStatus = "proxy404"
+    await render()
+    expect(page()).toContain(en.agentAccess.failed)
+    expect(button(en.common.tryAgain)).toBeTruthy()
+    expect(page()).not.toContain(en.agentKeys.howTitle)
+    agentsStatus = 200
+    await click(button(en.common.tryAgain))
+    expect(switchBox()).not.toBeNull()
+    agentsStatus = "proxy404"
+    await refetch(qk.agentSettings)
+    expect(switchBox()).not.toBeNull()
+    expect(page()).toContain(en.agentAccess.refreshFailed)
+    expect(page()).not.toContain(en.agentKeys.howTitle)
+  })
+
   it("shows a failure after a 404 as a failure, not as the old panel", async () => {
     agentsStatus = 404
     await render()
@@ -249,6 +275,8 @@ describe("a refresh that fails", () => {
     )
     expect(notices).toHaveLength(2)
     agentsStatus = 200
+    settingsStatus = 200
+    agentPatchGate = null
     connectionsStatus = 200
     for (const notice of notices) await click(button(en.common.tryAgain, notice))
     expect(page()).not.toContain(en.agentAccess.refreshFailed)
@@ -365,6 +393,36 @@ describe("the switch and the idle days in the page's draft (SV-1)", () => {
     expect(plain(question()?.textContent)).toContain(en.agentAccess.idleFewerMessage.other.replace("{count}", "30"))
     await click(button(en.agentAccess.idleFewerConfirm, question() as HTMLElement))
     expect(writes()).toEqual([{ method: "PATCH", path: "/agents/settings", body: { idleDays: 30 } }])
+  })
+})
+
+describe("a save of the agent fields while other things happen", () => {
+  it("keeps a value typed while the save was on its way, unsaved and guarded", async () => {
+    let release = () => {}
+    agentPatchGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await render()
+    await type(daysField(), "120")
+    await click(button(en.savebar.save))
+    expect(writes()).toEqual([{ method: "PATCH", path: "/agents/settings", body: { idleDays: 120 } }])
+    await type(daysField(), "30")
+    await act(async () => release())
+    await settle()
+    expect(daysField()?.value).toBe("30")
+    expect(unsaved()).not.toBeNull()
+  })
+
+  it("saves the agent settings on their own when the general settings could not be read", async () => {
+    settingsStatus = 500
+    await render()
+    expect(switchBox()?.checked).toBe(true)
+    await click(switchBox())
+    await click(button(en.savebar.save))
+    await click(button(en.agentAccess.offConfirm, question() as HTMLElement))
+    expect(writes()).toEqual([{ method: "PATCH", path: "/agents/settings", body: { enabled: false } }])
+    expect(unsaved()).toBeNull()
+    expect(page()).toContain(en.agentAccess.turnedOff)
   })
 })
 

@@ -594,7 +594,9 @@ function useSettingsDraft(
   }
 
   const save = async () => {
-    if (!saved) return
+    // Without the general settings (still loading, or their read failed) only the agent settings can change: they save
+    // on their own (the general part of the draft is empty then).
+    if (!saved && Object.keys(agentPatch).length === 0) return
     const outside = (value: number | undefined, min: number, max: number) =>
       value !== undefined && (!Number.isInteger(value) || value < min || value > max)
     if (outside(patch.closedItemDays, CLOSED_ITEM_DAYS_MIN, CLOSED_ITEM_DAYS_MAX))
@@ -633,14 +635,22 @@ function useSettingsDraft(
         await queryClient.invalidateQueries({ queryKey: qk.telegram })
       }
       if (Object.keys(agentPatch).length > 0) {
+        // The fields stay editable while the save runs: only a value still as it was sent leaves the draft, so one
+        // typed meanwhile stays unsaved and guarded.
+        const sent = { agentsEnabled: draft.agentsEnabled, agentIdleDays: draft.agentIdleDays }
         await api.updateAgentSettings(agentPatch)
-        setDraft(({ agentsEnabled: _on, agentIdleDays: _days, ...rest }) => rest)
+        setDraft((current) => {
+          const next = { ...current }
+          if (next.agentsEnabled === sent.agentsEnabled) delete next.agentsEnabled
+          if (next.agentIdleDays === sent.agentIdleDays) delete next.agentIdleDays
+          return next
+        })
         await queryClient.invalidateQueries({ queryKey: qk.agentSettings })
         await queryClient.invalidateQueries({ queryKey: qk.agentConnections })
       }
       // A shorter length leaves browsers already signed in with the time they had (G2): offer to sign out everywhere.
       if (agentPatch.enabled === false) showToast(t("agentAccess.turnedOff"), "success")
-      else if (patch.sessionIdleDays !== undefined && patch.sessionIdleDays < saved.sessionIdleDays)
+      else if (saved && patch.sessionIdleDays !== undefined && patch.sessionIdleDays < saved.sessionIdleDays)
         showToast(t("settings.session.shortened"), "success", {
           action: { label: t("account.endAll"), onAction: () => void signOutEverywhere() },
           duration: 10_000,

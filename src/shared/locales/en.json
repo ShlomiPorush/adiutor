@@ -1359,7 +1359,6 @@
     "offMessage": "Every agent connection, waiting code and open approval ends now. Turning agents on again brings none back.",
     "offConfirm": "Save and turn off",
     "turnedOff": "Agents are off, and every connection ended",
-    "saveFailed": "Could not save the agent settings: {reason}",
     "idleDays": "Idle days",
     "idleHint": "A connection ends after this many days without a real request (1 to 365). Fewer days end every connection idle longer at once.",
     "idleInvalid": "Enter a whole number from 1 to 365.",

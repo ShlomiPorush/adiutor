@@ -28,12 +28,15 @@ import { Tag } from "../../ui/tags.tsx"
 import { AgentKeysSection, skillSentence } from "./AgentKeysPanel.tsx"
 import { Group, Row, SwitchRow } from "./parts.tsx"
 
-/** The owner's agent settings, or null where agent access by approval is not mounted (the server answers 404). */
+/**
+ * The owner's agent settings, or null where agent access by approval is not mounted: Adiutor's own JSON answer
+ * `404 {error: {code: "not_found"}}`. Any other 404 (a proxy's page) is a failure, never the old panel.
+ */
 async function readAgentSettings(): Promise<AgentSettings | null> {
   try {
     return await api.agentSettings()
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404 && error.code === "not_found") return null
+    if (error instanceof ApiError && error.status === 404 && error.code === "not_found" && error.fromServer) return null
     throw error
   }
 }

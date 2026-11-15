@@ -23,6 +23,7 @@ let decision: Answer
 let calls: { path: string; method: string; body: unknown }[]
 let gone: string[]
 let mounted: { root: Root; host: HTMLElement } | null = null
+let router: ReturnType<typeof createMemoryRouter>
 
 const browserDetails = (): ConsentDetails => ({
   client: { name: "Claude Code", builtIn: false, nameIsOwnWord: true },
@@ -41,6 +42,7 @@ function respond(answer: Answer): Response {
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
   localStorage.setItem("adiutor.language", "en")
   details = { status: 200, body: browserDetails() }
   decision = { status: 200, body: { outcome: "approved", redirectTo: `${window.location.origin}/oauth/authorize/u1` } }
@@ -84,12 +86,12 @@ async function render(): Promise<void> {
   mounted = { root, host }
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   queryClient.setQueryData(qk.session, { actor: { kind: "owner", label: "owner.name" } })
-  const router = createMemoryRouter(
+  router = createMemoryRouter(
     [
       { path: "/connect/approve/:uid", element: <ConsentPage /> },
       { path: "/login", element: <p data-testid="login">sign in</p> },
       { path: "/setup", element: <p data-testid="setup">setup</p> },
-      { path: "/settings/agents", element: <p>settings</p> },
+      { path: "/settings/agents", element: <p data-testid="settings">settings</p> },
       { path: "/", element: <p>board</p> },
     ],
     { initialEntries: ["/connect/approve/u1"] },
@@ -253,12 +255,56 @@ describe("the answer", () => {
     expect(page()).toContain(en.consent.reason.gone)
   })
 
+  it("never offers a second answer after a lost one: not after Settings and Back, not after a reload", async () => {
+    await render()
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        calls.push({ path: String(input), method: "?", body: null })
+        return Promise.reject(new TypeError("connection reset"))
+      }),
+    )
+    await click(button(en.consent.approve))
+    expect(page()).toContain(en.consent.unknownTitle)
+    await click(document.querySelector('a[href="/settings/agents"]'))
+    expect(document.querySelector("[data-testid=settings]")).not.toBeNull()
+    await act(async () => {
+      await router.navigate(-1)
+    })
+    await settle()
+    expect(page()).toContain(en.consent.unknownTitle)
+    expect(button(en.consent.approve)).toBeUndefined()
+    // A reload: a new page with the same tab's storage reads nothing and offers nothing.
+    await act(async () => mounted?.root.unmount())
+    mounted?.host.remove()
+    mounted = null
+    calls = []
+    await render()
+    expect(page()).toContain(en.consent.unknownTitle)
+    expect(button(en.consent.approve)).toBeUndefined()
+    expect(calls).toEqual([])
+  })
+
+  it("shows what became of an answer that came back, after Back, instead of the form", async () => {
+    decision = { status: 200, body: { outcome: "denied", redirectTo: "https://elsewhere.example.com/x" } }
+    await render()
+    await click(button(en.consent.deny))
+    expect(page()).toContain(en.consent.denied)
+    await act(async () => mounted?.root.unmount())
+    mounted?.host.remove()
+    mounted = null
+    await render()
+    expect(page()).toContain(en.consent.denied)
+    expect(button(en.consent.deny)).toBeUndefined()
+  })
+
   it("lets the owner answer again after a refusal that proves nothing was decided", async () => {
     decision = { status: 415, body: { error: "unsupported_media_type", message: "x" } }
     await render()
     await click(button(en.consent.approve))
     expect(page()).toContain(en.consent.failed.other)
     expect(button(en.consent.approve)?.disabled).toBe(false)
+    expect(sessionStorage.getItem("adiutor.consent.sent.u1")).toBeNull()
   })
 
   for (const [name, lost] of [
