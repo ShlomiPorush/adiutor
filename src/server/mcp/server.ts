@@ -334,20 +334,24 @@ export function mcpRoutes(deps: AuthDeps & { version: string }, agents?: AgentCh
 }
 
 /**
- * The ids of the `tools/call` messages in a request's body, one message or a batch, read only to keep room in the
- * answer cap for each (agents/channel.ts toolGuard); the SDK parses the body itself. Nothing when it is not JSON.
+ * Whether a body is a JSON-RPC batch (a JSON array). Agents connected by approval send one message per request: the
+ * MCP specification removed batching in protocol version 2025-06-18, and a batch's answers would leave the per-call
+ * limits and audit (the SDK sends them together, answers duplicate ids once and never answers an id-less call). Body
+ * that is not JSON is left to the SDK's own parse error.
  */
-function toolCallIds(bytes: Uint8Array): unknown[] {
-  let parsed: unknown
+function isBatch(bytes: Uint8Array): boolean {
   try {
-    parsed = JSON.parse(new TextDecoder().decode(bytes))
+    return Array.isArray(JSON.parse(new TextDecoder().decode(bytes)))
   } catch {
-    return []
+    return false
   }
-  const messages = Array.isArray(parsed) ? parsed : [parsed]
-  return messages
-    .filter((m) => m && typeof m === "object" && (m as { method?: unknown }).method === "tools/call")
-    .map((m) => (m as { id?: unknown }).id)
+}
+
+/** The SDK's own shape for a request it cannot take (`createJsonErrorResponse`). */
+const BATCH_REFUSED = {
+  jsonrpc: "2.0",
+  error: { code: -32600, message: "Invalid Request: JSON-RPC batches are not accepted; send one message per request." },
+  id: null,
 }
 
 type AgentMcpEnv = { Variables: Env["Variables"] & { agentToken: AgentToken } }
@@ -372,20 +376,20 @@ function agentMcpRoutes(app: Hono<Env>, deps: AuthDeps & { version: string }, ag
     const found = c.get("agentToken")
     const { connection, areas } = found.check
     let request = withoutPeoplesCredentials(c.req.raw)
-    let toolCalls: unknown[] = []
     // The body is read under the deadline and the shared cap before the SDK sees it, so a body sent slowly holds
-    // nothing past the deadline; the SDK then reads it from memory, with its own cap and its own parsing.
+    // nothing past the deadline; a batch is refused there, in front of the transport (validation the standard allows
+    // in middleware); the SDK then reads the one message from memory, with its own cap and its own parsing.
     if (request.body) {
       const read = await readBody(request, agents.limits.bodyBytes.default, agents.limits.deadlineMs)
       if ("late" in read) return c.json(REFUSALS.tooSlow, 408)
       if ("tooLarge" in read) return c.json(REFUSALS.tooLarge, 413)
-      toolCalls = toolCallIds(read.bytes)
+      if (isBatch(read.bytes)) return c.json(BATCH_REFUSED, 400)
       request = withBody(request, read.bytes)
     }
     const by: By = { actor: { kind: "agent", label: agentLabel(c, connection.name) }, source: "mcp" }
     const server = buildMcpServer(deps.ctx, by, deps.version, {
       areas,
-      guard: agents.toolGuard(found, by, deliveryOf(c), toolCalls),
+      guard: agents.toolGuard(found, by, deliveryOf(c)),
       getAccess: () => agents.accessAnswer(found.check, "mcp"),
     })
     const transport = new WebStandardStreamableHTTPServerTransport({

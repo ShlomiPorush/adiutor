@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { and, eq, sql } from "drizzle-orm"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
+import { createApp } from "../app.ts"
 import { agentConnections, audit, items } from "../db/schema.ts"
 import { AGENT_INSTRUCTIONS } from "../mcp/server.ts"
 import { createItem } from "../services/items.ts"
@@ -468,59 +469,59 @@ describe("the answer cap on the wire", () => {
     expect(answer.status).toBe(200)
     expect(textOf(answer.json as never).error).toBe("answer_too_large")
   })
+})
 
-  it("keeps room for the others' replacement answers: the whole batch stays within the cap", async () => {
-    const { token } = await connectMcp(["read", "write"])
-    const note = await createNote(t.ctx, owner, {
-      title: `Room ${randomUUID()}`,
-      body: "n".repeat(LIMITS.answerBytes - 2_000),
+describe("JSON-RPC batches", () => {
+  it("are refused before the transport for an agent connected by approval: nothing runs, a single call still works", async () => {
+    const { token, id } = await connectMcp(["read", "write"])
+    const item = await createItem(t.ctx, owner, { type: "task", title: "Batch" })
+    const update = (requestId: number | undefined, title: string) => ({
+      jsonrpc: "2.0",
+      ...(requestId === undefined ? {} : { id: requestId }),
+      method: "tools/call",
+      params: { name: "adiutor_update_item", arguments: { itemId: item.id, version: 1, title } },
     })
-    const item = await createItem(t.ctx, owner, { type: "task", title: "Room" })
-    // The second call waits for the item's row, so the first nearly fills the cap before the second is judged.
-    const row = await holdRow(t, "items", item.id)
-    let pending: ReturnType<typeof post> | undefined
-    try {
-      pending = post({ authorization: `Bearer ${token}` }, [
-        {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: { name: "adiutor_get_note", arguments: { noteId: note.id } },
-        },
-        {
-          jsonrpc: "2.0",
-          id: "i".repeat(3_000),
-          method: "tools/call",
-          params: { name: "adiutor_update_item", arguments: { itemId: item.id, version: 1, title: "Room, changed" } },
-        },
-      ])
-      await row.waiting()
-      await new Promise((resolve) => setTimeout(resolve, 300))
-    } finally {
-      await row.release()
-    }
-    const answer = await pending
-    expect(answer?.status).toBe(200)
-    expect(Buffer.byteLength(answer?.text ?? "")).toBeLessThanOrEqual(LIMITS.answerBytes)
+    // Two calls with one id (the SDK would run both and answer one), and one without an id (never answered).
+    const batch = await post({ authorization: `Bearer ${token}` }, [
+      update(7, "Batch one"),
+      update(7, "Batch two"),
+      update(undefined, "Batch three"),
+    ])
+    expect(batch.status).toBe(400)
+    expect(JSON.parse(batch.text)).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32600, message: expect.any(String) },
+      id: null,
+    })
+    const [unchanged] = await t.ctx.db.select().from(items).where(eq(items.id, item.id))
+    expect([unchanged?.title, unchanged?.version]).toEqual(["Batch", 1])
+    expect(await toolCalls(id)).toEqual([])
+    const [row] = await t.ctx.db.select().from(agentConnections).where(eq(agentConnections.id, id))
+    expect(row?.lastUsedAt).toBeNull()
+    // One message per request still works.
+    const single = await post({ authorization: `Bearer ${token}` }, update(8, "Single"))
+    expect(single.status).toBe(200)
+    const [changed] = await t.ctx.db.select().from(items).where(eq(items.id, item.id))
+    expect(changed?.title).toBe("Single")
   })
 
-  it("counts the answers of one batch together: two that each pass alone do not pass together", async () => {
-    const { token } = await connectMcp(["read"])
-    const notes = await Promise.all(
-      [1, 2].map((n) => createNote(t.ctx, owner, { title: `Batch ${n} ${randomUUID()}`, body: "b".repeat(35_000) })),
-    )
-    const callNote = (noteId: string, n: number) => ({
-      jsonrpc: "2.0",
-      id: n,
-      method: "tools/call",
-      params: { name: "adiutor_get_note", arguments: { noteId } },
+  it("are still the SDK's on the key path without agent access", async () => {
+    const plain = createApp({ checkDatabase: async () => true, core: h.core })
+    const key = await createAgentKey(h.core, "batch key")
+    const r = await plain.request(`${h.issuer}/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", id: 1, method: "tools/list" },
+        { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      ]),
     })
-    const alone = await rpc(token, callNote(notes[0]?.id ?? "", 1))
-    expect(textOf(alone.json as never).error).toBeUndefined()
-    const batch = await rpc(token, [callNote(notes[0]?.id ?? "", 1), callNote(notes[1]?.id ?? "", 2)])
-    expect(batch.status).toBe(200)
-    const errors = (batch.json as never[]).map((a) => textOf(a).error)
-    expect(errors.sort()).toEqual(["answer_too_large", undefined].sort())
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as unknown[]).length).toBe(2)
   })
 })
 

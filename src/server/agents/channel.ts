@@ -111,26 +111,13 @@ export const REFUSALS = {
 } as const
 
 /**
- * Room for the JSON-RPC envelope around one tool answer, besides its id (counted on its own): `{"jsonrpc":"2.0",
- * "id":,"result":}` and a batch's comma and brackets take under 40 bytes.
+ * Room for the JSON-RPC envelope around a tool answer, besides its id (counted on its own): `{"jsonrpc":"2.0",
+ * "id":,"result":}` takes under 40 bytes.
  */
 const ENVELOPE_BYTES = 64
 
-/** A tool's answer that carries one of the channel's own error bodies. */
-const failResult = (body: object): ToolResult => ({
-  content: [{ type: "text", text: JSON.stringify(body) }],
-  isError: true,
-})
-
-/** Every body a tool answer can be replaced with (toolGuard), for the room kept for one. */
-const replacementBodies = (cap: number): object[] => [
-  REFUSALS.busy,
-  REFUSALS.unknown,
-  REFUSALS.connectionEnded,
-  REFUSALS.areaNotGranted,
-  INTERNAL,
-  answerTooLarge(cap, "act"),
-]
+/** What `drain` waits beyond the longest a call's run, delivery and row can take. */
+const DRAIN_MARGIN_MS = 5_000
 
 /** A failure whose outcome may be unknown (a 5xx after an action). */
 const INTERNAL = { error: "internal_error", message: "Something went wrong on the server." } as const
@@ -681,32 +668,8 @@ export function createAgentChannel(options: AgentChannelOptions) {
    * call may have waited, and the token been refused or the connection ended meanwhile; a real tool call counts as use,
    * get_access does not), the tool's area, then the tool under the deadline and the answer cap, with its audit entry.
    */
-  function toolGuard(
-    found: AgentToken,
-    by: By,
-    delivered: Delivery,
-    /** The request ids of the `tools/call` messages of this HTTP request (one, or a batch's). */
-    toolCallIds: readonly unknown[],
-  ): ToolGuard {
+  function toolGuard(found: AgentToken, by: By, delivered: Delivery): ToolGuard {
     const id = found.check.connection.id
-    const wire = (result: ToolResult, requestId: unknown) =>
-      Buffer.byteLength(JSON.stringify(result)) + Buffer.byteLength(JSON.stringify(requestId ?? null)) + ENVELOPE_BYTES
-    /** The most a replacement answer of a tool call with this id takes on the wire. */
-    const replacement = (requestId: unknown) =>
-      Math.max(...replacementBodies(limits.answerBytes).map((body) => wire(failResult(body), requestId)))
-    /**
-     * The tool answers of this HTTP request go out together (one, or a JSON-RPC batch), so the cap holds for their sum,
-     * each with the request id the SDK echoes. `sent` is what the answers given so far take; `reserved` the room kept for
-     * a replacement answer (busy, a refusal, outcome_unknown, answer_too_large) of every tool call still to answer. A
-     * result goes out only while it leaves that room, so a replacement always fits: the sum stays within the cap, as long
-     * as the replacements of the request's ids fit at all (ids come from a body of at most 512 KiB).
-     */
-    let sent = 0
-    let reserved = toolCallIds.reduce<number>((n, requestId) => n + replacement(requestId), 0)
-    const answered = (requestId: unknown, size: number) => {
-      sent += size
-      reserved = Math.max(0, reserved - replacement(requestId))
-    }
     return async (tool, run, requestId) => {
       const rule = TOOLS[tool]
       const call: CallEntry = {
@@ -716,11 +679,10 @@ export function createAgentChannel(options: AgentChannelOptions) {
         name: tool,
         kind: rule?.kind ?? null,
       }
-      const fail = (body: object): ToolResult => {
-        const result = failResult(body)
-        answered(requestId, wire(result, requestId))
-        return result
-      }
+      const fail = (body: object): ToolResult => ({
+        content: [{ type: "text", text: JSON.stringify(body) }],
+        isError: true,
+      })
       if (!running.take(id)) {
         await recordBusy(call, { refusal: "busy" })
         return fail(REFUSALS.busy)
@@ -752,13 +714,13 @@ export function createAgentChannel(options: AgentChannelOptions) {
         work,
         async (ran) => {
           if ("refusal" in ran) return { outcome: "denied", details: { refusal: ran.refusal } }
-          // What goes on the wire: the serialized result (its text escaped once more), the request id the SDK echoes
-          // and its envelope, together with the other answers of the same HTTP request (a batch).
-          const size = wire(ran.result, requestId)
-          // The room kept for the others' replacements, not this call's own (its result takes that place).
-          const others = Math.max(0, reserved - replacement(requestId))
-          tooLarge = sent + size + others > limits.answerBytes
-          if (!tooLarge) answered(requestId, size)
+          // What goes on the wire (one message per request: batches are refused): the serialized result, its text
+          // escaped once more, the request id the SDK echoes, and the envelope.
+          const size =
+            Buffer.byteLength(JSON.stringify(ran.result)) +
+            Buffer.byteLength(JSON.stringify(requestId ?? null)) +
+            ENVELOPE_BYTES
+          tooLarge = size > limits.answerBytes
           return { outcome: tooLarge || ran.result.isError ? "error" : "ok" }
         },
         delivered,
@@ -782,7 +744,19 @@ export function createAgentChannel(options: AgentChannelOptions) {
     challenge,
     /** Waits until every audit write begun so far has settled: on shutdown, before the database closes. */
     async drain(): Promise<void> {
-      while (pending.size > 0) await Promise.allSettled([...pending])
+      // The shutdown bound: the longest a call can still take to run, to deliver its answer and to write its row, and
+      // a margin. Past it (a database that stopped answering), shutdown goes on; the held slots stay held.
+      const bound = limits.deadlineMs + limits.deliveryMs + limits.auditMs + DRAIN_MARGIN_MS
+      let timer: NodeJS.Timeout | undefined
+      const late = new Promise<"late">((resolve) => {
+        timer = setTimeout(() => resolve("late"), bound)
+        timer.unref?.()
+      })
+      const all = (async () => {
+        while (pending.size > 0) await Promise.allSettled([...pending])
+      })()
+      const done = await Promise.race([all, late]).finally(() => clearTimeout(timer))
+      if (done === "late") log.error("agent call rows still owed at shutdown", { owed: pending.size })
     },
     /** The routes of the agent router, for the exposure test. */
     restRoutes: rest.routes,
