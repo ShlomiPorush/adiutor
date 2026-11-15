@@ -112,16 +112,17 @@ describe("loadConfig", () => {
   })
 
   describe("placeholders in every key family", () => {
-    // Refused values only: literal on purpose.
+    // Refused values only: literal on purpose. Each is a whole placeholder, not a key that contains a word.
     const placeholders = [
+      "changeme",
       "changeme-changeme-changeme-changeme",
-      "CHANGE_ME_to_a_long_random_value_0123",
-      "please-change-me-before-you-deploy-it",
-      "replace-me-with-32-random-bytes-0123456",
-      "ReplaceMe0123456789012345678901234567",
-      "placeholder-placeholder-placeholder",
-      "an-Example-value-that-is-long-enough-0",
+      "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME",
+      "replace-me placeholder secret value here",
+      "ReplaceMe",
+      "PLACEHOLDER-VALUE-HERE",
+      "Example",
       "your-own-secret-goes-here-0123456789",
+      "YOUR_SECRET",
       "<32 random bytes from openssl rand -hex 32>",
       "a".repeat(40),
     ]
@@ -137,10 +138,32 @@ describe("loadConfig", () => {
       },
     )
 
+    it("accepts a random key that only contains a placeholder word", () => {
+      // Random on every run around a fixed word, so the case is always the same: the word inside, never the whole.
+      const random = () => randomBytes(24).toString("base64url")
+      for (const word of [
+        "your-",
+        "your_",
+        "Example",
+        "EXAMPLE",
+        "changeme",
+        "change-me",
+        "replace_me",
+        "<a>",
+        "secret",
+      ]) {
+        for (const value of [`${random()}${word}${random()}`, `${random()}${word}`, `${word}${random()}`]) {
+          if (value.startsWith("your")) continue // a key that starts with your- or your_ is the template's form
+          expect(isPlaceholder(value), word).toBe(false)
+          expect(loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: `1:${value}` }).oauthSecrets).toHaveLength(1)
+        }
+      }
+    })
+
     it("accepts the values the stacks and the tests generate", () => {
       for (let i = 0; i < 200; i++) {
-        const hex = randomBytes(32).toString("hex")
-        expect(isPlaceholder(hex), "random_hex").toBe(false)
+        expect(isPlaceholder(randomBytes(32).toString("hex")), "random_hex").toBe(false)
+        expect(isPlaceholder(testSecret()), "testSecret").toBe(false)
       }
       expect(isPlaceholder(authSecret)).toBe(false)
       expect(isPlaceholder(settingsKey)).toBe(false)

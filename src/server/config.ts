@@ -73,10 +73,20 @@ export function parseDomains(text: string): string[] {
     .filter(Boolean)
 }
 
-/** Text an example or a template holds instead of a key, in any case: refused for every key family. */
-const PLACEHOLDER = /changeme|change-me|change_me|replace-me|replaceme|placeholder|example|your-|<[^>]*>/i
+/** Words an example or a template writes instead of a key, in any case. */
+const PLACEHOLDER_WORD = "change[-_ ]?me|replace[-_ ]?me|placeholder|example|secret|value|here"
 
-/** An obvious placeholder: a word from an example, a `<...>` slot, or one character repeated. */
+/**
+ * A whole value an example or a template holds instead of a key: only placeholder words (`change-me`,
+ * `CHANGE_ME_PLACEHOLDER`), a `<...>` slot, or `your-...` / `your_...`. Matched against the whole value, so a random
+ * key that happens to contain one of these is never refused. Refused for every key family.
+ */
+const PLACEHOLDER = new RegExp(
+  `^(?:(?:${PLACEHOLDER_WORD})(?:[-_ .]+(?:${PLACEHOLDER_WORD}))*|<[^<>]*>|your[-_].*)$`,
+  "is",
+)
+
+/** An obvious placeholder: a whole value from an example (PLACEHOLDER), or one character repeated. */
 export function isPlaceholder(value: string): boolean {
   return PLACEHOLDER.test(value) || /^(.)\1*$/su.test(value)
 }
