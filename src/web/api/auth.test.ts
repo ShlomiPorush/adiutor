@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import en from "../../shared/locales/en.json" with { type: "json" }
-import { authFailure, FAILURE_TEXT } from "./auth.ts"
+import { authFailure, FAILURE_TEXT, passkeyFailure } from "./auth.ts"
 
 describe("authFailure", () => {
   it("sorts failed sign-in answers by what the owner can do next", () => {
@@ -19,5 +19,24 @@ describe("authFailure", () => {
     expect(failure).toBe("server")
     expect(FAILURE_TEXT.server).toBe("auth.error.server")
     expect(en.auth.error.server).toBe("The server failed. Try again in a moment.")
+  })
+})
+
+describe("passkeyFailure", () => {
+  it("tells a closed or timed-out prompt from an address, a device or a server that refuses", () => {
+    const browser = (code: string) => passkeyFailure({ status: 400, code })
+    expect(browser("AUTH_CANCELLED")).toBe("passkey_cancelled")
+    expect(browser("ERROR_CEREMONY_ABORTED")).toBe("passkey_cancelled")
+    expect(browser("ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY")).toBe("passkey_cancelled")
+    expect(browser("ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED")).toBe("passkey_registered")
+    expect(browser("ERROR_INVALID_DOMAIN")).toBe("passkey_address")
+    expect(browser("ERROR_INVALID_RP_ID")).toBe("passkey_address")
+    expect(browser("ERROR_AUTHENTICATOR_MISSING_USER_VERIFICATION_SUPPORT")).toBe("passkey_unsuitable")
+    expect(browser("ERROR_AUTHENTICATOR_MISSING_DISCOVERABLE_CREDENTIAL_SUPPORT")).toBe("passkey_unsuitable")
+    expect(browser("ERROR_AUTHENTICATOR_GENERAL_ERROR")).toBe("passkey_failed")
+    // The server's answers keep their meaning.
+    expect(passkeyFailure({ status: 401, code: "PASSKEY_NOT_FOUND" })).toBe("wrong_password")
+    expect(passkeyFailure({ status: 429 })).toBe("rate_limited")
+    expect(passkeyFailure(null)).toBe("network")
   })
 })

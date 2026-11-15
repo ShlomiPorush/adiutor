@@ -5,7 +5,15 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { type FormEvent, useId, useState } from "react"
 import { PASSKEY_MAX, PASSKEY_NAME_MAX } from "../../shared/auth.ts"
-import { type AuthError, authClient, authData, FAILURE_TEXT, passkeyFailure, passkeysSupported } from "../api/auth.ts"
+import {
+  type AuthError,
+  authClient,
+  authData,
+  FAILURE_TEXT,
+  PASSKEY_FAILURE_TEXT,
+  passkeyFailure,
+  passkeysSupported,
+} from "../api/auth.ts"
 import { qk } from "../api/endpoints.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { confirmDialog, useDiscardGuard } from "../ui/confirm.tsx"
@@ -27,10 +35,15 @@ type Translate = (key: string, values?: Record<string, string | number>) => stri
 /** The sentence for a failed passkey call: closed in the browser, already on this device, or the server's reason. */
 function failureText(t: Translate, answer: AuthError, during: "add" | "change"): string {
   const failure = passkeyFailure(answer)
-  if ((answer?.code ?? "").toUpperCase() === "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED")
-    return t("account.passkeyAlready")
-  if (failure === "passkey_cancelled") return t("auth.error.passkeyCancelled")
-  if (failure !== "other" && failure !== "wrong_password") return t(FAILURE_TEXT[failure])
+  if (
+    failure === "passkey_cancelled" ||
+    failure === "passkey_registered" ||
+    failure === "passkey_address" ||
+    failure === "passkey_unsuitable"
+  )
+    return t(PASSKEY_FAILURE_TEXT[failure])
+  if (failure !== "other" && failure !== "wrong_password" && failure !== "passkey_failed")
+    return t(FAILURE_TEXT[failure])
   const reason = answer?.message || String(answer?.status ?? "")
   return during === "add" ? t("account.passkeyAddFailed", { reason }) : t("account.passkeyFailed", { reason })
 }

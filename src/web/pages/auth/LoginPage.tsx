@@ -12,6 +12,7 @@ import {
   authClient,
   authFailure,
   FAILURE_TEXT,
+  PASSKEY_FAILURE_TEXT,
   passkeyFailure,
   passkeysSupported,
 } from "../../api/auth.ts"
@@ -124,11 +125,16 @@ export function LoginPage() {
       if (answer) {
         const failure = passkeyFailure(answer)
         setPasskeyError(
-          failure === "passkey_cancelled"
-            ? t("auth.error.passkeyCancelled")
+          failure === "passkey_cancelled" ||
+            failure === "passkey_registered" ||
+            failure === "passkey_address" ||
+            failure === "passkey_unsuitable"
+            ? t(PASSKEY_FAILURE_TEXT[failure])
             : failure === "wrong_password"
               ? t("auth.error.passkeyRefused")
-              : failureText(failure, answer),
+              : failure === "passkey_failed"
+                ? t("auth.error.failed", { reason: answer?.message || String(answer?.status ?? "") })
+                : failureText(failure, answer),
         )
         return
       }

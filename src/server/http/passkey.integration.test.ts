@@ -270,6 +270,23 @@ describe("managing passkeys", () => {
     expect(await rows("account.passkey_delete")).toHaveLength(1)
   })
 
+  it("leaves no row for a rename or removal without a session: the plugin refuses it and the passkey stays", async () => {
+    const key = new SoftwarePasskey(TEST_ORIGIN)
+    const b = await enrolled()
+    await key.register(b, "kept")
+    const [stored] = await passkeys()
+    const id = stored?.id ?? ""
+    const anonymous = browser()
+    expect(
+      (await anonymous.call("POST", "/api/auth/passkey/update-passkey", { body: { id, name: "taken" } })).status,
+    ).toBe(401)
+    expect((await anonymous.call("POST", "/api/auth/passkey/delete-passkey", { body: { id } })).status).toBe(401)
+    expect(await rows("account.passkey_rename")).toHaveLength(0)
+    expect(await rows("account.passkey_delete")).toHaveLength(0)
+    expect((await passkeys()).map((p) => p.name)).toEqual(["kept"])
+    expect((await key.signIn(browser())).status).toBe(200)
+  })
+
   it("refuses an Authorization header on every passkey route, with or without a cookie", async () => {
     const b = await enrolled()
     const anonymous = browser()

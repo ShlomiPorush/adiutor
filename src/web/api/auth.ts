@@ -58,15 +58,43 @@ export function authFailure(error: AuthError, step: "password" | "code"): AuthFa
 /** Whether this browser can create and use passkeys (WebAuthn). Listing, renaming and removing need no support. */
 export const passkeysSupported = () => typeof window !== "undefined" && typeof window.PublicKeyCredential === "function"
 
+export type PasskeyFailure =
+  | AuthFailure
+  | "passkey_cancelled"
+  | "passkey_registered"
+  | "passkey_address"
+  | "passkey_unsuitable"
+  | "passkey_failed"
+
 /**
- * A passkey ceremony that failed: closed, timed out or refused in the browser (the client answers 400 with a WebAuthn
- * code, or AUTH_CANCELLED), else what authFailure says.
+ * A passkey ceremony that failed in the browser: the plugin's client answers 400 with SimpleWebAuthn's code
+ * (`ERROR_...`) or AUTH_CANCELLED. A NotAllowedError (the prompt closed, or it timed out) comes through as
+ * ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY. Anything else is what authFailure says about the server's answer.
  */
-export function passkeyFailure(error: AuthError): AuthFailure | "passkey_cancelled" {
+export function passkeyFailure(error: AuthError): PasskeyFailure {
   const code = (error?.code ?? "").toUpperCase()
-  if (error?.status === 400 && (code === "AUTH_CANCELLED" || code.startsWith("ERROR_"))) return "passkey_cancelled"
+  if (error?.status === 400) {
+    if (["AUTH_CANCELLED", "ERROR_CEREMONY_ABORTED", "ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY"].includes(code))
+      return "passkey_cancelled"
+    if (code === "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED") return "passkey_registered"
+    if (code === "ERROR_INVALID_DOMAIN" || code === "ERROR_INVALID_RP_ID") return "passkey_address"
+    if (
+      code === "ERROR_AUTHENTICATOR_MISSING_USER_VERIFICATION_SUPPORT" ||
+      code === "ERROR_AUTHENTICATOR_MISSING_DISCOVERABLE_CREDENTIAL_SUPPORT"
+    )
+      return "passkey_unsuitable"
+    if (code.startsWith("ERROR_")) return "passkey_failed"
+  }
   return authFailure(error, "password")
 }
+
+/** The locale key of a passkey failure the browser reported (the others use FAILURE_TEXT). */
+export const PASSKEY_FAILURE_TEXT = {
+  passkey_cancelled: "auth.error.passkeyCancelled",
+  passkey_registered: "account.passkeyAlready",
+  passkey_address: "auth.error.passkeyAddress",
+  passkey_unsuitable: "auth.error.passkeyUnsuitable",
+} as const
 
 /** The locale key of a failure's sentence (other failures say the server's reason). */
 export const FAILURE_TEXT: Record<Exclude<AuthFailure, "other">, string> = {

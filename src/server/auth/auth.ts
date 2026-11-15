@@ -2,7 +2,7 @@ import { apiKey } from "@better-auth/api-key"
 import { passkey } from "@better-auth/passkey"
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
-import { APIError, createAuthMiddleware } from "better-auth/api"
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api"
 import { bearer, deviceAuthorization, twoFactor, username } from "better-auth/plugins"
 import { count, eq } from "drizzle-orm"
 import {
@@ -208,10 +208,13 @@ async function countPasskeys(ctx: Ctx, userId: string): Promise<number> {
   return row?.n ?? 0
 }
 
-/** The name of one passkey (for the audit row of its removal), or null when it does not exist. */
-async function passkeyName(ctx: Ctx, id: string): Promise<string | null> {
-  const [row] = await ctx.db.select({ name: authPasskey.name }).from(authPasskey).where(eq(authPasskey.id, id))
-  return row ? (row.name ?? "") : null
+/** One passkey's name and owner (for the audit row of a rename or removal), or null when it does not exist. */
+async function readPasskey(ctx: Ctx, id: string): Promise<{ name: string; userId: string } | null> {
+  const [row] = await ctx.db
+    .select({ name: authPasskey.name, userId: authPasskey.userId })
+    .from(authPasskey)
+    .where(eq(authPasskey.id, id))
+  return row ? { name: row.name ?? "", userId: row.userId } : null
 }
 
 type HookContext = { path?: string; request?: Request; context?: { session?: unknown } } | null | undefined
@@ -314,12 +317,15 @@ export function createAuth(options: AuthOptions) {
       if (path === "/passkey/update-passkey" || path === "/passkey/delete-passkey") {
         const id = typeof body.id === "string" ? body.id : ""
         if (path === "/passkey/update-passkey" && !validPasskeyName(body.name)) throw invalidPasskeyName()
-        // A passkey that does not exist gets the plugin's own answer and no row.
-        const before = id ? await passkeyName(ctx, id) : null
-        if (before === null) return
+        // Only a change the plugin will make gets a row: a signed-in session (read as the plugin's sessionMiddleware
+        // reads it, a GET that never extends the session, and kept for the route) and a passkey of that account. Any
+        // other request gets the plugin's own answer and no row.
+        const session = await getSessionFromCtx(c, { disableRefresh: true })
+        const passkey = session && id ? await readPasskey(ctx, id) : null
+        if (!session || !passkey || passkey.userId !== session.user.id) return
         if (path === "/passkey/update-passkey")
           await audit(ownerBy(owner), "account.passkey_rename", "account", { name: String(body.name).trim() }, id)
-        else await audit(ownerBy(owner), "account.passkey_delete", "account", { name: before }, id)
+        else await audit(ownerBy(owner), "account.passkey_delete", "account", { name: passkey.name }, id)
       }
       return
     }

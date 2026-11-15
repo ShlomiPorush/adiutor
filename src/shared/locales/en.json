@@ -944,7 +944,9 @@
       "backupFormat": "Enter a backup code as you saved it.",
       "accountLocked": "Too many wrong codes. Sign-in is locked for 15 minutes.",
       "passkeyCancelled": "The passkey request was closed or timed out. Try again.",
-      "passkeyRefused": "That passkey was not accepted. Use another one, or sign in with your password."
+      "passkeyRefused": "That passkey was not accepted. Use another one, or sign in with your password.",
+      "passkeyAddress": "Passkeys work only at Adiutor's own address, a host name over HTTPS. Sign in with your password.",
+      "passkeyUnsuitable": "This device cannot keep a passkey that checks it is you with a PIN or biometrics. Use another device or password manager."
     },
     "backupCode": "Backup code",
     "backupCodeHint": "One of the codes you saved when you set up two-factor. Each code works once."
@@ -1002,7 +1004,7 @@
   },
   "account": {
     "title": "Account",
-    "description": "The browsers signed in to your account, your password, two-factor authentication and the way back in. Each action here takes effect at once.",
+    "description": "The browsers signed in to your account, your password, your passkeys, two-factor authentication and the way back in. Each action here takes effect at once.",
     "signedInAs": "Signed in as",
     "sessions": "Signed-in browsers",
     "sessionsHint": "Each browser where you are signed in, and when it is signed out unless you open Adiutor there again.",
