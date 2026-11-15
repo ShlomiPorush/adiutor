@@ -3,8 +3,11 @@ import { randomBytes, randomInt } from "node:crypto"
 // Credentials for tests, new on every run (node:crypto): nothing in the repository works as a password, key or
 // token anywhere. A test file keeps one value for the whole file when several consumers must agree on it.
 
-/** 32 random bytes as base64url (43 characters): an auth secret or a settings key. */
-export const testSecret = () => randomBytes(32).toString("base64url")
+/**
+ * 32 random bytes as 64 hex characters, like the stacks' keys (random_hex): an auth secret or a settings key. Hex
+ * holds no placeholder word, so no test key is ever refused as one.
+ */
+export const testSecret = () => randomBytes(32).toString("hex")
 
 /** 24 characters, inside the owner password's 12 to 128. */
 export const testPassword = () => randomBytes(18).toString("base64url")

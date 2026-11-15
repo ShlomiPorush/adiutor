@@ -73,25 +73,38 @@ export function parseDomains(text: string): string[] {
     .filter(Boolean)
 }
 
+/** A whole value that is a `<...>` slot or one character repeated: no random key can be one. */
+const CERTAIN_PLACEHOLDER = /^(?:<[^<>]*>|(.)\1*)$/su
+
 /**
  * A word an example or a template writes instead of a key, in any case, as a token: after the start of the value or
  * a character that is not a letter or digit, and before the end or a character that is not a letter, so a digit ends
- * it (`please-change-me-...`, `CHANGE_ME_to_...`, `your_secret`, `ReplaceMe0123...`, `Example2-key`). After a letter
- * or digit it is part of a random key (`aBcExampleXyZ`, `Qyour-Z`, `9placeholder8`) and passes.
+ * it (`please-change-me-...`, `CHANGE_ME_to_...`, `your_secret`, `ReplaceMe0123...`, `Example2-key`).
  */
-const PLACEHOLDER_WORD = /(?<![a-z0-9])(?:change[-_ ]?me|replace[-_ ]?me|placeholder|example|your|todo|fixme)(?![a-z])/i
+const PLACEHOLDER_WORD =
+  /(?<![a-z0-9])(?:change[-_ ]?me|replace[-_ ]?me|placeholder|example|your|secret|todo|fixme)(?![a-z])/i
+/** A random key of 32 bytes has far more distinct characters; `secret-secret-...` or `abcabc...` has fewer. */
+const MIN_DISTINCT_CHARACTERS = 8
 
-/** A whole value that is a `<...>` slot or one character repeated. */
-const PLACEHOLDER_WHOLE = /^(?:<[^<>]*>|(.)\1*)$/su
+/** Refused in every entry of every key family: a `<...>` slot or one character repeated. */
+export function isCertainPlaceholder(value: string): boolean {
+  return CERTAIN_PLACEHOLDER.test(value)
+}
 
-/** An obvious placeholder, refused for every key family: a placeholder word as a token, a slot, or one character. */
-export function isPlaceholder(value: string): boolean {
-  return PLACEHOLDER_WORD.test(value) || PLACEHOLDER_WHOLE.test(value)
+/**
+ * Refused only in the current entry (the first, which signs or encrypts): a placeholder word as a token, or fewer
+ * than MIN_DISTINCT_CHARACTERS distinct characters. A random non-hex key can rarely look like this; the way out is a
+ * new hex key listed first, so this one stays listed as an older version and keeps decrypting. Older entries are
+ * never refused by it.
+ */
+export function looksLikePlaceholder(value: string): boolean {
+  return PLACEHOLDER_WORD.test(value) || new Set(value).size < MIN_DISTINCT_CHARACTERS
 }
 
 /**
  * Reads "2:new,1:old": versions are distinct non-negative integers, each value at least MIN_SECRET_BYTES bytes and
- * not a placeholder. Problems name the variable and the position, never a value.
+ * not a certain placeholder; the current (first) value not a likely one either. Problems name the variable and the
+ * position, never a value.
  */
 function parseKeys(name: string, text: string, problems: string[]): VersionedKey[] {
   const keys: VersionedKey[] = []
@@ -110,8 +123,13 @@ function parseKeys(name: string, text: string, problems: string[]): VersionedKey
     seen.add(version)
     if (Buffer.byteLength(value, "utf8") < MIN_SECRET_BYTES)
       problems.push(`${name} entry ${index + 1} must be at least ${MIN_SECRET_BYTES} bytes (use 32 random bytes)`)
-    if (isPlaceholder(value))
+    if (isCertainPlaceholder(value))
       problems.push(`${name} entry ${index + 1} looks like an example placeholder (use 32 random bytes)`)
+    else if (index === 0 && looksLikePlaceholder(value))
+      problems.push(
+        `${name} entry 1 looks like an example placeholder: generate a new key with openssl rand -hex 32, list it ` +
+          "first under a new version, and keep this one after it as an older version",
+      )
     keys.push({ version, value })
   })
   return keys
