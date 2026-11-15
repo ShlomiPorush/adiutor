@@ -10,6 +10,7 @@ import { RateLimiter } from "./http/auth.ts"
 import { setupRoutes } from "./http/setup.ts"
 import { errorFacts, log } from "./log.ts"
 import { mcpRoutes } from "./mcp/server.ts"
+import type { AgentOAuthMount } from "./oauth/routes.ts"
 import type { Ctx } from "./services/context.ts"
 import type { TelegramRuntime } from "./telegram/status.ts"
 import { webRoutes } from "./web.ts"
@@ -34,6 +35,12 @@ export type AppDeps = {
   }
   /** The built web UI (dist/web); without it only the API, MCP and /healthz are served. */
   web?: { root: string }
+  /**
+   * Agent access by approval (oauth/): the authorization server's addresses, the protected resource documents, the
+   * approval API and the owner's agent connections. Mounted only when given (it needs `core`); index.ts does not pass
+   * it until the agent access release, so nothing of it is reachable in production before then.
+   */
+  agentOAuth?: AgentOAuthMount
 }
 
 /** The socket's address: the peer that clientAddress (http/auth.ts) trusts as a proxy or keys the limit by. */
@@ -96,6 +103,9 @@ export function createApp(deps: AppDeps) {
       bodyLimit({ maxSize: AUTH_BODY_LIMIT, onError: (c) => c.json({ message: "Too large" }, 413) }),
     )
     app.on(["GET", "POST"], "/api/auth/*", (c) => auth.current.handler(withoutEmptyBody(c.req.raw)))
+    // Before /api/v1, which would otherwise answer /api/v1/agents/*; no middleware here reads a body before the
+    // authorization server's hand-off.
+    if (deps.agentOAuth) app.route("/", deps.agentOAuth.routes(shared))
     app.route("/api/setup", setupRoutes({ ctx, auth }))
     app.route("/api/v1", apiRoutes(shared))
     app.route("/mcp", mcpRoutes(shared))

@@ -689,7 +689,13 @@
       "account_backup_codes_new": "יצר קודי גיבוי חדשים",
       "account_passkey_add": "הוסיף מפתח גישה",
       "account_passkey_rename": "שינה שם של מפתח גישה",
-      "account_passkey_delete": "הסיר מפתח גישה"
+      "account_passkey_delete": "הסיר מפתח גישה",
+      "agent_approve": "אישר סוכן",
+      "agent_deny": "דחה סוכן",
+      "agent_end": "סיים חיבור של סוכן",
+      "agent_end_all": "סיים את כל חיבורי הסוכנים",
+      "agent_blocked": "חסם בקשות סוכנים אחרי ניסיונות רבים מדי",
+      "agent_settings_update": "עדכן את הגדרות הסוכנים"
     },
     "field": {
       "status": "סטטוס",
@@ -719,7 +725,8 @@
       "session": "חיבור",
       "account": "החשבון",
       "api_key": "מפתח סוכן",
-      "device_code": "אישור סוכן"
+      "device_code": "אישור סוכן",
+      "agent_connection": "חיבור של סוכן"
     },
     "source": {
       "ui": "לוח",

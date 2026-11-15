@@ -36,9 +36,10 @@ import { writeAudit } from "../services/context.ts"
 // Better Auth as it documents itself: its routes, its plugins (username, twoFactor, passkey, api-key,
 // deviceAuthorization, bearer), its options and its documented hooks. Adiutor does not wrap its handler. The hooks
 // below only refuse (a closed route, a second owner, a trusted device, an agent key, an agent approval or a new passkey
-// without two-factor, an Authorization header outside what `adiutor connect` needs) and write audit rows; Better Auth
-// makes every decision about passwords, passkeys, sessions and codes. See "Security design" in
-// docs/project-foundation.md for what this leaves open.
+// without two-factor, an Authorization header outside what `adiutor connect` needs), write audit rows and, where agent
+// access is mounted, end agent connections around an identity change; Better Auth makes every decision about
+// passwords, passkeys, sessions and codes. See "Security design" in docs/project-foundation.md for what this leaves
+// open.
 
 const DAY_S = 86_400
 const HOUR_S = 3_600
@@ -149,6 +150,9 @@ const DEVICE_CODE_RULE = { window: 600, max: 10 }
  */
 const DEVICE_TOKEN_RULE = { window: 900, max: 300 }
 
+/** The routes that change the owner's identity for agent access (D7). */
+const IDENTITY_CHANGE_PATHS = new Set(["/change-password", "/two-factor/disable", "/reset-password"])
+
 /** Paths whose session deletions are ended sessions (one audit row each). Sign-out is audited after the fact. */
 const SESSION_END_PATHS = new Set(["/revoke-other-sessions", "/revoke-sessions", "/reset-password"])
 
@@ -166,8 +170,23 @@ export type AuthSettings = {
   otpViaTelegram: boolean
 }
 
+/**
+ * Agent access around an identity change of the owner (D7, oauth/access.ts): `begin` ends every agent connection and
+ * closes approvals before Better Auth writes an authorized change; `finish` ends them again and opens approvals once the
+ * change was written or refused.
+ */
+export type IdentityChanges = {
+  begin(by: By): Promise<string>
+  finish(id: string, by: By): Promise<void>
+}
+
 export type AuthOptions = AuthSettings & {
   ctx: Ctx
+  /**
+   * Only where the authorization server for agents is mounted (createApp's `agentOAuth`); absent until the agent access
+   * release, so a password or two-factor change does nothing more than before.
+   */
+  identityChanges?: IdentityChanges
   /** ADIUTOR_AUTH_SECRETS: Better Auth's versioned `secrets`. */
   secrets: VersionedKey[]
   publicUrl: URL
@@ -219,7 +238,7 @@ async function readPasskey(ctx: Ctx, id: string): Promise<{ name: string; userId
 
 type HookContext = { path?: string; request?: Request; context?: { session?: unknown } } | null | undefined
 
-const refuse = (status: "NOT_FOUND" | "FORBIDDEN" | "BAD_REQUEST", code: string, message: string) =>
+const refuse = (status: "NOT_FOUND" | "FORBIDDEN" | "BAD_REQUEST" | "UNAUTHORIZED", code: string, message: string) =>
   new APIError(status, { code, message })
 
 const passkeyLimit = () =>
@@ -365,6 +384,8 @@ export function createAuth(options: AuthOptions) {
    * of `adiutor connect` alive: both are recorded after the fact, and this hook never throws.
    */
   const auditAfterTheFact = createAuthMiddleware(async (c) => {
+    // An identity change the endpoint refused with an APIError after it began (its database after hook never ran).
+    if (IDENTITY_CHANGE_PATHS.has(c.path)) await finishIdentityChanges(c)
     if (c.path !== "/sign-out" && c.path !== "/revoke-session") return
     const returned = (c.context as { returned?: unknown }).returned
     if (returned instanceof APIError || returned instanceof Error) return
@@ -382,6 +403,55 @@ export function createAuth(options: AuthOptions) {
 
   const pathOf = (context: HookContext) => context?.path ?? ""
   const viaHttp = (context: HookContext) => Boolean(context?.request)
+
+  /*
+   * Identity changes (D7): a password change, the recovery command's reset and turning two-factor off (also the first
+   * step of a new authenticator) end every agent connection. The database hooks run only once Better Auth has verified
+   * the change (the session, the password or the reset token), right before it writes it: `begin` ends every connection
+   * and closes approvals in one transaction of Adiutor's own. A request over HTTP without a session Better Auth read is
+   * refused there (fail closed). `finish` runs in the matching after hook (after the write commits) or, when the
+   * endpoint refused with an APIError, in hooks.after. A failure that is not an APIError runs neither: the change's
+   * record stays and approvals stay closed until the next start finishes it (an accepted gap, see the foundation plan).
+   * Changes are tracked per call: by its request, or for a server call by its per-call auth context.
+   */
+  const identity = options.identityChanges
+  const begun = new WeakMap<object, { id: string; by: By }[]>()
+  const serverCall = {}
+  const callKey = (context: unknown): object => {
+    const c = context as { request?: Request; context?: unknown } | null | undefined
+    if (c?.request) return c.request
+    return c?.context && typeof c.context === "object" ? c.context : serverCall
+  }
+  const beginIdentityChange = async (context: unknown): Promise<void> => {
+    if (!identity) return
+    const hook = context as HookContext
+    let by: By
+    if (viaHttp(hook)) {
+      if (!hook?.context?.session)
+        throw refuse("UNAUTHORIZED", "SESSION_REQUIRED", "Sign in again, then make the change.")
+      by = ownerBy(await readOwner(ctx))
+    } else {
+      by = { actor: { kind: "system", label: pathOf(hook) === "/reset-password" ? "cli" : "system" }, source: "cli" }
+    }
+    const id = await identity.begin(by)
+    const key = callKey(context)
+    begun.set(key, [...(begun.get(key) ?? []), { id, by }])
+  }
+  const finishIdentityChanges = async (context: unknown): Promise<void> => {
+    if (!identity) return
+    const key = callKey(context)
+    const changes = begun.get(key)
+    if (!changes?.length) return
+    begun.delete(key)
+    for (const change of changes) {
+      try {
+        await identity.finish(change.id, change.by)
+      } catch (error) {
+        // Its record stays: approvals stay closed until the next start finishes it (the safe side).
+        log.error("an identity change could not be finished for agent access", errorFacts(error))
+      }
+    }
+  }
 
   return betterAuth({
     appName: "Adiutor",
@@ -464,13 +534,18 @@ export function createAuth(options: AuthOptions) {
           },
         },
         update: {
-          // Only the audit row of a two-factor change; a refusal leaves the factor as it was.
+          // The audit row of a two-factor change; a refusal leaves the factor as it was. Turning it off is an identity
+          // change for agent access.
           before: async (data, context) => {
             if (!("twoFactorEnabled" in data) || data.twoFactorEnabled === undefined) return
             const owner = await readOwner(ctx)
             if (!owner || owner.twoFactorEnabled === Boolean(data.twoFactorEnabled)) return
+            if (!data.twoFactorEnabled) await beginIdentityChange(context)
             const by = viaHttp(context) ? ownerBy(owner) : { actor: { kind: "system", label: "system" }, source: "api" }
             await audit(by as By, data.twoFactorEnabled ? "account.totp_enable" : "account.totp_disable", "account")
+          },
+          after: async (_user, context) => {
+            await finishIdentityChanges(context)
           },
         },
       },
@@ -520,6 +595,7 @@ export function createAuth(options: AuthOptions) {
         update: {
           before: async (data, context) => {
             if (!(data as { password?: string }).password) return
+            await beginIdentityChange(context)
             const path = pathOf(context)
             if (path === "/reset-password")
               await audit(
@@ -528,6 +604,9 @@ export function createAuth(options: AuthOptions) {
                 "account",
               )
             else await audit(ownerBy(await readOwner(ctx)), "account.password_change", "account")
+          },
+          after: async (_account, context) => {
+            await finishIdentityChanges(context)
           },
         },
       },

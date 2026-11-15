@@ -107,6 +107,13 @@ export const AUDIT_ACTIONS = [
   "api_key.delete",
   "device.approve",
   "device.deny",
+  // Agent connections through the authorization server (written only where it is mounted).
+  "agent.approve",
+  "agent.deny",
+  "agent.end",
+  "agent.end_all",
+  "agent.blocked",
+  "agent.settings_update",
   // Older rows only.
   "device.pair",
   "device.revoke",
@@ -132,6 +139,7 @@ export const AUDIT_ENTITY_TYPES = [
   "account",
   "api_key",
   "device_code",
+  "agent_connection",
 ] as const
 
 export type Stage = (typeof STAGES)[number]

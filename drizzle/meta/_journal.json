@@ -113,6 +113,13 @@
       "when": 1794742704872,
       "tag": "0015_agents-stay-on",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794742848128,
+      "tag": "0016_agent-oauth",
+      "breakpoints": true
     }
   ]
 }
