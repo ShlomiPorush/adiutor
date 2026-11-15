@@ -74,21 +74,35 @@ These notes are for the owner, who deploys production himself. Agents never depl
 
 `ADIUTOR_OAUTH_SECRETS` holds the cookie keys of the authorization server that agents will connect through, versioned like `ADIUTOR_AUTH_SECRETS`. Today it is optional: when it is set, the server checks it at start and refuses a malformed or short value, an example placeholder, or a value shared with `ADIUTOR_AUTH_SECRETS` or `ADIUTOR_SETTINGS_KEYS`. A later release requires it and refuses to start without it, so add it before you deploy that release.
 
-Run this in the deploy directory. It writes a new random key at the end of `.env` and never prints it. It changes nothing when `.env` is missing, when `openssl` fails, or when `.env` already has an `ADIUTOR_OAUTH_SECRETS` line, even an empty one; in that last case keep a value that is there, or delete the empty line and run it again.
+Run this in the deploy directory. It writes a new random key at the end of `.env` and never prints it. Before it writes, it makes sure `.env` is a regular file (not a link) that belongs to you and only you can read (mode 600), and it holds a lock on `.env` from the check to the write, so two runs at once add one key. It changes nothing when any step fails: `.env` is missing, a link or another user's, it cannot be read, `flock` or `openssl` fails, or `.env` already has an `ADIUTOR_OAUTH_SECRETS` line, even an empty one. In that last case keep a value that is there, or delete the empty line and run it again.
 
 ```bash
 (
   set -eu
-  test -f .env
-  if grep -qE '^[[:space:]]*(export[[:space:]]+)?ADIUTOR_OAUTH_SECRETS[[:space:]]*=' .env; then
+  if [ -L .env ] || [ ! -f .env ]; then
+    echo ".env is missing, a link or not a regular file; nothing changed" >&2
+    exit 1
+  fi
+  if [ "$(stat -c %u .env)" != "$(id -u)" ]; then
+    echo ".env does not belong to you; nothing changed" >&2
+    exit 1
+  fi
+  chmod 600 .env
+  [ "$(stat -c %a .env)" = 600 ]
+  exec 9<.env
+  flock -x 9
+  found=0
+  grep -qE '^[[:space:]]*(export[[:space:]]+)?ADIUTOR_OAUTH_SECRETS[[:space:]]*=' .env || found=$?
+  if [ "$found" -eq 0 ]; then
     echo "ADIUTOR_OAUTH_SECRETS is already in .env; nothing changed" >&2
     exit 1
   fi
+  [ "$found" -eq 1 ]
+  last="$(tail -c 1 .env)"
   value="$(openssl rand -hex 32)"
-  [ "${#value}" -eq 64 ]
-  [ -z "$(tail -c 1 .env)" ] || echo >>.env
+  printf '%s\n' "$value" | grep -qxE '[0-9a-f]{64}'
+  if [ -n "$last" ]; then printf '\n' >>.env; fi
   printf 'ADIUTOR_OAUTH_SECRETS=1:%s\n' "$value" >>.env
-  chmod 600 .env
   echo "ADIUTOR_OAUTH_SECRETS added to .env"
 )
 ```
