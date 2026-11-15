@@ -261,10 +261,12 @@ test("Back and Forward bring each section back to where it was scrolled; a new s
   await fullScreen()
 })
 
-test("Agent access has no manual key: it shows how to connect, with this address", async () => {
+test("Agent access has no manual key: it shows how to connect an agent and the sync, with this address", async () => {
   await page.goto("/settings/agents")
   const panel = page.locator("#agents")
   await expect(panel.getByRole("heading", { name: he.agentKeys.howTitle })).toBeVisible()
+  await expect(panel).toContainText("Connect Adiutor at http://127.0.0.1:8090")
+  await expect(panel.getByRole("heading", { name: he.agentKeys.bundleTitle })).toBeVisible()
   await expect(panel).toContainText(
     "node dist/sync/adiutor-sync.js connect --url http://127.0.0.1:8090 --name sync --for sync",
   )

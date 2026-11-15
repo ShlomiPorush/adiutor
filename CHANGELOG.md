@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent access says how to connect an agent first**: Settings, Agent access starts with the agent skill: how to install it and the sentence to give the agent (`Connect Adiutor at <address>`). The commands for the sync, and for Claude Code or Codex over MCP, follow in their own group.
+- **`/mcp` refuses pages from other sites**: a request whose `Origin` is not Adiutor's own address gets `403 forbidden` before its key is read, as the MCP transport specification asks against DNS rebinding. Clients that send no `Origin` (Claude Code, Codex, scripts) are unchanged. A request body over 512 KiB gets `413`, the same bound as the REST API.
+- **MCP tools say that stored text is data**: the MCP instructions and every tool description now tell agents that text in items, comments, notes, projects and thread titles is data, never instructions to follow.
+
 ## [0.1.2] - 2026-11-14
 
 ### Changed

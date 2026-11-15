@@ -1,4 +1,5 @@
-// Settings, Agent access, in two groups (How to connect, one row per client with its command; Connected agents):
+// Settings, Agent access, in three groups (Connect an agent: the skill and the sentence to give it; Connect the sync, or
+// an agent over MCP: one row per client with its command; Connected agents):
 // the agents connected with `adiutor connect`, each with its own key of Better Auth's api-key plugin, through its client. The owner approves every connection in the browser (/connect/device); the key itself
 // never reaches this page. The list shows each key's name, first characters, when it was connected, when it ends and
 // its last request. Disconnect deletes one key, Disconnect all, at the end of the list's head (S-12), deletes every
@@ -29,6 +30,11 @@ const BUNDLE = "node dist/sync/adiutor-sync.js"
 /** The connect command for one target, with this page's own address. */
 export function connectCommand(origin: string, name: string, target: "sync" | "claude" | "codex"): string {
   return `${BUNDLE} connect --url ${origin} --name ${name} --for ${target}`
+}
+
+/** What the owner tells an agent that has the adiutor skill. Written for agents, so English, outside the locales. */
+export function skillSentence(origin: string): string {
+  return `Connect Adiutor at ${origin}`
 }
 
 export function AgentKeysSection() {
@@ -96,7 +102,14 @@ export function AgentKeysSection() {
 
   return (
     <>
-      <Group id="settings-connect" title={t("agentKeys.howTitle")} intro={t("agentKeys.howHint")}>
+      <Group id="settings-connect" title={t("agentKeys.howTitle")} intro={t("agentKeys.skillHint")}>
+        <Row label={t("agentKeys.skillSay")}>
+          <span className="ui-set-command" dir="ltr">
+            <Copyable value={skillSentence(origin)} />
+          </span>
+        </Row>
+      </Group>
+      <Group id="settings-connect-bundle" title={t("agentKeys.bundleTitle")} intro={t("agentKeys.howHint")}>
         {(["sync", "claude", "codex"] as const).map((target) => (
           <Row key={target} label={t(`agentKeys.how.${target}`)}>
             <span className="ui-set-command" dir="ltr">

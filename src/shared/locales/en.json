@@ -747,7 +747,7 @@
       },
       "agents": {
         "title": "Agent access",
-        "hint": "Agents and the sync connect with adiutor connect: you approve each one in the browser, and it gets its own key with a name and an end date. A key keeps working after you sign out; disconnect it here when a machine is lost or a key leaks."
+        "hint": "Each agent and the sync connects once, and you approve it in the browser. Each gets its own key with a name and an end date. A key keeps working after you sign out; disconnect it here when a machine is lost or a key leaks."
       },
       "secret-check": {
         "title": "Secret check",
@@ -1065,8 +1065,11 @@
     "fileHeading": "Adiutor backup codes. Each code signs in once without the authenticator app."
   },
   "agentKeys": {
-    "howTitle": "How to connect",
-    "howHint": "Run the command in the Adiutor checkout on your computer. It opens Adiutor to approve the agent; the key never shows on this page.",
+    "howTitle": "Connect an agent",
+    "skillHint": "Install the adiutor skill in the agent: the shared agent configuration installs it, or copy the skill/adiutor folder of the Adiutor repository into the agent's skills folder. Then give the agent the sentence below. It shows a link and a code: open the link, check that the code matches, and approve.",
+    "skillSay": "Tell the agent",
+    "bundleTitle": "Connect the sync, or an agent over MCP",
+    "howHint": "Run the command in the Adiutor folder on your computer. It opens Adiutor to approve the connection; the key never shows on this page.",
     "how": {
       "sync": "The sync on this computer",
       "claude": "Claude Code",
