@@ -35,7 +35,7 @@ import {
   resourceUrls,
 } from "./provider.ts"
 import { loadSigningKey } from "./signing-key.ts"
-import { cancelWaiting, deleteGrant, ONE_TIME, sha256, storeAdapter, sweepStore } from "./store.ts"
+import { cancelWaiting, deleteGrant, ONE_TIME, type StoreOptions, sha256, storeAdapter, sweepStore } from "./store.ts"
 
 /** A connection's last use is written at most once a minute. */
 const USE_WRITE_MS = 60_000
@@ -95,6 +95,8 @@ export type AgentAccessOptions = {
   /** ADIUTOR_SETTINGS_KEYS: encrypts the signing key (oauth/signing-key.ts). */
   cipher: SettingsCipher
   pages?: ProviderPages
+  /** The pinning tests' view of the store's calls (oauth/store.ts); production passes none. */
+  observeStore?: StoreOptions["observe"]
 }
 
 /**
@@ -338,6 +340,7 @@ export async function createAgentAccess(options: AgentAccessOptions) {
 
   const Adapter = storeAdapter(options.storeDb, {
     now: ctx.clock,
+    ...(options.observeStore ? { observe: options.observeStore } : {}),
     // A refresh token or code used twice at once: the loser ends the connection, like any reuse.
     onReuse: async (grantId, kind) => {
       await end({ grantId }, ONE_TIME[kind], SYSTEM_END)

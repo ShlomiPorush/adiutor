@@ -8,6 +8,7 @@ import { type AgentAccess, createAgentAccess } from "../oauth/access.ts"
 import { WindowLimit } from "../oauth/limits.ts"
 import { CLI_CLIENT_ID } from "../oauth/provider.ts"
 import { type AgentLimits, agentLimits, agentOAuthMount } from "../oauth/routes.ts"
+import type { StoreOptions } from "../oauth/store.ts"
 import type { By } from "../services/context.ts"
 import { createSettingsCipher } from "../settings/crypto.ts"
 import { TEST_SETTINGS_KEY, type TestCore, testCore } from "./app.ts"
@@ -70,7 +71,12 @@ export type OAuthHarness = {
  */
 export async function oauthHarness(
   t: TestDatabase,
-  options: { limits?: AgentLimits; agentsOn?: boolean; publicUrl?: (origin: string) => string } = {},
+  options: {
+    limits?: AgentLimits
+    agentsOn?: boolean
+    publicUrl?: (origin: string) => string
+    observeStore?: StoreOptions["observe"]
+  } = {},
 ): Promise<OAuthHarness> {
   const { server, origin, handle } = await listen()
   const storeDb = createDatabase(t.url, { max: 4 })
@@ -80,6 +86,7 @@ export async function oauthHarness(
     cookieKeys: [testSecret(), testSecret()],
     storeDb: storeDb.db,
     cipher: createSettingsCipher([{ version: 1, value: TEST_SETTINGS_KEY }]),
+    ...(options.observeStore ? { observeStore: options.observeStore } : {}),
   })
   const core = testCore(t, {
     config: { publicUrl: new URL(origin), version: "test" },

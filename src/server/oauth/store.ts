@@ -33,6 +33,11 @@ export type StoreOptions = {
    * transaction, as any reuse does. The library rejects only the request; ending the grant is Adiutor's policy.
    */
   onReuse: (grantId: string, kind: OneTimeKind) => Promise<void>
+  /**
+   * Sees every call the library makes, with the id it passed (never stored or logged): the pinning tests check what the
+   * hashing relies on (D1-X 1). It changes nothing; production passes none.
+   */
+  observe?: (call: { kind: string; method: string; id: string; payload?: AdapterPayload }) => void
 }
 
 type Payload = AdapterPayload & Record<string, unknown>
@@ -55,6 +60,7 @@ export function storeAdapter(db: Db, options: StoreOptions) {
     }
 
     async upsert(id: string, payload: AdapterPayload, expiresIn?: number): Promise<void> {
+      options.observe?.({ kind: this.name, method: "upsert", id, payload })
       let stored: Record<string, unknown> = payload
       if (this.hashed) {
         // Stored only when its value is its id: anything else would come back as a different record.
@@ -78,15 +84,18 @@ export function storeAdapter(db: Db, options: StoreOptions) {
     }
 
     async find(id: string): Promise<AdapterPayload | undefined> {
+      options.observe?.({ kind: this.name, method: "find", id })
       const found = await this.one(eq(oauthStore.id, this.key(id)))
       return found && this.hashed ? { ...found, jti: id } : found
     }
 
     async findByUserCode(userCode: string): Promise<AdapterPayload | undefined> {
+      options.observe?.({ kind: this.name, method: "findByUserCode", id: userCode })
       return this.hashed ? undefined : this.one(eq(oauthStore.userCode, userCode))
     }
 
     async findByUid(uid: string): Promise<AdapterPayload | undefined> {
+      options.observe?.({ kind: this.name, method: "findByUid", id: uid })
       return this.hashed ? undefined : this.one(eq(oauthStore.uid, uid))
     }
 
@@ -95,6 +104,7 @@ export function storeAdapter(db: Db, options: StoreOptions) {
      * marked, and is reuse (S13, S14).
      */
     async consume(id: string): Promise<void> {
+      options.observe?.({ kind: this.name, method: "consume", id })
       const key = this.key(id)
       const won = await db
         .update(oauthStore)
@@ -111,6 +121,7 @@ export function storeAdapter(db: Db, options: StoreOptions) {
     }
 
     async destroy(id: string): Promise<void> {
+      options.observe?.({ kind: this.name, method: "destroy", id })
       await db.delete(oauthStore).where(and(eq(oauthStore.type, this.name), eq(oauthStore.id, this.key(id))))
     }
 
