@@ -35,7 +35,7 @@ export const CONTENT_SECURITY_POLICY = [
  * Addresses that are never a page: the API, MCP, the health check, and the approval API under the consent page's
  * address (agent access answers it where it is mounted; elsewhere it is a 404, not the app).
  */
-const RESERVED = /^\/(?:(?:api|mcp|healthz)(?:\/|$)|connect\/approve\/[^/]+\/)/
+const RESERVED = /^\/(?:(?:api|mcp|healthz)(?:\/|$)|connect\/approve\/[^/]+\/(?:details|decision)$)/
 
 async function isFile(path: string): Promise<boolean> {
   try {

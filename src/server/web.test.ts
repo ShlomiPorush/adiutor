@@ -62,8 +62,10 @@ describe("web UI serving", () => {
     expect(await (await app.request("/connect/approve/some-uid/details")).json()).toMatchObject({
       error: { code: "not_found" },
     })
-    const page = await app.request("/connect/approve/some-uid")
-    expect(page.status).toBe(200)
-    expect(await page.text()).toContain("<title>Adiutor</title>")
+    for (const path of ["/connect/approve/some-uid", "/connect/approve/some-uid/"]) {
+      const page = await app.request(path)
+      expect(page.status, path).toBe(200)
+      expect(await page.text(), path).toContain("<title>Adiutor</title>")
+    }
   })
 })
