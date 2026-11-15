@@ -411,7 +411,8 @@ export function createAuth(options: AuthOptions) {
    * and closes approvals in one transaction of Adiutor's own. A request over HTTP without a session Better Auth read is
    * refused there (fail closed). `finish` runs in the matching after hook (after the write commits) or, when the
    * endpoint refused with an APIError, in hooks.after. A failure that is not an APIError runs neither: the change's
-   * record stays and approvals stay closed until the next start finishes it (an accepted gap, see the foundation plan).
+   * record stays and approvals stay closed until its process ends and the next start or sweep finishes it (an open gap
+   * pending the owner's decision, see the foundation plan).
    * Changes are tracked per call: by its request, or for a server call by its per-call auth context.
    */
   const identity = options.identityChanges

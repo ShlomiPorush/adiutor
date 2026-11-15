@@ -720,11 +720,16 @@ export const agentConsent = pgTable(
 /**
  * An identity change under way (the owner's password, a disabled two-factor, the recovery command's reset): one row per
  * change, written in the transaction that ends every connection before Better Auth writes the change, and removed in
- * the one that ends them again after it. While any row exists no approval is answered. A row whose change ended without
- * either of Better Auth's after hooks (a failure that is not an APIError) stays, and approvals stay closed until the
- * next start finishes it (docs/project-foundation.md, Security design).
+ * the one that ends them again after it. While any row exists no approval is answered. The row names the process that
+ * makes the change (host, pid and that process's start time, oauth/process.ts): the start and the sweep finish only a
+ * row whose process is certainly gone. A row whose change ended without either of Better Auth's after hooks (a failure
+ * that is not an APIError) in a process that still runs stays, and approvals stay closed until that process ends: an
+ * open gap pending the owner's decision (docs/project-foundation.md, Security design).
  */
 export const agentIdentityChanges = pgTable("agent_identity_changes", {
   id: uuid("id").primaryKey(),
   startedAt: at("started_at").notNull(),
+  host: text("host").notNull(),
+  pid: integer("pid").notNull(),
+  processStartedAt: text("process_started_at"),
 })

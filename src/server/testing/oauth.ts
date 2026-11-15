@@ -77,6 +77,7 @@ export async function oauthHarness(
     publicUrl?: (origin: string) => string
     observeStore?: StoreOptions["observe"]
     caps?: AgentCaps
+    maxPending?: number
   } = {},
 ): Promise<OAuthHarness> {
   const { server, origin, handle } = await listen()
@@ -88,6 +89,7 @@ export async function oauthHarness(
     storeDb: storeDb.db,
     cipher: createSettingsCipher([{ version: 1, value: TEST_SETTINGS_KEY }]),
     ...(options.observeStore ? { observeStore: options.observeStore } : {}),
+    ...(options.maxPending ? { maxPending: options.maxPending } : {}),
   })
   const core = testCore(t, {
     config: { publicUrl: new URL(origin), version: "test" },

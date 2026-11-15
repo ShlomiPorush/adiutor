@@ -1,9 +1,13 @@
 import { and, eq, isNull, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { agentConnections, oauthStore } from "../db/schema.ts"
+import { agentConnections, agentIdentityChanges, oauthStore } from "../db/schema.ts"
 import type { Tx } from "../services/context.ts"
+import { createSettingsCipher } from "../settings/crypto.ts"
+import { TEST_SETTINGS_KEY } from "../testing/app.ts"
+import { TEST_PASSWORD } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import {
+  agentCall,
   answerConsent,
   browserCall,
   confirmCode,
@@ -12,9 +16,14 @@ import {
   type OAuthHarness,
   oauthHarness,
   ownerBy,
+  pkce,
   pollDevice,
   refresh,
+  register,
+  uidOf,
 } from "../testing/oauth.ts"
+import { testSecret } from "../testing/secrets.ts"
+import { createAgentAccess } from "./access.ts"
 import { AGENT_GATE_KEY } from "./gate.ts"
 import { CLI_CLIENT_ID } from "./provider.ts"
 import { sha256 } from "./store.ts"
@@ -38,7 +47,7 @@ afterAll(async () => {
   await t?.close()
 })
 beforeEach(async () => {
-  await h.access.saveSettings(ownerBy, { enabled: true })
+  await h.access.saveSettings(ownerBy, { enabled: true, idleDays: 90 })
   await h.access.disconnectAll(ownerBy)
 })
 
@@ -111,6 +120,40 @@ async function waitForBlocked(holder: number, n: number) {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   throw new Error(`fewer than ${n} backends waited for ${holder}`)
+}
+
+/** An MCP client's approved authorization code, not exchanged yet, and its exchange. */
+async function approvedCode() {
+  const redirect = "http://127.0.0.1:33418/callback"
+  const reg = await register(h.issuer, { redirect_uris: [redirect] })
+  const clientId = String(reg.body.client_id)
+  const { verifier, challenge } = pkce()
+  const resource = `${h.issuer}/mcp`
+  const query = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirect,
+    response_type: "code",
+    scope: "read",
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    resource,
+  })
+  const authorize = await browserCall(h.owner, `/oauth/authorize?${query}`)
+  const { decision } = await answerConsent(h.owner, uidOf(authorize.location), { approve: true })
+  const back = await browserCall(h.owner, String(decision.body.redirectTo))
+  const code = new URL(back.location ?? "").searchParams.get("code") ?? ""
+  const exchange = () =>
+    agentCall(h.issuer, "/oauth/token", {
+      form: {
+        grant_type: "authorization_code",
+        code,
+        code_verifier: verifier,
+        client_id: clientId,
+        redirect_uri: redirect,
+        resource,
+      },
+    })
+  return { code, exchange }
 }
 
 /** A device request the owner opened on the consent page (bound to the browser), not answered yet. */
@@ -215,6 +258,147 @@ describe("the race matrix", () => {
         expect(at).toBeUndefined()
       }
     })
+
+  for (const order of ["the exchange first", "the end first"] as const)
+    it(`authorization code exchange against disconnect all, ${order}`, async () => {
+      const { code, exchange } = await approvedCode()
+      const row = await holdRow("AuthorizationCode", sha256(code))
+      let exchanged: ReturnType<typeof exchange>
+      let ended: Promise<number>
+      if (order === "the exchange first") {
+        exchanged = exchange()
+        await waitForBlocked(row.pid, 1)
+        ended = h.access.disconnectAll(ownerBy)
+        await waitForBlocked(row.pid, 2)
+      } else {
+        ended = h.access.disconnectAll(ownerBy)
+        await waitForBlocked(row.pid, 1)
+        exchanged = exchange()
+        await waitForBlocked(row.pid, 2)
+      }
+      await row.release()
+      const [res, count] = await Promise.all([exchanged, ended])
+      expect(count).toBe(1)
+      expect(await live()).toBe(0)
+      if (res.status === 200) {
+        expect((await h.access.checkToken(res.body.access_token, "mcp")).ok).toBe(false)
+        await h.access.sweep()
+        expect(await h.access.provider?.AccessToken.find(res.body.access_token)).toBeUndefined()
+      }
+    })
+
+  for (const order of ["the change first", "the answer first"] as const)
+    it(`consent answer against an identity change, ${order}`, async () => {
+      const { uid } = await openRequest()
+      const gate = await holdGate()
+      const decide = () =>
+        browserCall(h.owner, `/connect/approve/${uid}/decision`, { json: { approve: true, areas: ["read"] } })
+      let answer: ReturnType<typeof decide>
+      let change: Promise<string>
+      if (order === "the change first") {
+        change = h.access.identity.begin(ownerBy)
+        await waitForBlocked(gate.pid, 1)
+        answer = decide()
+        await waitForBlocked(gate.pid, 2)
+      } else {
+        answer = decide()
+        await waitForBlocked(gate.pid, 1)
+        change = h.access.identity.begin(ownerBy)
+        await waitForBlocked(gate.pid, 2)
+      }
+      await gate.release()
+      const [res, id] = await Promise.all([answer, change])
+      expect(res.status).toBe(order === "the change first" ? 410 : 200)
+      expect(await live()).toBe(0)
+      if (order === "the answer first") {
+        const ended = await t.ctx.db
+          .select()
+          .from(agentConnections)
+          .where(eq(agentConnections.endReason, "person_changed"))
+        expect(ended.length).toBeGreaterThan(0)
+      }
+      await h.access.identity.finish(id, ownerBy)
+    })
+
+  for (const order of ["the change first", "the answer first"] as const)
+    it(`consent answer against a new issuer, ${order}`, async () => {
+      const moved = await createAgentAccess({
+        ctx: t.ctx,
+        cookieKeys: [testSecret()],
+        storeDb: h.storeDb.db,
+        cipher: createSettingsCipher([{ version: 1, value: TEST_SETTINGS_KEY }]),
+        publicUrl: h.issuer.replace("127.0.0.1", "localhost"),
+      })
+      const { uid } = await openRequest()
+      const gate = await holdGate()
+      const decide = () =>
+        browserCall(h.owner, `/connect/approve/${uid}/decision`, { json: { approve: true, areas: ["read"] } })
+      let answer: ReturnType<typeof decide>
+      let change: Promise<void>
+      try {
+        if (order === "the change first") {
+          change = moved.reconcile()
+          await waitForBlocked(gate.pid, 1)
+          answer = decide()
+          await waitForBlocked(gate.pid, 2)
+        } else {
+          answer = decide()
+          await waitForBlocked(gate.pid, 1)
+          change = moved.reconcile()
+          await waitForBlocked(gate.pid, 2)
+        }
+        await gate.release()
+        const [res] = await Promise.all([answer, change])
+        expect(res.status).toBe(order === "the change first" ? 410 : 200)
+        expect(await live()).toBe(0)
+      } finally {
+        // Back to this harness's issuer for the next tests: that ends everything again and revives nothing.
+        await gate.release()
+        await h.access.reconcile()
+      }
+      expect(await live()).toBe(0)
+    })
+
+  for (const order of ["the refresh first", "the save first"] as const)
+    it(`refresh against saving a shorter idle period that the connection is past, ${order}`, async () => {
+      const c = await connectWithCode(h)
+      const check = await h.access.checkToken(c.tokens.body.access_token, "rest")
+      if (!check.ok) throw new Error("not connected")
+      await t.ctx.db
+        .update(agentConnections)
+        .set({ approvedAt: new Date(Date.now() - 10 * 86_400_000) })
+        .where(eq(agentConnections.id, check.connection.id))
+      const row = await holdRow("RefreshToken", sha256(c.tokens.body.refresh_token))
+      let refreshed: ReturnType<typeof refresh>
+      let saved: Promise<void>
+      if (order === "the refresh first") {
+        refreshed = refresh(h.issuer, CLI_CLIENT_ID, c.tokens.body.refresh_token)
+        await waitForBlocked(row.pid, 1)
+        saved = h.access.saveSettings(ownerBy, { idleDays: 5 })
+        await waitForBlocked(row.pid, 2)
+      } else {
+        saved = h.access.saveSettings(ownerBy, { idleDays: 5 })
+        await waitForBlocked(row.pid, 1)
+        refreshed = refresh(h.issuer, CLI_CLIENT_ID, c.tokens.body.refresh_token)
+        await waitForBlocked(row.pid, 2)
+      }
+      await row.release()
+      const [res] = await Promise.all([refreshed, saved])
+      expect(await live()).toBe(0)
+      const [ended] = await t.ctx.db.select().from(agentConnections).where(eq(agentConnections.id, check.connection.id))
+      expect(ended?.endReason).toBe("unused")
+      if (res.status === 200) expect((await h.access.checkToken(res.body.access_token, "rest")).ok).toBe(false)
+    })
+
+  it("a password change Better Auth refuses (a wrong current password) leaves no change under way, and approvals work", async () => {
+    const wrong = await h.owner.call("POST", "/api/auth/change-password", {
+      body: { currentPassword: `${TEST_PASSWORD}x`, newPassword: TEST_PASSWORD },
+    })
+    expect(wrong.status).toBe(400)
+    expect(await t.ctx.db.select().from(agentIdentityChanges)).toEqual([])
+    await connectWithCode(h)
+    expect(await live()).toBe(1)
+  })
 
   it("two refreshes with one token at once: one wins, the grant ends, and the winner's new token is refused at once", async () => {
     const c = await connectWithCode(h)

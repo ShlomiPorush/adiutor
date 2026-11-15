@@ -1,5 +1,7 @@
-import { createHash } from "node:crypto"
-import { and, eq, isNull, sql } from "drizzle-orm"
+import { spawn } from "node:child_process"
+import { createHash, randomUUID } from "node:crypto"
+import { hostname } from "node:os"
+import { and, eq, isNull, like, sql } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { resetOwnerPassword } from "../auth/recovery.ts"
 import { agentConnections, agentConsent, agentIdentityChanges, audit, oauthStore } from "../db/schema.ts"
@@ -25,8 +27,9 @@ import {
 } from "../testing/oauth.ts"
 import { totp } from "../testing/totp.ts"
 import { WindowLimit } from "./limits.ts"
+import { processStart } from "./process.ts"
 import { CLI_CLIENT_ID } from "./provider.ts"
-import { openDeviceRequests, roomForClient } from "./store.ts"
+import { openDeviceRequests, roomForClient, sha256 } from "./store.ts"
 
 /*
  * Every way a connection ends, for good (testing.md, OAuth and Consent): the owner's disconnect and disconnect all,
@@ -202,6 +205,19 @@ describe("the idle rule", () => {
     expect(await rowOf(row.id)).toMatchObject({ endReason: "unused" })
   })
 
+  it("ends a connection already past the period in force when a longer one is saved, before the sweep saw it", async () => {
+    const c = await connectWithCode(h)
+    const row = await connectionOfToken(c.tokens.body.access_token)
+    await t.ctx.db
+      .update(agentConnections)
+      .set({ approvedAt: new Date(Date.now() - 91 * 86_400_000) })
+      .where(eq(agentConnections.id, row.id))
+    await h.access.saveSettings(ownerBy, { idleDays: 365 })
+    expect(await rowOf(row.id)).toMatchObject({ endReason: "unused", endedBy: "owner" })
+    expect((await h.access.checkToken(c.tokens.body.access_token, "rest")).ok).toBe(false)
+    expect((await refresh(h.issuer, CLI_CLIENT_ID, c.tokens.body.refresh_token)).status).toBe(400)
+  })
+
   it("ends at once every connection idle longer than fewer idle days saved", async () => {
     const c = await connectWithCode(h)
     const row = await connectionOfToken(c.tokens.body.access_token)
@@ -234,6 +250,31 @@ describe("the issuer", () => {
     // Back to the first address: the process that runs it sees the change at its first check.
     expect((await h.access.checkToken(c.tokens.body.access_token, "rest")).ok).toBe(false)
     expect((await rowOf(row.id))?.endReason).toBe("issuer_changed")
+    expect(await live()).toBe(0)
+  })
+
+  it("ends every connection when the public URL becomes one agents cannot use, and changing back revives none", async () => {
+    const { createAgentAccess } = await import("./access.ts")
+    const { createSettingsCipher } = await import("../settings/crypto.ts")
+    const { TEST_SETTINGS_KEY } = await import("../testing/app.ts")
+    const { testSecret } = await import("../testing/secrets.ts")
+    const c = await connectWithCode(h)
+    const row = await connectionOfToken(c.tokens.body.access_token)
+    // The same host, refused as an issuer (a path makes it no origin).
+    const refused = await createAgentAccess({
+      ctx: t.ctx,
+      cookieKeys: [testSecret()],
+      storeDb: h.storeDb.db,
+      cipher: createSettingsCipher([{ version: 1, value: TEST_SETTINGS_KEY }]),
+      publicUrl: `${h.issuer}/adiutor`,
+    })
+    expect(refused.issuer).toBeNull()
+    await refused.reconcile()
+    expect(await rowOf(row.id)).toMatchObject({ endReason: "issuer_changed", endedBy: "system" })
+    // Back to the first address.
+    await h.access.reconcile()
+    expect((await h.access.checkToken(c.tokens.body.access_token, "rest")).ok).toBe(false)
+    expect((await refresh(h.issuer, CLI_CLIENT_ID, c.tokens.body.refresh_token)).status).toBe(400)
     expect(await live()).toBe(0)
   })
 
@@ -416,7 +457,7 @@ describe("identity changes", () => {
     expect(await live()).toBe(1)
   })
 
-  it("keeps approvals closed after a change that failed outside Better Auth's errors, until the next start", async () => {
+  it("keeps approvals closed after a change that failed outside Better Auth's errors, until its process is gone", async () => {
     // A failure that is not an APIError between the hooks: the account update itself fails.
     await t.ctx.db.execute(
       sql.raw(`create or replace function adiutor_test_fail() returns trigger language plpgsql as $$
@@ -438,13 +479,68 @@ describe("identity changes", () => {
     expect(await t.ctx.db.select().from(agentIdentityChanges)).toHaveLength(1)
     const uid = await confirmCode(h.owner, (await deviceRequest(h.issuer)).body.user_code)
     expect((await answerConsent(h.owner, uid, { approve: true, areas: ["read"] })).decision.status).toBe(410)
-    // The next start finishes it: its after hook can never run now.
+    // Its process (this one) still runs: a start or a sweep now leaves it under way (open gap, owner's decision).
+    await h.access.reconcile()
+    await h.access.sweep()
+    expect(await t.ctx.db.select().from(agentIdentityChanges)).toHaveLength(1)
+    // Once that process is gone, the next start finishes it: its after hook can never run now.
+    const dead = await deadProcess()
+    await t.ctx.db.update(agentIdentityChanges).set({ pid: dead.pid, processStartedAt: dead.startedAt })
     await h.access.reconcile()
     expect(await t.ctx.db.select().from(agentIdentityChanges)).toEqual([])
     await connectWithCode(h)
     expect(await live()).toBe(1)
   })
+
+  it("finishes at start and in the sweep only changes whose process is certainly gone", async () => {
+    const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"])
+    try {
+      await new Promise((resolve) => alive.once("spawn", resolve))
+      const dead = await deadProcess()
+      const here = hostname()
+      const row = (id: string, pid: number, startedAt: string | null, host = here) => ({
+        id,
+        startedAt: new Date(),
+        host,
+        pid,
+        processStartedAt: startedAt,
+      })
+      const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()]
+      await t.ctx.db.insert(agentIdentityChanges).values([
+        // Another process that runs now, such as the recovery command: stays.
+        row(ids[0] as string, alive.pid as number, processStart(alive.pid as number)),
+        // A process that stopped: finished.
+        row(ids[1] as string, dead.pid, dead.startedAt),
+        // A live pid that now belongs to a process started at another time: finished.
+        row(ids[2] as string, alive.pid as number, "1"),
+        // Another host: not certain, stays.
+        row(ids[3] as string, dead.pid, dead.startedAt, "another-host"),
+        // No start time recorded: not certain, stays.
+        row(ids[4] as string, dead.pid, null),
+      ])
+      await h.access.sweep()
+      const left = (await t.ctx.db.select().from(agentIdentityChanges)).map((r) => r.id).sort()
+      expect(left).toEqual([ids[0], ids[3], ids[4]].sort())
+      await h.access.reconcile()
+      expect((await t.ctx.db.select().from(agentIdentityChanges)).length).toBe(3)
+    } finally {
+      alive.kill()
+      await t.ctx.db.delete(agentIdentityChanges)
+    }
+  })
 })
+
+/** The identity of a process that ran on this host and has ended. */
+async function deadProcess(): Promise<{ pid: number; startedAt: string | null }> {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"])
+  await new Promise((resolve) => child.once("spawn", resolve))
+  const identity = { pid: child.pid as number, startedAt: processStart(child.pid as number) }
+  expect(identity.startedAt).not.toBeNull()
+  const exited = new Promise((resolve) => child.once("exit", resolve))
+  child.kill()
+  await exited
+  return identity
+}
 
 describe("limits", () => {
   it("lets exactly the limit through when registrations arrive at once, and audits the block once", async () => {
@@ -511,6 +607,24 @@ describe("limits", () => {
       const devices = await Promise.all(Array.from({ length: 5 }, () => deviceRequest(capped.issuer)))
       expect(devices.filter((d) => d.status === 200)).toHaveLength(2)
       expect(devices.filter((d) => d.status === 429)).toHaveLength(3)
+    } finally {
+      await capped.close()
+      await other.close()
+    }
+  })
+
+  it("caps the pending requests under parallel requests, the oldest unanswered going first", async () => {
+    const other = await createTestDatabase("oauth_pending")
+    const capped = await oauthHarness(other, { maxPending: 3 })
+    try {
+      const devices = await Promise.all(Array.from({ length: 8 }, () => deviceRequest(capped.issuer)))
+      expect(devices.every((d) => d.status === 200)).toBe(true)
+      const pending = await other.ctx.db.select().from(agentConsent).where(like(agentConsent.key, "d:%"))
+      expect(pending).toHaveLength(3)
+      // An evicted request cannot be approved any more.
+      const evicted = devices.find((d) => !pending.some((p) => p.key === `d:${sha256(d.body.device_code)}`))
+      const uid = await confirmCode(capped.owner, evicted?.body.user_code)
+      expect((await answerConsent(capped.owner, uid, { approve: true, areas: ["read"] })).decision.status).toBe(410)
     } finally {
       await capped.close()
       await other.close()

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { IncomingMessage } from "node:http"
-import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or, sql } from "drizzle-orm"
 import type { KoaContextWithOIDC } from "oidc-provider"
 import type { AgentArea, AgentConnectionMethod, AgentEndReason, AgentResource } from "../../shared/enums.ts"
 import { AGENT_IDLE_DAYS_MAX, AGENT_IDLE_DAYS_MIN } from "../../shared/settings.ts"
@@ -23,6 +23,7 @@ import {
 } from "./gate.ts"
 import { checkIssuer, type IssuerProblem, issuerFingerprint } from "./issuer.ts"
 import { defaultPages, type ProviderPages } from "./pages.ts"
+import { currentProcess, processGone } from "./process.ts"
 import {
   type AgentProvider,
   CLI_CLIENT_ID,
@@ -97,7 +98,14 @@ export type AgentAccessOptions = {
   pages?: ProviderPages
   /** The pinning tests' view of the store's calls (oauth/store.ts); production passes none. */
   observeStore?: StoreOptions["observe"]
+  /** Pending requests kept of each kind at most (MAX_PENDING_REQUESTS unless a test names fewer). */
+  maxPending?: number
 }
+
+/** Pending requests of each kind (approval pages, device codes) kept at most; the oldest unanswered goes first. */
+export const MAX_PENDING_REQUESTS = 100
+/** The lock that recording a pending request takes while it counts and makes room ("adtq"). */
+const PENDING_LOCK_KEY = 0x61647471
 
 /**
  * Agent access by approval: the authorization server for the configured public URL, the connection records, every way a
@@ -107,10 +115,13 @@ export type AgentAccessOptions = {
 export async function createAgentAccess(options: AgentAccessOptions) {
   const { ctx } = options
   const db = ctx.db
+  const maxPending = options.maxPending ?? MAX_PENDING_REQUESTS
   const checked = checkIssuer(options.publicUrl)
   const issuer = checked.issuer
   const issuerProblem: IssuerProblem | null = checked.problem
-  const fingerprint = issuer ? issuerFingerprint(issuer) : null
+  // A public URL agents may not use has a fingerprint too (of the refused value): moving to it ends every connection,
+  // and moving back from it revives none.
+  const fingerprint = issuerFingerprint(issuer ?? `refused:${options.publicUrl.trim()}`)
   if (options.cookieKeys.length === 0) throw new Error("the authorization server needs ADIUTOR_OAUTH_SECRETS")
 
   /** Set by the routes: a counted device poll that turned out to be waiting or approved, and a capped request done. */
@@ -222,10 +233,28 @@ export async function createAgentAccess(options: AgentAccessOptions) {
    */
   async function beginIdentityChange(by: By): Promise<string> {
     const id = randomUUID()
+    const owner = currentProcess()
     await endEverything("person_changed", by, async (tx) => {
-      await tx.insert(agentIdentityChanges).values({ id, startedAt: ctx.clock() })
+      await tx.insert(agentIdentityChanges).values({
+        id,
+        startedAt: ctx.clock(),
+        host: owner.host,
+        pid: owner.pid,
+        processStartedAt: owner.startedAt,
+      })
     })
     return id
+  }
+
+  /**
+   * Finishes every identity change whose process is certainly gone (it stopped between its hooks): its after hook can
+   * never run now. A change of a process that still runs, such as the recovery command at this moment, stays.
+   */
+  async function finishAbandonedChanges(): Promise<void> {
+    const rows = await db.select().from(agentIdentityChanges)
+    for (const row of rows)
+      if (processGone({ host: row.host, pid: row.pid, startedAt: row.processStartedAt }))
+        await finishIdentityChange(row.id, SYSTEM_END)
   }
 
   /**
@@ -246,7 +275,6 @@ export async function createAgentAccess(options: AgentAccessOptions) {
    * public URL is changed back. Run at start, before a grant and in every token check.
    */
   async function reconcileIssuer(): Promise<void> {
-    if (!fingerprint) return
     const known = await storedFingerprint(db)
     if (known === fingerprint) return
     await endEverything("issuer_changed", SYSTEM_END, async (tx) => {
@@ -256,13 +284,12 @@ export async function createAgentAccess(options: AgentAccessOptions) {
 
   /**
    * Brings connections in line with how things are now; run at start, before any request: the state row, an identity
-   * change left behind by a process that stopped (finished: its after hook can never run now), the issuer, and agents
-   * turned off while connections stayed (a turn-off interrupted halfway).
+   * change left behind by a process that is certainly gone, the issuer, and agents turned off while connections stayed
+   * (a turn-off interrupted halfway).
    */
   async function reconcile(): Promise<void> {
     await ensureState(db)
-    const abandoned = await db.select({ id: agentIdentityChanges.id }).from(agentIdentityChanges)
-    for (const change of abandoned) await finishIdentityChange(change.id, SYSTEM_END)
+    await finishAbandonedChanges()
     await reconcileIssuer()
     const row = await getSettings(db)
     if (!row.agentsEnabled) {
@@ -321,8 +348,11 @@ export async function createAgentAccess(options: AgentAccessOptions) {
     }
     await db.transaction(async (tx) => {
       await gateExclusive(tx)
-      const { after } = await save(tx)
-      const cutoff = new Date(ctx.clock().getTime() - after.agentIdleDays * 86_400_000)
+      const { before, after } = await save(tx)
+      // A connection already past its end under the period in force before this save ends now, in the same
+      // transaction, also when the new period is longer: saving a longer period never revives one.
+      const days = Math.min(before.agentIdleDays, after.agentIdleDays)
+      const cutoff = new Date(ctx.clock().getTime() - days * 86_400_000)
       const idle = await tx
         .select({ id: agentConnections.id })
         .from(agentConnections)
@@ -443,13 +473,39 @@ export async function createAgentAccess(options: AgentAccessOptions) {
     if (failure) throw failure
   }
 
-  /** Records the generation a request began under (`agent_consent`), for its approval to compare. */
+  /**
+   * Records the generation a request began under (`agent_consent`), for its approval to compare. Pending requests of
+   * each kind (approvals `i:`, device codes `d:`) are capped: when full, the oldest unanswered one goes and can no longer
+   * be approved. Counted and evicted under an advisory lock of its own, so requests at once never pass the cap.
+   */
   async function recordRequest(key: string, gen: number, ttlSeconds: number): Promise<void> {
     const now = ctx.clock()
-    await db
-      .insert(agentConsent)
-      .values({ key, generation: gen, createdAt: now, expiresAt: new Date(now.getTime() + ttlSeconds * 1000) })
-      .onConflictDoNothing()
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(PENDING_LOCK_KEY))})`)
+      const open = await tx
+        .select({ key: agentConsent.key })
+        .from(agentConsent)
+        .where(
+          and(
+            like(agentConsent.key, `${key.slice(0, 2)}%`),
+            isNull(agentConsent.answeredAt),
+            gt(agentConsent.expiresAt, now),
+          ),
+        )
+        .orderBy(asc(agentConsent.createdAt), asc(agentConsent.key))
+      const over = open.length - maxPending + 1
+      if (over > 0)
+        await tx.delete(agentConsent).where(
+          inArray(
+            agentConsent.key,
+            open.slice(0, over).map((r) => r.key),
+          ),
+        )
+      await tx
+        .insert(agentConsent)
+        .values({ key, generation: gen, createdAt: now, expiresAt: new Date(now.getTime() + ttlSeconds * 1000) })
+        .onConflictDoNothing()
+    })
   }
 
   // --- The owner's approval (S11, S19) ---
@@ -493,7 +549,7 @@ export async function createAgentAccess(options: AgentAccessOptions) {
     by: By
   }): Promise<Decision> {
     const { request, by } = input
-    if (!provider || !issuer || !fingerprint) return { kind: "gone" }
+    if (!provider || !issuer) return { kind: "gone" }
     if (input.approve && (input.areas.length === 0 || !input.areas.every((a) => request.areas.includes(a))))
       throw invalid("Choose what the agent may do from the areas shown.")
     await reconcileIssuer()
@@ -670,6 +726,7 @@ export async function createAgentAccess(options: AgentAccessOptions) {
    * connection holds go, and the store's clean-up runs. Requests check everything themselves and never wait for it.
    */
   async function sweep(): Promise<void> {
+    await finishAbandonedChanges()
     await reconcileIssuer()
     const current = await agentSettings()
     if (!current.enabled) {

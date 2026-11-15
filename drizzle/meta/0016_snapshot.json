@@ -1,5 +1,5 @@
 {
-  "id": "5d55cb13-6f31-4577-aa81-d189e564f49a",
+  "id": "b146bc31-7f05-426f-b144-2db3e453a004",
   "prevId": "175bd617-1f72-41e8-b902-5dae79384422",
   "version": "7",
   "dialect": "postgresql",
@@ -220,6 +220,24 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "host": {
+          "name": "host",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pid": {
+          "name": "pid",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "process_started_at": {
+          "name": "process_started_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
