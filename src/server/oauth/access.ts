@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { IncomingMessage } from "node:http"
+import { hostname } from "node:os"
 import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or, sql } from "drizzle-orm"
 import type { KoaContextWithOIDC } from "oidc-provider"
 import type { AgentArea, AgentConnectionMethod, AgentEndReason, AgentResource } from "../../shared/enums.ts"
@@ -23,7 +24,7 @@ import {
 } from "./gate.ts"
 import { checkIssuer, type IssuerProblem, issuerFingerprint } from "./issuer.ts"
 import { defaultPages, type ProviderPages } from "./pages.ts"
-import { currentProcess, processGone, provablyLive } from "./process.ts"
+import { currentProcess, processGone } from "./process.ts"
 import {
   type AgentProvider,
   CLI_CLIENT_ID,
@@ -704,17 +705,21 @@ export async function createAgentAccess(options: AgentAccessOptions) {
   }
 
   /**
-   * Ends every connection and every waiting request. In the same transaction it also clears every identity change that
-   * no provably live process on this host owns (another host, such as an earlier container or a CLI run in another one;
-   * no start time recorded; a process that is gone): the owner's way out of an approval block such a row would keep
-   * for ever. The change of a process that provably runs here is never cleared; the server's own stuck change ends
-   * with a restart of the container. The audit row names how many it cleared.
+   * Ends every connection and every waiting request. In the same transaction it also clears every identity change of
+   * another host (an earlier container: the recovery command runs with `docker compose exec` in the server's own
+   * container, so a change under way always has this host) and every change of this host whose process is certainly
+   * gone (`processGone`): the owner's way out of an approval block such a row would keep for ever. A change of this host
+   * whose process runs, or cannot be read, or has no recorded start time, stays (a change may still be under way); the
+   * server's own stuck change ends with a restart of the container. The audit row names how many it cleared.
    */
   async function disconnectAll(by: By): Promise<number> {
     requireOwner(by, "disconnect every agent")
     return endEverything("all_disconnected", by, async (tx) => {
+      const here = hostname()
       const rows = await tx.select().from(agentIdentityChanges)
-      const stale = rows.filter((r) => !provablyLive({ host: r.host, pid: r.pid, startedAt: r.processStartedAt }))
+      const stale = rows.filter(
+        (r) => r.host !== here || processGone({ host: r.host, pid: r.pid, startedAt: r.processStartedAt }),
+      )
       if (stale.length > 0)
         await tx.delete(agentIdentityChanges).where(
           inArray(

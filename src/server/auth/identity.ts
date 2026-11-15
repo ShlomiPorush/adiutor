@@ -21,8 +21,8 @@ type HookContext = { path?: string; request?: Request; context?: { session?: unk
  * and closes approvals in one transaction of Adiutor's own. A request over HTTP without a session Better Auth read is
  * refused there (fail closed). `release` runs in the matching database after hook (after the write commits) and in
  * hooks.after. A failure that is not an APIError runs neither: the change's record stays and approvals stay closed
- * until its process ends and the next start or sweep finishes it, or the owner's Disconnect all clears it when no
- * provably live process owns it (an open gap pending the owner's decision, see the foundation plan). Changes are
+ * until its process is certainly gone and the next start, sweep or Disconnect all finishes it (Disconnect all also
+ * clears a change of another host) (an open gap pending the owner's decision, see the foundation plan). Changes are
  * tracked per call: by its request, or for a server call by its per-call auth context.
  *
  * The release in hooks.after is the path for an APIError thrown after `begin` and before the database after hook. In

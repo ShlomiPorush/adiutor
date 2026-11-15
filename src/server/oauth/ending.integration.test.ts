@@ -567,39 +567,85 @@ describe("stuck identity changes", () => {
     }
   })
 
-  it("are cleared by Disconnect all when no provably live process here owns them, never a live one's", async () => {
+  /**
+   * Disconnect all with `row` as the only identity change: what is left, the count its audit row names, and whether an
+   * approval is still refused afterwards.
+   */
+  async function disconnectAllWith(row: typeof agentIdentityChanges.$inferInsert) {
+    await t.ctx.db.delete(agentIdentityChanges)
+    await t.ctx.db.insert(agentIdentityChanges).values(row)
+    const before = (await t.ctx.db.select({ id: audit.id }).from(audit)).map((r) => r.id)
+    await h.access.disconnectAll(ownerBy)
+    const left = (await t.ctx.db.select().from(agentIdentityChanges)).map((r) => r.id)
+    const [end] = (await t.ctx.db.select().from(audit).where(eq(audit.action, "agent.end_all"))).filter(
+      (r) => !before.includes(r.id),
+    )
+    const uid = await confirmCode(h.owner, (await deviceRequest(h.issuer)).body.user_code)
+    const answer = await answerConsent(h.owner, uid, { approve: true, areas: ["read"] })
+    return {
+      left,
+      cleared: (end?.after as { identityChangesCleared?: number } | undefined)?.identityChangesCleared,
+      approval: answer.decision.status,
+    }
+  }
+
+  async function withLiveProcess<T>(run: (pid: number) => Promise<T>): Promise<T> {
     const alive = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"])
     try {
       await new Promise((resolve) => alive.once("spawn", resolve))
-      const pid = alive.pid as number
-      const [foreign, unknown, owned] = [randomUUID(), randomUUID(), randomUUID()]
-      await t.ctx.db.insert(agentIdentityChanges).values([
-        // An earlier container, or a CLI run in another one.
-        rowOfProcess(foreign, pid, processStart(pid), "an-earlier-container"),
-        rowOfProcess(unknown, pid, null),
-        rowOfProcess(owned, pid, processStart(pid)),
-      ])
-      await h.access.sweep()
-      expect((await t.ctx.db.select().from(agentIdentityChanges)).length).toBe(3)
-      await h.access.disconnectAll(ownerBy)
-      expect((await t.ctx.db.select().from(agentIdentityChanges)).map((r) => r.id)).toEqual([owned])
-      const ends = await t.ctx.db.select().from(audit).where(eq(audit.action, "agent.end_all"))
-      expect(ends.some((r) => (r.after as { identityChangesCleared?: number }).identityChangesCleared === 2)).toBe(true)
-      // The live process's change still blocks approvals.
-      const uid = await confirmCode(h.owner, (await deviceRequest(h.issuer)).body.user_code)
-      expect((await answerConsent(h.owner, uid, { approve: true, areas: ["read"] })).decision.status).toBe(410)
-      // Once that process ends, the sweep finishes it and approvals work again.
-      const exited = new Promise((resolve) => alive.once("exit", resolve))
-      alive.kill()
-      await exited
-      await h.access.sweep()
-      expect(await t.ctx.db.select().from(agentIdentityChanges)).toEqual([])
-      await connectWithCode(h)
-      expect(await live()).toBe(1)
+      return await run(alive.pid as number)
     } finally {
       alive.kill()
       await t.ctx.db.delete(agentIdentityChanges)
+      await h.access.disconnectAll(ownerBy)
     }
+  }
+
+  it("Disconnect all keeps a change of this host whose process cannot be read, and approvals stay blocked", async () => {
+    await withLiveProcess(async (pid) => {
+      const id = randomUUID()
+      const original = procfs.readStat
+      procfs.readStat = (p) => {
+        if (p === pid) throw Object.assign(new Error("permission denied"), { code: "EACCES" })
+        return original(p)
+      }
+      try {
+        const result = await disconnectAllWith(rowOfProcess(id, pid, processStart(pid) ?? "1"))
+        expect(result).toEqual({ left: [id], cleared: 0, approval: 410 })
+      } finally {
+        procfs.readStat = original
+      }
+    })
+  })
+
+  it("Disconnect all keeps a change of this host with no recorded start time whose pid lives", async () => {
+    await withLiveProcess(async (pid) => {
+      const id = randomUUID()
+      expect(await disconnectAllWith(rowOfProcess(id, pid, null))).toEqual({ left: [id], cleared: 0, approval: 410 })
+    })
+  })
+
+  it("Disconnect all keeps a change of a live process on this host", async () => {
+    await withLiveProcess(async (pid) => {
+      const id = randomUUID()
+      const result = await disconnectAllWith(rowOfProcess(id, pid, processStart(pid)))
+      expect(result).toEqual({ left: [id], cleared: 0, approval: 410 })
+    })
+  })
+
+  it("Disconnect all clears a change of another host (an earlier container), and approvals work again", async () => {
+    await withLiveProcess(async (pid) => {
+      const row = rowOfProcess(randomUUID(), pid, processStart(pid), "an-earlier-container")
+      const result = await disconnectAllWith(row)
+      expect(result).toEqual({ left: [], cleared: 1, approval: 200 })
+    })
+  })
+
+  it("Disconnect all clears a change of this host whose process is gone (ENOENT), and approvals work again", async () => {
+    const dead = await deadProcess()
+    const result = await disconnectAllWith(rowOfProcess(randomUUID(), dead.pid, dead.startedAt))
+    expect(result).toEqual({ left: [], cleared: 1, approval: 200 })
+    await h.access.disconnectAll(ownerBy)
   })
 })
 

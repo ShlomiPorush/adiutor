@@ -55,10 +55,3 @@ export function processGone(owner: ProcessIdentity): boolean {
   const read = readProcessStart(owner.pid)
   return read.kind === "missing" || (read.kind === "start" && read.value !== owner.startedAt)
 }
-
-/** Whether the process that recorded an identity change provably runs now: this host, the same pid and start time. */
-export function provablyLive(owner: ProcessIdentity): boolean {
-  if (owner.host !== hostname() || !owner.startedAt) return false
-  const read = readProcessStart(owner.pid)
-  return read.kind === "start" && read.value === owner.startedAt
-}
