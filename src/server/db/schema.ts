@@ -8,6 +8,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -17,6 +18,10 @@ import {
 import { SESSION_IDLE_DAYS_MAX, SESSION_IDLE_DAYS_MIN } from "../../shared/auth.ts"
 import {
   ACTOR_KINDS,
+  AGENT_AREAS,
+  AGENT_CONNECTION_METHODS,
+  AGENT_END_REASONS,
+  AGENT_RESOURCES,
   AUDIT_SOURCES,
   CLOSED_STATUSES,
   ITEM_STATUSES,
@@ -32,7 +37,7 @@ import {
   SYNC_OUTCOMES,
   TELEGRAM_OUTCOMES,
 } from "../../shared/enums.ts"
-import { SETTINGS_DEFAULTS } from "../../shared/settings.ts"
+import { AGENT_IDLE_DAYS_MAX, AGENT_IDLE_DAYS_MIN, SETTINGS_DEFAULTS } from "../../shared/settings.ts"
 
 // Codes are stored as text and checked by the database against the lists in src/shared/enums.ts.
 // Adding a code means a new migration: drizzle-kit generate picks up the changed check.
@@ -370,6 +375,13 @@ export const settings = pgTable(
     telegramChatId: text("telegram_chat_id"),
     /** ADIUTOR_PRIVATE_DOMAINS overrides it. */
     privateDomains: text("private_domains").array().notNull().default(sql`'{}'::text[]`),
+    /**
+     * Whether agents may connect. Off for a new installation; the installation that existed before it is on (a
+     * data migration). Not in the API or the UI yet: the agent access release reads and edits it.
+     */
+    agentsEnabled: boolean("agents_enabled").notNull().default(SETTINGS_DEFAULTS.agentsEnabled),
+    /** A connection ends after this many days without a real API or MCP call. Not in the API or the UI yet. */
+    agentIdleDays: integer("agent_idle_days").notNull().default(SETTINGS_DEFAULTS.agentIdleDays),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
@@ -381,6 +393,10 @@ export const settings = pgTable(
       sql.raw(`"session_idle_days" between ${SESSION_IDLE_DAYS_MIN} and ${SESSION_IDLE_DAYS_MAX}`),
     ),
     check("settings_telegram_chat_id_check", sql.raw(`"telegram_chat_id" ~ '^-?[0-9]{1,20}$'`)),
+    check(
+      "settings_agent_idle_days_check",
+      sql.raw(`"agent_idle_days" between ${AGENT_IDLE_DAYS_MIN} and ${AGENT_IDLE_DAYS_MAX}`),
+    ),
   ],
 )
 
@@ -589,4 +605,108 @@ export const authPasskey = pgTable(
     uniqueIndex("auth_passkey_credential_id_idx").on(t.credentialID),
     index("auth_passkey_user_id_idx").on(t.userId),
   ],
+)
+
+// --- Agent connections (oidc-provider, the authorization server for agents) ---
+// Nothing reads or writes these tables yet: the agent access release mounts the authorization server on them.
+
+/**
+ * One row per approval: two agents, even of the same program, never share one. `name` is the agent's own word for
+ * itself, cleaned, never proof of what it is. A connection that ended stays, with when, why and by whom.
+ */
+export const agentConnections = pgTable(
+  "agent_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    /** `code` for the device flow, `browser` for an MCP client's authorization code. */
+    connectedVia: text("connected_via", { enum: AGENT_CONNECTION_METHODS }).notNull(),
+    resource: text("resource", { enum: AGENT_RESOURCES }).notNull(),
+    /** The areas the owner granted on the consent page. `sync` only on the REST resource. */
+    areas: text("areas", { enum: AGENT_AREAS }).array().notNull(),
+    clientId: text("client_id").notNull(),
+    /** The authorization server's grant: its tokens end with this connection. */
+    grantId: text("grant_id").notNull().unique(),
+    /** The public URL it connected to; a connection made under another one ends. */
+    issuer: text("issuer").notNull(),
+    /** Where the browser went back after approval, as the owner saw it; none for the device flow. */
+    redirectHost: text("redirect_host"),
+    approvedAt: at("approved_at").notNull(),
+    /** The last real API or MCP call (a refresh does not count), written at most once a minute. */
+    lastUsedAt: at("last_used_at"),
+    endedAt: at("ended_at"),
+    endReason: text("end_reason", { enum: AGENT_END_REASONS }),
+    endedBy: text("ended_by", { enum: ACTOR_KINDS }),
+  },
+  (t) => [
+    check("agent_connections_connected_via_check", oneOf("connected_via", AGENT_CONNECTION_METHODS)),
+    check("agent_connections_resource_check", oneOf("resource", AGENT_RESOURCES)),
+    check(
+      "agent_connections_areas_check",
+      sql.raw(`"areas" <@ array[${AGENT_AREAS.map((a) => `'${a}'`).join(", ")}]::text[]`),
+    ),
+    check("agent_connections_sync_rest_only_check", sql.raw(`"resource" = 'rest' or not ('sync' = any("areas"))`)),
+    check("agent_connections_end_reason_check", oneOf("end_reason", AGENT_END_REASONS)),
+    check("agent_connections_ended_by_check", oneOf("ended_by", ACTOR_KINDS)),
+    check("agent_connections_ended_check", sql`(${t.endedAt} is null) = (${t.endReason} is null)`),
+  ],
+)
+
+/**
+ * The authorization server's own records (its adapter): grants, codes, access and refresh tokens, registered clients,
+ * sessions and interactions, looked up by type and id. Never shown in the UI.
+ */
+export const oauthStore = pgTable(
+  "oauth_store",
+  {
+    type: text("type").notNull(),
+    id: text("id").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    grantId: text("grant_id"),
+    userCode: text("user_code"),
+    uid: text("uid"),
+    expiresAt: at("expires_at"),
+    consumedAt: at("consumed_at"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.type, t.id] }),
+    index("oauth_store_grant_idx").on(t.grantId),
+    index("oauth_store_user_code_idx").on(t.userCode),
+    index("oauth_store_uid_idx").on(t.uid),
+    index("oauth_store_expires_idx").on(t.expiresAt),
+  ],
+)
+
+/**
+ * A single row (id 1). `generation` goes up whenever every connection or every waiting request ends (disconnect all,
+ * agents turned off, the owner's password or two-factor changed, a new public URL): a request that began under an
+ * earlier generation can no longer be approved. `issuer_fingerprint` is the public URL connections were last made
+ * under, so a change while the server was down is seen at start.
+ */
+export const agentState = pgTable(
+  "agent_state",
+  {
+    id: integer("id").primaryKey().default(1),
+    generation: integer("generation").notNull().default(0),
+    issuerFingerprint: text("issuer_fingerprint"),
+  },
+  (t) => [check("agent_state_single_row_check", sql`${t.id} = 1`)],
+)
+
+/**
+ * A request waiting on the owner's answer: `key` is `i:<interaction uid>` or `d:<SHA-256 of the device code>`. It
+ * keeps the generation it began under, the browser session that first opened it and when it was answered. The sweep
+ * removes a row once `expires_at` passed.
+ */
+export const agentConsent = pgTable(
+  "agent_consent",
+  {
+    key: text("key").primaryKey(),
+    generation: integer("generation").notNull(),
+    sessionId: text("session_id"),
+    answeredAt: at("answered_at"),
+    createdAt: createdAt(),
+    expiresAt: at("expires_at").notNull(),
+  },
+  (t) => [index("agent_consent_expires_idx").on(t.expiresAt)],
 )

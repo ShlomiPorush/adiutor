@@ -15,6 +15,8 @@ describe("the settings defaults", () => {
       closedItemDays: 7,
       sessionIdleDays: 30,
       otpViaTelegram: false,
+      agentsEnabled: false,
+      agentIdleDays: 90,
     })
   })
 
@@ -27,6 +29,8 @@ describe("the settings defaults", () => {
       closedItemDays: "closed_item_days",
       sessionIdleDays: "session_idle_days",
       otpViaTelegram: "otp_via_telegram",
+      agentsEnabled: "agents_enabled",
+      agentIdleDays: "agent_idle_days",
     } as const
     for (const [key, value] of Object.entries(SETTINGS_DEFAULTS))
       expect(columns.get(column[key as keyof typeof column])?.default, key).toBe(value)

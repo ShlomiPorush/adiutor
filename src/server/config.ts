@@ -10,6 +10,12 @@ export type ServerConfig = {
   authSecrets: VersionedKey[]
   /** ADIUTOR_SETTINGS_KEYS ("2:new,1:old"): encrypts the secrets stored in Settings. Never an auth secret. */
   settingsKeys: VersionedKey[]
+  /**
+   * ADIUTOR_OAUTH_SECRETS ("2:new,1:old"): the cookie keys of the authorization server for agents, in the order
+   * listed (newest first: the first signs, the others only verify). Never an auth secret or a settings key. Null
+   * while it is not set: optional until the release that switches agents to it.
+   */
+  oauthSecrets: VersionedKey[] | null
   /** ADIUTOR_TRUSTED_PROXIES: the proxy addresses or CIDR ranges in front of Adiutor (Traefik), comma-separated. */
   trustedProxies: string[]
   /** The URL the owner opens; browsers' Origin must match it. */
@@ -67,9 +73,38 @@ export function parseDomains(text: string): string[] {
     .filter(Boolean)
 }
 
+/** A whole value that is a `<...>` slot or one character repeated: no random key can be one. */
+const CERTAIN_PLACEHOLDER = /^(?:<[^<>]*>|(.)\1*)$/su
+
 /**
- * Reads "2:new,1:old": versions are distinct non-negative integers, each value at least MIN_SECRET_BYTES bytes.
- * Problems name the variable and the position, never a value.
+ * A word an example or a template writes instead of a key, in any case, as a token: after the start of the value or
+ * a character that is not a letter or digit, and before the end or a character that is not a letter, so a digit ends
+ * it (`please-change-me-...`, `CHANGE_ME_to_...`, `your_secret`, `ReplaceMe0123...`, `Example2-key`).
+ */
+const PLACEHOLDER_WORD =
+  /(?<![a-z0-9])(?:change[-_ ]?me|replace[-_ ]?me|placeholder|example|your|secret|todo|fixme)(?![a-z])/i
+/** A random key of 32 bytes has far more distinct characters; `secret-secret-...` or `abcabc...` has fewer. */
+const MIN_DISTINCT_CHARACTERS = 8
+
+/** Refused in every entry of every key family: a `<...>` slot or one character repeated. */
+export function isCertainPlaceholder(value: string): boolean {
+  return CERTAIN_PLACEHOLDER.test(value)
+}
+
+/**
+ * Refused only in the current entry (the first, which signs or encrypts): a placeholder word as a token, or fewer
+ * than MIN_DISTINCT_CHARACTERS distinct characters. A random non-hex key can rarely look like this; the way out is a
+ * new hex key listed first, so this one stays listed as an older version and keeps decrypting. Older entries are
+ * never refused by it.
+ */
+export function looksLikePlaceholder(value: string): boolean {
+  return PLACEHOLDER_WORD.test(value) || new Set(value).size < MIN_DISTINCT_CHARACTERS
+}
+
+/**
+ * Reads "2:new,1:old": versions are distinct non-negative integers, each value at least MIN_SECRET_BYTES bytes and
+ * not a certain placeholder; the current (first) value not a likely one either. Problems name the variable and the
+ * position, never a value.
  */
 function parseKeys(name: string, text: string, problems: string[]): VersionedKey[] {
   const keys: VersionedKey[] = []
@@ -88,6 +123,13 @@ function parseKeys(name: string, text: string, problems: string[]): VersionedKey
     seen.add(version)
     if (Buffer.byteLength(value, "utf8") < MIN_SECRET_BYTES)
       problems.push(`${name} entry ${index + 1} must be at least ${MIN_SECRET_BYTES} bytes (use 32 random bytes)`)
+    if (isCertainPlaceholder(value))
+      problems.push(`${name} entry ${index + 1} looks like an example placeholder (use 32 random bytes)`)
+    else if (index === 0 && looksLikePlaceholder(value))
+      problems.push(
+        `${name} entry 1 looks like an example placeholder: generate a new key with openssl rand -hex 32, list it ` +
+          "first under a new version, and keep this one after it as an older version",
+      )
     keys.push({ version, value })
   })
   return keys
@@ -125,6 +167,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const authValues = new Set(authSecrets.map((k) => k.value))
   if (settingsKeys.some((k) => authValues.has(k.value)))
     problems.push("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
+  // Optional until the release that switches agents to the authorization server: empty is the same as unset.
+  const oauthSecretsText = env.ADIUTOR_OAUTH_SECRETS?.trim() ?? ""
+  const oauthSecrets = oauthSecretsText ? parseKeys("ADIUTOR_OAUTH_SECRETS", oauthSecretsText, problems) : null
+  const settingsValues = new Set(settingsKeys.map((k) => k.value))
+  if (oauthSecrets?.some((k) => authValues.has(k.value) || settingsValues.has(k.value)))
+    problems.push("ADIUTOR_OAUTH_SECRETS must differ from every auth secret and settings key")
 
   let publicUrl: URL | undefined
   if (publicUrlText) {
@@ -159,6 +207,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     databaseUrl,
     authSecrets,
     settingsKeys,
+    oauthSecrets,
     trustedProxies,
     publicUrl,
     migrationsDir: env.MIGRATIONS_DIR || "drizzle",

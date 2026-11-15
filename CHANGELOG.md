@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - **Passkeys**: sign in with a passkey alone, with your fingerprint, face or device PIN, instead of the password and the code. Add, rename and remove passkeys on the Account page (up to 20); the browser must support passkeys to add one or sign in with it, and listing, renaming and removing work in any browser. The password and the authenticator app keep working. A passkey belongs to the host name of `ADIUTOR_PUBLIC_URL`: changing that host name makes every passkey stop working. Adding a passkey needs two-factor on. Each change, and each sign-in with a passkey, is in the activity log. The server's password reset keeps passkeys, so after a restore or a lost device check them on the Account page.
+- **`ADIUTOR_OAUTH_SECRETS`, optional for now**: the cookie keys of the authorization server agents will connect through, checked at start when set; a later release requires it, so add it to `.env` with the command in `docs/deployment.md` (step 2). The server now also refuses a current key (the first one listed in `ADIUTOR_AUTH_SECRETS`, `ADIUTOR_SETTINGS_KEYS` or `ADIUTOR_OAUTH_SECRETS`) that looks like an example placeholder, and says how to replace it while keeping it as an older version.
 
 ### Changed
 

@@ -20,6 +20,8 @@ const row = (patch: Partial<SettingsRow> = {}): SettingsRow => ({
   telegramBotTokenEnc: null,
   telegramChatId: null,
   privateDomains: [],
+  agentsEnabled: false,
+  agentIdleDays: 90,
   updatedAt: new Date(0),
   ...patch,
 })

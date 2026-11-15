@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { ConfigError, loadConfig } from "./config.ts"
+import { ConfigError, isCertainPlaceholder, loadConfig, looksLikePlaceholder } from "./config.ts"
 import { testBotToken, testSecret } from "./testing/secrets.ts"
 
 // Every value the loader accepts is new on each run; only refused values are literal.
@@ -31,6 +31,7 @@ describe("loadConfig", () => {
     expect(config.publicUrl.origin).toBe("https://adiutor.example.com")
     expect(config.authSecrets).toEqual([{ version: 1, value: authSecret }])
     expect(config.settingsKeys).toEqual([{ version: 1, value: settingsKey }])
+    expect(config.oauthSecrets).toBeNull()
     expect(config.trustedProxies).toEqual([])
     expect(config.telegramApiUrl).toBe("https://api.telegram.org")
     expect(config.overrides).toEqual({})
@@ -70,6 +71,144 @@ describe("loadConfig", () => {
     expect(
       refusal({ ...valid, ADIUTOR_AUTH_SECRETS: `2:${authSecret},1:${older}`, ADIUTOR_SETTINGS_KEYS: `1:${older}` }),
     ).toContain("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
+  })
+
+  describe("ADIUTOR_OAUTH_SECRETS, optional until the release that switches agents to it", () => {
+    const oauthSecret = testSecret()
+
+    it("is absent when unset, empty or blank", () => {
+      for (const value of [undefined, "", "  "])
+        expect(loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: value }).oauthSecrets).toBeNull()
+    })
+
+    it("reads versioned keys, newest first", () => {
+      const older = testSecret()
+      expect(loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: `2:${oauthSecret}, 1:${older}` }).oauthSecrets).toEqual([
+        { version: 2, value: oauthSecret },
+        { version: 1, value: older },
+      ])
+    })
+
+    it("refuses a bad entry, a repeated version or a short key, never printing it", () => {
+      expect(refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: oauthSecret })).toContain(
+        "ADIUTOR_OAUTH_SECRETS entry 1 must look like <version>:<secret>",
+      )
+      expect(refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: `1:${oauthSecret},1:${testSecret()}` })).toContain(
+        "ADIUTOR_OAUTH_SECRETS repeats version 1",
+      )
+      const short = oauthSecret.slice(0, 31)
+      const message = refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: `1:${short}` })
+      expect(message).toContain("ADIUTOR_OAUTH_SECRETS entry 1 must be at least 32 bytes")
+      expect(message).not.toContain(short)
+    })
+
+    it("refuses a value shared with an auth secret or a settings key, never printing it", () => {
+      for (const shared of [authSecret, settingsKey]) {
+        const message = refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: `2:${oauthSecret},1:${shared}` })
+        expect(message).toContain("ADIUTOR_OAUTH_SECRETS must differ from every auth secret and settings key")
+        expect(message).not.toContain(shared)
+      }
+    })
+  })
+
+  describe("placeholders", () => {
+    const families = ["ADIUTOR_AUTH_SECRETS", "ADIUTOR_SETTINGS_KEYS", "ADIUTOR_OAUTH_SECRETS"]
+    const recovery = "generate a new key with openssl rand -hex 32, list it first under a new version"
+    // Refused values only: literal on purpose. No random key is ever one of these: refused in every entry.
+    const certain = ["<32 random bytes from openssl rand -hex 32>", "a".repeat(40)]
+    // Refused as the current (first) entry only: a placeholder word as a token, or few distinct characters.
+    const likely = [
+      "changeme",
+      "changeme-changeme-changeme-changeme",
+      "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME",
+      "CHANGE_ME_to_a_long_random_value_0123",
+      "please-change-me-before-you-deploy-it",
+      "replace-me-with-32-random-bytes-0123456",
+      "replace-me placeholder secret value here",
+      "ReplaceMe",
+      "ReplaceMe0123456789012345678901234567",
+      "your-secret-1",
+      "placeholder-placeholder-placeholder",
+      "PLACEHOLDER-VALUE-HERE",
+      "Example",
+      "an-Example-value-that-is-long-enough-0",
+      "example-key-for-the-docs-0123456789abcdef",
+      "Example2-key-for-docs-0123456789abcdef",
+      "your-own-secret-goes-here-0123456789",
+      "your-secret-here-0123456789abcdefghijkl",
+      "YOUR_SECRET",
+      "TODO: generate with openssl rand -hex 32",
+      "a-real-key-goes-here-FIXME-0123456789",
+      "secret-secret-secret-secret-secret",
+      "abcabcabcabcabcabcabcabcabcabcabcabc",
+    ]
+    // A base64url key that starts like a placeholder word: refused as current, accepted as an older version.
+    const unlucky = `your0${randomBytes(30).toString("base64url")}`
+
+    it.each(families)("%s refuses a certain placeholder in any entry, never printing it", (name) => {
+      for (const value of certain)
+        for (const [text, entry] of [
+          [`1:${value}`, 1],
+          [`2:${testSecret()},1:${value}`, 2],
+        ] as const) {
+          const message = refusal({ ...valid, [name]: text })
+          expect(message, value).toContain(`${name} entry ${entry} looks like an example placeholder`)
+          expect(message).not.toContain(value)
+        }
+    })
+
+    it.each(families)("%s refuses a likely placeholder as the current key, saying how to recover", (name) => {
+      for (const value of [...likely, unlucky]) {
+        const message = refusal({ ...valid, [name]: `2:${value},1:${testSecret()}` })
+        expect(message, value).toContain(`${name} entry 1 looks like an example placeholder: ${recovery}`)
+        expect(message).not.toContain(value)
+      }
+    })
+
+    it.each(families)("%s accepts a likely placeholder as an older key behind a random current one", (name) => {
+      // Every accepted value is new on each run: a placeholder word followed by a random key, a random run of fewer
+      // than eight distinct characters (`x` keeps it from being one repeated character), and `unlucky`. Each still
+      // looks like a placeholder, so only its place as an older key lets it through.
+      const fewDistinct = `x${randomBytes(3).toString("hex")}`.repeat(6)
+      const withWord = likely.filter((v) => !/^(abc)+$/.test(v)).map((v) => `${v}-${testSecret()}`)
+      for (const value of [...withWord, fewDistinct, unlucky]) {
+        expect(looksLikePlaceholder(value), value).toBe(true)
+        expect(loadConfig({ ...valid, [name]: `2:${testSecret()},1:${value}` }), value).toBeDefined()
+      }
+    })
+
+    it("accepts a random key where a letter or digit comes right before a placeholder word", () => {
+      // Hex on every run around a fixed word with a letter or digit on its left, so the case is always the same:
+      // the word is never a token of its own (aBcExampleXyZ, Qyour-Z, 0EXAMPLE9).
+      const random = () => randomBytes(24).toString("hex")
+      for (const word of [
+        "Qyour-Z",
+        "7your_4",
+        "aBcExampleXyZ",
+        "0EXAMPLE9",
+        "xchangemex",
+        "kchange-me2",
+        "Rreplace_meQ",
+        "9placeholder8",
+        "1secret-",
+        "atodob",
+        "3FIXMEz",
+        "x<a>x",
+      ]) {
+        for (const value of [`${random()}${word}${random()}`, `${word}${random()}`]) {
+          expect(looksLikePlaceholder(value), word).toBe(false)
+          expect(loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: `1:${value}` }).oauthSecrets).toHaveLength(1)
+        }
+      }
+    })
+
+    it("accepts 1000 random hex keys, as the stacks and the tests generate them", () => {
+      for (let i = 0; i < 1000; i++) {
+        const value = randomBytes(32).toString("hex")
+        expect(isCertainPlaceholder(value) || looksLikePlaceholder(value), "random hex").toBe(false)
+      }
+      expect(testSecret()).toMatch(/^[0-9a-f]{64}$/)
+    })
   })
 
   it.each([

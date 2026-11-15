@@ -33,6 +33,30 @@ export const JOB_STATES = ["sending", "sent", "failed", "unknown", "skipped"] as
 export const TELEGRAM_OUTCOMES = ["item_created", "note_created", "ignored", "refused"] as const
 export const LANGUAGES = ["he", "en"] as const
 
+// --- Agent connections (the OAuth authorization server; labels come with the pages that show them) ---
+
+/** What a connection may do: read, write (act on items, projects and notes) and sync (push T3 snapshots, REST only). */
+export const AGENT_AREAS = ["read", "write", "sync"] as const
+/** How a connection was approved: `code` is the device flow (the skill, the sync), `browser` an MCP client's sign-in. */
+export const AGENT_CONNECTION_METHODS = ["code", "browser"] as const
+/** The resource a connection's tokens are for: `/mcp` or `/api/v1`. */
+export const AGENT_RESOURCES = ["mcp", "rest"] as const
+/**
+ * Why a connection ended: the owner disconnected it, disconnected all, or turned agents off; it went unused for the
+ * idle days; a spent refresh token or code came back; the owner's password or two-factor changed; the public URL
+ * changed.
+ */
+export const AGENT_END_REASONS = [
+  "disconnected",
+  "all_disconnected",
+  "turned_off",
+  "unused",
+  "refresh_reused",
+  "code_reused",
+  "person_changed",
+  "issuer_changed",
+] as const
+
 /**
  * Every audit action written today, then the ones only older rows hold. Each has a label in `audit.action` of
  * each locale file, keyed with its dots as underscores (locales.test.ts). No database check uses the list: an
@@ -124,6 +148,10 @@ export type SyncOutcome = (typeof SYNC_OUTCOMES)[number]
 export type JobState = (typeof JOB_STATES)[number]
 export type TelegramOutcome = (typeof TELEGRAM_OUTCOMES)[number]
 export type Language = (typeof LANGUAGES)[number]
+export type AgentArea = (typeof AGENT_AREAS)[number]
+export type AgentConnectionMethod = (typeof AGENT_CONNECTION_METHODS)[number]
+export type AgentResource = (typeof AGENT_RESOURCES)[number]
+export type AgentEndReason = (typeof AGENT_END_REASONS)[number]
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 export type AuditEntityType = (typeof AUDIT_ENTITY_TYPES)[number]
 
@@ -141,6 +169,10 @@ export const syncOutcomeSchema = z.enum(SYNC_OUTCOMES)
 export const jobStateSchema = z.enum(JOB_STATES)
 export const telegramOutcomeSchema = z.enum(TELEGRAM_OUTCOMES)
 export const languageSchema = z.enum(LANGUAGES)
+export const agentAreaSchema = z.enum(AGENT_AREAS)
+export const agentConnectionMethodSchema = z.enum(AGENT_CONNECTION_METHODS)
+export const agentResourceSchema = z.enum(AGENT_RESOURCES)
+export const agentEndReasonSchema = z.enum(AGENT_END_REASONS)
 
 /** The labelled groups, keyed by their section name in the locale files. */
 export const LABELLED_CODES = {

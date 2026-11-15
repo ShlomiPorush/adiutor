@@ -37,9 +37,23 @@ export type SettingsPatch = {
 /** What the settings that hold secrets or may be set by the environment need: the overrides and the cipher. */
 export type SettingsEnv = { overrides: EnvOverrides; cipher: SettingsCipher }
 
+/**
+ * The agent settings: in the row, not yet in the API, the UI or the audit. The agent access release shows and edits
+ * them; until then they stay out of every answer and audit row, so nothing changes for the owner.
+ */
+function withoutAgentSettings(row: SettingsRow) {
+  const { agentsEnabled: _enabled, agentIdleDays: _idle, ...rest } = row
+  return rest
+}
+
 /** The settings as the API shows them: the bot token never leaves the server, only whether it is set. */
 export function settingsView(row: SettingsRow, env: SettingsEnv) {
-  const { telegramBotTokenEnc: _token, telegramChatId: _chat, privateDomains: _domains, ...plain } = row
+  const {
+    telegramBotTokenEnc: _token,
+    telegramChatId: _chat,
+    privateDomains: _domains,
+    ...plain
+  } = withoutAgentSettings(row)
   return {
     ...plain,
     telegram: effectiveTelegram(row, env.overrides, env.cipher).view,
@@ -49,7 +63,7 @@ export function settingsView(row: SettingsRow, env: SettingsEnv) {
 
 /** A settings row for the audit: the encrypted token becomes "set" or "unset". */
 function auditable(row: SettingsRow) {
-  const { telegramBotTokenEnc, ...rest } = row
+  const { telegramBotTokenEnc, ...rest } = withoutAgentSettings(row)
   return { ...rest, telegramBotToken: telegramBotTokenEnc ? "set" : "unset" }
 }
 

@@ -66,7 +66,7 @@ describe("migrations", () => {
     const rows = await sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public' order by table_name`
     expect(rows.map((r) => r.table_name)).toEqual(expected)
-    expect(expected).toHaveLength(25)
+    expect(expected).toHaveLength(29)
   })
 
   it("enforce the unique keys the services rely on", async () => {
@@ -107,6 +107,37 @@ describe("migrations", () => {
     await refused("23514", () => sql`insert into projects (name, slug, stage) values ('Gamma', 'gamma', 'launched')`)
     await refused("23514", () => sql`insert into settings (id) values (2)`)
     await sql`insert into settings default values`
+  })
+
+  it("start a new installation with agents off and the idle days at 90, between 1 and 365", async () => {
+    // The data migration that keeps agents on found no settings row in a new database: the row has the defaults.
+    expect(await sql`select agents_enabled, agent_idle_days from settings`).toEqual([
+      { agents_enabled: false, agent_idle_days: 90 },
+    ])
+    await refused("23514", () => sql`update settings set agent_idle_days = 0`)
+    await refused("23514", () => sql`update settings set agent_idle_days = 366`)
+    await sql`update settings set agent_idle_days = 365`
+  })
+
+  it("keep agent connections to their codes, sync to the REST resource, and one connection per grant", async () => {
+    const connect = (grant: string, resource: string, areas: string[], end: [Date, string] | null = null) => sql`
+      insert into agent_connections
+        (name, connected_via, resource, areas, client_id, grant_id, issuer, approved_at, ended_at, end_reason)
+      values ('Claude Code', 'browser', ${resource}, ${areas}, 'client-1', ${grant}, 'http://127.0.0.1:8090',
+        ${new Date()}, ${end?.[0] ?? null}, ${end?.[1] ?? null})`
+    await connect("grant-1", "rest", ["read", "write", "sync"])
+    await connect("grant-2", "mcp", ["read", "write"], [new Date(), "disconnected"])
+    await refused("23505", () => connect("grant-1", "mcp", ["read"]))
+    await refused("23514", () => connect("grant-3", "mcp", ["read", "sync"]))
+    await refused("23514", () => connect("grant-4", "rest", ["read", "admin"]))
+    await refused("23514", () => connect("grant-5", "files", ["read"]))
+    await refused("23514", () => connect("grant-6", "rest", ["read"], [new Date(), "expired"]))
+    await refused("23514", () => sql`update agent_connections set ended_at = ${new Date()} where grant_id = 'grant-1'`)
+    await sql`insert into agent_state default values`
+    await refused("23514", () => sql`insert into agent_state (id) values (2)`)
+    expect(await sql`select generation, issuer_fingerprint from agent_state`).toEqual([
+      { generation: 0, issuer_fingerprint: null },
+    ])
   })
 
   it("keep items when their project is deleted, and drop a thread link with its item", async () => {
