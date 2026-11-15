@@ -1,6 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { request as httpRequest } from "node:http"
-import { connect } from "node:net"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { and, eq, sql } from "drizzle-orm"
@@ -371,33 +370,6 @@ describe("the deadline of a tool call", () => {
     ;({ h, t } = main)
   })
 
-  it("answers a body that does not arrive within the deadline 408, nothing run, while the client still sends", async () => {
-    const { token } = await connectMcp(["read"])
-    const url = new URL(h.issuer)
-    const answer = await new Promise<{ status: number; stillSending: boolean } | null>((resolve, reject) => {
-      const socket = connect(Number(url.port), url.hostname)
-      let received = ""
-      const timer = setTimeout(() => {
-        socket.destroy()
-        resolve(null)
-      }, SHORT.deadlineMs + 3_000)
-      socket.setEncoding("utf8")
-      socket.on("data", (chunk: string) => {
-        received += chunk
-        if (received.includes("\r\n\r\n")) {
-          clearTimeout(timer)
-          resolve({ status: Number(received.split(" ")[1]), stillSending: socket.writable })
-          socket.destroy()
-        }
-      })
-      socket.on("error", (error) => reject(error))
-      socket.write(
-        `POST /mcp HTTP/1.1\r\nHost: ${url.host}\r\nAuthorization: Bearer ${token}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: 1000\r\n\r\n{"jsonrpc":`,
-      )
-    })
-    expect(answer).toEqual({ status: 408, stillSending: true })
-  })
-
   it("keeps the connection's check again under the deadline", async () => {
     const { token, id } = await connectMcp(["read"])
     const c = await client(token)
@@ -448,63 +420,7 @@ describe("the deadline of a tool call", () => {
   })
 })
 
-describe("the answer cap on the wire", () => {
-  /** One JSON-RPC message or a batch, posted as is; the parsed answer. */
-  async function rpc(token: string, message: unknown) {
-    const r = await post({ authorization: `Bearer ${token}` }, message)
-    return { status: r.status, json: JSON.parse(r.text) as unknown }
-  }
-  const textOf = (answer: { result?: { content?: { text: string }[] } }) =>
-    JSON.parse(answer.result?.content?.[0]?.text ?? "null") as { error?: string }
-
-  it("counts the request id the answer echoes: a long id brings a small result over the cap", async () => {
-    const { token } = await connectMcp(["read"])
-    const id = "i".repeat(LIMITS.answerBytes - 1_000)
-    const answer = await rpc(token, {
-      jsonrpc: "2.0",
-      id,
-      method: "tools/call",
-      params: { name: "get_access", arguments: {} },
-    })
-    expect(answer.status).toBe(200)
-    expect(textOf(answer.json as never).error).toBe("answer_too_large")
-  })
-})
-
 describe("JSON-RPC batches", () => {
-  it("are refused before the transport for an agent connected by approval: nothing runs, a single call still works", async () => {
-    const { token, id } = await connectMcp(["read", "write"])
-    const item = await createItem(t.ctx, owner, { type: "task", title: "Batch" })
-    const update = (requestId: number | undefined, title: string) => ({
-      jsonrpc: "2.0",
-      ...(requestId === undefined ? {} : { id: requestId }),
-      method: "tools/call",
-      params: { name: "adiutor_update_item", arguments: { itemId: item.id, version: 1, title } },
-    })
-    // Two calls with one id (the SDK would run both and answer one), and one without an id (never answered).
-    const batch = await post({ authorization: `Bearer ${token}` }, [
-      update(7, "Batch one"),
-      update(7, "Batch two"),
-      update(undefined, "Batch three"),
-    ])
-    expect(batch.status).toBe(400)
-    expect(JSON.parse(batch.text)).toEqual({
-      jsonrpc: "2.0",
-      error: { code: -32600, message: expect.any(String) },
-      id: null,
-    })
-    const [unchanged] = await t.ctx.db.select().from(items).where(eq(items.id, item.id))
-    expect([unchanged?.title, unchanged?.version]).toEqual(["Batch", 1])
-    expect(await toolCalls(id)).toEqual([])
-    const [row] = await t.ctx.db.select().from(agentConnections).where(eq(agentConnections.id, id))
-    expect(row?.lastUsedAt).toBeNull()
-    // One message per request still works.
-    const single = await post({ authorization: `Bearer ${token}` }, update(8, "Single"))
-    expect(single.status).toBe(200)
-    const [changed] = await t.ctx.db.select().from(items).where(eq(items.id, item.id))
-    expect(changed?.title).toBe("Single")
-  })
-
   it("are still the SDK's on the key path without agent access", async () => {
     const plain = createApp({ checkDatabase: async () => true, core: h.core })
     const key = await createAgentKey(h.core, "batch key")
@@ -579,7 +495,6 @@ describe("the limits of a tool call", () => {
     expect((await toolCalls(id))[0]?.after).toMatchObject({
       tool: "adiutor_update_item",
       outcome: "unknown",
-      disconnected: true,
     })
     const [after] = await t.ctx.db.select().from(items).where(eq(items.id, item.id))
     expect(after?.title).toBe("MCP finished alone")

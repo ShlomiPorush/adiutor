@@ -13,15 +13,7 @@ import {
   severitySchema,
   stageSchema,
 } from "../../shared/enums.ts"
-import {
-  type AgentChannel,
-  agentErrorBody,
-  deliveryOf,
-  REFUSALS,
-  readBody,
-  withBody,
-  withoutPeoplesCredentials,
-} from "../agents/channel.ts"
+import { type AgentChannel, agentErrorBody, REFUSALS, withoutPeoplesCredentials } from "../agents/channel.ts"
 import { DATA_SENTENCE, mayCall, NEVER, TOOLS } from "../agents/policy.ts"
 import { AppError, errorBody, forbidden } from "../errors.ts"
 import { type AuthDeps, agentLabel, authenticate, type Env } from "../http/auth.ts"
@@ -64,7 +56,7 @@ function json(value: unknown): ToolResult {
 }
 
 /** Runs one tool call of an agent connected by approval under the policy core and the limits (agents/channel.ts). */
-export type ToolGuard = (tool: string, run: () => Promise<ToolResult>, requestId?: unknown) => Promise<ToolResult>
+export type ToolGuard = (tool: string, run: () => Promise<ToolResult>) => Promise<ToolResult>
 
 /**
  * An agent connected by approval: only the tools of its areas are listed and registered (TOOLS in agents/policy.ts),
@@ -111,9 +103,7 @@ export function buildMcpServer(ctx: Ctx, by: By, version: string, agent?: AgentM
           openWorldHint: false,
         },
       },
-      // The SDK hands every tool its request's id (`extra.requestId`), which its answer echoes.
-      (async (args: Args, extra: { requestId?: unknown }) =>
-        agent ? agent.guard(name, () => once(args), extra?.requestId) : once(args)) as never,
+      (async (args: Args) => (agent ? agent.guard(name, () => once(args)) : once(args))) as never,
     )
   }
 
@@ -125,8 +115,7 @@ export function buildMcpServer(ctx: Ctx, by: By, version: string, agent?: AgentM
         inputSchema: {},
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       },
-      (async (_args: unknown, extra: { requestId?: unknown }) =>
-        agent.guard("get_access", async () => json(await agent.getAccess()), extra?.requestId)) as never,
+      (async () => agent.guard("get_access", async () => json(await agent.getAccess()))) as never,
     )
 
   tool(
@@ -333,27 +322,6 @@ export function mcpRoutes(deps: AuthDeps & { version: string }, agents?: AgentCh
   return app
 }
 
-/**
- * Whether a body is a JSON-RPC batch (a JSON array). Agents connected by approval send one message per request: the
- * MCP specification removed batching in protocol version 2025-06-18, and a batch's answers would leave the per-call
- * limits and audit (the SDK sends them together, answers duplicate ids once and never answers an id-less call). Body
- * that is not JSON is left to the SDK's own parse error.
- */
-function isBatch(bytes: Uint8Array): boolean {
-  try {
-    return Array.isArray(JSON.parse(new TextDecoder().decode(bytes)))
-  } catch {
-    return false
-  }
-}
-
-/** The SDK's own shape for a request it cannot take (`createJsonErrorResponse`). */
-const BATCH_REFUSED = {
-  jsonrpc: "2.0",
-  error: { code: -32600, message: "Invalid Request: JSON-RPC batches are not accepted; send one message per request." },
-  id: null,
-}
-
 type AgentMcpEnv = { Variables: Env["Variables"] & { agentToken: AgentToken } }
 type AgentToken = Exclude<Awaited<ReturnType<AgentChannel["authenticate"]>>, { refusal: Response }>
 
@@ -375,21 +343,10 @@ function agentMcpRoutes(app: Hono<Env>, deps: AuthDeps & { version: string }, ag
   mcp.all("/", async (c) => {
     const found = c.get("agentToken")
     const { connection, areas } = found.check
-    let request = withoutPeoplesCredentials(c.req.raw)
-    // The body is read under the deadline and the shared cap before the SDK sees it, so a body sent slowly holds
-    // nothing past the deadline; a batch is refused there, in front of the transport (validation the standard allows
-    // in middleware); the SDK then reads the one message from memory, with its own cap and its own parsing.
-    if (request.body) {
-      const read = await readBody(request, agents.limits.bodyBytes.default, agents.limits.deadlineMs)
-      if ("late" in read) return c.json(REFUSALS.tooSlow, 408)
-      if ("tooLarge" in read) return c.json(REFUSALS.tooLarge, 413)
-      if (isBatch(read.bytes)) return c.json(BATCH_REFUSED, 400)
-      request = withBody(request, read.bytes)
-    }
     const by: By = { actor: { kind: "agent", label: agentLabel(c, connection.name) }, source: "mcp" }
     const server = buildMcpServer(deps.ctx, by, deps.version, {
       areas,
-      guard: agents.toolGuard(found, by, deliveryOf(c)),
+      guard: agents.toolGuard(found, by, c.req.raw.signal),
       getAccess: () => agents.accessAnswer(found.check, "mcp"),
     })
     const transport = new WebStandardStreamableHTTPServerTransport({
@@ -398,7 +355,8 @@ function agentMcpRoutes(app: Hono<Env>, deps: AuthDeps & { version: string }, ag
       maxRequestBodySize: agents.limits.bodyBytes.default,
     })
     await server.connect(transport)
-    return transport.handleRequest(request, {
+    // People's credentials removed; the SDK reads the body under its own cap (maxRequestBodySize).
+    return transport.handleRequest(withoutPeoplesCredentials(c.req.raw), {
       authInfo: {
         token: found.token,
         clientId: found.check.clientId,

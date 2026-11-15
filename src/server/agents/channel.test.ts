@@ -1,8 +1,8 @@
 import { Hono } from "hono"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import type { AgentAccess } from "../oauth/access.ts"
 import type { Ctx } from "../services/context.ts"
-import { type ChannelLimits, channelLimits, createAgentChannel } from "./channel.ts"
+import { channelLimits, createAgentChannel } from "./channel.ts"
 import { HEADERS, REVISION } from "./policy.ts"
 
 /*
@@ -45,8 +45,8 @@ const access = {
   recordUse: async () => connection,
 } as unknown as AgentAccess
 
-function app(writes: ReturnType<typeof heldWrites>, auditMs: number, more: Partial<ChannelLimits> = {}) {
-  const limits = { ...channelLimits(), auditMs, ...more }
+function app(writes: ReturnType<typeof heldWrites>, auditMs: number) {
+  const limits = { ...channelLimits(), auditMs }
   const channel = createAgentChannel({ ctx: writes.ctx, access, version: "test", clientIp: () => "x", limits })
   const hono = new Hono()
   hono.all("*", (c) => channel.fetchRest(c))
@@ -96,32 +96,4 @@ describe("audit writes of agent calls", () => {
     writes.release()
     expect((await again).status).toBe(200)
   })
-
-  it("bound shutdown: drain returns after its bound with a row that never settles, and logs how many are owed", async () => {
-    const writes = heldWrites()
-    const { channel, limits, call } = app(writes, 20, { deadlineMs: 100, deliveryMs: 100 })
-    expect((await call("/api/v1/agent/endpoints")).status).toBe(200)
-    const lines: string[] = []
-    const spy = vi.spyOn(console, "error").mockImplementation((line: unknown) => void lines.push(String(line)))
-    const started = Date.now()
-    try {
-      const drained = await Promise.race([
-        channel.drain().then(() => "drained" as const),
-        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 9_000)),
-      ])
-      expect(drained).toBe("drained")
-    } finally {
-      spy.mockRestore()
-    }
-    expect(Date.now() - started).toBeGreaterThanOrEqual(limits.deadlineMs + limits.deliveryMs + limits.auditMs)
-    const logged = lines.filter((line) => line.includes("agent call rows still owed at shutdown"))
-    expect(logged).toHaveLength(1)
-    // One call whose row is still being written: one call owes its row, one write runs (each counted once).
-    expect(JSON.parse(logged[0] ?? "{}")).toMatchObject({ callsUnsettled: 1, rowsWriting: 1 })
-    // The slot stays held while its row may still be written.
-    expect((await call("/api/v1/agent/endpoints")).status).toBe(200)
-    expect((await call("/api/v1/agent/endpoints")).status).toBe(200)
-    expect((await call("/api/v1/agent/endpoints")).status).toBe(429)
-    writes.release()
-  }, 15_000)
 })

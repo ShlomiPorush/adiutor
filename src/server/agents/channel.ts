@@ -1,4 +1,3 @@
-import type { IncomingMessage, ServerResponse } from "node:http"
 import { type Context, Hono, type MiddlewareHandler } from "hono"
 import { bodyLimit } from "hono/body-limit"
 import { HTTPException } from "hono/http-exception"
@@ -31,10 +30,9 @@ import {
  * The agent channel of /api/v1 and the limits and audit it shares with /mcp (the agent-access standard, "The REST
  * channel"). Built only where createApp is given `agentOAuth`; without it /api/v1 and /mcp answer as before (agent keys
  * and the owner's browser session). A request to /api/v1 that carries an Authorization header is an agent's: it goes to
- * an agent router of its own, built from the open map alone, with the owner's cookie and any key header removed, so it
- * never acts through a browser session nor keeps one alive. There the token is checked first (401), the router picks the
- * route, and the policy check runs before the route's code: area (403), policy revision and declared kind (409), a free
- * slot (429). Anything the agent router has no route for is closed (403).
+ * an agent router of its own, built from the open map alone, with the owner's cookie and any key header removed. There
+ * the token is checked first (401); a slot is taken (429 busy); then the route and area (403) and the policy revision
+ * and declared kind (409), each refusal recorded in the slot. Anything the agent router has no route for is closed.
  */
 
 export type ChannelLimits = {
@@ -47,10 +45,8 @@ export type ChannelLimits = {
   /** Calls running at once per connection and in total, REST and MCP together. */
   perConnection: number
   total: number
-  /** An audit write gives up waiting after this long; the answer never waits longer for it. */
+  /** The answer waits at most this long for its audit row; the write goes on, in the call's slot. */
   auditMs: number
-  /** How long an answer may take to reach the client once it goes out; then the connection is closed (`unknown`). */
-  deliveryMs: number
   /** A `busy` refusal is recorded once per connection in this window. */
   busyWindowMs: number
   /** Invalid tokens per client address. */
@@ -65,7 +61,6 @@ export function channelLimits(now: () => number = Date.now): ChannelLimits {
     perConnection: 3,
     total: 6,
     auditMs: 5_000,
-    deliveryMs: 60_000,
     busyWindowMs: 60_000,
     badTokens: new WindowLimit(20, 60_000, now),
   }
@@ -104,20 +99,7 @@ export const REFUSALS = {
   },
   connectionEnded: { error: "connection_ended", message: "This connection has ended. Connect again." },
   tooLarge: { error: "too_large", message: "The request body is too large." },
-  tooSlow: {
-    error: "request_timeout",
-    message: "The request body did not arrive in time. Nothing ran; send it again.",
-  },
 } as const
-
-/**
- * Room for the JSON-RPC envelope around a tool answer, besides its id (counted on its own): `{"jsonrpc":"2.0",
- * "id":,"result":}` takes under 40 bytes.
- */
-const ENVELOPE_BYTES = 64
-
-/** What `drain` waits beyond the longest a call's run, delivery and row can take. */
-const DRAIN_MARGIN_MS = 5_000
 
 /** A failure whose outcome may be unknown (a 5xx after an action). */
 const INTERNAL = { error: "internal_error", message: "Something went wrong on the server." } as const
@@ -128,16 +110,14 @@ const answerTooLarge = (cap: number, kind: Kind) => ({
   message: `The answer is larger than ${Math.floor(cap / 1024 / 1024)} MiB. Ask for less (a filter, a smaller limit).${kind === "act" ? " The action ran: read its result before you try again." : ""}`,
 })
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref?.())
+
 /** Resolves "late" when the work has not ended within the deadline; the work goes on either way. */
 function within<T>(work: Promise<T>, ms: number): Promise<{ late: true } | { late: false; value: T }> {
-  let timer: NodeJS.Timeout | undefined
-  const late = new Promise<{ late: true }>((resolve) => {
-    timer = setTimeout(() => resolve({ late: true }), ms)
-    timer.unref?.()
-  })
-  return Promise.race([work.then((value) => ({ late: false as const, value })), late]).finally(() =>
-    clearTimeout(timer),
-  )
+  return Promise.race([
+    work.then((value) => ({ late: false as const, value })),
+    sleep(ms).then(() => ({ late: true as const })),
+  ])
 }
 
 /** Calls running now, per connection and in total, shared by the REST channel and MCP. Never waits: full is `busy`. */
@@ -180,98 +160,14 @@ export type AgentChannelOptions = {
   limits?: ChannelLimits
 }
 
-type Bindings = { incoming?: IncomingMessage }
-
 /** A request's checked token: the token and what agent access answered for it. */
 export type AgentToken = { token: string; check: Extract<TokenCheck, { ok: true }> }
 
-/** The number of header lines named `name` as the client sent them, when the Node request is at hand. */
-function headerLines(c: Context, name: string): number | null {
-  const raw = (c.env as Bindings | undefined)?.incoming?.rawHeaders
-  if (!raw) return null
-  let count = 0
-  for (let i = 0; i < raw.length; i += 2) if (raw[i]?.toLowerCase() === name) count++
-  return count
-}
-
-/** An RFC 6750 token after exactly one `Bearer` and one space. */
+/**
+ * An RFC 6750 token after exactly one `Bearer` and one space. Repeated headers arrive joined by ", " (the adapter
+ * appends them), which never matches: two Authorization headers are `invalid_request`.
+ */
 const BEARER = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i
-
-/**
- * Reads a request's body under a deadline and a cap, so a client that sends it slowly or without end holds nothing past
- * the deadline: `late` once the deadline passed (the read is cancelled), `tooLarge` past the cap.
- */
-export async function readBody(
-  raw: Request,
-  maxBytes: number,
-  ms: number,
-): Promise<{ bytes: Uint8Array } | { late: true } | { tooLarge: true }> {
-  const reader = raw.body?.getReader()
-  if (!reader) return { bytes: new Uint8Array() }
-  const chunks: Uint8Array[] = []
-  const read = (async (): Promise<{ bytes: Uint8Array } | { tooLarge: true }> => {
-    let size = 0
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      size += value.byteLength
-      if (size > maxBytes) return { tooLarge: true }
-      chunks.push(value)
-    }
-    const bytes = new Uint8Array(size)
-    let at = 0
-    for (const chunk of chunks) {
-      bytes.set(chunk, at)
-      at += chunk.byteLength
-    }
-    return { bytes }
-  })()
-  read.catch(() => undefined)
-  const done = await within(read, ms)
-  if (done.late || "tooLarge" in done.value) {
-    void reader.cancel().catch(() => undefined)
-    return done.late ? { late: true } : done.value
-  }
-  return done.value
-}
-
-/**
- * Whether the answer to this request reached the client: true once Node's response was written whole, false when the
- * connection closed before (the response's `close` without `writableFinished`). Subscribe before the answer goes out.
- * Without a Node response (the app driven directly, in unit tests) it is whether the request was aborted.
- */
-export function deliveryOf(c: Context): Delivery {
-  const outgoing = (c.env as { outgoing?: ServerResponse } | undefined)?.outgoing
-  if (!outgoing) return () => Promise.resolve(!c.req.raw.signal.aborted)
-  const closed: Promise<boolean> = outgoing.writableFinished
-    ? Promise.resolve(true)
-    : outgoing.destroyed
-      ? Promise.resolve(false)
-      : new Promise((resolve) => outgoing.once("close", () => resolve(outgoing.writableFinished)))
-  // A client that stops reading keeps the write from finishing: after `ms` the connection is closed, never delivered.
-  return (ms) => {
-    let timer: NodeJS.Timeout | undefined
-    const late = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => {
-        outgoing.destroy()
-        resolve(false)
-      }, ms)
-      timer.unref?.()
-    })
-    return Promise.race([closed, late]).finally(() => clearTimeout(timer))
-  }
-}
-
-/** Whether the answer reached the client, waiting at most `ms` for it to be written. */
-export type Delivery = (ms: number) => Promise<boolean>
-
-/** The same request with a body already read, for a handler that reads it again (its length no longer declared). */
-export function withBody(request: Request, bytes: Uint8Array): Request {
-  const headers = new Headers(request.headers)
-  headers.delete("content-length")
-  headers.delete("transfer-encoding")
-  return new Request(request.url, { method: request.method, headers, signal: request.signal, body: bytes })
-}
 
 /** A request whose headers people's credentials were removed from: the Cookie and any API key header. */
 export function withoutPeoplesCredentials(raw: Request): Request {
@@ -297,11 +193,8 @@ export function createAgentChannel(options: AgentChannelOptions) {
   const running = slots(limits)
   /** When `busy` was last recorded, per connection. */
   const busySeen = new Map<string, number>()
-  /** What `drain` waits for: audit writes and calls not settled yet. */
-  const pending = new Set<Promise<void>>()
-  /** For the shutdown log: audit writes begun and not settled, and calls whose work or row has not settled. */
-  let writing = 0
-  let unsettledCalls = 0
+  /** Audit writes still running, for `drain`. */
+  const writing = new Set<Promise<void>>()
   const issuer = access.issuer ?? ""
   const metadata = (resource: AgentResource) =>
     `${issuer}/.well-known/oauth-protected-resource${resource === "mcp" ? "/mcp" : "/api/v1"}`
@@ -322,38 +215,22 @@ export function createAgentChannel(options: AgentChannelOptions) {
   }
 
   /**
-   * Writes an audit row; never throws, and the answer never waits longer than the row's own deadline. The write itself
-   * goes on: it stays in `pending` until it settles (`drain` waits for every one on shutdown), and `settled` runs then,
-   * so a caller holding a slot gives it back only once its row is really written or failed.
+   * Writes an audit row; never throws, and the answer waits at most `auditMs` for it. `written` runs once the write has
+   * settled (a call's slot comes back only then); `drain` waits for writes still running.
    */
-  async function audit(by: By, entry: Parameters<typeof writeAudit>[3], settled?: () => void): Promise<void> {
-    writing++
-    const write = writeAudit(ctx, ctx.db, by, entry).catch((error: unknown) => {
-      log.error("an agent call was not audited", errorFacts(error))
-    })
-    track(write)
-    void write.finally(() => {
-      writing--
-      settled?.()
-    })
-    let timer: NodeJS.Timeout | undefined
-    const gaveUp = new Promise<void>((resolve) => {
-      timer = setTimeout(() => {
-        log.error("an agent call's audit row is late", {})
-        resolve()
-      }, limits.auditMs)
-      timer.unref?.()
-    })
-    await Promise.race([write, gaveUp]).finally(() => clearTimeout(timer))
+  async function audit(by: By, entry: Parameters<typeof writeAudit>[3], written?: () => void): Promise<void> {
+    const write: Promise<void> = writeAudit(ctx, ctx.db, by, entry)
+      .catch((error: unknown) => log.error("an agent call was not audited", errorFacts(error)))
+      .finally(() => {
+        writing.delete(write)
+        written?.()
+      })
+    writing.add(write)
+    await Promise.race([write, sleep(limits.auditMs)])
   }
 
-  /** The one audit entry of an agent call, with its outcome; `settled` runs once the row is written or failed. */
-  function record(
-    call: CallEntry,
-    outcome: Outcome,
-    details: Record<string, unknown> = {},
-    settled?: () => void,
-  ): Promise<void> {
+  /** The one audit entry of an agent call, with its outcome. */
+  function record(call: CallEntry, outcome: Outcome, details: Record<string, unknown> = {}, written?: () => void) {
     return audit(
       call.by,
       {
@@ -368,14 +245,11 @@ export function createAgentChannel(options: AgentChannelOptions) {
           ...details,
         },
       },
-      settled,
+      written,
     )
   }
 
-  /**
-   * `busy`, the one refusal made without a slot, is recorded once per window per connection (the standard allows
-   * thinning it alone); every other refusal is made and recorded inside the call's slot.
-   */
+  /** `busy`, the one refusal made without a slot, is recorded once per window per connection. */
   async function recordBusy(call: CallEntry, details: Record<string, unknown>): Promise<void> {
     const id = call.connection.id
     const now = Date.now()
@@ -386,41 +260,18 @@ export function createAgentChannel(options: AgentChannelOptions) {
     await record(call, "denied", details)
   }
 
-  /** A refusal made in the call's slot: its row is written there, and the slot comes back once the row settled. */
-  function recordInSlot(call: CallEntry, details: Record<string, unknown>): Promise<void> {
-    const id = call.connection.id
-    return record(call, "denied", details, () => running.give(id))
-  }
-
-  /** Waits for `work` before `drain` may finish. */
-  function track(work: Promise<unknown>): void {
-    const settled = work.then(
-      () => undefined,
-      () => undefined,
-    )
-    pending.add(settled)
-    void settled.finally(() => pending.delete(settled))
-  }
-
   /**
    * The token of an agent request for `resource`: exactly one `Authorization: Bearer <token>`, checked by agent access
-   * (oauth/access.ts checkToken). Invalid tokens count per client address; past the limit an address is refused before
-   * its token is read, and the first refusal of a window is logged and audited once.
+   * (oauth/access.ts checkToken). Invalid tokens count per client address, before the first await (lesson 23); a valid
+   * one gives its place back. Past the limit an address is refused, logged and audited once per window.
    */
-  async function authenticate(
-    c: Context,
-    resource: AgentResource,
-  ): Promise<{ refusal: Response } | { token: string; check: Extract<TokenCheck, { ok: true }> }> {
+  async function authenticate(c: Context, resource: AgentResource): Promise<{ refusal: Response } | AgentToken> {
     const header = c.req.header("authorization")
     if (header === undefined) return { refusal: challenge(c, resource) }
-    const lines = headerLines(c, "authorization")
     const match = BEARER.exec(header)
-    if (!match?.[1] || (lines !== null && lines !== 1)) return { refusal: challenge(c, resource, "invalid_request") }
-    // Counted before the first await, so requests sent at once cannot all pass (lesson 23); a valid token gives its
-    // place back, so only invalid ones stay counted. An address over the limit is refused before its token is read.
+    if (!match?.[1]) return { refusal: challenge(c, resource, "invalid_request") }
     const address = options.clientIp(c)
     if (!limits.badTokens.take(address)) {
-      // The first refusal of a window is logged and audited once (the block), never a token.
       if (limits.badTokens.firstOver(address)) {
         log.warn("agent tokens refused: too many invalid tokens from one address", { resource })
         await audit(SYSTEM, {
@@ -462,71 +313,36 @@ export function createAgentChannel(options: AgentChannelOptions) {
   }
 
   /**
-   * Runs one call under the limits: a slot (taken by the caller), the deadline and the audit entry; the slot is given
-   * back once both the work and the entry are done. The answer goes out first, and the entry is written once its fate is
-   * known (`delivered`): written whole to the client, the judged outcome; the client gone first, `unknown`. A call past
-   * its deadline is recorded `unknown` and answered at once; its work goes on in its slot.
+   * Runs one call in its slot (taken by the caller) under the deadline, and writes its one row before the answer goes
+   * out: past the deadline `unknown`, a client already gone (the request's abort signal) `unknown`, else the judged
+   * outcome. The slot comes back once both the work and the row have settled; a late call's work goes on in it.
    */
   async function guarded<T>(
     call: CallEntry,
     work: Promise<T>,
     judge: (value: T) => Promise<{ outcome: Outcome; details?: Record<string, unknown> }>,
-    /** Whether the answer reached the client (deliveryOf). */
-    delivered: Delivery,
+    signal: AbortSignal,
   ): Promise<{ late: true } | { late: false; value: T }> {
-    const id = call.connection.id
-    work.catch(() => undefined)
-    // The call's row is owed from now on: `drain` waits for it, also while the work still runs after its client left.
-    let owed = () => {}
-    unsettledCalls++
-    track(
-      new Promise<void>((resolve) => {
-        owed = () => {
-          unsettledCalls--
-          resolve()
-        }
-      }),
-    )
-    // The slot comes back once the work and its row have both settled.
     let left = 2
     const release = () => {
-      if (--left === 0) {
-        running.give(id)
-        owed()
-      }
+      if (--left === 0) running.give(call.connection.id)
     }
     void work.then(release, release)
-    let done: Awaited<ReturnType<typeof within<T>>>
-    try {
-      done = await within(work, limits.deadlineMs)
-    } catch (error) {
-      await record(call, "error", {}, release)
-      throw error
-    }
+    const done = await within(work, limits.deadlineMs)
     if (done.late) {
       await record(call, "unknown", {}, release)
       return done
     }
-    let judged: { outcome: Outcome; details?: Record<string, unknown> }
-    try {
-      judged = await judge(done.value)
-    } catch (error) {
-      await record(call, "error", {}, release)
-      throw error
-    }
-    // An answer that broke off (the client left before it was written) never reached the agent: its outcome is unknown
-    // to it. Tracked from now on, so `drain` waits for the row although it begins after the answer.
-    track(
-      delivered(limits.deliveryMs).then((sent) =>
-        sent
-          ? record(call, judged.outcome, judged.details, release)
-          : record(call, "unknown", { ...judged.details, disconnected: true }, release),
-      ),
-    )
+    const { outcome, details } = await judge(done.value)
+    await record(call, signal.aborted ? "unknown" : outcome, details, release)
     return done
   }
 
   // --- The agent router of /api/v1 ---
+
+  type AgentCall = AgentToken & { by: By }
+  type AgentEnv = { Variables: Env["Variables"] & { agent: AgentCall; ended?: boolean } }
+  const callOf = (c: Context) => (c as Context<AgentEnv>).get("agent")
 
   const handlers: Record<string, RouteHandler> = {
     ...openRouteHandlers({ ctx }),
@@ -539,15 +355,16 @@ export function createAgentChannel(options: AgentChannelOptions) {
     },
   }
 
-  type AgentCall = { token: string; check: Extract<TokenCheck, { ok: true }>; by: By }
-  type AgentEnv = { Variables: Env["Variables"] & { agent: AgentCall; ended?: boolean } }
-  const callOf = (c: Context) => (c as Context<AgentEnv>).get("agent")
-
-  /** The policy check of one open route, then its code under the limits, and its audit entry. */
+  /**
+   * The policy check of one open route, then its code under the limits, and its audit entry. A slot first, so every
+   * refusal below is recorded in it like any call (without one, nothing runs: busy); then the area (403), then the
+   * policy revision and the declared kind (409; repeated headers arrive joined, which never matches).
+   */
   const policy =
     (route: OpenRoute): MiddlewareHandler<AgentEnv> =>
     async (c, next) => {
       const { check, by } = c.get("agent")
+      const id = check.connection.id
       const call: CallEntry = {
         connection: check.connection,
         by,
@@ -556,46 +373,34 @@ export function createAgentChannel(options: AgentChannelOptions) {
         method: c.req.method,
         kind: route.kind,
       }
-      // A slot first, so every refusal below is recorded inside it like any call; without one, nothing runs: busy.
-      if (!running.take(check.connection.id)) {
+      if (!running.take(id)) {
         await recordBusy(call, { status: 429 })
         return c.json(REFUSALS.busy, 429)
       }
-      if (!mayCall(check.areas, route.area)) {
-        await recordInSlot(call, { status: 403 })
-        return c.json({ ...REFUSALS.areaNotGranted, area: route.area }, 403)
+      const refuse = async (status: 403 | 409, body: object) => {
+        await record(call, "denied", { status }, () => running.give(id))
+        return c.json(body, status)
       }
-      if (!route.exempt) {
-        const revision = c.req.header(HEADERS.policy)
-        const kind = c.req.header(HEADERS.kind)
-        const single = (name: string) => {
-          const lines = headerLines(c, name)
-          return lines === null || lines === 1
-        }
-        if (revision !== REVISION || kind !== route.kind || !single(HEADERS.policy) || !single(HEADERS.kind)) {
-          await recordInSlot(call, { status: 409 })
-          return c.json(REFUSALS.policyChanged, 409)
-        }
-      }
-      // Subscribed before the answer goes out: whether it reached the client.
-      const delivered = deliveryOf(c)
-      // The body limit, the use (counted) and the route's code (agentUse below), under the deadline.
-      const work = next()
+      if (!mayCall(check.areas, route.area)) return refuse(403, { ...REFUSALS.areaNotGranted, area: route.area })
+      if (!route.exempt && (c.req.header(HEADERS.policy) !== REVISION || c.req.header(HEADERS.kind) !== route.kind))
+        return refuse(409, REFUSALS.policyChanged)
       let tooLarge = false
       const done = await guarded(
         call,
-        work,
+        next(),
         async () => {
           if (c.get("ended")) return { outcome: "denied", details: { status: 401 } }
           const status = c.res.status
           const answer = await c.res.clone().arrayBuffer()
           tooLarge = answer.byteLength > limits.answerBytes
-          if (tooLarge) return { outcome: "error", details: { status, answerTooLarge: true } }
           // A 2xx answer that says it failed: a sync run whose records failed, in part or whole.
-          const failed = status < 400 && route.area === "sync" && syncFailed(answer)
-          return { outcome: status < 400 && !failed ? "ok" : "error", details: { status } }
+          const failed = status >= 400 || tooLarge || (route.area === "sync" && syncFailed(answer))
+          return {
+            outcome: failed ? "error" : "ok",
+            details: { status, ...(tooLarge ? { answerTooLarge: true } : {}) },
+          }
         },
-        delivered,
+        c.req.raw.signal,
       )
       if (done.late) return c.json(REFUSALS.unknown, 504)
       if (c.get("ended")) return
@@ -604,10 +409,10 @@ export function createAgentChannel(options: AgentChannelOptions) {
     }
 
   /**
-   * After the body limit and right before the route's own code: the whole body is read first (under the limit and the
-   * deadline; the route reads it again from Hono's cache), then a real call counts as use (the idle rule; `access` and
-   * `endpoints` do not, and a body the limit refused never gets here) and the connection is read again. A connection
-   * that ended since its token was checked, also while its body was still arriving, runs nothing (401).
+   * After the body limit and right before the route's own code: the whole body is read first (the route reads it again
+   * from Hono's cache), then a real call counts as use (`access` and `endpoints` do not, and a body the limit refused
+   * never gets here) and the connection is read again: one that ended meanwhile, also while its body arrived, runs
+   * nothing (401).
    */
   const agentUse =
     (route: OpenRoute): MiddlewareHandler<AgentEnv> =>
@@ -642,10 +447,11 @@ export function createAgentChannel(options: AgentChannelOptions) {
     const limit = route.area === "sync" ? syncLimit : defaultLimit
     rest.on(route.method, honoPath(route.path), policy(route), limit, agentUse(route), handler as never)
   }
-  // Anything else is closed to agents: the router picked no open route.
+  // Anything else is closed to agents: the router picked no open route. As for an open route: a slot, then the row.
   const closed = async (c: Context<AgentEnv>) => {
     const agent = c.get("agent")
     if (agent) {
+      const id = agent.check.connection.id
       const call: CallEntry = {
         connection: agent.check.connection,
         by: agent.by,
@@ -654,12 +460,11 @@ export function createAgentChannel(options: AgentChannelOptions) {
         method: c.req.method,
         kind: null,
       }
-      // As for an open route: a slot first, then the refusal recorded in it.
-      if (!running.take(agent.check.connection.id)) {
+      if (!running.take(id)) {
         await recordBusy(call, { status: 429 })
         return c.json(REFUSALS.busy, 429)
       }
-      await recordInSlot(call, { status: 403 })
+      await record(call, "denied", { status: 403 }, () => running.give(id))
     }
     return c.json(REFUSALS.closed, 403)
   }
@@ -676,12 +481,12 @@ export function createAgentChannel(options: AgentChannelOptions) {
 
   /**
    * Runs one MCP tool call through the same policy core as a REST call: a free slot, the connection checked again (the
-   * call may have waited, and the token been refused or the connection ended meanwhile; a real tool call counts as use,
-   * get_access does not), the tool's area, then the tool under the deadline and the answer cap, with its audit entry.
+   * call may have waited, and the connection ended meanwhile; a real tool call counts as use, get_access does not), the
+   * tool's area, then the tool under the deadline and the answer cap, with its audit entry.
    */
-  function toolGuard(found: AgentToken, by: By, delivered: Delivery): ToolGuard {
+  function toolGuard(found: AgentToken, by: By, signal: AbortSignal): ToolGuard {
     const id = found.check.connection.id
-    return async (tool, run, requestId) => {
+    return async (tool, run) => {
       const rule = TOOLS[tool]
       const call: CallEntry = {
         connection: found.check.connection,
@@ -699,23 +504,20 @@ export function createAgentChannel(options: AgentChannelOptions) {
         return fail(REFUSALS.busy)
       }
       type Ran = { refusal: string; body: object } | { result: ToolResult }
-      // The check again and the tool, both under the deadline, in the slot.
       const work = (async (): Promise<Ran> => {
-        let again: TokenCheck
-        try {
-          again = await access.checkToken(found.token, "mcp", { use: tool !== "get_access" })
-        } catch (error) {
+        const again = await access.checkToken(found.token, "mcp", { use: tool !== "get_access" }).catch((error) => {
           log.error("an agent's connection could not be checked", errorFacts(error))
-          return { refusal: "check_failed", body: INTERNAL }
-        }
+          return null
+        })
+        if (!again) return { refusal: "check_failed", body: INTERNAL }
         if (!again.ok || again.connection.id !== id)
           return { refusal: "connection_ended", body: REFUSALS.connectionEnded }
         if (!rule || !mayCall(again.areas, rule.area))
           return { refusal: "area_not_granted", body: REFUSALS.areaNotGranted }
+        // Never the error's message: it may hold a query or the owner's text.
         const result = await run().catch((error: unknown): ToolResult => {
-          // Never the error's message: it may hold a query or the owner's text.
           log.error("an agent's tool call failed", { tool, ...errorFacts(error) })
-          return { content: [{ type: "text", text: JSON.stringify(INTERNAL) }], isError: true }
+          return fail(INTERNAL)
         })
         return { result }
       })()
@@ -725,16 +527,11 @@ export function createAgentChannel(options: AgentChannelOptions) {
         work,
         async (ran) => {
           if ("refusal" in ran) return { outcome: "denied", details: { refusal: ran.refusal } }
-          // What goes on the wire (one message per request: batches are refused): the serialized result, its text
-          // escaped once more, the request id the SDK echoes, and the envelope.
-          const size =
-            Buffer.byteLength(JSON.stringify(ran.result)) +
-            Buffer.byteLength(JSON.stringify(requestId ?? null)) +
-            ENVELOPE_BYTES
-          tooLarge = size > limits.answerBytes
+          // The serialized result, so text full of escapes is measured as it goes out.
+          tooLarge = Buffer.byteLength(JSON.stringify(ran.result)) > limits.answerBytes
           return { outcome: tooLarge || ran.result.isError ? "error" : "ok" }
         },
-        delivered,
+        signal,
       )
       if (done.late) return fail(REFUSALS.unknown)
       if ("refusal" in done.value) return fail(done.value.body)
@@ -746,29 +543,12 @@ export function createAgentChannel(options: AgentChannelOptions) {
   return {
     issuer,
     limits,
-    slots: running,
     toolGuard,
     authenticate,
     accessAnswer,
-    record,
-    guarded,
-    challenge,
-    /** Waits until every audit write begun so far has settled: on shutdown, before the database closes. */
+    /** Waits for the audit writes still running: on shutdown, before the database closes. */
     async drain(): Promise<void> {
-      // The shutdown bound: the longest a call can still take to run, to deliver its answer and to write its row, and
-      // a margin. Past it (a database that stopped answering), shutdown goes on; the held slots stay held.
-      const bound = limits.deadlineMs + limits.deliveryMs + limits.auditMs + DRAIN_MARGIN_MS
-      let timer: NodeJS.Timeout | undefined
-      const late = new Promise<"late">((resolve) => {
-        timer = setTimeout(() => resolve("late"), bound)
-        timer.unref?.()
-      })
-      const all = (async () => {
-        while (pending.size > 0) await Promise.allSettled([...pending])
-      })()
-      const done = await Promise.race([all, late]).finally(() => clearTimeout(timer))
-      if (done === "late")
-        log.error("agent call rows still owed at shutdown", { callsUnsettled: unsettledCalls, rowsWriting: writing })
+      while (writing.size > 0) await Promise.allSettled([...writing])
     },
     /** The routes of the agent router, for the exposure test. */
     restRoutes: rest.routes,

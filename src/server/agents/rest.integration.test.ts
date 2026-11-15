@@ -900,7 +900,6 @@ describe("a call whose client left", () => {
     expect((await calls(id))[0]?.after).toMatchObject({
       route: "PATCH /api/v1/items/{id}",
       outcome: "unknown",
-      disconnected: true,
     })
     const [after] = await t.ctx.db.select().from(items).where(eq(items.id, item.id))
     expect(after?.title).toBe("Finished alone")
@@ -955,47 +954,6 @@ describe("a body the limit refused", () => {
   })
 })
 
-describe("the answer before its row", () => {
-  it("goes out before the row is written, and the row says ok once the answer was delivered, though the client left", async () => {
-    const { token, id } = await connect(["read"], "Delivered")
-    // The audit table locked in a transaction of its own: the call's row waits until it is released.
-    let release = () => {}
-    const released = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    let locked = () => {}
-    const isLocked = new Promise<void>((resolve) => {
-      locked = resolve
-    })
-    const holder = t.ctx.db.transaction(async (tx) => {
-      await tx.execute(sql`lock table audit in exclusive mode`)
-      locked()
-      await released
-    })
-    await isLocked
-    let answer: Res | "hung"
-    try {
-      // The whole answer arrives, and the client's connection closes, while the row is still held.
-      answer = await Promise.race([
-        rawCall("GET", "/api/v1/items", [
-          "authorization",
-          `Bearer ${token}`,
-          HEADERS.policy,
-          REVISION,
-          HEADERS.kind,
-          "read",
-        ]),
-        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 2_000)),
-      ])
-    } finally {
-      release()
-      await holder
-    }
-    expect(answer === "hung" ? "hung" : answer.status).toBe(200)
-    expect((await calls(id)).map((e) => (e.after as { outcome: string }).outcome)).toEqual(["ok"])
-  })
-})
-
 describe("a connection that ended while its body arrived", () => {
   it("runs nothing: the connection is read again once the whole body is in, also when it was used within the minute", async () => {
     const { token, id } = await connect(["read", "write"], "Slow body")
@@ -1028,114 +986,5 @@ describe("a connection that ended while its body arrived", () => {
       socket.destroy()
     }
     expect(await t.ctx.db.select().from(items).where(eq(items.title, title))).toEqual([])
-  })
-})
-
-/** Within `ms`, or "hung". */
-const within = <T>(work: Promise<T>, ms: number) =>
-  Promise.race([work, new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), ms))])
-
-describe("an answer the client stops reading", () => {
-  // A harness with a cap that lets a 32 MB answer out, a one-second bound on its delivery and one slot a connection.
-  let main: { h: OAuthHarness; t: TestDatabase }
-  beforeAll(async () => {
-    main = { h, t }
-    t = await createTestDatabase("agents_delivery")
-    h = await oauthHarness(t, {
-      channel: { ...channelLimits(), answerBytes: 64 * 1024 * 1024, deliveryMs: 1_000, perConnection: 1 },
-    })
-  })
-  afterAll(async () => {
-    await h?.close()
-    await t?.close()
-    ;({ h, t } = main)
-  })
-
-  it("is cut off after the bound: the call is recorded unknown once, and its slot comes back", async () => {
-    const { token, id } = await connect(["read"], "Stops reading")
-    const item = await anItem()
-    await t.ctx.db.execute(
-      sql`insert into comments (item_id, author_kind, text) select ${item.id}, 'owner', repeat('x', 40000) from generate_series(1, 800)`,
-    )
-    const url = new URL(h.issuer)
-    const socket = netConnect(Number(url.port), url.hostname)
-    // The client reads the first bytes of the answer, then nothing more, and keeps the connection open.
-    const started = new Promise<void>((resolve) =>
-      socket.once("data", () => {
-        socket.pause()
-        resolve()
-      }),
-    )
-    socket.write(
-      `GET /api/v1/items/${item.id} HTTP/1.1\r\nHost: ${url.host}\r\nAuthorization: Bearer ${token}\r\n${HEADERS.policy}: ${REVISION}\r\n${HEADERS.kind}: read\r\n\r\n`,
-    )
-    try {
-      await started
-      const rows = await within(calls(id), 15_000)
-      expect(rows === "hung" ? "hung" : rows.map((e) => (e.after as { outcome: string }).outcome)).toEqual(["unknown"])
-      expect((await call(token, "GET", "/api/v1/items")).status).toBe(200)
-    } finally {
-      socket.destroy()
-    }
-  })
-})
-
-describe("shutdown while a call's client is gone", () => {
-  let main: { h: OAuthHarness; t: TestDatabase }
-  beforeAll(async () => {
-    main = { h, t }
-    t = await createTestDatabase("agents_owed")
-    h = await oauthHarness(t)
-  })
-  afterAll(async () => {
-    await h?.close()
-    await t?.close()
-    ;({ h, t } = main)
-  })
-
-  it("drains only once the row of every call that began is written, also after its client left", async () => {
-    const { token, id } = await connect(["read", "write"], "Owed")
-    const item = await anItem()
-    const row = await holdRow("items", item.id)
-    const url = new URL(h.issuer)
-    const body = JSON.stringify({ version: 1, title: "After the client" })
-    const req = httpRequest({
-      host: url.hostname,
-      port: Number(url.port),
-      path: `/api/v1/items/${item.id}`,
-      method: "PATCH",
-      agent: false,
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        "content-length": String(Buffer.byteLength(body)),
-        [HEADERS.policy]: REVISION,
-        [HEADERS.kind]: "act",
-      },
-    })
-    req.on("error", () => undefined)
-    req.end(body)
-    let drained = false
-    let drain: Promise<void> = Promise.resolve()
-    try {
-      await row.waiting()
-      // The client leaves while the act waits; the server stops, with no socket left to wait for; then the drain.
-      req.destroy()
-      await new Promise<void>((resolve) => h.server.close(() => resolve()))
-      drain = h.mount.drain().then(() => {
-        drained = true
-      })
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      expect(drained).toBe(false)
-    } finally {
-      await row.release()
-    }
-    await drain
-    // Read without draining again: the row is there once drain returned.
-    const rows = await t.ctx.db
-      .select()
-      .from(audit)
-      .where(and(eq(audit.action, "agent.api_call"), eq(audit.entityId, id)))
-    expect(rows.map((r) => (r.after as { outcome: string }).outcome)).toEqual(["unknown"])
   })
 })
