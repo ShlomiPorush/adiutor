@@ -123,7 +123,7 @@ describe("migrations", () => {
     const connect = (grant: string, resource: string, areas: string[], end: [Date, string] | null = null) => sql`
       insert into agent_connections
         (name, connected_via, resource, areas, client_id, grant_id, issuer, approved_at, ended_at, end_reason)
-      values ('Claude Code', 'browser', ${resource}, ${sql.array(areas)}, 'client-1', ${grant}, 'http://127.0.0.1:8090',
+      values ('Claude Code', 'browser', ${resource}, ${areas}, 'client-1', ${grant}, 'http://127.0.0.1:8090',
         ${new Date()}, ${end?.[0] ?? null}, ${end?.[1] ?? null})`
     await connect("grant-1", "rest", ["read", "write", "sync"])
     await connect("grant-2", "mcp", ["read", "write"], [new Date(), "disconnected"])
