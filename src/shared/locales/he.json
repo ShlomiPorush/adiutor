@@ -695,7 +695,9 @@
       "agent_end": "סיים חיבור של סוכן",
       "agent_end_all": "סיים את כל חיבורי הסוכנים",
       "agent_blocked": "חסם בקשות סוכנים אחרי ניסיונות רבים מדי",
-      "agent_settings_update": "עדכן את הגדרות הסוכנים"
+      "agent_settings_update": "עדכן את הגדרות הסוכנים",
+      "agent_api_call": "קרא ל-API",
+      "agent_tool_call": "השתמש בכלי MCP"
     },
     "field": {
       "status": "סטטוס",

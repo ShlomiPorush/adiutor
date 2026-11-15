@@ -38,6 +38,7 @@ import {
   settingsView,
   updateSettings,
 } from "../services/admin.ts"
+import type { Ctx } from "../services/context.ts"
 import { addComment, captureItem, createItem, deleteItem, linkThread, updateItem } from "../services/items.ts"
 import {
   createNote,
@@ -156,20 +157,84 @@ function versionParam(c: Context): number {
 
 /** Sync pushes come from the sync tool with a token, never from a browser. */
 function requireToken(c: Context<Env>) {
-  if (c.get("auth").via !== "token") throw forbidden("Sync data is pushed with an agent key.")
+  if (c.get("auth").via === "session") throw forbidden("Sync data is pushed with an agent key.")
 }
+
+/** A route's own code, after its authentication. */
+export type RouteHandler = (c: Context<Env>) => Promise<Response>
+
+/**
+ * The code of every route open to agents (agents/policy.ts OPEN but `access` and `endpoints`), keyed by method and
+ * template. The owner's routes below and the agent channel (agents/channel.ts) register these same functions, so an
+ * agent connected by approval runs exactly the code an agent key runs.
+ */
+export function openRouteHandlers(deps: { ctx: Ctx }): Record<string, RouteHandler> {
+  const { ctx } = deps
+  return {
+    "GET /api/v1/projects": async (c) => c.json({ data: await listProjects(ctx) }),
+    "PATCH /api/v1/projects/{id}": async (c) =>
+      c.json({ data: await updateProject(ctx, byOf(c), idParam(c), await body(c, updateProjectBody)) }),
+    "POST /api/v1/projects/{id}/stage-proposals": async (c) =>
+      c.json({ data: await proposeStage(ctx, byOf(c), idParam(c), await body(c, proposeStageBody)) }, 201),
+    "GET /api/v1/items": async (c) => c.json({ data: await findItems(ctx, query(c, findItemsQuery)) }),
+    "POST /api/v1/items": async (c) =>
+      c.json({ data: await createItem(ctx, byOf(c), await body(c, createItemBody)) }, 201),
+    "GET /api/v1/items/{id}": async (c) => c.json({ data: await itemDetail(ctx, idParam(c)) }),
+    "PATCH /api/v1/items/{id}": async (c) => {
+      const { version, ...patch } = await body(c, updateItemBody)
+      return c.json({ data: await updateItem(ctx, byOf(c), idParam(c), version, patch) })
+    },
+    "POST /api/v1/items/{id}/comments": async (c) =>
+      c.json({ data: await addComment(ctx, byOf(c), idParam(c), await body(c, commentBody)) }, 201),
+    "POST /api/v1/items/{id}/threads": async (c) => {
+      const { link, created } = await linkThread(ctx, byOf(c), idParam(c), await body(c, linkThreadBody))
+      return c.json({ data: { link, created } }, created ? 201 : 200)
+    },
+    "POST /api/v1/capture": async (c) =>
+      c.json({ data: await captureItem(ctx, byOf(c), await body(c, captureBody)) }, 201),
+    "GET /api/v1/notes": async (c) => c.json(await findNotes(ctx, query(c, findNotesQuery))),
+    "POST /api/v1/notes": async (c) =>
+      c.json({ data: await createNote(ctx, byOf(c), await body(c, createNoteBody)) }, 201),
+    "GET /api/v1/notes/{id}": async (c) => c.json({ data: await noteDetail(ctx, idParam(c)) }),
+    "PATCH /api/v1/notes/{id}": async (c) => {
+      const { version, ...patch } = await body(c, updateNoteBody)
+      return c.json({ data: await updateNote(ctx, byOf(c), idParam(c), version, patch) })
+    },
+    "POST /api/v1/threads/start": async (c) => {
+      const result = await startThread(ctx, byOf(c), await body(c, startThreadBody))
+      return c.json({ data: result }, result.created ? 201 : 200)
+    },
+    "POST /api/v1/sync/t3": async (c) => {
+      requireToken(c)
+      return c.json({ data: await applyT3Snapshot(ctx, await body(c, t3SnapshotBody)) })
+    },
+    "POST /api/v1/sync/security": async (c) => {
+      requireToken(c)
+      return c.json({ data: await applySecuritySnapshot(ctx, await body(c, securitySnapshotBody)) })
+    },
+  }
+}
+
+/** The body limits of /api/v1: sync snapshots are large, everything else is small. */
+export const BODY_LIMITS = { sync: 16 * 1024 * 1024, default: 512 * 1024 } as const
 
 export function apiRoutes(deps: AuthDeps & { version: string; telegram?: TelegramRuntime; settings: SettingsHandle }) {
   const { ctx } = deps
   const api = new Hono<Env>()
+  const open = openRouteHandlers(deps)
+  const h = (key: string): RouteHandler => {
+    const handler = open[key]
+    if (!handler) throw new Error(`no handler for ${key}`)
+    return handler
+  }
 
   // Credentials first: a request without a valid key or session is refused before the app reads its body.
   // authenticate reads headers only.
   api.use("*", authenticate(deps, { allowSession: true }))
 
   // Snapshots from the sync tool are large; everything else is small.
-  const syncLimit = bodyLimit({ maxSize: 16 * 1024 * 1024, onError: tooLarge })
-  const defaultLimit = bodyLimit({ maxSize: 512 * 1024, onError: tooLarge })
+  const syncLimit = bodyLimit({ maxSize: BODY_LIMITS.sync, onError: tooLarge })
+  const defaultLimit = bodyLimit({ maxSize: BODY_LIMITS.default, onError: tooLarge })
   api.use("*", (c, next) => (c.req.path.includes("/sync/") ? syncLimit : defaultLimit)(c, next))
 
   // --- Session and visits ---
@@ -198,58 +263,43 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   })
 
   // --- Projects ---
-  api.get("/projects", async (c) => c.json({ data: await listProjects(ctx) }))
+  api.get("/projects", h("GET /api/v1/projects"))
   api.post("/projects", async (c) =>
     c.json({ data: await createProject(ctx, byOf(c), await body(c, createProjectBody)) }, 201),
   )
   api.get("/projects/:id", async (c) => c.json({ data: await projectDetail(ctx, idParam(c)) }))
-  api.patch("/projects/:id", async (c) =>
-    c.json({ data: await updateProject(ctx, byOf(c), idParam(c), await body(c, updateProjectBody)) }),
-  )
+  api.patch("/projects/:id", h("PATCH /api/v1/projects/{id}"))
   api.delete("/projects/:id", async (c) => {
     await deleteProject(ctx, byOf(c), idParam(c))
     return c.body(null, 204)
   })
-  api.post("/projects/:id/stage-proposals", async (c) =>
-    c.json({ data: await proposeStage(ctx, byOf(c), idParam(c), await body(c, proposeStageBody)) }, 201),
-  )
+  api.post("/projects/:id/stage-proposals", h("POST /api/v1/projects/{id}/stage-proposals"))
   api.post("/stage-proposals/:id/decision", async (c) => {
     const { decision } = await body(c, decideProposalBody)
     return c.json({ data: await decideProposal(ctx, byOf(c), idParam(c), decision) })
   })
 
   // --- Items ---
-  api.get("/items", async (c) => c.json({ data: await findItems(ctx, query(c, findItemsQuery)) }))
-  api.post("/items", async (c) => c.json({ data: await createItem(ctx, byOf(c), await body(c, createItemBody)) }, 201))
-  api.get("/items/:id", async (c) => c.json({ data: await itemDetail(ctx, idParam(c)) }))
-  api.patch("/items/:id", async (c) => {
-    const { version, ...patch } = await body(c, updateItemBody)
-    return c.json({ data: await updateItem(ctx, byOf(c), idParam(c), version, patch) })
-  })
+  api.get("/items", h("GET /api/v1/items"))
+  api.post("/items", h("POST /api/v1/items"))
+  api.get("/items/:id", h("GET /api/v1/items/{id}"))
+  api.patch("/items/:id", h("PATCH /api/v1/items/{id}"))
   api.delete("/items/:id", async (c) => {
     await deleteItem(ctx, byOf(c), idParam(c), query(c, versionQuery).version)
     return c.body(null, 204)
   })
-  api.post("/items/:id/comments", async (c) =>
-    c.json({ data: await addComment(ctx, byOf(c), idParam(c), await body(c, commentBody)) }, 201),
-  )
-  api.post("/items/:id/threads", async (c) => {
-    const { link, created } = await linkThread(ctx, byOf(c), idParam(c), await body(c, linkThreadBody))
-    return c.json({ data: { link, created } }, created ? 201 : 200)
-  })
-  api.post("/capture", async (c) => c.json({ data: await captureItem(ctx, byOf(c), await body(c, captureBody)) }, 201))
+  api.post("/items/:id/comments", h("POST /api/v1/items/{id}/comments"))
+  api.post("/items/:id/threads", h("POST /api/v1/items/{id}/threads"))
+  api.post("/capture", h("POST /api/v1/capture"))
   api.get("/inbox", async (c) => c.json({ data: await inbox(ctx) }))
   api.get("/archive", async (c) => c.json(await archive(ctx, query(c, archiveQuery))))
   api.get("/audit", async (c) => c.json(await auditLog(ctx, byOf(c), query(c, auditQuery))))
 
   // --- Notes ---
-  api.get("/notes", async (c) => c.json(await findNotes(ctx, query(c, findNotesQuery))))
-  api.post("/notes", async (c) => c.json({ data: await createNote(ctx, byOf(c), await body(c, createNoteBody)) }, 201))
-  api.get("/notes/:id", async (c) => c.json({ data: await noteDetail(ctx, idParam(c)) }))
-  api.patch("/notes/:id", async (c) => {
-    const { version, ...patch } = await body(c, updateNoteBody)
-    return c.json({ data: await updateNote(ctx, byOf(c), idParam(c), version, patch) })
-  })
+  api.get("/notes", h("GET /api/v1/notes"))
+  api.post("/notes", h("POST /api/v1/notes"))
+  api.get("/notes/:id", h("GET /api/v1/notes/{id}"))
+  api.patch("/notes/:id", h("PATCH /api/v1/notes/{id}"))
   api.delete("/notes/:id", async (c) => {
     await deleteNote(ctx, byOf(c), idParam(c), query(c, requiredVersionQuery).version)
     return c.body(null, 204)
@@ -263,18 +313,9 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   )
 
   // --- T3 ---
-  api.post("/threads/start", async (c) => {
-    const result = await startThread(ctx, byOf(c), await body(c, startThreadBody))
-    return c.json({ data: result }, result.created ? 201 : 200)
-  })
-  api.post("/sync/t3", async (c) => {
-    requireToken(c)
-    return c.json({ data: await applyT3Snapshot(ctx, await body(c, t3SnapshotBody)) })
-  })
-  api.post("/sync/security", async (c) => {
-    requireToken(c)
-    return c.json({ data: await applySecuritySnapshot(ctx, await body(c, securitySnapshotBody)) })
-  })
+  api.post("/threads/start", h("POST /api/v1/threads/start"))
+  api.post("/sync/t3", h("POST /api/v1/sync/t3"))
+  api.post("/sync/security", h("POST /api/v1/sync/security"))
   api.get("/sync/runs", async (c) =>
     c.json({ data: await recentSyncRuns(ctx, query(c, z.object({ limit })).limit ?? 20) }),
   )

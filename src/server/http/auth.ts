@@ -1,6 +1,7 @@
 import { getIP } from "better-auth/api"
 import type { Context } from "hono"
 import { createMiddleware } from "hono/factory"
+import type { AgentArea } from "../../shared/enums.ts"
 import type { AuthHolder } from "../auth/auth.ts"
 import { AppError, forbidden } from "../errors.ts"
 import type { Actor, By, Ctx } from "../services/context.ts"
@@ -11,6 +12,8 @@ export const AGENT_LABEL_HEADER = "x-adiutor-agent"
 export type Auth =
   | { actor: Actor; via: "token"; keyId: string }
   | { actor: Actor; via: "session"; sessionId: string; expiresAt: Date }
+  /** An agent connected by approval (OAuth), only where agent access is mounted (agents/channel.ts). */
+  | { actor: Actor; via: "agent"; connectionId: string; areas: AgentArea[] }
 export type Env = { Variables: { auth: Auth } }
 
 export type AuthDeps = {
@@ -108,10 +111,19 @@ export function cookieOnly(headers: Headers): Headers {
   return new Headers(cookie ? { cookie } : {})
 }
 
-function agentLabel(c: Context): string {
-  const raw = c.req.header(AGENT_LABEL_HEADER)?.trim() ?? ""
-  const clean = raw.replace(/[^A-Za-z0-9 ._:-]/g, "").slice(0, 60)
-  return clean ? `agent:${clean}` : "agent"
+/**
+ * The label an agent writes as: `agent:` and the name it sends in X-Adiutor-Agent, else `agent:` and `fallback` (the
+ * name of a connection made by approval), each cleaned to what the activity log's Who filter takes; else `agent`.
+ */
+export function agentLabel(c: Context, fallback?: string): string {
+  const clean = (raw: string) =>
+    raw
+      .trim()
+      .replace(/[^A-Za-z0-9 ._:-]/g, "")
+      .slice(0, 60)
+  const own = clean(c.req.header(AGENT_LABEL_HEADER) ?? "")
+  const name = own || clean(fallback ?? "").trim()
+  return name ? `agent:${name}` : "agent"
 }
 
 /**

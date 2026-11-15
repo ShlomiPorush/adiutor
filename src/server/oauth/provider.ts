@@ -6,7 +6,7 @@ import Provider, {
   type JWK,
   type KoaContextWithOIDC,
 } from "oidc-provider"
-import { AGENT_AREAS, type AgentArea, type AgentResource, type Language } from "../../shared/enums.ts"
+import { type AgentResource, type Language, RESOURCE_AREAS } from "../../shared/enums.ts"
 import { LOOPBACK_HOSTNAMES } from "./issuer.ts"
 import { cleanLabel } from "./label.ts"
 import type { CodeProblem, ProviderPages } from "./pages.ts"
@@ -65,11 +65,8 @@ export function resourceUrls(issuer: string): Record<AgentResource, string> {
   return { mcp: `${issuer}/mcp`, rest: `${issuer}/api/v1` }
 }
 
-/** The areas a resource offers: `sync` belongs to the REST API alone (D3). */
-export const RESOURCE_AREAS: Record<AgentResource, readonly AgentArea[]> = {
-  mcp: ["read", "write"],
-  rest: AGENT_AREAS,
-}
+/** The areas a resource offers (shared/enums.ts, where the agent policy reads them without loading the library). */
+export { RESOURCE_AREAS }
 
 /** Redirect URIs a registration may hold, at most. */
 export const MAX_REDIRECT_URIS = 5

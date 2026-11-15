@@ -2,6 +2,8 @@ import { createHash, randomBytes } from "node:crypto"
 import type { Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { serve } from "@hono/node-server"
+import type { Context } from "hono"
+import type { ChannelLimits } from "../agents/channel.ts"
 import { createApp } from "../app.ts"
 import { createDatabase, type Database } from "../db/client.ts"
 import { type AgentAccess, createAgentAccess } from "../oauth/access.ts"
@@ -58,6 +60,8 @@ export type OAuthHarness = {
   core: TestCore
   storeDb: Database
   limits: AgentLimits
+  /** The app's server, for tests that close it while a call runs. */
+  server: Server
   /** The owner's signed-in browser (two-factor on). */
   owner: TestBrowser
   /** The owner's TOTP secret, to sign in another browser. */
@@ -80,6 +84,10 @@ export async function oauthHarness(
     maxPending?: number
     /** A built UI to serve as createApp's `web` (the consent page's own address). */
     web?: { root: string }
+    /** The agent channel's limits (agents/channel.ts); the defaults otherwise. */
+    channel?: ChannelLimits
+    /** The client's address for the limits (the socket's address otherwise). */
+    clientIp?: (c: Context) => string
   } = {},
 ): Promise<OAuthHarness> {
   const { server, origin, handle } = await listen()
@@ -96,12 +104,13 @@ export async function oauthHarness(
   const core = testCore(t, {
     config: { publicUrl: new URL(origin), version: "test" },
     auth: { identityChanges: access.identity },
+    ...(options.clientIp ? { clientIp: options.clientIp } : {}),
   })
   const limits = options.limits ?? wideLimits()
   const app = createApp({
     checkDatabase: async () => true,
     core,
-    agentOAuth: agentOAuthMount(access, limits, options.caps),
+    agentOAuth: agentOAuthMount(access, limits, options.caps, options.channel),
     ...(options.web ? { web: options.web } : {}),
   })
   handle((request, env) => app.fetch(request, env))
@@ -116,11 +125,12 @@ export async function oauthHarness(
     core,
     storeDb,
     limits,
+    server,
     owner,
     ownerSecret,
     async close() {
       access.stop()
-      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await new Promise<void>((resolve) => (server.listening ? server.close(() => resolve()) : resolve()))
       server.closeAllConnections()
       await storeDb.close()
     },
