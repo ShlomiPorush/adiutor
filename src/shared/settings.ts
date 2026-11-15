@@ -8,6 +8,9 @@ import type { Language } from "./enums.ts"
 
 export const CLOSED_ITEM_DAYS_MIN = 1
 export const CLOSED_ITEM_DAYS_MAX = 365
+/** A connection ends after this many days without a real API or MCP call (a token refresh does not count). */
+export const AGENT_IDLE_DAYS_MIN = 1
+export const AGENT_IDLE_DAYS_MAX = 365
 
 export const SETTINGS_DEFAULTS = {
   language: "he" as Language,
@@ -16,6 +19,12 @@ export const SETTINGS_DEFAULTS = {
   closedItemDays: 7,
   sessionIdleDays: SESSION_IDLE_DAYS_DEFAULT,
   otpViaTelegram: false,
+  /**
+   * Whether agents may connect: off for a new installation. A data migration turned it on for the installation that
+   * existed before the switch, so its agents keep working.
+   */
+  agentsEnabled: false,
+  agentIdleDays: 90,
 } as const
 
 export type DefaultedSetting = keyof typeof SETTINGS_DEFAULTS

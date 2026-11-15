@@ -232,3 +232,20 @@ describe("the idle length in Settings", () => {
     expect(BOT_TOKEN_COLUMN).toBe("telegram_bot_token_enc")
   })
 })
+
+describe("the agent settings before the agent access release", () => {
+  it("stay in the row only: not answered, not changed by a save and not audited", async () => {
+    await build()
+    const hidden = ["agentsEnabled", "agentIdleDays"]
+    for (const name of hidden) expect(await read()).not.toHaveProperty(name)
+    const saved = await patch({ closedItemDays: 8, agentsEnabled: true, agentIdleDays: 5 })
+    expect(saved.status).toBe(200)
+    for (const name of hidden) expect(saved.json.data).not.toHaveProperty(name)
+    expect(await getSettings(t.ctx.db)).toMatchObject({ closedItemDays: 8, agentsEnabled: false, agentIdleDays: 90 })
+    const [change] = await t.ctx.db.select().from(audit).where(eq(audit.action, "settings.update"))
+    for (const name of hidden) {
+      expect(change?.before).not.toHaveProperty(name)
+      expect(change?.after).not.toHaveProperty(name)
+    }
+  })
+})

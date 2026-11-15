@@ -11,7 +11,7 @@ import postgres from "postgres"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
 import { resetOwnerPassword } from "../auth/recovery.ts"
-import { previousVisit } from "../services/admin.ts"
+import { getSettings, previousVisit } from "../services/admin.ts"
 import { ReloadableSecretScanner } from "../services/secrets.ts"
 import { TEST_AUTH_SECRET, testAuthBase, testCore } from "../testing/app.ts"
 import { TEST_ORIGIN, TEST_PASSWORD, TestBrowser } from "../testing/browser.ts"
@@ -339,5 +339,49 @@ describe("upgrading to visits per account", () => {
       await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`)
       rmSync(folder, { recursive: true, force: true })
     }
+  })
+})
+
+// 0014_agent-access and 0015_agents-stay-on: the agents switch is off for a new installation, and the installation that
+// existed before it (its settings row was there) keeps agents on. Each case starts from migrations 0000 to 0013.
+
+const AGENT_SWITCH = 14 // migrations 0000 to 0013
+
+/** A database at migration 0013, with or without the settings row, upgraded to the latest; `test` reads it. */
+async function upgradedToAgentSwitch(withSettingsRow: boolean, test: (db: Database) => Promise<void>): Promise<void> {
+  const dbName = `adiutor_upgrade_${randomBytes(4).toString("hex")}`
+  await admin.unsafe(`CREATE DATABASE "${dbName}"`)
+  const u = new URL(process.env.ADIUTOR_TEST_DATABASE_URL ?? "")
+  u.pathname = `/${dbName}`
+  const db = createDatabase(u.toString())
+  const folder = folderBefore(AGENT_SWITCH)
+  try {
+    await db.migrate(folder)
+    if (withSettingsRow) await db.db.execute(sql`insert into settings (id, closed_item_days) values (1, 14)`)
+    await db.migrate(migrations)
+    await test(db)
+  } finally {
+    await db.close()
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`)
+    rmSync(folder, { recursive: true, force: true })
+  }
+}
+
+describe("upgrading to the agents switch", () => {
+  it("keeps agents on for the installation that existed, with its other settings as they were", async () => {
+    await upgradedToAgentSwitch(true, async (db) => {
+      expect(await getSettings(db.db)).toMatchObject({ closedItemDays: 14, agentsEnabled: true, agentIdleDays: 90 })
+      // Once: the next start runs the migrations again and changes nothing.
+      await db.db.execute(sql`update settings set agents_enabled = false`)
+      await db.migrate(migrations)
+      expect((await getSettings(db.db)).agentsEnabled).toBe(false)
+    })
+  })
+
+  it("leaves agents off when no settings row existed yet: the row created later has the defaults", async () => {
+    await upgradedToAgentSwitch(false, async (db) => {
+      expect(await db.db.execute(sql`select 1 from settings`)).toHaveLength(0)
+      expect(await getSettings(db.db)).toMatchObject({ agentsEnabled: false, agentIdleDays: 90 })
+    })
   })
 })
