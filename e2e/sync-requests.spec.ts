@@ -141,6 +141,8 @@ test("a check-in, Sync now, Cancel, the claim and its result", async () => {
   await expect(requestFact().getByRole("button", { name: he.syncNow.cancel })).toHaveCount(0)
   expect(await checkIn({ running: { kind: "request", requestId: claim } })).toBe(claim)
   await checkIn({ finished: [{ requestId: claim, result: { t3: "accepted", security: "not_run" } }] })
+  // The page reads again every 30 seconds by itself; a reload shows the result now.
+  await page.reload()
   await expect(requestFact()).toContainText(he.syncNow.state.partial)
   await expect(requestFact()).toContainText(he.syncNow.part.not_run)
 
