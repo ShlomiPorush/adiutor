@@ -1,18 +1,16 @@
 import { randomBytes, randomInt } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { ConfigError, isCertainPlaceholder, loadConfig, looksLikePlaceholder } from "./config.ts"
+import { ConfigError, deriveAgentCookieKeys, isCertainPlaceholder, loadConfig, looksLikePlaceholder } from "./config.ts"
 import { testBotToken, testSecret } from "./testing/secrets.ts"
 
 // Every value the loader accepts is new on each run; only refused values are literal.
 const authSecret = testSecret()
 const settingsKey = testSecret()
-const oauthKey = testSecret()
 const valid = {
   DATABASE_URL: `postgres://adiutor:${randomBytes(16).toString("hex")}@db.example.com:5432/adiutor`,
   ADIUTOR_PUBLIC_URL: "https://adiutor.example.com",
   ADIUTOR_AUTH_SECRETS: `1:${authSecret}`,
   ADIUTOR_SETTINGS_KEYS: `1:${settingsKey}`,
-  ADIUTOR_OAUTH_SECRETS: `1:${oauthKey}`,
 }
 
 function refusal(env: Record<string, string | undefined>): string {
@@ -34,20 +32,14 @@ describe("loadConfig", () => {
     expect(config.publicUrlText).toBe("https://adiutor.example.com")
     expect(config.authSecrets).toEqual([{ version: 1, value: authSecret }])
     expect(config.settingsKeys).toEqual([{ version: 1, value: settingsKey }])
-    expect(config.oauthSecrets).toEqual([{ version: 1, value: oauthKey }])
+    expect(config.agentCookieKeys).toEqual(deriveAgentCookieKeys(config.authSecrets))
     expect(config.trustedProxies).toEqual([])
     expect(config.telegramApiUrl).toBe("https://api.telegram.org")
     expect(config.overrides).toEqual({})
     expect(config.warnings).toEqual([])
   })
 
-  it.each([
-    "DATABASE_URL",
-    "ADIUTOR_PUBLIC_URL",
-    "ADIUTOR_AUTH_SECRETS",
-    "ADIUTOR_SETTINGS_KEYS",
-    "ADIUTOR_OAUTH_SECRETS",
-  ])("refuses without %s", (name) => {
+  it.each(["DATABASE_URL", "ADIUTOR_PUBLIC_URL", "ADIUTOR_AUTH_SECRETS", "ADIUTOR_SETTINGS_KEYS"])("refuses without %s", (name) => {
     expect(refusal({ ...valid, [name]: undefined })).toContain(`${name} is required`)
     expect(refusal({ ...valid, [name]: "" })).toContain(`${name} is required`)
   })
@@ -79,53 +71,44 @@ describe("loadConfig", () => {
     ).toContain("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
   })
 
-  describe("ADIUTOR_OAUTH_SECRETS, required: the authorization server for agents", () => {
-    const oauthSecret = testSecret()
+  it("keeps ADIUTOR_PUBLIC_URL as written beside the parsed URL", () => {
+    const config = loadConfig({ ...valid, ADIUTOR_PUBLIC_URL: "https://Adiutor.example.com/" })
+    expect(config.publicUrl.origin).toBe("https://adiutor.example.com")
+    expect(config.publicUrlText).toBe("https://Adiutor.example.com/")
+  })
 
-    it("refuses a blank value", () => {
-      expect(refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: "  " })).toContain(
-        "ADIUTOR_OAUTH_SECRETS entry 1 must look like <version>:<secret>",
-      )
-    })
-
-    it("keeps ADIUTOR_PUBLIC_URL as written beside the parsed URL", () => {
-      const config = loadConfig({ ...valid, ADIUTOR_PUBLIC_URL: "https://Adiutor.example.com/" })
-      expect(config.publicUrl.origin).toBe("https://adiutor.example.com")
-      expect(config.publicUrlText).toBe("https://Adiutor.example.com/")
-    })
-
-    it("reads versioned keys, newest first", () => {
+  describe("the cookie keys of the authorization server for agents, derived from ADIUTOR_AUTH_SECRETS", () => {
+    it("derives one key per auth secret, in the order listed, each its own and none equal to a secret", () => {
       const older = testSecret()
-      expect(loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: `2:${oauthSecret}, 1:${older}` }).oauthSecrets).toEqual([
-        { version: 2, value: oauthSecret },
-        { version: 1, value: older },
-      ])
-    })
-
-    it("refuses a bad entry, a repeated version or a short key, never printing it", () => {
-      expect(refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: oauthSecret })).toContain(
-        "ADIUTOR_OAUTH_SECRETS entry 1 must look like <version>:<secret>",
-      )
-      expect(refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: `1:${oauthSecret},1:${testSecret()}` })).toContain(
-        "ADIUTOR_OAUTH_SECRETS repeats version 1",
-      )
-      const short = oauthSecret.slice(0, 31)
-      const message = refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: `1:${short}` })
-      expect(message).toContain("ADIUTOR_OAUTH_SECRETS entry 1 must be at least 32 bytes")
-      expect(message).not.toContain(short)
-    })
-
-    it("refuses a value shared with an auth secret or a settings key, never printing it", () => {
-      for (const shared of [authSecret, settingsKey]) {
-        const message = refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: `2:${oauthSecret},1:${shared}` })
-        expect(message).toContain("ADIUTOR_OAUTH_SECRETS must differ from every auth secret and settings key")
-        expect(message).not.toContain(shared)
+      const config = loadConfig({ ...valid, ADIUTOR_AUTH_SECRETS: `2:${authSecret},1:${older}` })
+      const keys = config.agentCookieKeys
+      expect(keys).toHaveLength(2)
+      expect(new Set(keys).size).toBe(2)
+      for (const key of keys) {
+        expect(Buffer.from(key, "base64")).toHaveLength(32)
+        for (const secret of [authSecret, older, settingsKey]) expect(key).not.toContain(secret)
       }
+      // Rotation: the key derived from a secret stays the same when a newer secret is listed before it.
+      expect(keys).toEqual([...loadConfig(valid).agentCookieKeys, ...loadConfig({ ...valid, ADIUTOR_AUTH_SECRETS: `1:${older}` }).agentCookieKeys])
+      expect(deriveAgentCookieKeys(config.authSecrets)).toEqual(keys)
+    })
+
+    it.each([
+      ["a value", testSecret()],
+      ["an empty value", ""],
+      ["a malformed value", "not-a-key"],
+    ])("only warns about a leftover ADIUTOR_OAUTH_SECRETS with %s, never reading or printing it", (_, value) => {
+      const config = loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: value })
+      expect(config.warnings).toEqual([
+        "ADIUTOR_OAUTH_SECRETS is no longer read: remove it; the agent cookie keys come from ADIUTOR_AUTH_SECRETS",
+      ])
+      if (value) expect(config.warnings.join(" ")).not.toContain(value)
+      expect(config.agentCookieKeys).toEqual(loadConfig(valid).agentCookieKeys)
     })
   })
 
   describe("placeholders", () => {
-    const families = ["ADIUTOR_AUTH_SECRETS", "ADIUTOR_SETTINGS_KEYS", "ADIUTOR_OAUTH_SECRETS"]
+    const families = ["ADIUTOR_AUTH_SECRETS", "ADIUTOR_SETTINGS_KEYS"]
     const recovery = "generate a new key with openssl rand -hex 32, list it first under a new version"
     // Refused values only: literal on purpose. No random key is ever one of these: refused in every entry.
     const certain = ["<32 random bytes from openssl rand -hex 32>", "a".repeat(40)]
@@ -210,7 +193,7 @@ describe("loadConfig", () => {
       ]) {
         for (const value of [`${random()}${word}${random()}`, `${word}${random()}`]) {
           expect(looksLikePlaceholder(value), word).toBe(false)
-          expect(loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: `1:${value}` }).oauthSecrets).toHaveLength(1)
+          expect(loadConfig({ ...valid, ADIUTOR_SETTINGS_KEYS: `1:${value}` }).settingsKeys).toHaveLength(1)
         }
       }
     })

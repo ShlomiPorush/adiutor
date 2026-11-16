@@ -137,11 +137,10 @@ require_outside_repo() {
 # --- Stack secrets ---
 # The development and verification stacks' database password and keys are generated on this machine into
 # <data dir>/stack.env (0600), next to the database they open. The repository holds none of them.
-STACK_ENV_NAMES=(POSTGRES_USER POSTGRES_DB POSTGRES_PASSWORD DATABASE_URL ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS
-  ADIUTOR_OAUTH_SECRETS)
+STACK_ENV_NAMES=(POSTGRES_USER POSTGRES_DB POSTGRES_PASSWORD DATABASE_URL ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS)
 
 # The key families: each value is <version>:<secret>, the first secret at least 32 characters.
-STACK_KEY_NAMES=(ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS ADIUTOR_OAUTH_SECRETS)
+STACK_KEY_NAMES=(ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS)
 
 random_hex() {
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
@@ -191,11 +190,11 @@ add_missing_stack_key() {
   ) 9<"$file" || die "could not add $name to $file"
 }
 
-# Creates <data dir>/stack.env once, before PostgreSQL first starts, and never rewrites it; a key added to Adiutor
-# later is appended to an existing file (add_missing_stack_key). A database without its file is refused: new keys
-# would not open it.
+# Creates <data dir>/stack.env once, before PostgreSQL first starts, and never rewrites it. A database without its
+# file is refused: new keys would not open it. An ADIUTOR_OAUTH_SECRETS line that 0.2.0 wrote stays; the server only
+# warns about it.
 ensure_stack_env() {
-  local dir="$1" file="$1/stack.env" tmp contents password auth settings oauth
+  local dir="$1" file="$1/stack.env" tmp contents password auth settings
   require_linux_dir "$dir"
   require_outside_repo "$dir"
   mkdir -p "$dir/postgres"
@@ -205,7 +204,7 @@ ensure_stack_env() {
     [ -z "$contents" ] || die "$dir/postgres holds a database, but its password and keys are not in $file.
   Restore that file, or start over with: scripts/local.sh nuke"
     # Every value first, each checked: nothing is written unless all of them were generated.
-    if ! { password="$(new_hex)" && auth="$(new_hex)" && settings="$(new_hex)" && oauth="$(new_hex)"; }; then
+    if ! { password="$(new_hex)" && auth="$(new_hex)" && settings="$(new_hex)"; }; then
       die "could not generate the stack's password and keys; nothing was written"
     fi
     tmp="$(mktemp "$dir/.stack.env.XXXXXX")"
@@ -217,7 +216,6 @@ POSTGRES_PASSWORD=$password
 DATABASE_URL=postgres://adiutor:$password@postgres:5432/adiutor
 ADIUTOR_AUTH_SECRETS=1:$auth
 ADIUTOR_SETTINGS_KEYS=1:$settings
-ADIUTOR_OAUTH_SECRETS=1:$oauth
 EOF
     chmod 600 "$tmp"
     stack_env_valid "$tmp" || {
@@ -228,7 +226,6 @@ EOF
     ln "$tmp" "$file" 2>/dev/null || true
     rm -f "$tmp"
   fi
-  add_missing_stack_key "$file" ADIUTOR_OAUTH_SECRETS
   stack_env_valid "$file" || die "$file is incomplete or not mode 600. Fix or restore it; new keys would not open the database"
 }
 

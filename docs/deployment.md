@@ -52,7 +52,6 @@ These notes are for the owner, who deploys production himself. Agents never depl
    ```bash
    openssl rand -hex 32   # ADIUTOR_AUTH_SECRETS, written as 1:<value>
    openssl rand -hex 32   # ADIUTOR_SETTINGS_KEYS, written as 1:<value>
-   openssl rand -hex 32   # ADIUTOR_OAUTH_SECRETS, written as 1:<value>
    ```
 
    Generate the keys and the database password (step 1) new, on the server, with these `openssl rand` commands. Never reuse a value from the development stack's `stack.env` or `.env.dev` in production: the first launch starts with a new, empty database, so nothing needs the development keys.
@@ -62,52 +61,14 @@ These notes are for the owner, who deploys production himself. Agents never depl
    - `DOMAIN`: the host name you open, for example `adiutor.example.com`.
    - `DATABASE_URL`: from step 1.
    - `ADIUTOR_PUBLIC_URL`: exactly the origin the browser's address bar shows: `https://` and `DOMAIN`, plus `:<port>` when the proxy's entry point is not on 443. Any difference makes every browser change fail with 403 (invalid origin), sign-in included. Telegram links use it, agents connect to it (it is the issuer of agent access), and the same value goes into every `--url` of the sync's commands (section 6). Passkeys belong to its host name: a new host name makes every passkey stop working, and you sign in with the password and the authenticator, then add new ones. Write the full value, for example `https://adiutor.example.com`, instead of the example's `https://${DOMAIN}`, and check that the server gets it resolved: `docker compose config` shows the environment the container receives.
-   - `ADIUTOR_AUTH_SECRETS`: `1:<value>` from step 3. Better Auth signs the sign-in cookies and encrypts the TOTP secret and the backup codes with it. To rotate, put a new version first and keep the old one (`2:<new>,1:<old>`): every browser signs in again, and the stored TOTP secret stays readable while the old version is listed.
+   - `ADIUTOR_AUTH_SECRETS`: `1:<value>` from step 3. Better Auth signs the sign-in cookies and encrypts the TOTP secret and the backup codes with it, and the authorization server that agents connect through signs its cookies with keys derived from it (one per version, under a label of their own). To rotate, put a new version first and keep the old one (`2:<new>,1:<old>`): every browser signs in again, the stored TOTP secret stays readable while the old version is listed, and an agent approval under way may have to start again.
    - `ADIUTOR_SETTINGS_KEYS`: `1:<value>` from step 3. It encrypts the secrets you store in Settings (the Telegram bot token), and must differ from the auth secret. Rotate it the same way; a stored value whose version is no longer listed must be entered again in Settings.
-   - `ADIUTOR_OAUTH_SECRETS`: `1:<value>` from step 3. The cookie keys of the authorization server that agents connect through; it must differ from the other two keys. Required: the server refuses to start without it. Rotate it like the others; a new version first signs the authorization server's cookies, and an approval under way when you rotate may have to start again.
    - `ADIUTOR_TRUSTED_PROXIES`: the address (or CIDR range) Traefik uses to reach `adiutor` on the `traefik` network, for example the network's subnet from `docker network inspect traefik`. Better Auth then reads the client address from `X-Forwarded-For` (step 3). Prefer Traefik's own fixed address when you can give it one: the whole subnet trusts every container on that network, and any of them can reach `adiutor:8080` directly and forge `X-Forwarded-For`. That weakens only the per-address rate limits; sign-in and agent approval are still required.
    - Keep backups of `.env` with the database backup: with other keys every browser is signed out, the TOTP secret cannot be read, and the stored bot token must be entered again.
 
    Everything else you manage in Adiutor itself, in Settings: the Telegram bot token and chat id, sending sign-in codes to Telegram, the private domains of the secret check, the connected agents and how long a browser stays signed in. `ADIUTOR_TELEGRAM_BOT_TOKEN`, `ADIUTOR_TELEGRAM_CHAT_ID` and `ADIUTOR_PRIVATE_DOMAINS` may still be set here: each then overrides its field, and Settings shows that field locked. Leave `TELEGRAM_API_URL` empty. Never set a `BETTER_AUTH_*` variable: the server refuses to start with one, because Better Auth would read it on its own. It refuses `ADIUTOR_AUTH_SECRET` too, even empty: that variable is no longer used, and `ADIUTOR_AUTH_SECRETS` holds the auth keys.
 
-### Add `ADIUTOR_OAUTH_SECRETS` to an existing `.env`
-
-`ADIUTOR_OAUTH_SECRETS` holds the cookie keys of the authorization server that agents connect through, versioned like `ADIUTOR_AUTH_SECRETS`. From the agent access release on it is required: the server refuses to start without it, and refuses a malformed or short value, an example placeholder, or a value shared with `ADIUTOR_AUTH_SECRETS` or `ADIUTOR_SETTINGS_KEYS`. An `.env` written before that release has no such line: add it before you deploy the release (section 10).
-
-Run this in the deploy directory. It writes a new random key at the end of `.env` and never prints it. Before it writes, it makes sure `.env` is a regular file (not a link) that belongs to you and only you can read (mode 600), and it holds a lock on `.env` from the check to the write, so two runs at once add one key. It changes nothing when any step fails: `.env` is missing, a link or another user's, it cannot be read, `flock` or `openssl` fails, or `.env` already has an `ADIUTOR_OAUTH_SECRETS` line, even an empty one. In that last case keep a value that is there, or delete the empty line and run it again.
-
-```bash
-(
-  set -eu
-  if [ -L .env ] || [ ! -f .env ]; then
-    echo ".env is missing, a link or not a regular file; nothing changed" >&2
-    exit 1
-  fi
-  if [ "$(stat -c %u .env)" != "$(id -u)" ]; then
-    echo ".env does not belong to you; nothing changed" >&2
-    exit 1
-  fi
-  chmod 600 .env
-  [ "$(stat -c %a .env)" = 600 ]
-  exec 9<.env
-  flock -x 9
-  found=0
-  grep -qE '^[[:space:]]*(export[[:space:]]+)?ADIUTOR_OAUTH_SECRETS[[:space:]]*=' .env || found=$?
-  if [ "$found" -eq 0 ]; then
-    echo "ADIUTOR_OAUTH_SECRETS is already in .env; nothing changed" >&2
-    exit 1
-  fi
-  [ "$found" -eq 1 ]
-  last="$(tail -c 1 .env)"
-  value="$(openssl rand -hex 32)"
-  printf '%s\n' "$value" | grep -qxE '[0-9a-f]{64}'
-  if [ -n "$last" ]; then printf '\n' >>.env; fi
-  printf 'ADIUTOR_OAUTH_SECRETS=1:%s\n' "$value" >>.env
-  echo "ADIUTOR_OAUTH_SECRETS added to .env"
-)
-```
-
-Then deploy (section 9, or section 10 for the agent access release) and check that the container is healthy (step 4): a missing value, or one the server refuses, stops it at start with a message that names the variable. Keep the key with the backup of `.env`, like the other two.
+`ADIUTOR_OAUTH_SECRETS` is no longer read: 0.2.0 required it, and from 0.2.1 on the agents' cookie keys come from `ADIUTOR_AUTH_SECRETS`. If your `.env` has an `ADIUTOR_OAUTH_SECRETS` line, delete it; until you do, the server only logs a warning at start.
 
 ## 3. Fit the network
 
@@ -268,7 +229,7 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 
 1. Sign in and choose the Account page, "Sign out everywhere", then sign in again. When you cannot sign in, the recovery command above also signs out every browser.
 2. Open Settings, Agent access and disconnect every agent you do not recognise or had disconnected (Disconnect all, then connect your own again, is the sure way). On the Account page, remove every passkey you do not recognise or had removed.
-3. If `.env` or the backup may have leaked, put a new version first in `ADIUTOR_AUTH_SECRETS` and in `ADIUTOR_OAUTH_SECRETS` (keep the old ones listed so the TOTP secret stays readable) and run `docker compose up -d`: every browser is signed out. Disconnect all agents and connect them again, and replace the Telegram bot token with BotFather.
+3. If `.env` or the backup may have leaked, put a new version first in `ADIUTOR_AUTH_SECRETS` (keep the old one listed so the TOTP secret stays readable; the agents' cookie keys follow it) and run `docker compose up -d`: every browser is signed out. Disconnect all agents and connect them again, and replace the Telegram bot token with BotFather.
 
 ## 9. Upgrade
 
@@ -291,11 +252,10 @@ To go back to an earlier version, restore the backup from step 2, set the earlie
 
 The release that switches agents to connect by approval (CHANGELOG, "Agents and the sync connect by approval") ends the agent keys: from it on, Adiutor refuses every agent key before any of its code runs, and no new key can be made. Every agent and the sync connect once again, by approval. Do these steps in this order: a client updated before the server cannot connect to the older server (it stops with `endpoints_unavailable`), and an old client against the new server only stops.
 
-1. **Before you deploy:** add `ADIUTOR_OAUTH_SECRETS` to the production `.env` with the command in "Add `ADIUTOR_OAUTH_SECRETS` to an existing `.env`" (step 2). The release refuses to start without it.
-2. **Deploy the server** (section 9). From now on an old skill copy gets `401`, forgets its key and says to connect again, and its old `connect` gets `404` and stops; an old Claude Code or Codex setup with a key gets `401`; the sync stops pushing, and the morning message and the sync card say that the sync is disconnected, with the time of its last good run.
-3. **Check the forwarding headers** with the command in section 3 ("Check that Traefik replaces the forwarding headers").
-4. **Then update the clients:** move the shared agent configuration to this release's tag (installed skill copies follow releases, not the default branch), and on the PC that runs the sync, pull this release in the Adiutor checkout and build the sync bundle again (`pnpm build:sync`, see [sync.md](sync.md)).
-5. **Approve each client once** (section 6): the skill once per computer, Claude Code and Codex with `setup-mcp` (it replaces the setup with the key), and the sync with `connect --replace` if it says a connection is kept, else `connect`.
-6. **Clean up:** Settings, Agent access lists the agent keys left over, which no longer work: delete them there (the list goes away in a later release). On the Account page, sign out any session named "adiutor connect (agent approval)" that a cut-off approval of the old command left.
+1. **Deploy the server** (section 9). From now on an old skill copy gets `401`, forgets its key and says to connect again, and its old `connect` gets `404` and stops; an old Claude Code or Codex setup with a key gets `401`; the sync stops pushing, and the morning message and the sync card say that the sync is disconnected, with the time of its last good run.
+2. **Check the forwarding headers** with the command in section 3 ("Check that Traefik replaces the forwarding headers").
+3. **Then update the clients:** move the shared agent configuration to this release's tag (installed skill copies follow releases, not the default branch), and on the PC that runs the sync, pull this release in the Adiutor checkout and build the sync bundle again (`pnpm build:sync`, see [sync.md](sync.md)).
+4. **Approve each client once** (section 6): the skill once per computer, Claude Code and Codex with `setup-mcp` (it replaces the setup with the key), and the sync with `connect --replace` if it says a connection is kept, else `connect`.
+5. **Clean up:** Settings, Agent access lists the agent keys left over, which no longer work: delete them there (the list goes away in a later release). On the Account page, sign out any session named "adiutor connect (agent approval)" that a cut-off approval of the old command left.
 
 Between steps 2 and 5 no agent can write to Adiutor and the sync does not run; the board and the morning message keep working.

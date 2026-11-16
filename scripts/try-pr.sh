@@ -70,9 +70,9 @@ save_state() {
 }
 
 write_env() {
-  local password auth settings oauth
+  local password auth settings
   # Every value first, each checked: nothing is written unless all of them were generated.
-  if ! { password="$(new_hex)" && auth="$(new_hex)" && settings="$(new_hex)" && oauth="$(new_hex)"; }; then
+  if ! { password="$(new_hex)" && auth="$(new_hex)" && settings="$(new_hex)"; }; then
     die "could not generate the stack's password and keys; nothing was written"
   fi
   (
@@ -86,7 +86,6 @@ POSTGRES_DB=adiutor
 DATABASE_URL=postgres://adiutor:$password@postgres:5432/adiutor
 ADIUTOR_AUTH_SECRETS=1:$auth
 ADIUTOR_SETTINGS_KEYS=1:$settings
-ADIUTOR_OAUTH_SECRETS=1:$oauth
 ADIUTOR_PUBLIC_URL=$(pr_url)
 EOF
   )

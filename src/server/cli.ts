@@ -38,7 +38,7 @@ try {
   const access = await createAgentAccess({
     ctx,
     publicUrl: config.publicUrlText,
-    cookieKeys: config.oauthSecrets.map((k) => k.value),
+    cookieKeys: config.agentCookieKeys,
     storeDb: storeDatabase.db,
     cipher: createSettingsCipher(config.settingsKeys),
   })
