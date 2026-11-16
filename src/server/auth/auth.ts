@@ -3,7 +3,7 @@ import { passkey } from "@better-auth/passkey"
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api"
-import { bearer, deviceAuthorization, twoFactor, username } from "better-auth/plugins"
+import { deviceAuthorization, twoFactor, username } from "better-auth/plugins"
 import { count, eq } from "drizzle-orm"
 import {
   AGENT_KEY_DAYS_MAX,
@@ -35,11 +35,13 @@ import { writeAudit } from "../services/context.ts"
 import { type IdentityChanges, identityChangeTracker } from "./identity.ts"
 
 // Better Auth as it documents itself: its routes, its plugins (username, twoFactor, passkey, api-key,
-// deviceAuthorization, bearer), its options and its documented hooks. Adiutor does not wrap its handler. The hooks
-// below only refuse (a closed route, a second owner, a trusted device, an agent key, an agent approval or a new passkey
-// without two-factor, an Authorization header outside what `adiutor connect` needs), write audit rows and, where agent
-// access is mounted, end agent connections around an identity change; Better Auth makes every decision about
-// passwords, passkeys, sessions and codes. See "Security design" in docs/project-foundation.md for what this leaves
+// deviceAuthorization), its options and its documented hooks. Adiutor does not wrap its handler. The hooks below only
+// refuse (a closed route, a second owner, a trusted device, an agent key, an agent approval or a new passkey without
+// two-factor, any Authorization header), write audit rows and end agent connections around an identity change; Better
+// Auth makes every decision about passwords, passkeys, sessions and codes. Agents connect through the authorization
+// server for agents (oauth/) since the agent access release: the api-key and deviceAuthorization plugins stay only
+// until the clean-up release removes them with their tables (Phase 4), and their routes that made or used a key are
+// closed below. See "Security design" in docs/project-foundation.md for what this leaves
 // open.
 
 const DAY_S = 86_400
@@ -69,16 +71,11 @@ export const ALLOWED_PATHS = [
   "/two-factor/verify-totp",
   "/two-factor/verify-backup-code",
   "/two-factor/generate-backup-codes",
-  "/api-key/create",
+  // The agent keys of the releases before agent access: Adiutor refuses them on /api/v1 and /mcp, and Settings lists
+  // and deletes the ones left until the clean-up release. No route makes a new one (/api-key/create and the device
+  // routes of the old agent approval are closed).
   "/api-key/list",
   "/api-key/delete",
-  // Agent approval (deviceAuthorization): the CLI asks for a code and polls for its answer without a session; the
-  // owner's signed-in browser claims the code (GET /device), then approves or denies it.
-  "/device/code",
-  "/device/token",
-  "/device",
-  "/device/approve",
-  "/device/deny",
   // Passkeys: added and managed on the Account page; a sign-in with one needs no session.
   "/passkey/generate-register-options",
   "/passkey/verify-registration",
@@ -89,15 +86,7 @@ export const ALLOWED_PATHS = [
   "/passkey/verify-authentication",
 ] as const
 
-/**
- * The only routes an HTTP request with an `Authorization` header reaches. bearer() turns `Authorization: Bearer
- * <session token>` into a session on every route; Adiutor lets the header through only where `adiutor connect` uses its
- * device session: create its one key, then end that same session (/revoke-session, its own token only). Everything
- * else, listing the sessions included, refuses the header, with or without a cookie.
- */
-export const BEARER_PATHS = ["/api-key/create", "/revoke-session"] as const
-
-/** Where the owner's browser decides about an agent approval: open only once the account has two-factor on. */
+/** Where the owner's browser decided about an old agent approval (closed over HTTP: not in ALLOWED_PATHS). */
 export const DEVICE_DECISION_PATHS = ["/device", "/device/approve", "/device/deny"] as const
 
 /** The device code lives 10 minutes; the CLI polls every 5 seconds (the plugin answers slow_down when faster). */
@@ -244,12 +233,6 @@ const validPasskeyName = (name: unknown) =>
 const invalidPasskeyName = () =>
   refuse("BAD_REQUEST", "INVALID_PASSKEY_NAME", `A passkey's name has 1 to ${PASSKEY_NAME_MAX} characters.`)
 
-/** The value of `Authorization: Bearer <value>`, or null for another scheme or none. */
-function bearerValue(header: string | null): string | null {
-  const match = /^bearer\s+(\S+)\s*$/i.exec(header ?? "")
-  return match?.[1] ?? null
-}
-
 /**
  * Better Auth for the one owner: username and password, then TOTP (or a backup code), and agent keys. The instance
  * is rebuilt when a setting it reads changes (AuthHolder).
@@ -258,7 +241,6 @@ export function createAuth(options: AuthOptions) {
   const { ctx, publicUrl } = options
   const otp = options.otpViaTelegram && options.sendOtp ? options.sendOtp : undefined
   const allowed = new Set<string>([...ALLOWED_PATHS, ...(otp ? OTP_PATHS : [])])
-  const bearerPaths = new Set<string>(BEARER_PATHS)
   const deviceDecision = new Set<string>(DEVICE_DECISION_PATHS)
 
   const ownerBy = (owner: OwnerRow | null): By => ({
@@ -274,15 +256,9 @@ export function createAuth(options: AuthOptions) {
     const http = Boolean(c.request)
     if (http && !allowed.has(path)) throw refuse("NOT_FOUND", "NOT_FOUND", "Nothing is here.")
     const body = (c.body ?? {}) as Record<string, unknown>
-    // This hook runs before bearer()'s own, so it sees the header as the client sent it.
-    const authorization = c.request?.headers.get("authorization") ?? null
-    const viaBearer = http && authorization !== null
-    if (viaBearer) {
-      if (!bearerPaths.has(path))
-        throw refuse("FORBIDDEN", "AUTHORIZATION_NOT_ALLOWED", "This route takes the browser's session only.")
-      if (path === "/revoke-session" && (typeof body.token !== "string" || body.token !== bearerValue(authorization)))
-        throw refuse("FORBIDDEN", "OWN_SESSION_ONLY", "A session sent as a bearer can end only itself.")
-    }
+    // People's routes take the browser's session only: no token, key or session sent in a header.
+    if (http && c.request?.headers.has("authorization"))
+      throw refuse("FORBIDDEN", "AUTHORIZATION_NOT_ALLOWED", "This route takes the browser's session only.")
 
     if (path === "/sign-up/email") {
       if (await readOwner(ctx)) throw refuse("FORBIDDEN", "ALREADY_SET_UP", "Adiutor already has its owner.")
@@ -346,9 +322,7 @@ export function createAuth(options: AuthOptions) {
       // Browsers only: server calls (verifying a key) keep working while the owner sets up a new authenticator.
       if (http && !owner?.twoFactorEnabled)
         throw refuse("FORBIDDEN", "TOTP_REQUIRED", "Set up two-factor authentication first.")
-      const by: By = http
-        ? { ...ownerBy(owner), source: viaBearer ? "api" : "ui" }
-        : { actor: { kind: "system", label: "system" }, source: "api" }
+      const by: By = http ? ownerBy(owner) : { actor: { kind: "system", label: "system" }, source: "api" }
       if (path === "/api-key/create") {
         if (body.prefix !== undefined && body.prefix !== AGENT_KEY_PREFIX)
           throw refuse("BAD_REQUEST", "INVALID_KEY_PREFIX", `Agent keys start with ${AGENT_KEY_PREFIX}.`)
@@ -373,8 +347,8 @@ export function createAuth(options: AuthOptions) {
 
   /**
    * One documented `hooks.after`: the rows of a sign-out and of one ended session. A throwing hook on sign-out would be
-   * swallowed by Better Auth and leave the session valid, and a refused /revoke-session would leave the device session
-   * of `adiutor connect` alive: both are recorded after the fact, and this hook never throws.
+   * swallowed by Better Auth and leave the session valid, and a refused /revoke-session would leave that session alive:
+   * both are recorded after the fact, and this hook never throws.
    */
   const auditAfterTheFact = createAuthMiddleware(async (c) => {
     // An identity change the endpoint refused with an APIError after it began (its database after hook never ran). In
@@ -386,10 +360,7 @@ export function createAuth(options: AuthOptions) {
     try {
       const by = ownerBy(await readOwner(ctx))
       if (c.path === "/sign-out") await audit(by, "session.sign_out", "session")
-      else {
-        const viaBearer = Boolean(c.request?.headers.get("authorization"))
-        await audit({ ...by, source: viaBearer ? "api" : "ui" }, "session.revoke", "session")
-      }
+      else await audit(by, "session.revoke", "session")
     } catch (error) {
       log.error("the session audit row was not written", errorFacts(error))
     }
@@ -608,18 +579,14 @@ export function createAuth(options: AuthOptions) {
           ? { authentication: { afterVerification: options.afterPasskeyVerified } }
           : {}),
       }),
-      // Agent approval in the browser: `adiutor connect` asks for a code, the owner approves it at /connect/device, and
-      // the CLI receives a session token for that one approval. Its session lasts what every session lasts
-      // (session.expiresIn, the idle days); the plugin has no option of its own for it.
+      // The old agent approval of `adiutor connect`: its routes are closed (ALLOWED_PATHS); the plugin and its table
+      // stay until the clean-up release (Phase 4).
       deviceAuthorization({
         expiresIn: DEVICE_CODE_LIFETIME,
         interval: DEVICE_POLL_INTERVAL,
         verificationUri: CONNECT_DEVICE_PATH,
         validateClient: (clientId) => clientId === CONNECT_CLIENT_ID,
       }),
-      // Documented on the device page: the CLI sends that token as `Authorization: Bearer`. hooks.before keeps the
-      // header to BEARER_PATHS; Adiutor's /api/v1, /mcp and /api/setup never hand it to getSession.
-      bearer(),
     ],
   })
 }

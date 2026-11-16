@@ -3,7 +3,7 @@ import { type Context, Hono, type MiddlewareHandler } from "hono"
 import { bodyLimit } from "hono/body-limit"
 import { HTTPException } from "hono/http-exception"
 import { type AgentChannel, createAgentChannel, REFUSALS } from "./agents/channel.ts"
-import { type AuthHolder, BEARER_PATHS } from "./auth/auth.ts"
+import type { AuthHolder } from "./auth/auth.ts"
 import type { ServerConfig } from "./config.ts"
 import { AppError, errorBody } from "./errors.ts"
 import { apiRoutes, type SettingsHandle } from "./http/api.ts"
@@ -81,15 +81,11 @@ const AUTH_BODY_LIMIT = 16 * 1024
 const AGENT_API = /^\/api\/v1(\/|$)/
 /**
  * The only paths where a request may carry a Bearer token for a check of their own (the agent-access standard, "Keep
- * exceptions explicit, by path"): /mcp (the MCP dispatcher's token check), the two Better Auth routes whose own
- * allow-list takes one (`BEARER_PATHS`: the old agent approval of `adiutor connect`, until the agent access release),
- * and the approval API (which refuses it itself).
+ * exceptions explicit, by path"): /mcp (the MCP dispatcher's token check) and the approval API (which refuses it
+ * itself).
  */
-const BETTER_AUTH_BEARER = new Set<string>(BEARER_PATHS.map((p) => `/api/auth${p}`))
 const ownBearerCheck = (path: string) =>
-  /^\/mcp(\/|$)/.test(path) ||
-  BETTER_AUTH_BEARER.has(path) ||
-  /^\/connect\/approve\/[^/]+\/(details|decision)$/.test(path)
+  /^\/mcp(\/|$)/.test(path) || /^\/connect\/approve\/[^/]+\/(details|decision)$/.test(path)
 
 /**
  * Agent access mounted: a request to /api/v1 with an Authorization header is an agent's, answered by the agent router
