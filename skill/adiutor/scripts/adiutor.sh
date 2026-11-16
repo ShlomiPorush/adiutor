@@ -518,6 +518,8 @@ old_address() {
 
 # old_report: the old command's files in the folder, reported as they are, as JSON members to add to an answer.
 old_report() {
+  # Always run as $(old_report), in a subshell of its own: the temporary files are found by a pattern.
+  set +f
   found=""
   for f in connection pending left lock lock.break "$DIR"/connection.*.tmp "$DIR"/pending.*.tmp "$DIR"/left.*.tmp; do
     case "$f" in
