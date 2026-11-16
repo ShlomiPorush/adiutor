@@ -118,12 +118,20 @@ const pausedNow = (ctx: Ctx, report: Pick<SyncCheckin, "paused" | "pausedUntil">
 /**
  * A check-in of the sync on the owner's computer, made by the agent connection `connectionId`. A state report: sent
  * twice, it changes nothing more, so a check-in whose answer was lost is safe to send again. In one transaction:
- * claims whose lease passed become `unknown`; the client's state is recorded; each finished request this connection
- * claimed takes its result (`claimed` or `unknown` only: the final states ignore later reports); the reported running
- * request's lease is renewed; then the answer is the claim this connection holds and has not finished, or else, when
- * the computer is not paused and nothing runs, the oldest waiting request, claimed atomically.
+ * claims whose lease passed become `unknown`; each finished request this connection claimed takes its result
+ * (`claimed` or `unknown` only: the final states ignore later reports); the reported running request's lease is
+ * renewed; the answer is the claim this connection holds and has not finished, or else, when the computer is not paused
+ * and nothing runs, the oldest waiting request, claimed atomically; and last the client's state is recorded. One lock
+ * order everywhere: request rows first (as Sync now and Cancel, which never touch `sync_client`), `sync_client` last,
+ * so two check-ins at once, one of them expiring a lease, never wait on each other in a circle. `beforeClientState`
+ * is a test seam: it runs once the request rows are written.
  */
-export async function checkIn(ctx: Ctx, connectionId: string, report: SyncCheckin) {
+export async function checkIn(
+  ctx: Ctx,
+  connectionId: string,
+  report: SyncCheckin,
+  hooks: { beforeClientState?: () => Promise<void> } = {},
+) {
   return inTx(ctx, async (tx) => {
     const now = ctx.clock()
     const leaseUntil = new Date(now.getTime() + SYNC_LEASE_MS)
@@ -134,18 +142,6 @@ export async function checkIn(ctx: Ctx, connectionId: string, report: SyncChecki
         : report.running.kind === "request"
           ? { kind: "request", requestId: report.running.requestId }
           : { kind: "local", startedAt: report.running.startedAt.toISOString() }
-    const state = {
-      lastCheckinAt: now,
-      version: report.version,
-      paused: report.paused,
-      pausedUntil: report.paused ? report.pausedUntil : null,
-      nextRunAt: report.nextRunAt,
-      running,
-    }
-    await tx
-      .insert(syncClient)
-      .values({ connectionId, ...state })
-      .onConflictDoUpdate({ target: syncClient.connectionId, set: state })
 
     for (const { requestId, result } of report.finished) {
       await tx
@@ -193,6 +189,20 @@ export async function checkIn(ctx: Ctx, connectionId: string, report: SyncChecki
         .where(and(inArray(syncRequests.id, oldest), eq(syncRequests.state, "waiting")))
         .returning()
     }
+
+    await hooks.beforeClientState?.()
+    const state = {
+      lastCheckinAt: now,
+      version: report.version,
+      paused: report.paused,
+      pausedUntil: report.paused ? report.pausedUntil : null,
+      nextRunAt: report.nextRunAt,
+      running,
+    }
+    await tx
+      .insert(syncClient)
+      .values({ connectionId, ...state })
+      .onConflictDoUpdate({ target: syncClient.connectionId, set: state })
     return {
       claim: claim ? { requestId: claim.id, claimedAt: claim.claimedAt, leaseUntil: claim.leaseUntil } : null,
     }

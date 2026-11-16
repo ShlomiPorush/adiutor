@@ -1,0 +1,1 @@
+ALTER TABLE "item_threads" ADD COLUMN "snooze_as_of" timestamp with time zone;

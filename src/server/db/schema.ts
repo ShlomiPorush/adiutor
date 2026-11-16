@@ -147,6 +147,8 @@ export const itemThreads = pgTable(
     /** Snoozed in T3 (D-T6), until `snoozed_until` when T3 gives a time. Shown on the item; no sync rule reads it. */
     snoozed: boolean("snoozed").notNull().default(false),
     snoozedUntil: at("snoozed_until"),
+    /** When the snapshot that last set the snooze was collected: an older one never changes it. */
+    snoozeAsOf: at("snooze_as_of"),
     lastActivityAt: at("last_activity_at"),
     linkedAt: at("linked_at").notNull().defaultNow(),
   },

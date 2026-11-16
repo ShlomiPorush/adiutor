@@ -204,6 +204,38 @@ describe("the check-in", () => {
     expect(t.ctx.clock().getTime() + SYNC_LEASE_MS - lease).toBeLessThan(5_000)
   })
 
+  it("lets two check-ins overlap while one expires the lease the other renews: no deadlock, the claim stays", async () => {
+    const computer = randomUUID()
+    const { request } = await requestSync(t.ctx, owner)
+    await checkIn(t.ctx, computer, report())
+    // The lease ends in 30 seconds. Check-in A renews it and stops before it writes the client's state.
+    t.clock.travel(SYNC_LEASE_MS - MINUTE / 2)
+    const running = report({ running: { kind: "request", requestId: request.id } })
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let reached = () => {}
+    const atSeam = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    const a = checkIn(t.ctx, computer, running, {
+      beforeClientState: async () => {
+        reached()
+        await held
+      },
+    })
+    await atSeam
+    // Check-in B starts after the lease A has not committed yet passed: it expires leases first.
+    t.clock.travel(MINUTE)
+    const b = checkIn(t.ctx, computer, running)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    release()
+    const answers = await Promise.all([a, b])
+    for (const answer of answers) expect(answer.claim?.requestId).toBe(request.id)
+    expect((await row(request.id)).state).toBe("claimed")
+  })
+
   it("makes a claim whose lease passed unknown, and still takes its late result", async () => {
     const computer = randomUUID()
     const { request } = await requestSync(t.ctx, owner)

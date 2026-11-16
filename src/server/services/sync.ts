@@ -216,7 +216,7 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       if (!thread.parentThreadId) continue
       await run.record(`thread:${thread.threadId}`, async () => {
         const root = rootThreadId(thread.threadId, parentOf)
-        if (root) await foldChildLink(ctx, run, thread.threadId, root, byId.get(root))
+        if (root) await foldChildLink(ctx, run, thread.threadId, root, byId.get(root), snapshot.collectedAt)
       })
     }
 
@@ -243,12 +243,17 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
           }
           if (link) {
             // An older snapshot applied after a newer one: the stored state is newer. At the same activity time only
-            // the snooze can be new (T3 need not move a thread's time when it is snoozed, or when a snooze ends).
+            // the snooze can be new (T3 need not move a thread's time when it is snoozed, or when a snooze ends), and
+            // only from a snapshot collected no earlier than the one that last set it (a push applied late, after its
+            // answer was lost, never brings back a snooze that ended or clears a new one).
             const stored = link.lastActivityAt?.getTime()
             if (stored !== undefined && thread.updatedAt.getTime() < stored) return
-            const next = stored === thread.updatedAt.getTime() ? snooze : fields
+            const sameTime = stored === thread.updatedAt.getTime()
+            if (sameTime && link.snoozeAsOf && snapshot.collectedAt.getTime() < link.snoozeAsOf.getTime()) return
+            const next = sameTime ? snooze : fields
             if (!linkChanged(link, next)) return
-            const [after] = await tx.update(itemThreads).set(next).where(eq(itemThreads.id, link.id)).returning()
+            const write = linkChanged(link, snooze) ? { ...next, snoozeAsOf: snapshot.collectedAt } : next
+            const [after] = await tx.update(itemThreads).set(write).where(eq(itemThreads.id, link.id)).returning()
             await writeAudit(ctx, tx, SYNC, {
               action: "thread.update",
               entityType: "item",
@@ -277,7 +282,13 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
           )
           const [inserted] = await tx
             .insert(itemThreads)
-            .values({ itemId: item.id, threadId: thread.threadId, linkedAt: ctx.clock(), ...fields })
+            .values({
+              itemId: item.id,
+              threadId: thread.threadId,
+              linkedAt: ctx.clock(),
+              ...fields,
+              snoozeAsOf: snapshot.collectedAt,
+            })
             .onConflictDoNothing({ target: itemThreads.threadId })
             .returning()
           // An agent linked the thread at the same moment: roll this item back; the next run sees the link.
@@ -365,6 +376,7 @@ async function foldChildLink(
   childId: string,
   rootId: string,
   root: T3Snapshot["threads"][number] | undefined,
+  collectedAt: Date,
 ) {
   // Under the link structure lock: an owner delete or an agent's link of the root thread runs entirely
   // before or after this fold, so a delete suppresses either the child's link or the moved one.
@@ -399,6 +411,7 @@ async function foldChildLink(
             settled: root.settled,
             lastActivityAt: root.updatedAt,
             ...snoozeOf(root),
+            snoozeAsOf: collectedAt,
           }),
         })
         .where(eq(itemThreads.id, child.id))

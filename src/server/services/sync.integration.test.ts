@@ -790,6 +790,28 @@ describe("snoozed threads (D-T6)", () => {
     expect((await linkOf("a"))?.snoozed).toBe(false)
   })
 
+  it("never takes the snooze of a snapshot collected before the one that set it, at the same activity time", async () => {
+    const at = ago(HOUR)
+    const until = new Date(t.ctx.clock().getTime() + DAY)
+    const newer = t.ctx.clock()
+    const older = new Date(newer.getTime() - 10 * 60_000)
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at })], { collectedAt: older }))
+    // The newer push sets the snooze; the older one, applied late (its answer was lost), would clear it.
+    await applyT3Snapshot(
+      t.ctx,
+      snapshot([thread("a", { updatedAt: at, snoozed: true, snoozedUntil: until })], { collectedAt: newer }),
+    )
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: false })], { collectedAt: older }))
+    expect(await linkOf("a")).toMatchObject({ snoozed: true, snoozedUntil: until, snoozeAsOf: newer })
+    // And the other way: a newer push ended the snooze; the older one does not bring it back.
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: false })], { collectedAt: newer }))
+    await applyT3Snapshot(
+      t.ctx,
+      snapshot([thread("a", { updatedAt: at, snoozed: true, snoozedUntil: until })], { collectedAt: older }),
+    )
+    expect(await linkOf("a")).toMatchObject({ snoozed: false, snoozedUntil: null })
+  })
+
   it("changes no status decision", async () => {
     const item = await linkedItem("in_progress", ["a"])
     await applyT3Snapshot(
