@@ -49,13 +49,14 @@ const env = { overrides: config.overrides, cipher: createSettingsCipher(config.s
 const telegram = new TelegramService({ ctx, publicUrl: config.publicUrl, apiUrl: config.telegramApiUrl })
 
 // Agent access by approval (oauth/): the authorization server for agents on a small pool of its own (an approval holds
-// a transaction of the main pool while the library stores its grant), its cookies signed with ADIUTOR_OAUTH_SECRETS.
+// a transaction of the main pool while the library stores its grant), its cookies signed with keys derived from
+// ADIUTOR_AUTH_SECRETS (config.ts).
 // Built before Better Auth, whose identity changes end every agent connection (D7).
 const storeDatabase = createDatabase(config.databaseUrl, { max: 4 })
 const access = await createAgentAccess({
   ctx,
   publicUrl: config.publicUrlText,
-  cookieKeys: config.oauthSecrets.map((k) => k.value),
+  cookieKeys: config.agentCookieKeys,
   storeDb: storeDatabase.db,
   cipher: env.cipher,
 })

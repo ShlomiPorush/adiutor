@@ -75,7 +75,7 @@ check "the seed's origin is the public address" seed_origin
 
 # --- the keys (never printed) ---
 
-KEY_NAMES=(ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS ADIUTOR_OAUTH_SECRETS)
+KEY_NAMES=(ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS)
 # Succeeds when the env file holds exactly one 1:<64 hex> line per key, each value different.
 keys_generated() {
   local name values=()
@@ -87,21 +87,41 @@ keys_generated() {
 }
 check "the stack's env file holds each key family, generated and distinct" keys_generated
 check "the stack's env file is mode 600" test "$(stat -c %a "$ENV_FILE")" = 600
+check "the stack's env file holds no ADIUTOR_OAUTH_SECRETS" test "$(grep -c '^ADIUTOR_OAUTH_SECRETS=' "$ENV_FILE")" = 0
 
-# An older pr.env without ADIUTOR_OAUTH_SECRETS: the key is appended and every other line stays as it was.
+# A head based on 0.2.0 requires ADIUTOR_OAUTH_SECRETS: its env file gains one generated key, and only then.
+head_key_only_for_old_heads() {
+  local before
+  mkdir -p "$WORKTREE/src/server"
+  printf 'export const a = 1\n' >"$WORKTREE/src/server/config.ts"
+  before="$(cat "$ENV_FILE")"
+  ensure_head_keys >/dev/null
+  [ "$(cat "$ENV_FILE")" = "$before" ] || return 1
+  printf 'const t = required("ADIUTOR_OAUTH_SECRETS")\n' >"$WORKTREE/src/server/config.ts"
+  ensure_head_keys >/dev/null
+  ensure_head_keys >/dev/null
+  [ "$(head -n -1 "$ENV_FILE")" = "$before" ] &&
+    [ "$(grep -cE '^ADIUTOR_OAUTH_SECRETS=1:[0-9a-f]{64}$' "$ENV_FILE")" = 1 ] && keys_generated &&
+    [ "$(stat -c %a "$ENV_FILE")" = 600 ] || return 1
+  sed -i '/^ADIUTOR_OAUTH_SECRETS=/d' "$ENV_FILE"
+  rm -rf "$WORKTREE"
+}
+check "a head based on 0.2.0 gets ADIUTOR_OAUTH_SECRETS, any other head none" head_key_only_for_old_heads
+
+# An older pr.env without ADIUTOR_SETTINGS_KEYS: the key is appended and every other line stays as it was.
 older_env_gains_key() {
   local before
-  sed -i '/^ADIUTOR_OAUTH_SECRETS=/d' "$ENV_FILE"
+  sed -i '/^ADIUTOR_SETTINGS_KEYS=/d' "$ENV_FILE"
   before="$(cat "$ENV_FILE")"
   ensure_auth_secret >/dev/null
   [ "$(head -n -1 "$ENV_FILE")" = "$before" ] && keys_generated && [ "$(stat -c %a "$ENV_FILE")" = 600 ]
 }
-check "an older env file gains ADIUTOR_OAUTH_SECRETS and keeps its other lines" older_env_gains_key
+check "an older env file gains ADIUTOR_SETTINGS_KEYS and keeps its other lines" older_env_gains_key
 
 # The same file without a line break at its end: the key gets a line of its own, the address stays whole.
 unterminated_env_gains_key() {
   local before
-  sed -i '/^ADIUTOR_OAUTH_SECRETS=/d' "$ENV_FILE"
+  sed -i '/^ADIUTOR_SETTINGS_KEYS=/d' "$ENV_FILE"
   truncate -s -1 "$ENV_FILE"
   before="$(cat "$ENV_FILE")"
   ensure_auth_secret >/dev/null

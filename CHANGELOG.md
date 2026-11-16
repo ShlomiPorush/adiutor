@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **`ADIUTOR_OAUTH_SECRETS` is no longer needed**: the cookie keys of the authorization server for agents are derived from `ADIUTOR_AUTH_SECRETS`, one per version, so rotating the auth secrets rotates them too. Deploy this release without adding anything to `.env`. If you added `ADIUTOR_OAUTH_SECRETS` for 0.2.0, delete the line: until you do, the server only logs a warning at start. An agent approval under way during the upgrade from 0.2.0 may have to start again; agent connections stay.
+
 ## [0.2.0] - 2026-11-16
 
 ### Added

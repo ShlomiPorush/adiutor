@@ -70,9 +70,9 @@ save_state() {
 }
 
 write_env() {
-  local password auth settings oauth
+  local password auth settings
   # Every value first, each checked: nothing is written unless all of them were generated.
-  if ! { password="$(new_hex)" && auth="$(new_hex)" && settings="$(new_hex)" && oauth="$(new_hex)"; }; then
+  if ! { password="$(new_hex)" && auth="$(new_hex)" && settings="$(new_hex)"; }; then
     die "could not generate the stack's password and keys; nothing was written"
   fi
   (
@@ -86,7 +86,6 @@ POSTGRES_DB=adiutor
 DATABASE_URL=postgres://adiutor:$password@postgres:5432/adiutor
 ADIUTOR_AUTH_SECRETS=1:$auth
 ADIUTOR_SETTINGS_KEYS=1:$settings
-ADIUTOR_OAUTH_SECRETS=1:$oauth
 ADIUTOR_PUBLIC_URL=$(pr_url)
 EOF
   )
@@ -103,6 +102,14 @@ ensure_auth_secret() {
   for name in "${STACK_KEY_NAMES[@]}"; do
     add_missing_stack_key "$ENV_FILE" "$name"
   done
+}
+
+# A pull request based on 0.2.0 still requires ADIUTOR_OAUTH_SECRETS, which later servers no longer read: its env file
+# gains one generated key, appended like the others. Any other head gets none.
+ensure_head_keys() {
+  if grep -qF 'required("ADIUTOR_OAUTH_SECRETS")' "$WORKTREE/src/server/config.ts" 2>/dev/null; then
+    add_missing_stack_key "$ENV_FILE" ADIUTOR_OAUTH_SECRETS
+  fi
 }
 
 write_compose() {
@@ -265,6 +272,7 @@ try_pr() {
   mkdir -p "$DATA_DIR"
   write_env
   ensure_auth_secret
+  ensure_head_keys
   write_compose
   write_proxy_conf
   info "Starting $PR_PROJECT on $(pr_url)"

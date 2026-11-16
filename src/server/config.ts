@@ -1,3 +1,5 @@
+import { hkdfSync } from "node:crypto"
+
 export type VersionedKey = { version: number; value: string }
 
 export type ServerConfig = {
@@ -11,10 +13,10 @@ export type ServerConfig = {
   /** ADIUTOR_SETTINGS_KEYS ("2:new,1:old"): encrypts the secrets stored in Settings. Never an auth secret. */
   settingsKeys: VersionedKey[]
   /**
-   * ADIUTOR_OAUTH_SECRETS ("2:new,1:old"): the cookie keys of the authorization server for agents, in the order
-   * listed (newest first: the first signs, the others only verify). Never an auth secret or a settings key.
+   * The cookie keys of the authorization server for agents, one derived from each auth secret in the order listed
+   * (newest first: the first signs, the others only verify), so rotating ADIUTOR_AUTH_SECRETS rotates them too.
    */
-  oauthSecrets: VersionedKey[]
+  agentCookieKeys: string[]
   /** ADIUTOR_TRUSTED_PROXIES: the proxy addresses or CIDR ranges in front of Adiutor (Traefik), comma-separated. */
   trustedProxies: string[]
   /** The URL the owner opens; browsers' Origin must match it. */
@@ -140,6 +142,16 @@ function parseKeys(name: string, text: string, problems: string[]): VersionedKey
 }
 
 /**
+ * The cookie keys of the authorization server for agents (`oidc-provider`'s `cookies.keys`): one HKDF-SHA256 key per
+ * auth secret, in the order given, under a label of their own, so none equals or reveals the secret Better Auth uses.
+ */
+export function deriveAgentCookieKeys(authSecrets: VersionedKey[]): string[] {
+  return authSecrets.map((k) =>
+    Buffer.from(hkdfSync("sha256", k.value, "adiutor", "agent-access-cookies", 32)).toString("base64"),
+  )
+}
+
+/**
  * Reads the server configuration from the environment and refuses an unsafe one. Only what the process needs
  * before it can read its own settings lives here alone: the database, the keys, the public URL and the proxy
  * wiring. The owner's settings (Telegram, private domains) live in the database; a variable set here overrides
@@ -171,11 +183,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const authValues = new Set(authSecrets.map((k) => k.value))
   if (settingsKeys.some((k) => authValues.has(k.value)))
     problems.push("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
-  const oauthSecretsText = required("ADIUTOR_OAUTH_SECRETS")
-  const oauthSecrets = oauthSecretsText ? parseKeys("ADIUTOR_OAUTH_SECRETS", oauthSecretsText, problems) : []
-  const settingsValues = new Set(settingsKeys.map((k) => k.value))
-  if (oauthSecrets.some((k) => authValues.has(k.value) || settingsValues.has(k.value)))
-    problems.push("ADIUTOR_OAUTH_SECRETS must differ from every auth secret and settings key")
+  // Required by 0.2.0 only: existing .env, stack.env and pr.env files still hold it, so a leftover only warns. Its
+  // value is never read.
+  if (env.ADIUTOR_OAUTH_SECRETS !== undefined)
+    warnings.push(
+      "ADIUTOR_OAUTH_SECRETS is no longer read: remove it; the agent cookie keys come from ADIUTOR_AUTH_SECRETS",
+    )
 
   let publicUrl: URL | undefined
   if (publicUrlText) {
@@ -210,7 +223,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     databaseUrl,
     authSecrets,
     settingsKeys,
-    oauthSecrets,
+    agentCookieKeys: deriveAgentCookieKeys(authSecrets),
     trustedProxies,
     publicUrl,
     publicUrlText,

@@ -94,7 +94,7 @@ export type AgentAccessOptions = {
   ctx: Ctx
   /** ADIUTOR_PUBLIC_URL as configured: the issuer, when agents may connect under it (S3). */
   publicUrl: string
-  /** ADIUTOR_OAUTH_SECRETS values, newest first. Required: there is no authorization server without them. */
+  /** The cookie keys (config.ts, derived from ADIUTOR_AUTH_SECRETS), newest first. Required. */
   cookieKeys: string[]
   /** The storage adapter's own small pool (see oauth/store.ts). */
   storeDb: Db
@@ -127,7 +127,7 @@ export async function createAgentAccess(options: AgentAccessOptions) {
   // A public URL agents may not use has a fingerprint too (of the refused value): moving to it ends every connection,
   // and moving back from it revives none.
   const fingerprint = issuerFingerprint(issuer ?? `refused:${options.publicUrl.trim()}`)
-  if (options.cookieKeys.length === 0) throw new Error("the authorization server needs ADIUTOR_OAUTH_SECRETS")
+  if (options.cookieKeys.length === 0) throw new Error("the authorization server needs its cookie keys")
 
   /** Set by the routes: a counted device poll that turned out to be waiting or approved, and a capped request done. */
   const hooks: {

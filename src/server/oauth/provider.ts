@@ -162,7 +162,7 @@ function deviceLabel(ctx: KoaContextWithOIDC): unknown {
 export type AgentProviderOptions = {
   issuer: string
   adapter: AdapterConstructor
-  /** ADIUTOR_OAUTH_SECRETS, newest first: the first signs the library's cookies, the others only verify. */
+  /** The cookie keys, newest first: the first signs the library's cookies, the others only verify. */
   cookieKeys: string[]
   pages: ProviderPages
   /** The language of the pages above: the owner's language setting; never fails (the default instead). */
@@ -175,7 +175,7 @@ export type AgentProviderOptions = {
 
 export function createAgentProvider(options: AgentProviderOptions): Provider {
   const { issuer, pages, language } = options
-  if (options.cookieKeys.length === 0) throw new Error("the authorization server needs ADIUTOR_OAUTH_SECRETS")
+  if (options.cookieKeys.length === 0) throw new Error("the authorization server needs its cookie keys")
   const resources = resourceUrls(issuer)
   const resourceOf = (indicator: string): AgentResource | null =>
     indicator === resources.mcp ? "mcp" : indicator === resources.rest ? "rest" : null

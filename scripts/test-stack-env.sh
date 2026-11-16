@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Tests for ensure_stack_env (scripts/lib/common.sh) without Docker: a new stack.env holds every key, generated and
-# distinct, mode 600; an older one gains a key added later as one appended line and keeps every other line, also
-# when several runs start at once; a failing generator writes nothing; an empty or short key is not valid; a file
-# that is not mode 600 or is a link is never written to. Values are never printed. Run with the guards
+# Tests for ensure_stack_env and add_missing_stack_key (scripts/lib/common.sh) without Docker: a new stack.env holds
+# every key, generated and distinct, mode 600; an older one, also one that still holds the ADIUTOR_OAUTH_SECRETS of
+# 0.2.0, is kept as it is; a key missing from a file gains one appended line and every other line stays, also when
+# several runs start at once; a failing generator writes nothing; an empty or short key is not valid; a file that is
+# not mode 600 or is a link is never written to. Values are never printed. Run with the guards
 # (scripts/lib/guards.sh).
 set -uo pipefail
 
@@ -27,7 +28,7 @@ check() {
 source "$REPO/scripts/lib/common.sh"
 set +e
 
-KEY_NAMES=(ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS ADIUTOR_OAUTH_SECRETS)
+KEY_NAMES=(ADIUTOR_AUTH_SECRETS ADIUTOR_SETTINGS_KEYS)
 
 # Succeeds when the file holds exactly one 1:<64 hex> line per key, each value different.
 keys_generated() {
@@ -49,20 +50,44 @@ check "a new stack's env file is created" ensure "$NEW"
 check "it holds every key family, generated and distinct" keys_generated "$NEW/stack.env"
 check "it is mode 600" test "$(stat -c %a "$NEW/stack.env")" = 600
 check "every name it needs is set" stack_env_valid "$NEW/stack.env"
+check "it holds no ADIUTOR_OAUTH_SECRETS" test "$(grep -c '^ADIUTOR_OAUTH_SECRETS=' "$NEW/stack.env")" = 0
 copy="$(cat "$NEW/stack.env")"
 ensure "$NEW"
 check "a second run changes nothing" test "$(cat "$NEW/stack.env")" = "$copy"
 
-# --- an older stack, written before ADIUTOR_OAUTH_SECRETS ---
+# --- an older stack ---
 
-# A copy of the new stack's file without the OAuth line, ending with or without a line break.
+# A copy of the new stack's file for a database that exists, ending with or without a line break; with "leftover",
+# it also holds the ADIUTOR_OAUTH_SECRETS line 0.2.0 wrote, which the server no longer reads.
 older() {
-  local dir="$1" ending="$2"
+  local dir="$1" ending="$2" leftover="${3:-}"
   mkdir -p "$dir/postgres"
   : >"$dir/postgres/PG_VERSION"
-  grep -v '^ADIUTOR_OAUTH_SECRETS=' "$NEW/stack.env" >"$dir/stack.env"
+  cp "$NEW/stack.env" "$dir/stack.env"
+  [ -z "$leftover" ] || echo "ADIUTOR_OAUTH_SECRETS=1:$(new_hex)" >>"$dir/stack.env"
   [ "$ending" = newline ] || truncate -s -1 "$dir/stack.env"
   chmod 600 "$dir/stack.env"
+}
+
+for ending in newline none; do
+  for leftover in "" leftover; do
+    OLD="$WORK/old-$ending-${leftover:-plain}"
+    older "$OLD" "$ending" "$leftover"
+    before="$(cat "$OLD/stack.env")"
+    check "an older env file ($ending at the end, ${leftover:-no leftover}) is accepted" ensure "$OLD"
+    check "and it is kept as it was" test "$(cat "$OLD/stack.env")" = "$before"
+    check "it stays mode 600" test "$(stat -c %a "$OLD/stack.env")" = 600
+  done
+done
+
+# --- a key missing from a file (add_missing_stack_key, used by try-pr.sh) ---
+
+# A copy of the new stack's file without the settings key, ending with or without a line break.
+lacking() {
+  local file="$1" ending="$2"
+  grep -v '^ADIUTOR_SETTINGS_KEYS=' "$NEW/stack.env" >"$file"
+  [ "$ending" = newline ] || truncate -s -1 "$file"
+  chmod 600 "$file"
 }
 
 # Succeeds when the file is the text $2 (read without its last line break) with one more line at the end.
@@ -71,41 +96,41 @@ one_line_appended() {
   [ "$(head -n -1 "$file")" = "$before" ] && [ "$(wc -l <"$file")" = "$(($(grep -c '' <<<"$before") + 1))" ]
 }
 
+add() { (add_missing_stack_key "$1" ADIUTOR_SETTINGS_KEYS) >/dev/null 2>&1; }
+
 for ending in newline none; do
-  OLD="$WORK/old-$ending"
-  older "$OLD" "$ending"
-  before="$(cat "$OLD/stack.env")"
-  check "an older env file ($ending at the end) is accepted" ensure "$OLD"
-  check "it gains ADIUTOR_OAUTH_SECRETS as its one new last line" one_line_appended "$OLD/stack.env" "$before"
-  check "it then holds every key family, generated and distinct" keys_generated "$OLD/stack.env"
-  check "it stays mode 600" test "$(stat -c %a "$OLD/stack.env")" = 600
-  after="$(cat "$OLD/stack.env")"
-  ensure "$OLD"
-  check "a second run changes nothing" test "$(cat "$OLD/stack.env")" = "$after"
+  FILE="$WORK/lacking-$ending.env"
+  lacking "$FILE" "$ending"
+  before="$(cat "$FILE")"
+  check "a file lacking a key ($ending at the end) gains it" add "$FILE"
+  check "as its one new last line" one_line_appended "$FILE" "$before"
+  check "it then holds every key family, generated and distinct" keys_generated "$FILE"
+  check "it stays mode 600" test "$(stat -c %a "$FILE")" = 600
+  after="$(cat "$FILE")"
+  add "$FILE"
+  check "a second run changes nothing" test "$(cat "$FILE")" = "$after"
 done
 
-# --- runs at once ---
-
-# Four runs at once on one older file, ten times: each file ends with exactly one ADIUTOR_OAUTH_SECRETS line.
+# Four runs at once on one file, ten times: each file ends with exactly one ADIUTOR_SETTINGS_KEYS line.
 concurrent_runs_add_one_line() {
-  local round dir
+  local round file
   for round in $(seq 1 10); do
-    dir="$WORK/race-$round"
-    older "$dir" newline
-    ensure "$dir" &
-    ensure "$dir" &
-    ensure "$dir" &
-    ensure "$dir" &
+    file="$WORK/race-$round.env"
+    lacking "$file" newline
+    add "$file" &
+    add "$file" &
+    add "$file" &
+    add "$file" &
     wait
-    [ "$(grep -c '^ADIUTOR_OAUTH_SECRETS=' "$dir/stack.env")" = 1 ] || return 1
-    keys_generated "$dir/stack.env" || return 1
+    [ "$(grep -c '^ADIUTOR_SETTINGS_KEYS=' "$file")" = 1 ] || return 1
+    keys_generated "$file" || return 1
   done
 }
-check "four runs at once add exactly one ADIUTOR_OAUTH_SECRETS line" concurrent_runs_add_one_line
+check "four runs at once add exactly one line" concurrent_runs_add_one_line
 
 # --- a generator that fails ---
 
-# random_hex printing nothing: no stack.env is created, and an older one is not written to.
+# random_hex printing nothing: no stack.env is created, and a file lacking a key is not written to.
 no_value_written() {
   local before
   (
@@ -113,13 +138,14 @@ no_value_written() {
     ensure_stack_env "$WORK/broken-new"
   ) >/dev/null 2>&1 && return 1
   [ ! -e "$WORK/broken-new/stack.env" ] || return 1
-  older "$WORK/broken-old" newline
-  before="$(cat "$WORK/broken-old/stack.env")"
+  lacking "$WORK/broken.env" newline
+  before="$(cat "$WORK/broken.env")"
   (
+    # shellcheck disable=SC2317 # called by add_missing_stack_key
     random_hex() { :; }
-    ensure_stack_env "$WORK/broken-old"
+    add_missing_stack_key "$WORK/broken.env" ADIUTOR_SETTINGS_KEYS
   ) >/dev/null 2>&1 && return 1
-  [ "$(cat "$WORK/broken-old/stack.env")" = "$before" ]
+  [ "$(cat "$WORK/broken.env")" = "$before" ]
 }
 check "a failing generator writes no key, new or appended" no_value_written
 
@@ -127,8 +153,8 @@ check "a failing generator writes no key, new or appended" no_value_written
 short_keys_invalid() {
   local value
   for value in "" "1:" "1:$(new_hex | cut -c 1-31)"; do
-    grep -v '^ADIUTOR_OAUTH_SECRETS=' "$NEW/stack.env" >"$WORK/short.env"
-    echo "ADIUTOR_OAUTH_SECRETS=$value" >>"$WORK/short.env"
+    grep -v '^ADIUTOR_SETTINGS_KEYS=' "$NEW/stack.env" >"$WORK/short.env"
+    echo "ADIUTOR_SETTINGS_KEYS=$value" >>"$WORK/short.env"
     chmod 600 "$WORK/short.env"
     ! stack_env_valid "$WORK/short.env" || return 1
   done
