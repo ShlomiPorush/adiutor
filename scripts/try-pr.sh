@@ -211,9 +211,9 @@ gh_head() {
 }
 
 seed() {
-  info "Seeding the owner (sign-up, TOTP and an agent key) and invented fixtures with that key"
+  info "Seeding the owner (sign-up and TOTP) and invented fixtures with the owner's session"
   build_toolchain
-  # The seed writes the owner's sign-in and the agent key to /state/owner.env (0600) and prints neither.
+  # The seed writes the owner's sign-in to /state/owner.env (0600) and never prints it.
   TOOLCHAIN_EXTRA_ARGS=(--network "${PR_PROJECT}_default" -v "$STATE_DIR:/state"
     -e ADIUTOR_URL=http://adiutor:8080 -e "ADIUTOR_ORIGIN=$(pr_url)" -e ADIUTOR_OWNER_FILE=/state/owner.env)
   in_toolchain "node scripts/lib/try-pr-seed.mjs"
@@ -279,7 +279,6 @@ try_pr() {
 
   info "Pull request #$pr (${COMMIT:0:12}) runs on $(pr_url)"
   echo "    sign in with: $OWNER_FILE (username, password, TOTP secret, backup codes)"
-  echo "    agent key for API calls: $OWNER_FILE (ADIUTOR_AGENT_KEY)"
   echo "    when done: scripts/try-pr.sh restore"
 }
 

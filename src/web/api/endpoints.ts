@@ -134,8 +134,7 @@ export const api = {
   suppressions: () => data<Suppression[]>("GET", "/suppressions"),
   deleteSuppression: (suppressionId: string) => request<null>("DELETE", `/suppressions/${id(suppressionId)}`),
 
-  // Agent access by approval (/api/v1/agents): answered without the {data} wrapper. Not mounted in production until
-  // the agent access release: there the settings read answers 404 (pages/settings/AgentAccessPanel.tsx).
+  // Agent access by approval (/api/v1/agents): answered without the {data} wrapper.
   agentSettings: () => request<AgentSettings>("GET", "/agents/settings"),
   updateAgentSettings: (patch: { enabled?: boolean; idleDays?: number }) =>
     request<AgentSettings>("PATCH", "/agents/settings", patch),

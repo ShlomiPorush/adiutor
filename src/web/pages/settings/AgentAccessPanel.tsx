@@ -1,20 +1,19 @@
-// Settings, Agent access. Which panel shows depends on whether this Adiutor has agent access by approval mounted
-// (createApp's `agentOAuth`): the section reads GET /api/v1/agents/settings, and only a 404 `not_found` answer (an
-// Adiutor without it, as production is until the agent access release) shows today's panel of agent keys
-// (AgentKeysPanel.tsx). Any other failure shows the error with Try again, never the old panel; a refresh that fails
-// keeps what is shown and says so, with Try again.
+// Settings, Agent access: the section reads GET /api/v1/agents/settings. A failure shows the error with Try again; a
+// refresh that fails keeps what is shown and says so, with Try again.
 //
-// The new panel, in three groups: Agents (the on/off switch and the idle days, part of the page's one draft and its
-// save bar, SV-1; the save asks first when it ends connections: agents turned off, or fewer idle days); How to connect
-// (the MCP address, the Claude Code command and the sentence for the agent skill, or the locked reason when the public
-// URL does not allow agents); Connected agents (name, how it connected, areas, approved, last used and when it ends,
-// with Disconnect, and Disconnect all at the end of the head, always there: it also ends waiting codes and open
-// approvals).
+// Its groups: Agents (the on/off switch and the idle days, part of the page's one draft and its save bar, SV-1; the
+// save asks first when it ends connections: agents turned off, or fewer idle days); How to connect (the agent-access
+// standard's two ways, distribution-and-versioning.md: the MCP address with the Claude Code command, and the sentence
+// that installs the agent skill from /agents/skill/; or the locked reason when the public URL does not allow agents);
+// the sync bundle's commands on the computer that runs the sync (connect, and setup-mcp for Claude Code and Codex);
+// Connected agents (name, how it connected, areas, approved, last used and when it ends, with Disconnect, and
+// Disconnect all at the end of the head, always there: it also ends waiting codes and open approvals); and, while any
+// is left, the old agent keys (AgentKeysPanel.tsx). The commands and the sentence are written for agents and
+// terminals, so they are English, outside the locales; every address in them is quoted.
 
 import { useQueryClient } from "@tanstack/react-query"
 import { type ReactNode, useState } from "react"
 import { AGENT_IDLE_DAYS_MAX, AGENT_IDLE_DAYS_MIN } from "../../../shared/settings.ts"
-import { ApiError } from "../../api/client.ts"
 import { api, qk } from "../../api/endpoints.ts"
 import type { AgentConnection, AgentSettings } from "../../api/types.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
@@ -25,30 +24,35 @@ import { Banner, Empty, ErrorState, errorReason, Loading, Locked } from "../../u
 import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag } from "../../ui/tags.tsx"
-import { AgentKeysSection, skillSentence } from "./AgentKeysPanel.tsx"
+import { OldAgentKeys } from "./AgentKeysPanel.tsx"
 import { Group, Row, SwitchRow } from "./parts.tsx"
-
-/**
- * The owner's agent settings, or null where agent access by approval is not mounted: Adiutor's own JSON answer
- * `404 {error: {code: "not_found"}}`. Any other 404 (a proxy's page) is a failure, never the old panel.
- */
-async function readAgentSettings(): Promise<AgentSettings | null> {
-  try {
-    return await api.agentSettings()
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404 && error.code === "not_found" && error.fromServer) return null
-    throw error
-  }
-}
 
 /** The agent settings as Settings reads them: the page's draft and this section share the one read. */
 export function useAgentSettings() {
-  return usePageQuery({ queryKey: qk.agentSettings, queryFn: readAgentSettings, every: EVERY.slow })
+  return usePageQuery({ queryKey: qk.agentSettings, queryFn: api.agentSettings, every: EVERY.slow })
 }
 
 /** The command that adds Adiutor to Claude Code over MCP; Claude Code then opens Adiutor to approve it. */
 export function claudeCommand(mcpUrl: string): string {
-  return `claude mcp add --transport http adiutor ${mcpUrl}`
+  return `claude mcp add --transport http adiutor "${mcpUrl}"`
+}
+
+/** What the owner tells a coding agent that runs commands: install the skill from Adiutor, then connect. */
+export function skillSentence(issuer: string): string {
+  return `Install the adiutor skill into your personal skills folder as described at ${issuer}/agents/skill/, then connect to Adiutor.`
+}
+
+/** The sync bundle, run in the Adiutor folder on the computer that runs the sync. */
+const BUNDLE = "node dist/sync/adiutor-sync.js"
+
+/** The sync's own connection (the sync area), approved in this browser. */
+export function syncConnectCommand(issuer: string): string {
+  return `${BUNDLE} connect --name "sync" --url "${issuer}"`
+}
+
+/** Sets Claude Code or Codex up for Adiutor's MCP with OAuth, replacing a setup that used an agent key. */
+export function setupMcpCommand(issuer: string, client: "claude" | "codex"): string {
+  return `${BUNDLE} setup-mcp --for ${client} --url "${issuer}"`
 }
 
 /** A whole number of idle days within the limits, or null. */
@@ -64,7 +68,7 @@ export type AgentDraft = { agentsEnabled?: boolean; agentIdleDays?: string }
 
 /** What a save of the agent fields sends: only what differs from the stored settings (SV-2). */
 export function agentChanges(
-  saved: AgentSettings | null | undefined,
+  saved: AgentSettings | undefined,
   draft: AgentDraft,
 ): { enabled?: boolean; idleDays?: number } {
   if (!saved) return {}
@@ -128,22 +132,13 @@ function RefreshFailed({ onRetry }: { onRetry: () => void }) {
   )
 }
 
-/** The Agent access section: the new panel where agent access is mounted, today's panel of agent keys otherwise. */
+/** The Agent access section. */
 export function AgentsSection({ form }: { form: AgentForm }) {
   const { t } = useI18n()
   const query = useAgentSettings()
   const retry = () => void query.refetch()
   if (query.isPending) return <Loading label={t("agentAccess.loading")} />
-  // A failure never shows the old panel: only a 404 answer does, and a failure after it is shown as a failure.
-  if (query.isError && !query.data)
-    return <ErrorState title={t("agentAccess.failed")} error={query.error} onRetry={retry} />
-  if (query.data === null || query.data === undefined)
-    return (
-      <>
-        <p className="ui-set-tabdesc">{t("settings.sections.agents.hint")}</p>
-        <AgentKeysSection />
-      </>
-    )
+  if (!query.data) return <ErrorState title={t("agentAccess.failed")} error={query.error} onRetry={retry} />
   return (
     <>
       <p className="ui-set-tabdesc">{t("agentAccess.hint")}</p>
@@ -151,7 +146,17 @@ export function AgentsSection({ form }: { form: AgentForm }) {
       <SettingsGroup settings={query.data} form={form} />
       <ConnectGroup settings={query.data} />
       <ConnectionsGroup />
+      <OldAgentKeys />
     </>
+  )
+}
+
+/** A command or sentence to copy, left to right in every language. */
+function Command({ value }: { value: string }) {
+  return (
+    <span className="ui-set-command" dir="ltr">
+      <Copyable value={value} />
+    </span>
   )
 }
 
@@ -186,40 +191,47 @@ function SettingsGroup({ settings, form }: { settings: AgentSettings; form: Agen
   )
 }
 
-/** How to connect: the MCP address, the Claude Code command and the skill sentence, or why agents cannot connect. */
+/**
+ * How to connect: the MCP address with the Claude Code command, the skill sentence, and the sync bundle's commands; or
+ * why agents cannot connect.
+ */
 function ConnectGroup({ settings }: { settings: AgentSettings }) {
   const { t } = useI18n()
-  const command = (value: string) => (
-    <span className="ui-set-command" dir="ltr">
-      <Copyable value={value} />
-    </span>
-  )
-  let body: ReactNode
   if (settings.issuerProblem || !settings.mcpUrl || !settings.issuer)
-    body = (
-      <Locked title={t("agentAccess.issuerTitle")}>
-        {t(`agentAccess.issuer.${settings.issuerProblem ?? "invalid"}`)} {t("agentAccess.issuerWhere")}
-      </Locked>
+    return (
+      <Group id="settings-connect" title={t("agentAccess.connectTitle")} intro={t("agentAccess.connectIntro")}>
+        <Locked title={t("agentAccess.issuerTitle")}>
+          {t(`agentAccess.issuer.${settings.issuerProblem ?? "invalid"}`)} {t("agentAccess.issuerWhere")}
+        </Locked>
+      </Group>
     )
-  else
-    body = (
-      <>
+  const issuer = settings.issuer
+  return (
+    <>
+      <Group id="settings-connect" title={t("agentAccess.connectTitle")} intro={t("agentAccess.connectIntro")}>
         {settings.enabled ? null : <Banner tone="warn" title={t("agentAccess.offNote")} />}
         <Row label={t("agentAccess.mcpUrl")} hint={t("agentAccess.mcpHint")}>
-          {command(settings.mcpUrl)}
+          <Command value={settings.mcpUrl} />
         </Row>
         <Row label={t("agentAccess.claude")} hint={t("agentAccess.claudeHint")}>
-          {command(claudeCommand(settings.mcpUrl))}
+          <Command value={claudeCommand(settings.mcpUrl)} />
         </Row>
         <Row label={t("agentAccess.skill")} hint={t("agentAccess.skillHint")}>
-          {command(skillSentence(settings.issuer))}
+          <Command value={skillSentence(issuer)} />
         </Row>
-      </>
-    )
-  return (
-    <Group id="settings-connect" title={t("agentAccess.connectTitle")} intro={t("agentAccess.connectIntro")}>
-      {body}
-    </Group>
+      </Group>
+      <Group id="settings-connect-sync" title={t("agentAccess.syncTitle")} intro={t("agentAccess.syncIntro")}>
+        <Row label={t("agentAccess.syncConnect")} hint={t("agentAccess.syncConnectHint", { replace: "--replace" })}>
+          <Command value={syncConnectCommand(issuer)} />
+        </Row>
+        <Row label={t("agentAccess.setupClaude")} hint={t("agentAccess.setupHint")}>
+          <Command value={setupMcpCommand(issuer, "claude")} />
+        </Row>
+        <Row label={t("agentAccess.setupCodex")} hint={t("agentAccess.setupHint")}>
+          <Command value={setupMcpCommand(issuer, "codex")} />
+        </Row>
+      </Group>
+    </>
   )
 }
 

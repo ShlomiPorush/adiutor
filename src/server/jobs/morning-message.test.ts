@@ -4,7 +4,7 @@ import { buildMorningMessage, type MessageOptions, type MorningSummary } from ".
 
 const URL_BASE = "https://adiutor.example.com"
 const options: MessageOptions = { language: "en", publicUrl: URL_BASE, dateFormat: "dd/MM/yyyy", timeFormat: "HH:mm" }
-const fresh = { lastSuccessAt: new Date("2026-11-01T05:30:00Z"), stale: false }
+const fresh = { connected: true, lastSuccessAt: new Date("2026-11-01T05:30:00Z"), stale: false }
 
 // 2026-10-30 05:31 UTC is 07:31 in Asia/Jerusalem (winter time, UTC+2).
 const full: MorningSummary = {
@@ -19,7 +19,7 @@ const full: MorningSummary = {
     { projectName: "Gadget", critical: 1, high: 0, asOf: new Date("2026-11-01T05:00:00Z"), stale: false },
     { projectName: "Gizmo", critical: 1, high: 0, asOf: null, stale: true },
   ],
-  sync: { lastSuccessAt: new Date("2026-10-30T05:30:00Z"), stale: true },
+  sync: { connected: true, lastSuccessAt: new Date("2026-10-30T05:30:00Z"), stale: true },
 }
 
 const lines = (text: unknown) => String(text).split("\n")
@@ -57,7 +57,7 @@ describe("buildMorningMessage", () => {
       waiting: [],
       newCount: 0,
       security: [{ projectName: "Gizmo", critical: 0, high: 3, asOf: null, stale: true }],
-      sync: { lastSuccessAt: null, stale: true },
+      sync: { connected: true, lastSuccessAt: null, stale: true },
     }
     expect(lines(buildMorningMessage(summary, options))).toEqual([
       "Nothing is waiting on you.",
@@ -66,6 +66,24 @@ describe("buildMorningMessage", () => {
       "No T3 sync yet",
       `<a href="${URL_BASE}/">Open the board</a>`,
     ])
+  })
+
+  it("says that the sync is disconnected and must be connected again, with the last sync, even when it is fresh", () => {
+    const summary: MorningSummary = { waiting: [], newCount: 0, security: [], sync: { ...fresh, connected: false } }
+    const disconnected =
+      "The sync is disconnected: connect it again on the computer that runs it (Settings, Agent access)."
+    expect(lines(buildMorningMessage(summary, options))).toEqual([
+      "Nothing is waiting on you.",
+      "New since your last visit: 0",
+      `${disconnected} Last T3 sync: 01/11/2026 07:30`,
+      `<a href="${URL_BASE}/">Open the board</a>`,
+    ])
+    const never: MorningSummary = { ...summary, sync: { connected: false, lastSuccessAt: null, stale: true } }
+    expect(lines(buildMorningMessage(never, options))[2]).toBe(disconnected)
+    const m = he.telegram.morning
+    expect(lines(buildMorningMessage(summary, { ...options, language: "he" }))[2]).toBe(
+      `${m.syncDisconnected} ${m.syncStale.replace("{time}", "01/11/2026 07:30")}`,
+    )
   })
 
   it("escapes hostile titles and names and strips control and bidirectional characters", () => {
@@ -131,7 +149,7 @@ describe("buildMorningMessage", () => {
       newCount: 0,
       security: [],
       // 2026-07-04 21:05 UTC is 00:05 on 5 July in Asia/Jerusalem (summer time, UTC+3).
-      sync: { lastSuccessAt: new Date("2026-07-04T21:05:00Z"), stale: true },
+      sync: { connected: true, lastSuccessAt: new Date("2026-07-04T21:05:00Z"), stale: true },
     }
     expect(lines(buildMorningMessage(summary, options))[2]).toBe("Last T3 sync: 05/07/2026 00:05")
     const twelve = buildMorningMessage(summary, { ...options, dateFormat: "yyyy-MM-dd", timeFormat: "h:mm a" })

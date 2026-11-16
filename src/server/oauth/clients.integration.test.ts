@@ -1,9 +1,13 @@
 import { spawn, spawnSync } from "node:child_process"
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { syncClient } from "../../sync/oauth.ts"
+import { audit, authDeviceCode, items } from "../db/schema.ts"
+import { createAgentKey } from "../testing/app.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import {
   answerConsent,
@@ -21,6 +25,7 @@ import { SKILL_FILES, servedSkillVersion } from "./skill.ts"
  * The two clients against the real authorization server and agent channel, over HTTP (n8n-ops' skill.test.ts shape):
  * the agent skill's command (every version this computer runs: node, and sh with curl) as served at /agents/skill/
  * and as a copy from Git, and the sync's connection. Each connects with a code the owner approves, calls, and ends.
+ * Then the skill of the releases before agent access, which used an agent key: no route code runs for it (D12).
  */
 
 let t: TestDatabase
@@ -198,4 +203,87 @@ describe("the sync's connection", () => {
     )
     expect(ended).toMatchObject({ kind: "failed", code: "connection_ended" })
   }, 120_000)
+})
+
+describe("an old skill copy, which used an agent key (D12, the plan's rollout)", () => {
+  // The Node version of the skill at b50f463, the last commit before the new clients, byte for byte.
+  const OLD_SKILL = fileURLToPath(new URL("./testdata/adiutor-b50f463.mjs", import.meta.url))
+  const OLD_SKILL_SHA256 = "0e632fe09a301aa49898125de2e6d52afb7543649451e30def162c682d925cea"
+
+  /** Runs the old command with its connection folder (ADIUTOR_SKILL_HOME). */
+  function old(home: string, args: string[]) {
+    return new Promise<{ code: number | null; json: Loose; out: string }>((resolve) => {
+      const child = spawn(process.execPath, [OLD_SKILL, ...args], {
+        env: { PATH: process.env.PATH ?? "", HOME: home, ADIUTOR_SKILL_HOME: join(home, ".adiutor") },
+      })
+      let out = ""
+      child.stdout.on("data", (d) => {
+        out += d
+      })
+      child.stderr.on("data", (d) => {
+        out += d
+      })
+      child.on("close", (code) => {
+        let json: Loose = null
+        try {
+          json = JSON.parse(out.trim().split("\n").at(-1) ?? "")
+        } catch {}
+        resolve({ code, json, out })
+      })
+    })
+  }
+
+  /** What a route that ran would have left: items and every audit row but the agent channel's own. */
+  const traces = async () => ({
+    items: (await t.ctx.db.select({ id: items.id }).from(items)).length,
+    rows: (await t.ctx.db.select({ action: audit.action }).from(audit)).filter((r) => !r.action.startsWith("agent.")),
+  })
+
+  it("is the copy of b50f463", () => {
+    const text = readFileSync(OLD_SKILL, "utf8").replace(/\r\n/g, "\n")
+    expect(createHash("sha256").update(text).digest("hex")).toBe(OLD_SKILL_SHA256)
+  })
+
+  for (const enabled of [true, false])
+    it(`with agents ${enabled ? "on" : "off"}: its key runs no route code, it forgets the key, and cannot connect again`, async () => {
+      await h.access.saveSettings(ownerBy, { enabled })
+      try {
+        // The connection the old command kept: a key Adiutor itself made, still valid for the api-key plugin.
+        const key = await createAgentKey(h.core, "old skill")
+        const home = mkdtempSync(join(temp, "old-"))
+        mkdirSync(join(home, ".adiutor"), { mode: 0o700 })
+        const record = { v: 1, origin: h.issuer, key, keyName: "skill:old:0a1b2c3d", expiresAt: "2099-01-01T00:00:00Z" }
+        writeFileSync(join(home, ".adiutor", "connection"), JSON.stringify(record), { mode: 0o600 })
+        const before = await traces()
+
+        const posted = await old(home, ["post", "capture", "--json", '{"text":"An idea from an old skill"}'])
+        expect(posted.json?.error, posted.out).toBe("connection_ended")
+        expect(existsSync(join(home, ".adiutor", "connection"))).toBe(false)
+        // MCP with the same key, as an old Claude Code or Codex setup sent it.
+        const mcp = await fetch(`${h.issuer}/mcp`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${key}`,
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "adiutor_capture", arguments: { text: "An idea over MCP" } },
+          }),
+        })
+        expect(mcp.status).toBe(401)
+        expect(await traces()).toEqual(before)
+
+        // Its connect asks Better Auth's closed device routes, and stops.
+        const again = await old(home, ["connect", "--url", h.issuer])
+        expect(again.json?.error, again.out).toBe("http_404")
+        expect(await t.ctx.db.select().from(authDeviceCode)).toHaveLength(0)
+        expect(await traces()).toEqual(before)
+      } finally {
+        await h.access.saveSettings(ownerBy, { enabled: true })
+      }
+    }, 60_000)
 })

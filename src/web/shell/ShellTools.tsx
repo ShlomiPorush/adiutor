@@ -154,13 +154,22 @@ export function AccountMenu({ compact = false }: { compact?: boolean }) {
   )
 }
 
-/** The last complete T3 sync, in words and in its tone; it opens Settings › Status, where the sync's status is. */
+/**
+ * The last complete T3 sync, in words and in its tone; it opens Settings › Status, where the sync's status is. A sync
+ * with no live connection says so, and opens Settings › Agent access, where the command to connect it again is.
+ */
 export function SyncStatus({ morning, failed }: { morning: Morning | undefined; failed: boolean }) {
   const { t } = useI18n()
   const sync = morning?.sync
-  const tone = !sync?.lastSuccessAt ? "none" : sync.stale ? "warn" : "ok"
+  const disconnected = sync !== undefined && !sync.connected
+  const tone = disconnected ? "warn" : !sync?.lastSuccessAt ? "none" : sync.stale ? "warn" : "ok"
   return (
-    <Link to={settingsPath("status")} className="ui-status-card" title={t("sync.title")} data-sync-tone={tone}>
+    <Link
+      to={settingsPath(disconnected ? "agents" : "status")}
+      className="ui-status-card"
+      title={t("sync.title")}
+      data-sync-tone={tone}
+    >
       <span className="ui-status-dot" aria-hidden="true" />
       <span className="ui-status-text">
         <b>{t("shell.syncCard")}</b>
@@ -171,6 +180,8 @@ export function SyncStatus({ morning, failed }: { morning: Morning | undefined; 
             ) : (
               "-"
             )
+          ) : disconnected ? (
+            t("shell.syncDisconnected")
           ) : sync.lastSuccessAt ? (
             <>
               {sync.stale ? `${t("shell.syncStale")} · ` : null}

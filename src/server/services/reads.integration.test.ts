@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { audit, items, securitySources, syncRuns } from "../db/schema.ts"
+import { agentConnections, audit, items, securitySources, syncRuns } from "../db/schema.ts"
+import { addSyncConnection } from "../testing/agents.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { recordVisit, updateSettings } from "./admin.ts"
 import { addComment, captureItem, createItem, createItemTx, linkThread, updateItem } from "./items.ts"
@@ -198,6 +199,17 @@ describe("morning", () => {
     const second = await archive(t.ctx, { limit: 1, cursor: first.nextCursor ?? "" })
     expect(second).toMatchObject({ data: [expect.objectContaining({ title: "Old" })], nextCursor: null })
     await expect(archive(t.ctx, { cursor: "not-a-cursor" })).rejects.toMatchObject({ code: "validation_failed" })
+  })
+
+  it("says the sync is connected only while a live connection holds the sync area", async () => {
+    expect((await morning(t.ctx)).sync.connected).toBe(false)
+    const id = await addSyncConnection(t.ctx)
+    expect((await morning(t.ctx)).sync.connected).toBe(true)
+    await t.ctx.db
+      .update(agentConnections)
+      .set({ endedAt: t.ctx.clock(), endReason: "disconnected", endedBy: "owner" })
+      .where(eq(agentConnections.id, id))
+    expect((await morning(t.ctx)).sync.connected).toBe(false)
   })
 
   it("reports the last successful sync and whether it is stale", async () => {

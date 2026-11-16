@@ -228,7 +228,13 @@ function morning(): Morning {
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),
     inboxCount: open.filter((item) => item.projectId === null).length,
-    sync: { lastSuccessAt: ago(27), stale: true, lastPartialAt: ago(3), securityLastSuccessAt: ago(9) },
+    sync: {
+      connected: true,
+      lastSuccessAt: ago(27),
+      stale: true,
+      lastPartialAt: ago(3),
+      securityLastSuccessAt: ago(9),
+    },
   }
 }
 
@@ -736,6 +742,26 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     if (privateDomains !== undefined) state.settings.privateDomains.value = privateDomains as string[]
     record("settings.update", "settings", state.settings.id, before, { ...state.settings })
     return ok(state.settings)
+  }
+  // Agent access by approval: answered without the {data} wrapper, as the server does.
+  if (head === "agents" && id === "settings" && method === "GET") return { status: 200, body: state.agentSettings }
+  if (head === "agents" && id === "settings" && method === "PATCH") {
+    const { enabled, idleDays } = body as { enabled?: boolean; idleDays?: number }
+    if (enabled === false) state.agentConnections = []
+    if (enabled !== undefined) state.agentSettings.enabled = enabled
+    if (idleDays !== undefined) state.agentSettings.idleDays = idleDays
+    return { status: 200, body: state.agentSettings }
+  }
+  if (head === "agents" && id === "connections" && method === "GET")
+    return { status: 200, body: { connections: state.agentConnections } }
+  if (head === "agents" && id === "connections" && sub === "disconnect-all" && method === "POST") {
+    const ended = state.agentConnections.length
+    state.agentConnections = []
+    return { status: 200, body: { ended } }
+  }
+  if (head === "agents" && id === "connections" && sub && method === "DELETE") {
+    state.agentConnections = state.agentConnections.filter((connection) => connection.id !== sub)
+    return { status: 204, body: null }
   }
   if (head === "telegram" && id === "test-message" && method === "POST") return ok({ sent: true })
   if (head === "telegram")

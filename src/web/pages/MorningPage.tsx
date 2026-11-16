@@ -92,7 +92,17 @@ function MorningBody({
   return (
     <>
       <StaleNote failed={refreshFailed} />
-      {morning.sync.stale ? (
+      {!morning.sync.connected ? (
+        <Banner tone="warn" title={t("sync.disconnectedTitle")}>
+          {t("sync.disconnectedBody")}
+          {morning.sync.lastSuccessAt ? (
+            <>
+              {" "}
+              {t("sync.disconnectedLast")} <Time value={morning.sync.lastSuccessAt} mode="full" />.
+            </>
+          ) : null}
+        </Banner>
+      ) : morning.sync.stale ? (
         <Banner tone="warn" title={morning.sync.lastSuccessAt ? t("sync.staleTitle") : t("sync.neverTitle")}>
           {morning.sync.lastSuccessAt ? (
             <>

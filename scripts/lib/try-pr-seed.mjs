@@ -1,9 +1,10 @@
 // Seeds a pull request stack (scripts/try-pr.sh) through the HTTP API. First the owner, as the first-run setup
-// does it from the browser, on Better Auth's routes: sign-up with a generated password, TOTP enrolment, then an
-// agent key (api-key plugin). The username, password, TOTP secret, backup codes and agent key go to
-// ADIUTOR_OWNER_FILE (0600) and are never printed. Then invented fixtures with that agent key only, so the board has
-// something to show: projects from a T3 snapshot, items in every status, goals, a stage proposal, security sources,
-// comments and an inbox item.
+// does it from the browser, on Better Auth's routes: sign-up with a generated password, then TOTP enrolment. The
+// username, password, TOTP secret and backup codes go to ADIUTOR_OWNER_FILE (0600) and are never printed. Then
+// invented fixtures with the owner's signed-in session, so the board has something to show: projects, items in every
+// status, goals, stage proposals, a thread's item, comments and an inbox item. A pull request stack has no agent
+// access (its http address on pr.localhost is not one agents may use), so nothing here comes from the sync: no T3
+// threads, sync runs or security sources.
 // Reads ADIUTOR_URL, ADIUTOR_ORIGIN (the stack's public URL, for the origin check) and ADIUTOR_OWNER_FILE from the
 // environment. Never prints a key, password or secret.
 
@@ -73,7 +74,6 @@ await page("/api/auth/sign-up/email", {
 const { totpURI, backupCodes } = await page("/api/auth/two-factor/enable", { password })
 const totpSecret = new URL(totpURI).searchParams.get("secret")
 await page("/api/auth/two-factor/verify-totp", { code: totp(totpSecret) })
-const { key: token } = await page("/api/auth/api-key/create", { name: "try-pr seed", expiresIn: 30 * 86_400 })
 writeFileSync(
   ownerFile,
   [
@@ -82,26 +82,22 @@ writeFileSync(
     `ADIUTOR_OWNER_PASSWORD=${password}`,
     `ADIUTOR_OWNER_TOTP_SECRET=${totpSecret}`,
     `ADIUTOR_OWNER_BACKUP_CODES=${backupCodes.join(",")}`,
-    "# An agent key (Settings, Agent access) for the API and MCP: Authorization: Bearer <key>.",
-    `ADIUTOR_AGENT_KEY=${token}`,
     "",
   ].join("\n"),
   { mode: 0o600 },
 )
-console.log("    owner created with TOTP and an agent key; both written to the owner file")
+console.log("    owner created with TOTP; written to the owner file")
 
-// --- Fixtures, with the agent key ---
-
-const now = Date.now()
-const ago = (hours) => new Date(now - hours * 3_600_000).toISOString()
+// --- Fixtures, with the owner's session ---
 
 async function call(method, path, body) {
   const res = await fetch(`${base}/api/v1${path}`, {
     method,
     headers: {
-      authorization: `Bearer ${token}`,
       "content-type": "application/json",
-      "x-adiutor-agent": "try-pr seed",
+      origin,
+      "x-adiutor-request": "1",
+      cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join("; "),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
@@ -114,44 +110,13 @@ async function call(method, path, body) {
 }
 
 const projects = [
-  { t3ProjectId: "demo-harbor", title: "Harbor Notes", repo: "example-owner/harbor-notes" },
-  { t3ProjectId: "demo-lantern", title: "Lantern Garden", repo: "example-owner/lantern-garden" },
-  { t3ProjectId: "demo-ledger", title: "Quiet Ledger", repo: "example-owner/quiet-ledger" },
+  { name: "Harbor Notes", t3ProjectId: "demo-harbor", githubRepo: "example-owner/harbor-notes", stage: "poc" },
+  { name: "Lantern Garden", t3ProjectId: "demo-lantern", githubRepo: "example-owner/lantern-garden", stage: "idea" },
+  { name: "Quiet Ledger", t3ProjectId: "demo-ledger", githubRepo: "example-owner/quiet-ledger", stage: "development" },
 ]
-
-const thread = (threadId, t3ProjectId, title, status, settled, hours, extra = {}) => ({
-  threadId,
-  t3ProjectId,
-  title,
-  status,
-  settled,
-  settledAt: settled ? ago(hours) : null,
-  parentThreadId: null,
-  updatedAt: ago(hours),
-  ...extra,
-})
-
-const t3 = await call("POST", "/sync/t3", {
-  collectedAt: ago(0),
-  projects,
-  threads: [
-    thread("demo-thread-harbor-1", "demo-harbor", "Add offline export", "running", false, 1),
-    thread("demo-thread-harbor-1a", "demo-harbor", "Review offline export", "completed", true, 1, {
-      parentThreadId: "demo-thread-harbor-1",
-    }),
-    thread("demo-thread-harbor-2", "demo-harbor", "Choose the sync format", "waiting", false, 3),
-    thread("demo-thread-harbor-3", "demo-harbor", "Fix the date picker", "completed", true, 20),
-    thread("demo-thread-lantern-1", "demo-lantern", "Plan the watering schedule view", "waiting", false, 5),
-    thread("demo-thread-lantern-2", "demo-lantern", "Sketch the plant card", "completed", false, 30),
-  ],
-})
-
-const byT3 = new Map((await call("GET", "/projects")).map((p) => [p.t3ProjectId, p]))
-const id = (t3ProjectId) => {
-  const project = byT3.get(t3ProjectId)
-  if (!project) throw new Error(`project ${t3ProjectId} was not created by the snapshot`)
-  return project.id
-}
+const byT3 = new Map()
+for (const project of projects) byT3.set(project.t3ProjectId, await call("POST", "/projects", project))
+const id = (t3ProjectId) => byT3.get(t3ProjectId).id
 const harbor = id("demo-harbor")
 const lantern = id("demo-lantern")
 const ledger = id("demo-ledger")
@@ -212,36 +177,4 @@ await call("POST", "/threads/start", {
   t3ProjectId: "demo-ledger",
 })
 
-const counts = (critical, high, medium, low) => ({ critical, high, medium, low })
-const security = await call("POST", "/sync/security", {
-  collectedAt: ago(0),
-  repos: [
-    {
-      repo: "example-owner/harbor-notes",
-      openIssues: 4,
-      issuesAsOf: ago(1),
-      families: [
-        { family: "dependabot", coverage: "enabled", counts: counts(1, 2, 0, 1), asOf: ago(1) },
-        { family: "code_scanning", coverage: "enabled", counts: counts(0, 0, 1, 2), asOf: ago(1) },
-        { family: "secret_scanning", coverage: "not_enabled", counts: counts(0, 0, 0, 0), asOf: null },
-      ],
-    },
-    {
-      repo: "example-owner/lantern-garden",
-      openIssues: 0,
-      issuesAsOf: ago(1),
-      families: [{ family: "dependabot", coverage: "no_access", counts: counts(0, 0, 0, 0), asOf: null }],
-    },
-    {
-      repo: "example-owner/quiet-ledger",
-      openIssues: 2,
-      issuesAsOf: ago(50),
-      families: [{ family: "dependabot", coverage: "enabled", counts: counts(0, 1, 0, 0), asOf: ago(50) }],
-    },
-  ],
-})
-
-console.log(
-  `    seeded ${byT3.size} projects, ${created.length + 2} items besides the synced ones, 2 stage proposals;` +
-    ` T3 sync ${t3.outcome}, security sync ${security.outcome}`,
-)
+console.log(`    seeded ${byT3.size} projects, ${created.length + 2} items, 2 stage proposals`)

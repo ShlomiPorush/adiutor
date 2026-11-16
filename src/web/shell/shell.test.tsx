@@ -13,6 +13,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from "react-router"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import en from "../../shared/locales/en.json"
 import { qk } from "../api/endpoints.ts"
+import type { Morning } from "../api/types.ts"
 import { I18nProvider } from "../i18n/i18n.tsx"
 import { ConfirmHost } from "../ui/confirm.tsx"
 import { layerCount } from "../ui/layers.ts"
@@ -322,6 +323,22 @@ describe("the account menu is a layer of ui/layers.ts (R4)", () => {
     stubMedia(() => false)
     await render(<SyncStatus morning={undefined} failed={false} />)
     expect(document.querySelector(".ui-status-card")?.getAttribute("href")).toBe("/settings/status")
+  })
+
+  it("the sync card says a disconnected sync must be connected again, and links to Agent access", async () => {
+    stubMedia(() => false)
+    const sync = {
+      connected: false,
+      lastSuccessAt: "2026-11-02T06:30:00.000Z",
+      stale: false,
+      lastPartialAt: null,
+      securityLastSuccessAt: null,
+    }
+    await render(<SyncStatus morning={{ sync } as Morning} failed={false} />)
+    const card = document.querySelector(".ui-status-card")
+    expect(card?.getAttribute("href")).toBe("/settings/agents")
+    expect(card?.getAttribute("data-sync-tone")).toBe("warn")
+    expect(card?.textContent).toContain(en.shell.syncDisconnected)
   })
 })
 

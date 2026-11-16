@@ -41,6 +41,7 @@ import {
   syncRuns,
 } from "../db/schema.ts"
 import { invalid, notFound } from "../errors.ts"
+import { syncConnected } from "../oauth/sync-status.ts"
 import { getSettings, previousVisit } from "./admin.ts"
 import type { By, Ctx } from "./context.ts"
 import type { ItemRow } from "./items.ts"
@@ -129,16 +130,19 @@ async function lastFinished(ctx: Ctx, kind: string, outcomes: SyncOutcome[]): Pr
 
 /**
  * T3 freshness comes from the last complete run (`succeeded`): a partial run may have missed whole
- * projects. A partial run after it is reported as such (`lastPartialAt`).
+ * projects. A partial run after it is reported as such (`lastPartialAt`). `connected` is false when no live agent
+ * connection holds the `sync` area: the sync cannot push until the owner connects it again.
  */
 export async function syncStatus(ctx: Ctx) {
   const now = ctx.clock().getTime()
-  const [t3, partial, security] = await Promise.all([
+  const [t3, partial, security, connected] = await Promise.all([
     lastFinished(ctx, "t3", ["succeeded"]),
     lastFinished(ctx, "t3", ["partial"]),
     lastFinished(ctx, "security", ["succeeded", "partial"]),
+    syncConnected(ctx.db, ctx.clock()),
   ])
   return {
+    connected,
     lastSuccessAt: t3,
     stale: !t3 || now - t3.getTime() > STALE_AFTER_MS,
     lastPartialAt: partial && (!t3 || partial.getTime() > t3.getTime()) ? partial : null,

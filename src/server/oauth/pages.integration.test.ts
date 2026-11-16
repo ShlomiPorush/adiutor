@@ -296,8 +296,8 @@ describe("refusals before the hand-off to the library", () => {
   })
 })
 
-describe("production before the agent access release", () => {
-  it("answers 404 not_found on the owner's agent settings without agentOAuth, which shows the old Agent access panel", async () => {
+describe("an app built without agent access (tests only)", () => {
+  it("answers 404 not_found on the owner's agent settings without agentOAuth", async () => {
     const withoutAgents = createApp({ checkDatabase: async () => true, core: h.core })
     const headers = { cookie: h.owner.cookieHeader, ...h.owner.extra }
     const mounted = await browserCall(h.owner, "/api/v1/agents/settings")

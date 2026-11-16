@@ -292,8 +292,8 @@ export function buildMcpServer(ctx: Ctx, by: By, version: string, agent?: AgentM
 export const MCP_BODY_LIMIT = 512 * 1024
 
 /**
- * MCP over Streamable HTTP at /mcp, stateless, with an agent key as a bearer token; with `agents` (agent access
- * mounted), with an access token for `<issuer>/mcp` instead, through the agent channel's policy core.
+ * MCP over Streamable HTTP at /mcp, stateless. With `agents` (agent access mounted, always in production), an access
+ * token for `<issuer>/mcp` through the agent channel's policy core; without it (tests only), an agent key.
  */
 export function mcpRoutes(deps: AuthDeps & { version: string }, agents?: AgentChannel) {
   const app = new Hono<Env>()

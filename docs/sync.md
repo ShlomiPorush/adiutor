@@ -1,6 +1,6 @@
 # Sync tool
 
-Status: built and tested against fixtures, a stand-in Adiutor and, in the integration tests, the real authorization server. It connects by agent access by approval, so it works against the agent access release only: an Adiutor before it has no authorization server. The server routes it calls (`/api/v1/sync/t3`, `/api/v1/sync/security`) are on `main`; see [api.md](api.md). Not yet run against an Adiutor server; that happens in the launch checks in production.
+Status: built and tested against fixtures, a stand-in Adiutor and, in the integration tests, the real authorization server. It connects by agent access by approval, so it works against the agent access release and later only: an Adiutor before it has no authorization server. The server routes it calls (`/api/v1/sync/t3`, `/api/v1/sync/security`) are on `main`; see [api.md](api.md). Not yet run against an Adiutor server; that happens in the launch checks in production.
 
 `dist/sync/adiutor-sync.js` runs on the owner's PC, started by the T3 scheduled task in [prompts/reconcile.md](../prompts/reconcile.md). It is the only way T3 and GitHub data reach Adiutor: the server never calls T3 or GitHub.
 

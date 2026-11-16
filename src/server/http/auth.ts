@@ -102,10 +102,7 @@ export function checkBrowserRequest(c: Context, publicUrl: URL): void {
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"])
 
-/**
- * The request's cookie header and nothing else, for Better Auth's getSession. With bearer() an `Authorization:
- * Bearer <session token>` header is a session too; a browser route reads the session from its cookie alone.
- */
+/** The request's cookie header and nothing else, for Better Auth's getSession: a browser route reads the cookie alone. */
 export function cookieOnly(headers: Headers): Headers {
   const cookie = headers.get("cookie")
   return new Headers(cookie ? { cookie } : {})

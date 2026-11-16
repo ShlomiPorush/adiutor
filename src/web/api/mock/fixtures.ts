@@ -4,7 +4,9 @@
 
 import type { ItemStatus, ItemType, Severity, Stage } from "../../../shared/enums.ts"
 import type {
+  AgentConnection,
   AgentKey,
+  AgentSettings,
   AuditEntry,
   BrowserSession,
   Comment,
@@ -108,6 +110,10 @@ export type MockState = {
   /** Better Auth's list-sessions, the current one first. */
   sessions: BrowserSession[]
   endedOthers: boolean
+  /** Agent access by approval: the owner's settings and the live connections (GET /api/v1/agents/*). */
+  agentSettings: AgentSettings
+  agentConnections: AgentConnection[]
+  /** The agent keys left from before agent access, listed until the clean-up release. */
   agentKeys: AgentKey[]
   /** Better Auth's list-user-passkeys (the fields the Account page reads). */
   passkeys: MockPasskey[]
@@ -578,6 +584,54 @@ export function createState(): MockState {
       lastRequest: ago(3),
     },
   ]
+  // The mock's own address is the issuer, as a served Adiutor's public URL is (a test DOM may have none).
+  const issuer =
+    typeof window !== "undefined" && window.location?.origin?.startsWith("http")
+      ? window.location.origin
+      : "http://localhost:5173"
+  const agentSettings: AgentSettings = {
+    enabled: true,
+    idleDays: 90,
+    issuer,
+    issuerProblem: null,
+    mcpUrl: `${issuer}/mcp`,
+    restUrl: `${issuer}/api/v1`,
+  }
+  const agentConnections: AgentConnection[] = [
+    {
+      id: uuid(),
+      name: "Laptop sync",
+      via: "code",
+      resource: "rest",
+      areas: ["sync"],
+      redirectHost: null,
+      approvedAt: ago(24 * 6),
+      lastUsedAt: ago(0.3),
+      endsAt: ago(-24 * 90),
+    },
+    {
+      id: uuid(),
+      name: "Agents on work-laptop",
+      via: "code",
+      resource: "rest",
+      areas: ["read", "write"],
+      redirectHost: null,
+      approvedAt: ago(24 * 5),
+      lastUsedAt: ago(2),
+      endsAt: ago(-24 * 90),
+    },
+    {
+      id: uuid(),
+      name: "Claude Code",
+      via: "browser",
+      resource: "mcp",
+      areas: ["read", "write"],
+      redirectHost: "localhost",
+      approvedAt: ago(24 * 4),
+      lastUsedAt: null,
+      endsAt: ago(-24 * 90),
+    },
+  ]
   const passkeys: MockPasskey[] = [
     { id: uuid(), name: "Work laptop", createdAt: ago(24 * 14) },
     { id: uuid(), name: "Phone", createdAt: ago(24 * 2) },
@@ -606,6 +660,8 @@ export function createState(): MockState {
     noteVersions,
     sessions,
     endedOthers: false,
+    agentSettings,
+    agentConnections,
     agentKeys,
     passkeys,
     suppressions,

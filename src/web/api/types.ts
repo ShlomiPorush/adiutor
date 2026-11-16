@@ -410,6 +410,8 @@ export type Morning = {
   projects: MorningProject[]
   inboxCount: number
   sync: {
+    /** False when no live agent connection holds the sync area: the sync must be connected again. */
+    connected: boolean
     lastSuccessAt: string | null
     stale: boolean
     lastPartialAt: string | null

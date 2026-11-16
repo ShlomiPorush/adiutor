@@ -165,7 +165,8 @@
     "twoFactorOn": "Two-factor on",
     "syncCard": "T3 sync",
     "syncStale": "Out of date",
-    "syncUnknown": "Could not be read"
+    "syncUnknown": "Could not be read",
+    "syncDisconnected": "Disconnected: connect it again"
   },
   "theme": {
     "light": "Light",
@@ -282,7 +283,10 @@
     "neverTitle": "T3 has not been synced yet",
     "neverBody": "Items appear once the sync tool on your PC runs for the first time.",
     "partial": "Partial sync",
-    "partialBody": "A later sync could not read every project, at"
+    "partialBody": "A later sync could not read every project, at",
+    "disconnectedTitle": "The sync is disconnected",
+    "disconnectedBody": "Connect it again on the computer that runs it: Settings, Agent access shows the command.",
+    "disconnectedLast": "The last successful sync was at"
   },
   "bell": {
     "title": "Needs you",
@@ -759,7 +763,7 @@
       },
       "agents": {
         "title": "Agent access",
-        "hint": "Each agent and the sync connects once, and you approve it in the browser. Each gets its own key with a name and an end date. A key keeps working after you sign out; disconnect it here when a machine is lost or a key leaks."
+        "hint": "Agents and the sync connect once, and you approve each one in the browser. A connection ends after the idle days without use; disconnect one here when a computer is lost."
       },
       "secret-check": {
         "title": "Secret check",
@@ -922,6 +926,7 @@
       "more": "+{count} more",
       "syncStale": "Last T3 sync: {time}",
       "syncNever": "No T3 sync yet",
+      "syncDisconnected": "The sync is disconnected: connect it again on the computer that runs it (Settings, Agent access).",
       "openBoard": "Open the board"
     }
   },
@@ -1112,50 +1117,34 @@
     "fileHeading": "Adiutor backup codes. Each code signs in once without the authenticator app."
   },
   "agentKeys": {
-    "howTitle": "Connect an agent",
-    "skillHint": "Install the adiutor skill in the agent: the shared agent configuration installs it, or copy the skill/adiutor folder of the Adiutor repository into the agent's skills folder. Then give the agent the sentence below. It shows a link and a code: open the link, check that the code matches, and approve.",
-    "skillSay": "Tell the agent",
-    "bundleTitle": "Connect the sync, or an agent over MCP",
-    "howHint": "Run the command in the Adiutor folder on your computer. It opens Adiutor to approve the connection; the key never shows on this page.",
-    "how": {
-      "sync": "The sync on this computer",
-      "claude": "Claude Code",
-      "codex": "Codex"
-    },
-    "howOptions": "{name} sets the name shown below and {days} how long the key works (1 to 365 days, 90 if left out). For Claude Code and Codex the command adds Adiutor to the client itself; restart Codex afterwards. If the client's command is missing or fails, it prints the setup once instead, and that can stay in your shell history.",
-    "listTitle": "Connected agents",
-    "loading": "Loading the agents...",
-    "failed": "Could not load the agents",
-    "empty": "No agents connected yet",
-    "emptyHint": "Run a command above for your agent, then approve it in the browser.",
-    "unnamed": "Unnamed agent",
-    "created": "Connected",
-    "expires": "ends",
-    "noEnd": "never",
-    "expired": "Expired",
+    "oldTitle": "Old agent keys",
+    "oldNote": "Adiutor no longer accepts these keys: agents and the sync connect by approval, as shown above. Delete them here; a later release removes this list.",
+    "failed": "Could not load the old keys",
+    "unnamed": "Unnamed key",
+    "created": "Made",
     "lastUsed": "last request",
     "never": "never",
-    "disconnect": "Disconnect",
-    "disconnectTitle": "Disconnect {name}?",
-    "disconnectMessage": "Its next request is refused. To use it again, connect it again from the agent.",
-    "disconnected": "{name} was disconnected",
-    "disconnectFailed": "Could not disconnect {name}: {reason}",
-    "disconnectAll": "Disconnect all",
-    "disconnectAllTitle": "Disconnect all agents?",
-    "disconnectAllMessage": {
-      "one": "Disconnect 1 agent? Its next request is refused. It has to connect again from its agent.",
-      "other": "Disconnect {count} agents? Their next requests are refused. Each one has to connect again from its agent."
+    "delete": "Delete",
+    "deleteTitle": "Delete the key {name}?",
+    "deleteMessage": "Adiutor refuses it already. Deleting removes it from this list.",
+    "deleted": "The key {name} was deleted",
+    "deleteFailed": "Could not delete the key {name}: {reason}",
+    "deleteAll": "Delete all",
+    "deleteAllTitle": "Delete every old key?",
+    "deleteAllMessage": {
+      "one": "1 old key is deleted. Adiutor refuses it already.",
+      "other": "{count} old keys are deleted. Adiutor refuses them already."
     },
-    "disconnectedAll": "All agents were disconnected",
-    "disconnectAllFailed": {
-      "one": "1 agent is still connected. Wait a minute and try again.",
-      "other": "{count} agents are still connected. Wait a minute and try again."
+    "deletedAll": "Every old key was deleted",
+    "deleteAllFailed": {
+      "one": "1 key is still listed. Wait a minute and try again.",
+      "other": "{count} keys are still listed. Wait a minute and try again."
     },
-    "disconnectAllFailedAtLeast": {
-      "one": "At least 1 agent is still connected. Wait a minute and try again.",
-      "other": "At least {count} agents are still connected. Wait a minute and try again."
+    "deleteAllFailedAtLeast": {
+      "one": "At least 1 key is still listed. Wait a minute and try again.",
+      "other": "At least {count} keys are still listed. Wait a minute and try again."
     },
-    "disconnectAllError": "Could not disconnect all agents: {reason}"
+    "deleteAllError": "Could not delete every old key: {reason}"
   },
   "connect": {
     "title": "Connect an agent",
@@ -1377,8 +1366,15 @@
     "claude": "Claude Code",
     "claudeHint": "Run it in a terminal. Claude Code opens Adiutor to approve the connection.",
     "skill": "Tell the agent",
-    "skillHint": "For an agent with the adiutor skill. It shows a link and a code: open the link, check that the code matches, and approve.",
+    "skillHint": "For a coding agent that runs commands, such as Claude Code or Codex. It installs the adiutor skill from Adiutor, then shows a link and a code: open the link, check that the code matches, and approve.",
     "offNote": "Agents are off. Turn them on above to connect one.",
+    "syncTitle": "On the computer that runs the sync",
+    "syncIntro": "Run these in the Adiutor folder there. Each one opens Adiutor in the browser to approve the connection; no key or token shows here.",
+    "syncConnect": "The sync",
+    "syncConnectHint": "Connects the sync for the sync area: keep it ticked. After its connection ended, add {replace}.",
+    "setupClaude": "Claude Code over MCP",
+    "setupCodex": "Codex over MCP",
+    "setupHint": "Sets the client up for Adiutor's MCP address and replaces an older setup that used an agent key.",
     "issuerTitle": "Agents cannot connect at this address",
     "issuer": {
       "invalid": "ADIUTOR_PUBLIC_URL is not an http or https address.",

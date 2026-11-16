@@ -10,6 +10,7 @@ import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { createMemoryRouter, RouterProvider } from "react-router"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import en from "../../shared/locales/en.json"
 import { setTransport, type TransportRequest } from "../api/client.ts"
 import { qk } from "../api/endpoints.ts"
 import type { ItemSummary, Morning } from "../api/types.ts"
@@ -107,7 +108,7 @@ const MORNING: Morning = {
     },
   ],
   inboxCount: 0,
-  sync: { lastSuccessAt: AT, stale: false, lastPartialAt: null, securityLastSuccessAt: AT },
+  sync: { connected: true, lastSuccessAt: AT, stale: false, lastPartialAt: null, securityLastSuccessAt: AT },
 }
 
 let morning: Morning = MORNING
@@ -181,6 +182,21 @@ afterEach(() => {
     mounted = null
   }
   localStorage.clear()
+})
+
+describe("the sync's banner", () => {
+  it("says that a disconnected sync must be connected again, with its last sync, and no banner while it is connected", async () => {
+    await render()
+    expect(document.querySelector(".ui-banner-warn")).toBeNull()
+    act(() => mounted?.root.unmount())
+    mounted?.host.remove()
+    morning = { ...MORNING, sync: { ...MORNING.sync, connected: false } }
+    await render()
+    const banner = document.querySelector(".ui-banner-warn")
+    expect(banner?.textContent).toContain(en.sync.disconnectedTitle)
+    expect(banner?.textContent).toContain(en.sync.disconnectedBody)
+    expect(banner?.textContent).toContain(en.sync.disconnectedLast)
+  })
 })
 
 describe("the morning view's columns", () => {

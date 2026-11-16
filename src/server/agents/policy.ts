@@ -498,13 +498,9 @@ export const CLOSED_AUTH_PATHS: Record<string, string> = Object.fromEntries(
   ]
     .map((p): [string, string] => [p, "sign-in, sessions, two-factor and passkeys are for people only"])
     .concat(
-      ["/api-key/create", "/api-key/list", "/api-key/delete"].map((p): [string, string] => [
+      ["/api-key/list", "/api-key/delete"].map((p): [string, string] => [
         p,
-        "agent keys are made and listed by people only (removed with the keys, PR 6)",
-      ]),
-      ["/device/code", "/device/token", "/device", "/device/approve", "/device/deny"].map((p): [string, string] => [
-        p,
-        "the old agent approval of Better Auth, for `adiutor connect` until the agent access release",
+        "the owner lists and deletes the agent keys left from before agent access (removed in Phase 4)",
       ]),
     ),
 )

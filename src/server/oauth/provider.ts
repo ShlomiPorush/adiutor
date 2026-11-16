@@ -38,7 +38,7 @@ export const REFRESH_TOKEN_TTL_S = GRANT_TTL_S
 /** The built-in public client of the agent skill and the sync: the device flow and refresh only (S7). */
 export const CLI_CLIENT_ID = "adiutor-agent"
 
-/** The provider's addresses. `/connect/device` stays Better Auth's until the agent access release (D1j). */
+/** The provider's addresses. `/connect/device` stays Better Auth's page, its routes closed, until the clean-up release (D1j). */
 export const PROVIDER_ROUTES = {
   authorization: "/oauth/authorize",
   token: "/oauth/token",

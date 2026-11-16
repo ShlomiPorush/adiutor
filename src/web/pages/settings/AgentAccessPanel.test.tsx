@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
-// Settings, Agent access: today's panel of agent keys only where the settings read answers 404 not_found, the error
-// for any other failure (also after a 404 was shown), a failed refresh said with Try again while the data stays, and
-// the new panel: the switch and the idle days in the page's one draft and save bar (the save asks first when it ends
-// connections), how to connect or why agents cannot, the connections with Disconnect, and Disconnect all, there even
-// with no connection.
+// Settings, Agent access: the error for any failed read, a failed refresh said with Try again while the data stays,
+// and the panel: the switch and the idle days in the page's one draft and save bar (the save asks first when it ends
+// connections), how to connect (the MCP address, the Claude Code command, the skill sentence, the sync bundle's
+// commands) or why agents cannot, the connections with Disconnect, Disconnect all, there even with no connection, and
+// the old agent keys while any is left.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, type ReactNode } from "react"
@@ -20,12 +20,42 @@ import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
 import { UnsavedProvider } from "../../ui/unsaved.tsx"
 import { forgetSettingsVisit, SettingsPage } from "../SettingsPage.tsx"
-import { agentChanges, claudeCommand, idleDaysOf } from "./AgentAccessPanel.tsx"
-import { skillSentence } from "./AgentKeysPanel.tsx"
+import {
+  agentChanges,
+  claudeCommand,
+  idleDaysOf,
+  setupMcpCommand,
+  skillSentence,
+  syncConnectCommand,
+} from "./AgentAccessPanel.tsx"
 
+/** Better Auth's key list and delete, as the old keys' group calls them. */
+const oldKeys = vi.hoisted(() => ({
+  keys: [] as {
+    id: string
+    name: string | null
+    start: string | null
+    createdAt: string
+    expiresAt: null
+    lastRequest: null
+  }[],
+  deleted: [] as string[],
+}))
 vi.mock("../../api/auth.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../api/auth.ts")>()
-  return { ...real, authClient: { apiKey: { list: () => Promise.resolve({ data: { apiKeys: [] }, error: null }) } } }
+  return {
+    ...real,
+    authClient: {
+      apiKey: {
+        list: () => Promise.resolve({ data: { apiKeys: oldKeys.keys }, error: null }),
+        delete: ({ keyId }: { keyId: string }) => {
+          oldKeys.deleted.push(keyId)
+          oldKeys.keys = oldKeys.keys.filter((k) => k.id !== keyId)
+          return Promise.resolve({ data: { success: true }, error: null })
+        },
+      },
+    },
+  }
 })
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -121,6 +151,8 @@ beforeEach(() => {
   connectionsStatus = 200
   connections = []
   requests = []
+  oldKeys.keys = []
+  oldKeys.deleted = []
   setTransport(transport)
   vi.spyOn(window, "matchMedia").mockImplementation(
     (query: string) =>
@@ -216,29 +248,21 @@ async function type(input: HTMLInputElement | null, value: string): Promise<void
   await settle()
 }
 
-describe("which panel shows", () => {
-  it("shows today's panel of agent keys where agent access is not mounted (404 not_found)", async () => {
-    agentsStatus = 404
-    await render()
-    expect(page()).toContain(en.agentKeys.howTitle)
-    expect(page()).toContain(en.settings.sections.agents.hint)
-    expect(page()).not.toContain(en.agentAccess.switch)
-  })
-
-  it("shows the failure with Try again for any other answer, never the old panel", async () => {
-    agentsStatus = 500
+describe("a failed read", () => {
+  it.each([404, 500])("shows the failure with Try again for %s, then the panel once the read works", async (status) => {
+    agentsStatus = status
     await render()
     expect(page()).toContain(en.agentAccess.failed)
-    expect(button(en.common.tryAgain)).toBeTruthy()
-    expect(page()).not.toContain(en.agentKeys.howTitle)
+    expect(switchBox()).toBeNull()
+    agentsStatus = 200
+    await click(button(en.common.tryAgain))
+    expect(switchBox()).not.toBeNull()
   })
 
-  it("treats a 404 that is not Adiutor's own answer (a proxy's page) as a failure, also on a refresh", async () => {
+  it("treats a proxy's 404 page as a failure, also on a refresh", async () => {
     agentsStatus = "proxy404"
     await render()
     expect(page()).toContain(en.agentAccess.failed)
-    expect(button(en.common.tryAgain)).toBeTruthy()
-    expect(page()).not.toContain(en.agentKeys.howTitle)
     agentsStatus = 200
     await click(button(en.common.tryAgain))
     expect(switchBox()).not.toBeNull()
@@ -246,17 +270,6 @@ describe("which panel shows", () => {
     await refetch(qk.agentSettings)
     expect(switchBox()).not.toBeNull()
     expect(page()).toContain(en.agentAccess.refreshFailed)
-    expect(page()).not.toContain(en.agentKeys.howTitle)
-  })
-
-  it("shows a failure after a 404 as a failure, not as the old panel", async () => {
-    agentsStatus = 404
-    await render()
-    expect(page()).toContain(en.agentKeys.howTitle)
-    agentsStatus = 500
-    await refetch(qk.agentSettings)
-    expect(page()).toContain(en.agentAccess.failed)
-    expect(page()).not.toContain(en.agentKeys.howTitle)
   })
 })
 
@@ -298,10 +311,30 @@ describe("the new panel", () => {
     expect(switchBox()?.checked).toBe(true)
     expect(daysField()?.value).toBe("90")
     expect(page()).toContain(`${ISSUER}/mcp`)
+    expect(claudeCommand(`${ISSUER}/mcp`)).toBe(`claude mcp add --transport http adiutor "${ISSUER}/mcp"`)
     expect(page()).toContain(claudeCommand(`${ISSUER}/mcp`))
-    expect(claudeCommand(`${ISSUER}/mcp`)).toBe(`claude mcp add --transport http adiutor ${ISSUER}/mcp`)
+    // The agent-access standard's sentence, with the address where the skill is served.
+    expect(skillSentence(ISSUER)).toBe(
+      `Install the adiutor skill into your personal skills folder as described at ${ISSUER}/agents/skill/, then connect to Adiutor.`,
+    )
     expect(page()).toContain(skillSentence(ISSUER))
+    // The sync bundle's commands, every address quoted; nothing of the agent keys' commands.
+    expect(syncConnectCommand(ISSUER)).toBe(`node dist/sync/adiutor-sync.js connect --name "sync" --url "${ISSUER}"`)
+    expect(setupMcpCommand(ISSUER, "codex")).toBe(
+      `node dist/sync/adiutor-sync.js setup-mcp --for codex --url "${ISSUER}"`,
+    )
+    const sync = plain(document.querySelector("#settings-connect-sync")?.textContent)
+    for (const command of [
+      syncConnectCommand(ISSUER),
+      setupMcpCommand(ISSUER, "claude"),
+      setupMcpCommand(ISSUER, "codex"),
+    ])
+      expect(sync).toContain(command)
+    expect(page()).not.toContain("--days")
+    expect(page()).not.toMatch(/--for (sync|claude|codex) *$|connect --url [^ ]+ --name [^ ]+ --for/)
     expect(page()).toContain(en.agentAccess.empty)
+    // No old key left: no group for them.
+    expect(document.querySelector("#settings-agent-keys")).toBeNull()
     const head = document.querySelector("#settings-agent-connections .ui-set-group-acts") as HTMLElement
     expect(button(en.agentAccess.disconnectAll, head)).toBeTruthy()
   })
@@ -341,6 +374,41 @@ describe("the new panel", () => {
     expect(page()).toContain(en.agentAccess.issuerTitle)
     expect(page()).toContain(en.agentAccess.issuer.plain_http)
     expect(page()).not.toContain("claude mcp add")
+    expect(page()).not.toContain("adiutor-sync.js")
+  })
+})
+
+describe("the old agent keys", () => {
+  it("are listed while any is left, saying Adiutor refuses them, and deleted after a question", async () => {
+    oldKeys.keys = [
+      {
+        id: "k1",
+        name: "sync",
+        start: "adt_Qe",
+        createdAt: "2026-10-01T08:00:00.000Z",
+        expiresAt: null,
+        lastRequest: null,
+      },
+      {
+        id: "k2",
+        name: "claude",
+        start: "adt_tR",
+        createdAt: "2026-10-02T08:00:00.000Z",
+        expiresAt: null,
+        lastRequest: null,
+      },
+    ]
+    await render()
+    const group = document.querySelector("#settings-agent-keys") as HTMLElement
+    expect(plain(group.textContent)).toContain(en.agentKeys.oldTitle)
+    expect(plain(group.textContent)).toContain(en.agentKeys.oldNote)
+    expect(group.querySelectorAll("[data-testid=old-agent-key]")).toHaveLength(2)
+    const first = group.querySelector("[data-testid=old-agent-key]") as HTMLElement
+    await click(button(en.agentKeys.delete, first))
+    expect(plain(question()?.textContent)).toContain(en.agentKeys.deleteTitle.replace("{name}", "claude"))
+    await click(button(en.agentKeys.delete, question() as HTMLElement))
+    expect(oldKeys.deleted).toEqual(["k2"])
+    expect(document.querySelectorAll("[data-testid=old-agent-key]")).toHaveLength(1)
   })
 })
 
@@ -439,7 +507,7 @@ describe("what a save of the agent fields sends", () => {
     expect(agentChanges(saved, {})).toEqual({})
     expect(agentChanges(saved, { agentsEnabled: true, agentIdleDays: " 90 " })).toEqual({})
     expect(agentChanges(saved, { agentsEnabled: false, agentIdleDays: "7" })).toEqual({ enabled: false, idleDays: 7 })
-    expect(agentChanges(null, { agentsEnabled: false })).toEqual({})
+    expect(agentChanges(undefined, { agentsEnabled: false })).toEqual({})
   })
 })
 

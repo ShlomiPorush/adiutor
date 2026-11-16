@@ -12,7 +12,7 @@ export type MorningSummary = {
   )[]
   newCount: number
   security: { projectName: string; critical: number; high: number; asOf: Date | null; stale: boolean }[]
-  sync: { lastSuccessAt: Date | null; stale: boolean }
+  sync: { connected: boolean; lastSuccessAt: Date | null; stale: boolean }
 }
 
 export type MessageOptions = {
@@ -31,7 +31,8 @@ const SEPARATOR = " · "
  * 1. waiting on you: count and up to two titles, each linked to its item;
  * 2. new since the last visit: count;
  * 3. up to two security lines (critical, or high in production), with the data's age when stale;
- * 4. the last T3 sync time, only when the sync is stale;
+ * 4. that the sync is disconnected and must be connected again, with the last T3 sync time; else that time only when
+ *    the sync is stale;
  * 5. a link to the board.
  * Every value is escaped and stripped of control and bidirectional characters. Pure: no clock, no I/O.
  */
@@ -41,7 +42,8 @@ export function buildMorningMessage(summary: MorningSummary, options: MessageOpt
   const time = (at: Date) => formatLocal(at, options.dateFormat, options.timeFormat, options.language)
   const board = link(url(UI_ROUTES.home), t.openBoard)
 
-  if (summary.waiting.length === 0 && summary.newCount === 0 && summary.security.length === 0 && !summary.sync.stale)
+  const syncLine = !summary.sync.connected || summary.sync.stale
+  if (summary.waiting.length === 0 && summary.newCount === 0 && summary.security.length === 0 && !syncLine)
     return html`${fill(t.allClear)} ${board}`
 
   const lines: TelegramHtml[] = []
@@ -77,7 +79,11 @@ export function buildMorningMessage(summary: MorningSummary, options: MessageOpt
     lines.push(text)
   })
 
-  if (summary.sync.stale)
+  if (!summary.sync.connected) {
+    const last = summary.sync.lastSuccessAt
+    const disconnected = fill(t.syncDisconnected)
+    lines.push(last ? html`${disconnected} ${fill(t.syncStale, { time: time(last) })}` : disconnected)
+  } else if (summary.sync.stale)
     lines.push(
       summary.sync.lastSuccessAt ? fill(t.syncStale, { time: time(summary.sync.lastSuccessAt) }) : fill(t.syncNever),
     )

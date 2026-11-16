@@ -206,7 +206,7 @@ describe("the library's pages (pages.ts)", () => {
   })
 })
 
-describe("production before the agent access release", () => {
+describe("an app built without agent access (tests only)", () => {
   it("mounts nothing of agent access unless createApp is given it", async () => {
     const app = createApp({ checkDatabase: async () => true })
     for (const path of [

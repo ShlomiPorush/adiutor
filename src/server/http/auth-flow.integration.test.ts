@@ -9,7 +9,14 @@ import { TWO_FACTOR_CHALLENGE_S } from "../auth/auth.ts"
 import { resetOwnerPassword } from "../auth/recovery.ts"
 import { audit, authApiKey, authSession, authTwoFactor, authUser } from "../db/schema.ts"
 import { getSettings } from "../services/admin.ts"
-import { TEST_AUTH_SECRET, type TestCore, type TestCoreOptions, testAuthBase, testCore } from "../testing/app.ts"
+import {
+  createAgentKey,
+  TEST_AUTH_SECRET,
+  type TestCore,
+  type TestCoreOptions,
+  testAuthBase,
+  testCore,
+} from "../testing/app.ts"
 import { StandInBotApi, waitFor } from "../testing/bot-api.ts"
 import { TEST_ORIGIN, TEST_PASSWORD, TEST_USERNAME, TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
@@ -706,12 +713,6 @@ describe("audit rows from the documented hooks, and their refusals", () => {
     expect((await b.call("POST", "/api/auth/revoke-sessions", { body: {} })).status).toBe(500)
     expect(await sessions()).toHaveLength(2)
     await acceptAudit()
-
-    await refuseAudit("api_key.create")
-    expect(
-      (await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync", expiresIn: 30 * 86_400 } })).status,
-    ).toBe(500)
-    expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
   })
 
   it("a failing sign-out audit never leaves the session valid (the hook runs after the fact and never throws)", async () => {
@@ -869,26 +870,20 @@ describe("signing out after days without Adiutor open (sliding expiresIn, deferS
   })
 })
 
-describe("agent keys (Better Auth's api-key plugin)", () => {
-  it("creates adt_ keys from a signed-in browser with two-factor, refuses another prefix, revokes by deleting", async () => {
+describe("agent keys after agent access by approval (D12): none is made, the old ones are listed and deleted", () => {
+  it("closes /api-key/create over HTTP with a session or without; an old key is no session, is listed and is deleted", async () => {
     const b = browser()
     await b.owner()
-    const created = await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync", expiresIn: 30 * 86_400 } })
-    expect(created.status).toBe(200)
-    expect(created.json.key).toMatch(/^adt_[A-Za-z]{64}$/)
-    const prefixed = await b.call("POST", "/api/auth/api-key/create", {
-      body: { name: "x", prefix: "xyz_", expiresIn: 30 * 86_400 },
-    })
-    expect([prefixed.status, prefixed.json.code]).toEqual([400, "INVALID_KEY_PREFIX"])
-    const [stored] = await t.ctx.db.select().from(authApiKey)
-    expect(stored?.key).not.toBe(created.json.key)
-    expect(stored?.start).toBe(created.json.key.slice(0, 6))
-    expect(stored?.rateLimitEnabled).toBe(false)
+    for (const body of [{ name: "sync", expiresIn: 30 * 86_400 }, { name: "none" }]) {
+      const created = await b.call("POST", "/api/auth/api-key/create", { body })
+      expect([created.status, created.json?.code]).toEqual([404, "NOT_FOUND"])
+      const anonymous = await browser().call("POST", "/api/auth/api-key/create", { body })
+      expect(anonymous.status).toBe(404)
+    }
+    expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
 
-    const key = created.json.key as string
-    const agent = await app.request("/api/v1/session", { headers: { authorization: `Bearer ${key}` } })
-    expect(((await agent.json()) as { data: { actor: unknown } }).data.actor).toEqual({ kind: "agent", label: "agent" })
-    // Never a session: Better Auth does not take it as one, and the Authorization header is refused outright.
+    // A key left from a release before agent access (made here by a server call, as no route makes one now).
+    const key = await createAgentKey(core, "left over")
     const asSession = await app.request("/api/auth/get-session", { headers: { "x-api-key": key } })
     expect(await asSession.json()).toBeNull()
     const asBearer = await app.request("/api/auth/get-session", { headers: { authorization: `Bearer ${key}` } })
@@ -896,37 +891,14 @@ describe("agent keys (Better Auth's api-key plugin)", () => {
       403,
       "AUTHORIZATION_NOT_ALLOWED",
     ])
-    // Many verifications in a row: the plugin's own limit (10 a day by default) is off.
-    for (let i = 0; i < 12; i++)
-      expect((await app.request("/api/v1/projects", { headers: { authorization: `Bearer ${key}` } })).status).toBe(200)
 
     const listed = await b.call("GET", "/api/auth/api-key/list")
-    expect(listed.json.apiKeys ?? listed.json).toHaveLength(1)
-    expect((await b.call("POST", "/api/auth/api-key/delete", { body: { keyId: stored?.id } })).status).toBe(200)
-    expect((await app.request("/api/v1/projects", { headers: { authorization: `Bearer ${key}` } })).status).toBe(401)
-    expect((await actions()).filter((a) => a.startsWith("api_key."))).toEqual(["api_key.create", "api_key.delete"])
-  })
-
-  it("refuses a key without an end in days: no expiresIn, null or a string, and the plugin's 1 to 365 days", async () => {
-    const b = browser()
-    await b.owner()
-    for (const body of [{ name: "none" }, { name: "null", expiresIn: null }, { name: "text", expiresIn: "86400" }]) {
-      const refused = await b.call("POST", "/api/auth/api-key/create", { body })
-      expect([body.name, refused.status, refused.json.code]).toEqual([body.name, 400, "EXPIRES_IN_REQUIRED"])
-    }
-    const tooLong = await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", expiresIn: 366 * 86_400 } })
-    expect([tooLong.status, tooLong.json.code]).toEqual([400, "EXPIRES_IN_IS_TOO_LARGE"])
-    const tooShort = await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", expiresIn: 3600 } })
-    expect([tooShort.status, tooShort.json.code]).toEqual([400, "EXPIRES_IN_IS_TOO_SMALL"])
-    // The plugin checks the range only for a truthy number; its body schema refuses zero and less.
-    for (const expiresIn of [0, -86_400])
-      expect((await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", expiresIn } })).status).toBe(400)
-    expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
-
-    const longest = await b.call("POST", "/api/auth/api-key/create", { body: { name: "y", expiresIn: 365 * 86_400 } })
-    expect(longest.status).toBe(200)
+    expect(listed.json.apiKeys.map((k: { name: string }) => k.name)).toEqual(["left over"])
     const [stored] = await t.ctx.db.select().from(authApiKey)
-    expect(Math.abs((stored?.expiresAt?.getTime() ?? 0) - (Date.now() + 365 * DAY))).toBeLessThan(60_000)
+    expect((await b.call("POST", "/api/auth/api-key/delete", { body: { keyId: stored?.id } })).status).toBe(200)
+    expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
+    // The server call that made the key is recorded as the system's; the owner's delete as the owner's.
+    expect((await actions()).filter((a) => a.startsWith("api_key."))).toEqual(["api_key.create", "api_key.delete"])
   })
 
   it("never lets a session stand in for a key: MCP and sync pushes refuse a cookie", async () => {
@@ -939,28 +911,6 @@ describe("agent keys (Better Auth's api-key plugin)", () => {
     expect(mcp.status).toBe(401)
     const snapshot = { collectedAt: new Date().toISOString(), projects: [], threads: [] }
     expect((await b.call("POST", "/api/v1/sync/t3", { body: snapshot })).status).toBe(403)
-  })
-
-  it("G18, accepted: an account without two-factor cannot create keys, but a leftover password-only session can later", async () => {
-    const setupTab = browser()
-    await setupTab.setup()
-    const early = browser()
-    await early.passwordSignIn()
-    const refused = await early.call("POST", "/api/auth/api-key/create", {
-      body: { name: "early", expiresIn: 30 * 86_400 },
-    })
-    expect([refused.status, refused.json.code]).toEqual([403, "TOTP_REQUIRED"])
-    const { secret } = await setupTab.enable()
-    await setupTab.verify(totp(secret))
-    // The setup page's revokeOtherSessions did not run (G7(b)): the old session now passes the account check.
-    const later = await early.call("POST", "/api/auth/api-key/create", {
-      body: { name: "early", expiresIn: 30 * 86_400 },
-    })
-    expect(later.status).toBe(200)
-    // A key outlives "Sign out everywhere".
-    await setupTab.call("POST", "/api/auth/revoke-sessions", { body: {} })
-    const key = later.json.key as string
-    expect((await app.request("/api/v1/projects", { headers: { authorization: `Bearer ${key}` } })).status).toBe(200)
   })
 })
 

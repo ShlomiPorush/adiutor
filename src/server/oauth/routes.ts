@@ -485,7 +485,7 @@ export function agentRoutes(deps: AgentRouteDeps) {
 
 /**
  * What createApp mounts when it is given `agentOAuth`: built by the caller, so the app module never loads the
- * authorization server unless it is mounted (index.ts does not mount it until the agent access release).
+ * authorization server unless it is mounted (index.ts always mounts it; only tests build an app without it).
  */
 export function agentOAuthMount(
   access: AgentAccess,

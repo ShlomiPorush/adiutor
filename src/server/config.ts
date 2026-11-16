@@ -12,14 +12,18 @@ export type ServerConfig = {
   settingsKeys: VersionedKey[]
   /**
    * ADIUTOR_OAUTH_SECRETS ("2:new,1:old"): the cookie keys of the authorization server for agents, in the order
-   * listed (newest first: the first signs, the others only verify). Never an auth secret or a settings key. Null
-   * while it is not set: optional until the release that switches agents to it.
+   * listed (newest first: the first signs, the others only verify). Never an auth secret or a settings key.
    */
-  oauthSecrets: VersionedKey[] | null
+  oauthSecrets: VersionedKey[]
   /** ADIUTOR_TRUSTED_PROXIES: the proxy addresses or CIDR ranges in front of Adiutor (Traefik), comma-separated. */
   trustedProxies: string[]
   /** The URL the owner opens; browsers' Origin must match it. */
   publicUrl: URL
+  /**
+   * ADIUTOR_PUBLIC_URL as written. The authorization server for agents refuses a URL that a browser would spell
+   * differently (oauth/issuer.ts), which the parsed `publicUrl` no longer shows.
+   */
+  publicUrlText: string
   migrationsDir: string
   version: string
   /** The Telegram Bot API base URL. Only tests and the verify stack change it, to a stand-in. */
@@ -167,11 +171,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const authValues = new Set(authSecrets.map((k) => k.value))
   if (settingsKeys.some((k) => authValues.has(k.value)))
     problems.push("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
-  // Optional until the release that switches agents to the authorization server: empty is the same as unset.
-  const oauthSecretsText = env.ADIUTOR_OAUTH_SECRETS?.trim() ?? ""
-  const oauthSecrets = oauthSecretsText ? parseKeys("ADIUTOR_OAUTH_SECRETS", oauthSecretsText, problems) : null
+  const oauthSecretsText = required("ADIUTOR_OAUTH_SECRETS")
+  const oauthSecrets = oauthSecretsText ? parseKeys("ADIUTOR_OAUTH_SECRETS", oauthSecretsText, problems) : []
   const settingsValues = new Set(settingsKeys.map((k) => k.value))
-  if (oauthSecrets?.some((k) => authValues.has(k.value) || settingsValues.has(k.value)))
+  if (oauthSecrets.some((k) => authValues.has(k.value) || settingsValues.has(k.value)))
     problems.push("ADIUTOR_OAUTH_SECRETS must differ from every auth secret and settings key")
 
   let publicUrl: URL | undefined
@@ -210,6 +213,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     oauthSecrets,
     trustedProxies,
     publicUrl,
+    publicUrlText,
     migrationsDir: env.MIGRATIONS_DIR || "drizzle",
     version: env.ADIUTOR_VERSION || "dev",
     telegramApiUrl: apiUrlText,

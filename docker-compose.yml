@@ -13,6 +13,10 @@ services:
   adiutor:
     image: ghcr.io/shlomiporush/adiutor:${VERSION:?Set VERSION in .env to the release to run}
     container_name: adiutor
+    # On stop, the server finishes the audit row of every agent call still open before the database
+    # closes: a call gets its row by its 60-second deadline at the latest, and a write takes at most
+    # the 15-second statement timeout. Compose's default of 10 seconds would kill it first.
+    stop_grace_period: 90s
     # Runs as node (set in the image) with no capability and no way to gain privileges, on a
     # read-only root file system.
     security_opt:
