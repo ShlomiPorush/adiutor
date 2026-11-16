@@ -288,6 +288,50 @@
     "disconnectedBody": "צריך לחבר אותו מחדש במחשב שמריץ אותו: הפקודה מופיעה בהגדרות, בגישת סוכנים.",
     "disconnectedLast": "הסנכרון המוצלח האחרון היה ב-"
   },
+  "syncNow": {
+    "button": "סנכרן עכשיו",
+    "busy": "מבקש...",
+    "asked": "ביקשתי סנכרון. המחשב יקבל אותו בדיווח הבא שלו, תוך דקה.",
+    "already": "כבר יש בקשת סנכרון. המחשב יריץ אותה פעם אחת.",
+    "failed": "לא הצלחתי לבקש סנכרון: {reason}",
+    "cancel": "בטל",
+    "cancelling": "מבטל...",
+    "cancelled": "בקשת הסנכרון בוטלה",
+    "cancelFailed": "לא הצלחתי לבטל את בקשת הסנכרון: {reason}",
+    "noClient": "אף מחשב עוד לא דיווח, ולכן אין מחשב שיריץ אותו.",
+    "olderClient": "הסנכרון במחשב לא מקבל בקשות מ-Adiutor. כדי להשתמש בסנכרון עכשיו צריך להתקין את אפליקציית הסנכרון ל-Windows.",
+    "getTray": "אפליקציית הסנכרון ל-Windows זמינה בגרסאות ב-GitHub.",
+    "releases": "לגרסאות",
+    "state": {
+      "waiting": "ממתין למחשב",
+      "claimed": "רץ",
+      "done": "הסתיים",
+      "partial": "הסתיים בחלקו",
+      "failed": "נכשל",
+      "unknown": "המחשב הפסיק לענות",
+      "cancelled": "בוטל"
+    },
+    "parts": "T3: {t3}, אבטחה: {security}",
+    "part": {
+      "accepted": "התקבל",
+      "partial": "חלקי",
+      "failed": "נכשל",
+      "outcome_unknown": "התוצאה לא ידועה",
+      "not_run": "לא רץ"
+    },
+    "computer": "דיווח אחרון",
+    "version": "גרסת האפליקציה {version}",
+    "silentSince": "המחשב לא דיווח מאז",
+    "pause": "השהיה",
+    "paused": "מושהה",
+    "pausedUntil": "מושהה עד",
+    "notPaused": "לא מושהה",
+    "runningLocal": "מסנכרן עכשיו",
+    "nextRun": "הסנכרון המתוזמן הבא",
+    "request": "הבקשה האחרונה מכאן",
+    "requestedAt": "בקשה",
+    "noRequest": "עוד אין"
+  },
   "bell": {
     "title": "מחכה לך",
     "none": "שום דבר לא מחכה לך",
@@ -557,7 +601,9 @@
     "status": "T3: {status}",
     "unknown": "הסטטוס לא ידוע",
     "untitled": "שיחה בלי כותרת",
-    "lastActivity": "פעילות אחרונה"
+    "lastActivity": "פעילות אחרונה",
+    "snoozed": "נדחתה",
+    "snoozedUntil": "עד"
   },
   "toast": {
     "statusSet": "{title}: עכשיו {status}",
@@ -793,7 +839,8 @@
       "telegramCodes": "קודי כניסה",
       "privateNetwork": "רשת פרטית",
       "suppressed": "לא ייווצרו מחדש בסנכרון",
-      "status": "מצב"
+      "status": "מצב",
+      "computer": "הסנכרון במחשב"
     },
     "loading": "טוען הגדרות...",
     "failed": "לא הצלחתי לטעון את ההגדרות",

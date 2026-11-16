@@ -34,6 +34,8 @@ import type {
   SetupStatus,
   StageProposal,
   Suppression,
+  SyncRequest,
+  SyncRequests,
   SyncRun,
   TelegramStatus,
 } from "./types.ts"
@@ -104,6 +106,11 @@ export const api = {
   /** The activity log narrowed by its filters; `lang` goes with `q` (the labels the search also matches). */
   audit: (filters: AuditFilters, cursor: string | null) => auditPage(filters, cursor),
   syncRuns: () => data<SyncRun[]>("GET", "/sync/runs?limit=10"),
+  syncRequests: () => data<SyncRequests>("GET", "/sync/requests"),
+  /** Sync now: a new request, or the one already waiting or running (`created` false). */
+  requestSync: () => data<{ request: SyncRequest; created: boolean }>("POST", "/sync/requests", {}),
+  /** Cancels a request that still waits for the computer. */
+  cancelSyncRequest: (requestId: string) => data<SyncRequest>("DELETE", `/sync/requests/${id(requestId)}`),
 
   notes: (filters: NoteFilters, cursor: string | null) =>
     page<NoteSummary>(
@@ -165,6 +172,7 @@ export const qk = {
   noteVersion: (noteId: string, version: number) => ["note", noteId, "version", version] as const,
   settings: ["settings"] as const,
   syncRuns: ["sync-runs"] as const,
+  syncRequests: ["sync-requests"] as const,
   telegram: ["telegram"] as const,
   setupStatus: ["setup-status"] as const,
   /** Better Auth's list of this owner's browsers. */

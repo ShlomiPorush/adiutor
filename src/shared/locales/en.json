@@ -288,6 +288,50 @@
     "disconnectedBody": "Connect it again on the computer that runs it: Settings, Agent access shows the command.",
     "disconnectedLast": "The last successful sync was at"
   },
+  "syncNow": {
+    "button": "Sync now",
+    "busy": "Asking...",
+    "asked": "Sync asked for. The computer takes it at its next check-in, within a minute.",
+    "already": "A sync is already asked for. The computer runs it once.",
+    "failed": "Could not ask for a sync: {reason}",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling...",
+    "cancelled": "The sync request was cancelled",
+    "cancelFailed": "Could not cancel the sync request: {reason}",
+    "noClient": "No computer has checked in yet, so no computer would run it.",
+    "olderClient": "The sync on the computer takes no requests from Adiutor. Install the tray app to use Sync now.",
+    "getTray": "The tray app for Windows comes from the GitHub release.",
+    "releases": "Open the releases",
+    "state": {
+      "waiting": "Waiting for the computer",
+      "claimed": "Running",
+      "done": "Done",
+      "partial": "Partly done",
+      "failed": "Failed",
+      "unknown": "The computer stopped answering",
+      "cancelled": "Cancelled"
+    },
+    "parts": "T3: {t3}, security: {security}",
+    "part": {
+      "accepted": "accepted",
+      "partial": "partial",
+      "failed": "failed",
+      "outcome_unknown": "outcome unknown",
+      "not_run": "not run"
+    },
+    "computer": "Last check-in",
+    "version": "Tray app {version}",
+    "silentSince": "The computer has not checked in since",
+    "pause": "Pause",
+    "paused": "Paused",
+    "pausedUntil": "Paused until",
+    "notPaused": "Not paused",
+    "runningLocal": "Syncing now",
+    "nextRun": "Next scheduled sync",
+    "request": "Last sync asked for here",
+    "requestedAt": "asked",
+    "noRequest": "None yet"
+  },
   "bell": {
     "title": "Needs you",
     "none": "Nothing needs you",
@@ -557,7 +601,9 @@
     "status": "T3: {status}",
     "unknown": "Status not known",
     "untitled": "Untitled thread",
-    "lastActivity": "last activity"
+    "lastActivity": "last activity",
+    "snoozed": "Snoozed",
+    "snoozedUntil": "until"
   },
   "toast": {
     "statusSet": "{title} is now {status}",
@@ -793,7 +839,8 @@
       "telegramCodes": "Sign-in codes",
       "privateNetwork": "Private network",
       "suppressed": "Not recreated by the sync",
-      "status": "Status"
+      "status": "Status",
+      "computer": "Sync on the computer"
     },
     "loading": "Loading settings...",
     "failed": "Could not load settings",

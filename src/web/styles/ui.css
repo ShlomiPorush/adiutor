@@ -472,6 +472,16 @@ button {
   margin-top: auto;
   padding-top: 14px;
 }
+/* The sync card: the status link, then Sync now under its text (the dot and its gap before it). */
+.ui-sync-card {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ui-sync-now {
+  justify-self: start;
+  margin-inline: 34px 4px;
+}
 .ui-status-card {
   display: flex;
   align-items: center;
@@ -1105,7 +1115,7 @@ button {
     font-size: 0;
     background: var(--ui-warn);
   }
-  .ui-sidenav .ui-status-card {
+  .ui-sidenav .ui-sync-card {
     display: none;
   }
   .ui-sidenav .ui-utilities {
@@ -1156,7 +1166,7 @@ button {
     font-size: 0;
     background: var(--ui-warn);
   }
-  html[data-nav="rail"] .ui-sidenav .ui-status-card {
+  html[data-nav="rail"] .ui-sidenav .ui-sync-card {
     display: none;
   }
   html[data-nav="rail"] .ui-sidenav .ui-utilities {
@@ -2923,6 +2933,11 @@ html.ui-layer-on .ui-page {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+.ui-thread-snooze {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .ui-threads li {
   display: flex;

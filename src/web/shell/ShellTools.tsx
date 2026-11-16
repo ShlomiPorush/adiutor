@@ -7,7 +7,7 @@ import { LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, ShieldCheck, Sun,
 import { useRef, useState } from "react"
 import { Link } from "react-router"
 import { api, qk } from "../api/endpoints.ts"
-import type { Morning } from "../api/types.ts"
+import type { Morning, SyncRequests } from "../api/types.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { settingsPath } from "../pages/settings/sections.ts"
 import { Menu } from "../ui/Menu.tsx"
@@ -15,6 +15,7 @@ import { Time } from "../ui/Time.tsx"
 import { isMac } from "./navFold.ts"
 import { ACCOUNT_PATH } from "./navigation.ts"
 import { useSignOut } from "./signOut.ts"
+import { SyncNowButton, useSyncCardLine } from "./syncNow.tsx"
 import { THEMES, type Theme, useTheme } from "./theme.ts"
 
 /** The order the theme button walks through, as n8n-ops does: the system's, then light, then dark. */
@@ -156,42 +157,57 @@ export function AccountMenu({ compact = false }: { compact?: boolean }) {
 
 /**
  * The last complete T3 sync, in words and in its tone; it opens Settings › Status, where the sync's status is. A sync
- * with no live connection says so, and opens Settings › Agent access, where the command to connect it again is.
+ * with no live connection says so, and opens Settings › Agent access, where the command to connect it again is. Under
+ * it, the state of the computer or of the sync asked for here, and Sync now.
  */
-export function SyncStatus({ morning, failed }: { morning: Morning | undefined; failed: boolean }) {
+export function SyncStatus({
+  morning,
+  failed,
+  requests,
+}: {
+  morning: Morning | undefined
+  failed: boolean
+  requests?: SyncRequests | undefined
+}) {
   const { t } = useI18n()
   const sync = morning?.sync
+  const line = useSyncCardLine()(requests)
   const disconnected = sync !== undefined && !sync.connected
-  const tone = disconnected ? "warn" : !sync?.lastSuccessAt ? "none" : sync.stale ? "warn" : "ok"
+  const tone =
+    disconnected || line?.tone === "warn" ? "warn" : !sync?.lastSuccessAt ? "none" : sync.stale ? "warn" : "ok"
   return (
-    <Link
-      to={settingsPath(disconnected ? "agents" : "status")}
-      className="ui-status-card"
-      title={t("sync.title")}
-      data-sync-tone={tone}
-    >
-      <span className="ui-status-dot" aria-hidden="true" />
-      <span className="ui-status-text">
-        <b>{t("shell.syncCard")}</b>
-        <span className={tone === "warn" ? "ui-text-warn" : undefined}>
-          {!sync ? (
-            failed ? (
-              t("shell.syncUnknown")
+    <div className="ui-sync-card">
+      <Link
+        to={settingsPath(disconnected ? "agents" : "status")}
+        className="ui-status-card"
+        title={t("sync.title")}
+        data-sync-tone={tone}
+      >
+        <span className="ui-status-dot" aria-hidden="true" />
+        <span className="ui-status-text">
+          <b>{t("shell.syncCard")}</b>
+          <span className={tone === "warn" ? "ui-text-warn" : undefined}>
+            {!sync ? (
+              failed ? (
+                t("shell.syncUnknown")
+              ) : (
+                "-"
+              )
+            ) : disconnected ? (
+              t("shell.syncDisconnected")
+            ) : sync.lastSuccessAt ? (
+              <>
+                {sync.stale ? `${t("shell.syncStale")} · ` : null}
+                {t("sync.last")} <Time value={sync.lastSuccessAt} mode="list" />
+              </>
             ) : (
-              "-"
-            )
-          ) : disconnected ? (
-            t("shell.syncDisconnected")
-          ) : sync.lastSuccessAt ? (
-            <>
-              {sync.stale ? `${t("shell.syncStale")} · ` : null}
-              {t("sync.last")} <Time value={sync.lastSuccessAt} mode="list" />
-            </>
-          ) : (
-            t("sync.never")
-          )}
+              t("sync.never")
+            )}
+          </span>
+          {line ? <span className={line.tone === "warn" ? "ui-text-warn" : undefined}>{line.text}</span> : null}
         </span>
-      </span>
-    </Link>
+      </Link>
+      <SyncNowButton view={requests} className="ui-btn ui-btn-sm ui-sync-now" />
+    </div>
   )
 }

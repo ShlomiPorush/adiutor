@@ -340,6 +340,58 @@ describe("the account menu is a layer of ui/layers.ts (R4)", () => {
     expect(card?.getAttribute("data-sync-tone")).toBe("warn")
     expect(card?.textContent).toContain(en.shell.syncDisconnected)
   })
+
+  it("keeps Sync now in place, disabled with the reason, while no computer takes requests", async () => {
+    stubMedia(() => false)
+    await render(
+      <SyncStatus
+        morning={undefined}
+        failed={false}
+        requests={{ request: null, client: null, unavailable: "no_client" }}
+      />,
+    )
+    const syncNow = button(en.syncNow.button) as HTMLButtonElement
+    expect(syncNow.disabled).toBe(true)
+    expect(syncNow.title).toBe(en.syncNow.noClient)
+  })
+
+  const silentClient = {
+    lastCheckinAt: "2026-11-16T10:00:00.000Z",
+    version: "0.3.0",
+    paused: true,
+    pausedUntil: null,
+    nextRunAt: null,
+    running: null,
+    silent: true,
+  }
+  const waiting = {
+    id: "6f1c2b9e-0d4a-4f7e-9a51-3c8e2d7b1a40",
+    requestedAt: "2026-11-16T10:01:00.000Z",
+    state: "waiting" as const,
+    claimedAt: null,
+    leaseUntil: null,
+    finishedAt: null,
+    result: null,
+  }
+
+  it("says when the computer went silent, before a request that waits, in the warning tone", async () => {
+    stubMedia(() => false)
+    const requests = { request: waiting, client: silentClient, unavailable: null }
+    await render(<SyncStatus morning={undefined} failed={false} requests={requests} />)
+    const card = document.querySelector(".ui-status-card")
+    expect(card?.getAttribute("data-sync-tone")).toBe("warn")
+    expect(card?.textContent).toContain(en.syncNow.silentSince)
+    expect((button(en.syncNow.button) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it("says that a request waits for the computer, before its pause", async () => {
+    stubMedia(() => false)
+    const requests = { request: waiting, client: { ...silentClient, silent: false }, unavailable: null }
+    await render(<SyncStatus morning={undefined} failed={false} requests={requests} />)
+    const card = document.querySelector(".ui-status-card")
+    expect(card?.textContent).toContain(en.syncNow.state.waiting)
+    expect(card?.textContent).not.toContain(en.syncNow.paused)
+  })
 })
 
 /** A page with one unsaved change: a typed value and its guard. */

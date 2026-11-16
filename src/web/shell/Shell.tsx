@@ -25,6 +25,7 @@ import { NAV, navIdFor } from "./navigation.ts"
 import { PageMetaProvider, useCurrentMeta } from "./pageMeta.tsx"
 import { QuickAdd } from "./QuickAdd.tsx"
 import { AccountMenu, NavToggle, SyncStatus, ThemeButton } from "./ShellTools.tsx"
+import { useSyncRequests } from "./syncNow.tsx"
 
 /** The morning summary feeds the bell, the inbox counter and the sync card on every page (NL-19). */
 export function useMorningSummary() {
@@ -148,6 +149,7 @@ function Sidebar({
   morningFailed: boolean
 }) {
   const { t } = useI18n()
+  const requests = useSyncRequests()
   return (
     <nav className="ui-sidenav" aria-label={t("nav.main")}>
       <div className="ui-nav">
@@ -164,7 +166,7 @@ function Sidebar({
         ))}
       </div>
       <div className="ui-side-foot">
-        <SyncStatus morning={morning} failed={morningFailed} />
+        <SyncStatus morning={morning} failed={morningFailed} requests={requests.data} />
         <div className="ui-utilities">
           <AccountMenu />
           <ThemeButton />

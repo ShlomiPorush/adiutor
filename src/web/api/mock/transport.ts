@@ -17,6 +17,7 @@ import type {
   NoteSummary,
   ProjectListEntry,
   SecurityLine,
+  SyncRequest,
 } from "../types.ts"
 import { ago, createState, type MockState, uuid } from "./fixtures.ts"
 
@@ -699,6 +700,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
   }
   if (head === "audit") return auditAnswer(url.searchParams)
   if (head === "notes") return notesRoute(method, url, { id, sub, rest }, body)
+  if (head === "sync" && id === "requests") return syncRequestsRoute(method, sub)
   if (head === "sync" && id === "runs")
     return ok([
       {
@@ -777,6 +779,43 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     return { status: 204, body: null }
   }
   return fail(404, "not_found", "Nothing is here.")
+}
+
+/** Sync now over a computer that checked in a minute ago: a request waits until the owner cancels it. */
+let syncRequest: SyncRequest | null = null
+function syncRequestsRoute(method: string, requestId: string | undefined): TransportResponse {
+  if (method === "GET")
+    return ok({
+      request: syncRequest,
+      client: {
+        lastCheckinAt: ago(1 / 60),
+        version: "0.3.0",
+        paused: false,
+        pausedUntil: null,
+        nextRunAt: ago(-3),
+        running: null,
+        silent: false,
+      },
+      unavailable: null,
+    })
+  if (method === "POST") {
+    if (syncRequest?.state === "waiting") return ok({ request: syncRequest, created: false })
+    syncRequest = {
+      id: uuid(),
+      requestedAt: new Date().toISOString(),
+      state: "waiting",
+      claimedAt: null,
+      leaseUntil: null,
+      finishedAt: null,
+      result: null,
+    }
+    return ok({ request: syncRequest, created: true }, 201)
+  }
+  if (method === "DELETE" && syncRequest && syncRequest.id === requestId && syncRequest.state === "waiting") {
+    syncRequest = { ...syncRequest, state: "cancelled", finishedAt: new Date().toISOString() }
+    return ok(syncRequest)
+  }
+  return fail(409, "conflict", "Only a sync that still waits for the computer can be cancelled.")
 }
 
 export async function mockTransport({ method, path, body }: TransportRequest): Promise<TransportResponse> {
