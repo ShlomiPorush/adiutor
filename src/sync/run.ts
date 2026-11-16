@@ -184,7 +184,14 @@ async function runLocked(
     threads: 0,
     failedProjects: 0,
   }
-  const security: SecurityPart = { result: "not_run", snapshotRunId: null, snapshotAt: null, repos: 0 }
+  const security: SecurityPart = {
+    result: "not_run",
+    snapshotRunId: null,
+    snapshotAt: null,
+    repos: 0,
+    projectsFrom: null,
+    projectsAt: null,
+  }
   const stopT3 = (reason: string, message: string) => {
     Object.assign(t3, { result: "not_run", reason, message })
     say(`t3: ${message}`)
@@ -384,12 +391,26 @@ async function runLocked(
     })
   if (readable && !canSendT3) stopT3("no_threads", "no project's threads could be read; the T3 part is not sent")
 
-  // 4. Security for the GitHub repositories of the projects: without this run's project list, none are known.
+  // 4. Security for the GitHub repositories of the projects. It reads nothing from T3: when this run has no project
+  // list, the last good list (a local file) still maps the projects to their repositories.
   let securityPayload: { collectedAt: string; repos: ReturnType<typeof securityReports>["reports"] } | undefined
-  if (snapshot && !readable)
-    Object.assign(security, { reason: "no_projects", message: "no T3 project list to find the repositories" })
+  let securityProjects: { repo?: string }[] | undefined
   if (snapshot && readable) {
-    const repos = projectRecords.map((p) => p.repo).filter((r): r is string => r !== undefined)
+    securityProjects = projectRecords
+    Object.assign(security, { projectsFrom: t3.projectsFrom, projectsAt: t3.projectsAt })
+  } else if (snapshot) {
+    const last = readProjectList(ctx.data)
+    if (last) {
+      securityProjects = last.projects.map((project) => {
+        const repo = resolveRepo(project, local)
+        return repo ? { repo } : {}
+      })
+      Object.assign(security, { projectsFrom: "last_good", projectsAt: last.savedAt })
+      say(`security: repositories from the last good project list of ${last.savedAt}`)
+    } else Object.assign(security, { reason: "no_projects", message: "no T3 project list to find the repositories" })
+  }
+  if (snapshot && securityProjects) {
+    const repos = securityProjects.map((p) => p.repo).filter((r): r is string => r !== undefined)
     const { reports, missing } = securityReports(snapshot, repos)
     say(
       `security: ${reports.length} repositories` +

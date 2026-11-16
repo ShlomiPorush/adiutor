@@ -61,6 +61,12 @@ export type SecurityPart = {
   snapshotRunId: string | null
   snapshotAt: string | null
   repos: number
+  /**
+   * Where the repositories came from: this run's T3 project list, or, when T3 was not read, the last good list
+   * (projectsAt is then its time). Security reads nothing from T3; the list only maps projects to repositories.
+   */
+  projectsFrom: "t3" | "last_good" | null
+  projectsAt: string | null
 }
 
 export type RunReport = {

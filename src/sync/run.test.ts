@@ -300,8 +300,9 @@ describe("run", () => {
     const report = reportOf((await json(["run"], d, lines)).result)
     expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_rejected", projectsFrom: null })
     expect(t3.calls.filter((c) => c.args[0] === "thread")).toHaveLength(0)
-    // Without this run's project list, no repository is known for security either.
-    expect(report.security).toMatchObject({ result: "not_run", reason: "no_projects" })
+    // Security reads nothing from T3: the last good list (a local file) still maps the projects to repositories.
+    expect(report.security).toMatchObject({ result: "accepted", projectsFrom: "last_good" })
+    expect(fake.pushes.at(-1)?.path).toBe("/api/v1/sync/security")
     const status = await json(["status"], d, lines)
     expect(status.result).toMatchObject({ t3: { state: "ended", reason: "rejected" } })
     // Never issued again on its own.
@@ -321,7 +322,9 @@ describe("run", () => {
     const { deps: d, lines } = deps()
     const report = reportOf((await json(["run"], d, lines)).result)
     expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_other_environment" })
-    expect(fake.pushes).toHaveLength(0)
+    // Nothing of T3 is sent; security, which reads nothing from T3, still goes with the last good list.
+    expect(fake.pushes.map((p) => p.path)).toEqual(["/api/v1/sync/security"])
+    expect(report.security).toMatchObject({ projectsFrom: "last_good" })
     const status = await json(["status"], d, lines)
     expect(status.result).toMatchObject({ t3: { state: "ended", reason: "other_environment" } })
   })
