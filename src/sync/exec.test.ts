@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -136,7 +137,7 @@ describe("systemCommand", () => {
 
 describe("childEnv", () => {
   it("never passes the agent token to a child process", () => {
-    const env = childEnv({ PATH: "/bin", ADIUTOR_AGENT_TOKEN: "x".repeat(40) })
+    const env = childEnv({ PATH: "/bin", ADIUTOR_AGENT_TOKEN: randomBytes(20).toString("hex") })
     expect(env).toEqual({ PATH: "/bin" })
   })
 })
@@ -150,7 +151,7 @@ describe("t3Env", () => {
       VITE_DEV_SERVER_URL: "http://localhost:5173",
       T3CODE_BOOTSTRAP_FD: "3",
       T3CODE_PORT: "3773",
-      ADIUTOR_AGENT_TOKEN: "x".repeat(40),
+      ADIUTOR_AGENT_TOKEN: randomBytes(20).toString("hex"),
     })
     expect(env).toEqual({ PATH: "/bin", T3CODE_PORT: "3773" })
   })
@@ -179,7 +180,7 @@ describe("runProcess", () => {
     const cli = join(dir, "t3")
     writeFileSync(cli, `#!/bin/sh\nexec "${process.execPath}" "${echo}" "$@"\n`)
     chmodSync(cli, 0o755)
-    process.env.ADIUTOR_AGENT_TOKEN = "z".repeat(40)
+    process.env.ADIUTOR_AGENT_TOKEN = randomBytes(20).toString("hex")
     try {
       const pids: number[] = []
       const result = await runProcess(cli, tricky, { timeoutMs: 10_000, onSpawn: (pid) => pids.push(pid) })
@@ -194,7 +195,7 @@ describe("runProcess", () => {
     // A given environment replaces the process's own, still without the token.
     const given = await runProcess(cli, ["x"], {
       timeoutMs: 10_000,
-      env: { PATH: process.env.PATH, ADIUTOR_AGENT_TOKEN: "y".repeat(40) },
+      env: { PATH: process.env.PATH, ADIUTOR_AGENT_TOKEN: randomBytes(20).toString("hex") },
     })
     expect(JSON.parse(given.stdout)).toEqual({ args: ["x"], token: null })
     const failed = await runProcess(cli, ["fail"], { timeoutMs: 10_000 })

@@ -1,6 +1,7 @@
 // The sync's machine-readable output (`--json`), the contract the tray reads: one JSON object per line on stdout,
 // events first, then exactly one result object, and nothing else. Without --json the same commands print their human
-// lines as before. No line ever holds a token, and T3 titles and paths never appear in it: projects are named by id.
+// lines as before. No line ever holds a token. The sync names projects by id and puts no T3 title or path in a line;
+// a failure's message can pass on the last error line the T3 CLI or the collector printed.
 // Described in docs/sync.md, "Machine-readable output".
 
 export const CONTRACT_VERSION = 1
@@ -74,14 +75,20 @@ export type RunReport = {
 
 export type Pause = { until: string | null }
 
-export type Result = { type: "result"; v: typeof CONTRACT_VERSION; command: Command | null; ok: boolean } & (
-  | { command: null; error?: Failure }
-  | ({ command: "status" } & StatusBody)
-  | ({ command: "connect" } & ConnectBody)
-  | ({ command: "disconnect" } & DisconnectBody)
-  | ({ command: "t3-connect" } & T3ConnectBody)
-  | ({ command: "t3-disconnect" } & DisconnectBody)
-  | ({ command: "run" } & RunBody)
+/**
+ * The one result of a command. `ok` is true when the command did what it was asked; when it is false, `error` says
+ * why (a stable `code` and a message), with the command's own fields where it has them (`busy` for a run that did not
+ * start, `revocationPending` for a disconnect whose revocation is still to be done). Bad arguments: `command` null.
+ */
+export type Result = { type: "result"; v: typeof CONTRACT_VERSION } & (
+  | { command: Command | null; ok: false; error: Failure }
+  | { command: null; ok: true }
+  | ({ command: "status"; ok: true } & StatusBody)
+  | ({ command: "connect"; ok: boolean } & ConnectBody)
+  | ({ command: "disconnect"; ok: boolean } & DisconnectBody)
+  | ({ command: "t3-connect"; ok: boolean } & T3ConnectBody)
+  | ({ command: "t3-disconnect"; ok: boolean } & DisconnectBody)
+  | ({ command: "run"; ok: boolean } & RunBody)
 )
 
 export type StatusBody = {
@@ -93,7 +100,6 @@ export type StatusBody = {
   running: { startedAt: string } | null
   paused: Pause | null
   settings: { problems: string[] }
-  error?: Failure
 }
 
 export type ConnectBody = {

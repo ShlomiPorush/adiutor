@@ -206,9 +206,16 @@ export function t3Session(deps: T3SessionDeps) {
     } catch {
       return "unavailable"
     }
+    let text: string
+    try {
+      text = await response.text()
+    } catch {
+      // The answer broke off.
+      return "unavailable"
+    }
     let json: unknown = null
     try {
-      json = JSON.parse(await response.text())
+      json = JSON.parse(text)
     } catch {
       json = null
     }
@@ -452,7 +459,8 @@ export function t3Session(deps: T3SessionDeps) {
         state: !session ? ("not_connected" as const) : session.ended ? ("ended" as const) : ("connected" as const),
         ...(session?.ended ? { reason: session.ended } : {}),
         ...(session ? { environmentId: session.environmentId, expiresAt: session.expiresAt } : {}),
-        revocationPending: pending.revokes.length > 0,
+        // An entry for the saved session itself (a renewal that did not finish) is only ever dropped, never revoked.
+        revocationPending: pending.revokes.some((r) => r.sessionId !== session?.sessionId),
       }
     },
 
@@ -501,6 +509,13 @@ export function t3Session(deps: T3SessionDeps) {
             kind: "unavailable",
             environmentId: session.environmentId,
             message: `T3 at ${deps.origin} did not answer`,
+          }
+        // No environment id at all (not T3, or an answer it cannot read): this run stops, the session stays.
+        if (id === undefined)
+          return {
+            kind: "stop",
+            code: "t3_unexpected_answer",
+            message: `${deps.origin} did not answer as T3; the session is not sent there`,
           }
         if (id !== session.environmentId) {
           await writeSession({ ...session, ended: "other_environment" })

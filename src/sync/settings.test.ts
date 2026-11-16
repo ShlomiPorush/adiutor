@@ -32,13 +32,17 @@ describe("resolveSettings", () => {
       t3Url: "http://127.0.0.1:4000",
       overviewDir: "/settings/overview",
     })
-    const resolved = resolveSettings({
-      platform: "linux",
+    const given = {
+      platform: "linux" as const,
       env: { ...env, ADIUTOR_URL: "https://from-env.example.com", T3CODE_CLI_PATH: "/env/t3" },
       envFileVars: { ADIUTOR_URL: "https://from-file.example.com/" },
       now: NOW,
       flags: { overviewDir: "/flag/overview" },
-    })
+    }
+    // The default sync.env, and any env file of connect, come after the environment, as before.
+    expect(resolveSettings(given).url).toBe("https://from-env.example.com")
+    // An env file given with --env to run (and the other commands) wins over the environment, as before.
+    const resolved = resolveSettings({ ...given, envFileFirst: true })
     expect(resolved).toMatchObject({
       url: "https://from-file.example.com",
       cliPath: "/env/t3",

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import type { Runner } from "./exec.ts"
@@ -103,7 +104,7 @@ describe("listThreads", () => {
       t3code_home: "/x",
       VITE_DEV_SERVER_URL: "http://dev",
       T3CODE_BOOTSTRAP_FD: "3",
-      ADIUTOR_AGENT_TOKEN: "old",
+      ADIUTOR_AGENT_TOKEN: randomBytes(20).toString("hex"),
     }
     await listThreads(runner, "C:\\t3\\t3.cmd", "mcp:p-gadget", 1000, env)
     expect(calls).toEqual([

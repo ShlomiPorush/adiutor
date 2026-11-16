@@ -1,6 +1,7 @@
 // The sync's settings: Adiutor's address, the T3 CLI, T3's address and the overview folder. Each comes from the first
-// of: a command-line option, the env file (--env, or the default sync.env when it exists), the environment, the
-// settings file (settings.json in the data folder, which the tray writes), then the default. The settings file holds
+// of: a command-line option, the env file given with --env, the environment, the default sync.env (when it exists and
+// no --env was given), the settings file (settings.json in the data folder, which the tray writes), then the default.
+// As before, connect and setup-mcp let the environment win over any env file. The settings file holds
 // no secret and the engine never writes it. Error messages never include a value.
 
 import { readFileSync, statSync } from "node:fs"
@@ -104,6 +105,8 @@ export function resolveSettings(input: {
   env: Record<string, string | undefined>
   /** The env file's values (parsed by the caller), or undefined when none was read. */
   envFileVars?: Record<string, string>
+  /** The env file wins over the environment: it was given with --env (run, status and the other commands). */
+  envFileFirst?: boolean
   envFile?: string
   /** Milliseconds since the epoch, for the pause. */
   now: number
@@ -114,7 +117,10 @@ export function resolveSettings(input: {
   const file = readSettingsFile(join(dataDir(platform, env), SETTINGS_FILE))
   const problems = file.problem ? [file.problem] : []
   const pick = (name: keyof typeof NAMES, flag?: string) => {
-    const from = [flag, input.envFileVars?.[NAMES[name].env], env[NAMES[name].env], file.settings[NAMES[name].file]]
+    const fromFile = input.envFileVars?.[NAMES[name].env]
+    const from = input.envFileFirst
+      ? [flag, fromFile, env[NAMES[name].env], file.settings[NAMES[name].file]]
+      : [flag, env[NAMES[name].env], fromFile, file.settings[NAMES[name].file]]
     for (const value of from) {
       const trimmed = value?.trim()
       if (trimmed) return trimmed

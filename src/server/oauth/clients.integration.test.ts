@@ -241,10 +241,19 @@ describe("the sync's connection", () => {
 
     expect(await client.disconnect()).toEqual({ wasConnected: true, revocationPending: false })
     expect(readdirSync(folder).filter((name) => name.endsWith(".json"))).toEqual([])
-    const listed = await browserCall(h.owner, "/api/v1/agents/connections")
-    expect(listed.body.connections.some((c: Loose) => c.name === "Desk sync")).toBe(false)
+    // The library removed the grant: its tokens are refused at once.
     const after = await fetch(`${h.issuer}/api/v1/agent/endpoints`, { headers: { authorization: `Bearer ${access}` } })
     expect(after.status).toBe(401)
+    // Adiutor ends the connection's record after the library's grant.revoked event (oauth/access.ts), a moment later.
+    const endsSoon = async () => {
+      for (let i = 0; i < 100; i++) {
+        const listed = await browserCall(h.owner, "/api/v1/agents/connections")
+        if (!listed.body.connections.some((c: Loose) => c.name === "Desk sync")) return true
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      return false
+    }
+    expect(await endsSoon()).toBe(true)
   }, 120_000)
 })
 

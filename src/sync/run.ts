@@ -133,8 +133,12 @@ export async function runSync(options: RunOptions, deps: Deps, out: Output): Pro
   // One run at a time across the tray and the command line, for the whole run, the collector included.
   const held = await takeRunLock(data, lockDeps)
   if (held.busy) {
-    say(`run: another run is going (since ${held.startedAt ?? "an unknown time"}); nothing ran`)
-    return { exit: EXIT_NOTHING_PUSHED, body: { busy: { startedAt: held.startedAt } } }
+    const message = `another run is going (since ${held.startedAt ?? "an unknown time"}); nothing ran`
+    say(`run: ${message}`)
+    return {
+      exit: EXIT_NOTHING_PUSHED,
+      body: { busy: { startedAt: held.startedAt }, error: { code: "busy", message } },
+    }
   }
   try {
     const report = await runLocked(options, deps, say, { platform, sleep, nowMs, data, lockDeps })
@@ -380,19 +384,12 @@ async function runLocked(
     })
   if (readable && !canSendT3) stopT3("no_threads", "no project's threads could be read; the T3 part is not sent")
 
-  // 4. Security for the GitHub repositories of the projects. When this run has no project list (T3 stopped), the
-  // repositories of the last good list are used for security alone; nothing of it goes to the T3 part.
+  // 4. Security for the GitHub repositories of the projects: without this run's project list, none are known.
   let securityPayload: { collectedAt: string; repos: ReturnType<typeof securityReports>["reports"] } | undefined
-  let repoProjects = projectList
-  if (!readable && snapshot) {
-    const last = readProjectList(ctx.data)
-    if (last) {
-      repoProjects = last.projects
-      say(`security: repositories from the last good T3 project list of ${last.savedAt}`)
-    } else Object.assign(security, { reason: "no_projects", message: "no T3 project list to find the repositories" })
-  }
-  if (snapshot && (readable || repoProjects.length > 0)) {
-    const repos = repoProjects.map((project) => resolveRepo(project, local)).filter((r): r is string => r !== undefined)
+  if (snapshot && !readable)
+    Object.assign(security, { reason: "no_projects", message: "no T3 project list to find the repositories" })
+  if (snapshot && readable) {
+    const repos = projectRecords.map((p) => p.repo).filter((r): r is string => r !== undefined)
     const { reports, missing } = securityReports(snapshot, repos)
     say(
       `security: ${reports.length} repositories` +

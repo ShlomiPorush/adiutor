@@ -134,11 +134,12 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
       return setupMcpCommand(values, deps, out)
     }
     command = name as Command
-    // connect creates the env file it is given; every other command needs a given one to be readable.
+    // connect creates the env file it is given, and lets the environment win as before; every other command needs a
+    // given one to be readable, and it wins over the environment.
     const resolved = await settingsFor(values, deps, command !== "connect")
     if ("error" in resolved) {
       out.say(`config: ${resolved.error}`)
-      out.result({ command, ok: false, error: { code: "usage", message: resolved.error } } as never)
+      out.result({ command, ok: false, error: { code: "usage", message: resolved.error } })
       return EXIT_USAGE
     }
     secrets.push(resolved.oldTokenValue)
@@ -173,7 +174,7 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
     // Every path ends in one result, an unexpected failure too; its message holds no secret.
     const message = error instanceof ClientError ? error.message : `unexpected error (${errorCode(error)})`
     out.say(`${command ?? "sync"}: ${message}`)
-    out.result({ command, ok: false, error: { code: "internal_error", message } } as never)
+    out.result({ command, ok: false, error: { code: "internal_error", message } })
     return EXIT_NOTHING_PUSHED
   }
   return EXIT_NOTHING_PUSHED
@@ -216,6 +217,7 @@ async function settingsFor(
     platform,
     env: deps.env,
     envFileVars: vars,
+    envFileFirst: target?.required === true && requireEnvFile,
     ...(target ? { envFile: target.path } : {}),
     now: deps.now().getTime(),
     flags: { url: values.url, overviewDir: values.overview },
@@ -252,6 +254,10 @@ function sessionOf(settings: Resolved, deps: MainDeps) {
 }
 
 const URL_PROBLEM = "--url (or ADIUTOR_URL) must be Adiutor's address alone: https, or http on localhost"
+const PENDING: Failure = {
+  code: "revocation_pending",
+  message: "The connection is forgotten here, and its revocation is kept: every later command tries it again.",
+}
 
 // --- status ---
 
@@ -370,7 +376,12 @@ async function disconnectCommand(settings: Resolved, deps: MainDeps, out: Output
     if (done.revocationPending)
       out.say("Adiutor did not confirm the revocation; it is kept and every later command tries it again.")
     else if (done.wasConnected) out.say("Adiutor ended the connection.")
-    out.result({ command: "disconnect", ok: !done.revocationPending, ...done })
+    out.result({
+      command: "disconnect",
+      ok: !done.revocationPending,
+      ...done,
+      ...(done.revocationPending ? { error: PENDING } : {}),
+    })
     return done.revocationPending ? EXIT_NOTHING_PUSHED : EXIT_OK
   } catch (error) {
     out.say(`disconnect: ${failure(error).message}`)
@@ -414,7 +425,12 @@ async function t3DisconnectCommand(settings: Resolved, deps: MainDeps, out: Outp
     out.say(done.wasConnected ? "T3 is disconnected." : "T3 is not connected.")
     if (done.revocationPending)
       out.say("T3 did not confirm the revocation; it is kept and every later T3 command tries it again.")
-    out.result({ command: "t3-disconnect", ok: !done.revocationPending, ...done })
+    out.result({
+      command: "t3-disconnect",
+      ok: !done.revocationPending,
+      ...done,
+      ...(done.revocationPending ? { error: PENDING } : {}),
+    })
     return done.revocationPending ? EXIT_NOTHING_PUSHED : EXIT_OK
   } catch (error) {
     out.say(`t3-disconnect: ${failure(error).message}`)

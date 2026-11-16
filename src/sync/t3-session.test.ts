@@ -327,6 +327,8 @@ describe("readProjects", () => {
     })
     expect(JSON.parse(u.read(SESSION_FILE) ?? "{}").sessionId).toBe(old.sessionId)
     expect(live()).toEqual([old.sessionId])
+    // Its entry for the saved session is only ever dropped: nothing is waiting to be revoked.
+    expect((await u.session().status()).revocationPending).toBe(false)
   })
 
   it("a 401 ends the session: the T3 part stops and nothing is issued or read until t3-connect", async () => {
@@ -363,6 +365,12 @@ describe("readProjects", () => {
     expect(await u.session().readProjects()).toMatchObject({ kind: "unavailable" })
     fake.projectsAnswer.push("drop")
     expect(await u.session().readProjects()).toMatchObject({ kind: "unavailable" })
+    // An address that does not answer as T3: this run stops, the session is not sent there, and it stays.
+    fake.descriptorAnswer.push(404)
+    const before = fake.counts.projects
+    expect(await u.session().readProjects()).toMatchObject({ kind: "stop", code: "t3_unexpected_answer" })
+    expect(fake.counts.projects).toBe(before)
+    expect((await u.session().status()).state).toBe("connected")
     // A refusal that is neither: no fallback, and the session stays.
     fake.projectsAnswer.push(404)
     expect(await u.session().readProjects()).toMatchObject({ kind: "stop", code: "t3_projects_unreadable" })

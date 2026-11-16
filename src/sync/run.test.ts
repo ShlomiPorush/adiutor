@@ -139,6 +139,9 @@ async function json(argv: string[], d: MainDeps, lines: string[]) {
   expect(results).toHaveLength(1)
   expect(parsed.at(-1)?.type).toBe("result")
   for (const p of parsed.slice(0, -1)) expect(p.type).toBe("event")
+  // A result that is not ok always says why.
+  const last = parsed.at(-1) as { ok?: boolean; error?: { code?: string; message?: string } }
+  if (last.ok === false) expect(last.error).toEqual({ code: expect.any(String), message: expect.any(String) })
   return { exit, events: parsed.slice(0, -1), result: parsed.at(-1) as Result & Record<string, unknown> }
 }
 
@@ -297,7 +300,8 @@ describe("run", () => {
     const report = reportOf((await json(["run"], d, lines)).result)
     expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_rejected", projectsFrom: null })
     expect(t3.calls.filter((c) => c.args[0] === "thread")).toHaveLength(0)
-    expect(report.security.result).toBe("accepted")
+    // Without this run's project list, no repository is known for security either.
+    expect(report.security).toMatchObject({ result: "not_run", reason: "no_projects" })
     const status = await json(["status"], d, lines)
     expect(status.result).toMatchObject({ t3: { state: "ended", reason: "rejected" } })
     // Never issued again on its own.
@@ -317,7 +321,7 @@ describe("run", () => {
     const { deps: d, lines } = deps()
     const report = reportOf((await json(["run"], d, lines)).result)
     expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_other_environment" })
-    expect(fake.pushes.map((p) => p.path)).toEqual(["/api/v1/sync/security"])
+    expect(fake.pushes).toHaveLength(0)
     const status = await json(["status"], d, lines)
     expect(status.result).toMatchObject({ t3: { state: "ended", reason: "other_environment" } })
   })
@@ -333,7 +337,12 @@ describe("run", () => {
     const second = deps()
     const busy = await json(["run"], second.deps, second.lines)
     expect(busy.exit).toBe(1)
-    expect(busy.result).toMatchObject({ command: "run", ok: false, busy: { startedAt: expect.any(String) } })
+    expect(busy.result).toMatchObject({
+      command: "run",
+      ok: false,
+      busy: { startedAt: expect.any(String) },
+      error: { code: "busy" },
+    })
     const status = await json(["status"], second.deps, second.lines)
     expect(status.result).toMatchObject({ running: { startedAt: expect.any(String) } })
     open()
