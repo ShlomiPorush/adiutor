@@ -291,7 +291,9 @@
   "syncNow": {
     "button": "Sync now",
     "busy": "Asking...",
-    "asked": "Sync asked for. The computer takes it at its next check-in, within a minute.",
+    "asked": "Sync asked for. It waits for the computer's next check-in.",
+    "askedPaused": "Sync asked for. The computer is paused: the request waits until the pause ends.",
+    "askedSilent": "Sync asked for. The computer has not checked in lately: the request waits until it does.",
     "already": "A sync is already asked for. The computer runs it once.",
     "failed": "Could not ask for a sync: {reason}",
     "cancel": "Cancel",

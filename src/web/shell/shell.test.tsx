@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import en from "../../shared/locales/en.json"
 import { qk } from "../api/endpoints.ts"
 import type { Morning } from "../api/types.ts"
-import { I18nProvider } from "../i18n/i18n.tsx"
+import { I18nProvider, translate } from "../i18n/i18n.tsx"
 import { ConfirmHost } from "../ui/confirm.tsx"
 import { layerCount } from "../ui/layers.ts"
 import { ToastHost } from "../ui/Toast.tsx"
@@ -23,6 +23,7 @@ import { Bell } from "./Bell.tsx"
 import { MoreSheet } from "./MoreSheet.tsx"
 import { NAV_KEY, useNavFolded } from "./navFold.ts"
 import { AccountMenu, NavToggle, nextTheme, SyncStatus, ThemeButton } from "./ShellTools.tsx"
+import { askedMessage } from "./syncNow.tsx"
 
 const signOut = vi.fn<() => Promise<{ data: unknown; error: { status?: number; message?: string } | null }>>()
 vi.mock("../api/auth.ts", async (importOriginal) => {
@@ -384,13 +385,58 @@ describe("the account menu is a layer of ui/layers.ts (R4)", () => {
     expect((button(en.syncNow.button) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it("says that a request waits for the computer, before its pause", async () => {
+  it("shows the computer's pause and the request that waits, with Cancel beside Sync now", async () => {
     stubMedia(() => false)
     const requests = { request: waiting, client: { ...silentClient, silent: false }, unavailable: null }
     await render(<SyncStatus morning={undefined} failed={false} requests={requests} />)
     const card = document.querySelector(".ui-status-card")
-    expect(card?.textContent).toContain(en.syncNow.state.waiting)
-    expect(card?.textContent).not.toContain(en.syncNow.paused)
+    expect(card?.querySelector("[data-sync-line=computer]")?.textContent).toBe(en.syncNow.paused)
+    expect(card?.querySelector("[data-sync-line=request]")?.textContent).toBe(en.syncNow.state.waiting)
+    expect(button(en.syncNow.cancel)).toBeDefined()
+  })
+
+  it("keeps a finished request on the card, in its tone with each part's result, and without Cancel", async () => {
+    stubMedia(() => false)
+    const finished = {
+      ...waiting,
+      state: "partial" as const,
+      finishedAt: "2026-11-16T10:05:00.000Z",
+      result: { t3: "accepted" as const, security: "not_run" as const },
+    }
+    const client = { ...silentClient, silent: false, paused: false }
+    await render(
+      <SyncStatus morning={undefined} failed={false} requests={{ request: finished, client, unavailable: null }} />,
+    )
+    const line = document.querySelector("[data-sync-line=request]")
+    const parts = translate("en", "syncNow.parts", { t3: "accepted", security: "not run" })
+    expect(line?.textContent).toBe(`${en.syncNow.state.partial} · ${parts}`)
+    expect(line?.getAttribute("title")).toBe(`${en.syncNow.state.partial}: ${parts}`)
+    expect(line?.className).toBe("ui-text-warn")
+    expect(button(en.syncNow.cancel)).toBeUndefined()
+  })
+})
+
+describe("what Sync now says once the request is saved", () => {
+  const t = (key: string) => translate("en", key)
+  const client = {
+    lastCheckinAt: "2026-11-16T10:00:00.000Z",
+    version: "0.3.0",
+    paused: false,
+    pausedUntil: null,
+    nextRunAt: null,
+    running: null,
+    silent: false,
+  }
+  it("promises no time, and names a computer that is paused or went silent", () => {
+    expect(askedMessage(t, { request: null, client, unavailable: null })).toBe(en.syncNow.asked)
+    expect(askedMessage(t, { request: null, client: { ...client, paused: true }, unavailable: null })).toBe(
+      en.syncNow.askedPaused,
+    )
+    expect(
+      askedMessage(t, { request: null, client: { ...client, paused: true, silent: true }, unavailable: null }),
+    ).toBe(en.syncNow.askedSilent)
+    for (const text of [en.syncNow.asked, en.syncNow.askedPaused, en.syncNow.askedSilent])
+      expect(text).not.toMatch(/minute/)
   })
 })
 

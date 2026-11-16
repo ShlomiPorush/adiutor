@@ -78,6 +78,7 @@ const group = () => page.locator("#settings-sync-computer")
 const syncNow = () => group().getByRole("button", { name: he.syncNow.button, exact: true })
 const requestFact = () => group().locator(".ui-set-fact", { hasText: he.syncNow.request })
 const card = () => page.locator(".ui-status-card")
+const syncCard = () => page.locator(".ui-sync-card")
 
 test("before any computer checked in, Sync now stays in place, disabled, and the tray app's source is named", async () => {
   test.skip(test.info().project.name !== "desktop", "the phone runs after the desktop checked in")
@@ -132,6 +133,12 @@ test("a check-in, Sync now, Cancel, the claim and its result", async () => {
   await expect(requestFact()).toContainText(he.syncNow.state.waiting)
   await page.goto("/")
   await expect(card()).toContainText(he.syncNow.state.waiting)
+  // Cancel is on the card too, while the request waits; Sync now asks again from there.
+  await syncCard().getByRole("button", { name: he.syncNow.cancel, exact: true }).click()
+  await expect(card()).toContainText(he.syncNow.state.cancelled)
+  await expect(syncCard().getByRole("button", { name: he.syncNow.cancel })).toHaveCount(0)
+  await syncCard().getByRole("button", { name: he.syncNow.button, exact: true }).click()
+  await expect(card()).toContainText(he.syncNow.state.waiting)
 
   // The computer takes it at its check-in, runs it and reports its result.
   const claim = await checkIn()
@@ -145,11 +152,17 @@ test("a check-in, Sync now, Cancel, the claim and its result", async () => {
   await page.reload()
   await expect(requestFact()).toContainText(he.syncNow.state.partial)
   await expect(requestFact()).toContainText(he.syncNow.part.not_run)
+  // The card keeps the finished request with its result.
+  await page.goto("/")
+  await expect(card()).toContainText(he.syncNow.state.partial)
+  await expect(card()).toContainText(he.syncNow.part.not_run)
 
-  // Paused until a time.
+  // Paused until a time: Sync now says the request waits for the pause, and promises no time.
   await checkIn({ paused: true, pausedUntil: new Date(Date.now() + 3_600_000).toISOString() })
-  await page.reload()
+  await page.goto("/settings/status")
   await expect(group()).toContainText(he.syncNow.pausedUntil)
+  await syncNow().click()
+  await expect(page.locator(".ui-toast")).toContainText(he.syncNow.askedPaused)
 })
 
 test("a computer gone silent, and a claim whose lease passed", async () => {

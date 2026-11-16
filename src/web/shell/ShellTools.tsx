@@ -15,7 +15,7 @@ import { Time } from "../ui/Time.tsx"
 import { isMac } from "./navFold.ts"
 import { ACCOUNT_PATH } from "./navigation.ts"
 import { useSignOut } from "./signOut.ts"
-import { SyncNowButton, useSyncCardLine } from "./syncNow.tsx"
+import { CancelRequestButton, SyncNowButton, useSyncCardLines } from "./syncNow.tsx"
 import { THEMES, type Theme, useTheme } from "./theme.ts"
 
 /** The order the theme button walks through, as n8n-ops does: the system's, then light, then dark. */
@@ -171,10 +171,11 @@ export function SyncStatus({
 }) {
   const { t } = useI18n()
   const sync = morning?.sync
-  const line = useSyncCardLine()(requests)
+  const lines = useSyncCardLines()(requests)
+  const silent = requests?.client?.silent === true
   const disconnected = sync !== undefined && !sync.connected
-  const tone =
-    disconnected || line?.tone === "warn" ? "warn" : !sync?.lastSuccessAt ? "none" : sync.stale ? "warn" : "ok"
+  const tone = disconnected || silent ? "warn" : !sync?.lastSuccessAt ? "none" : sync.stale ? "warn" : "ok"
+  const waiting = requests?.request?.state === "waiting" ? requests.request : null
   return (
     <div className="ui-sync-card">
       <Link
@@ -204,10 +205,22 @@ export function SyncStatus({
               t("sync.never")
             )}
           </span>
-          {line ? <span className={line.tone === "warn" ? "ui-text-warn" : undefined}>{line.text}</span> : null}
+          {lines.map((line) => (
+            <span
+              key={line.key}
+              className={line.tone ? `ui-text-${line.tone}` : undefined}
+              title={line.title}
+              data-sync-line={line.key}
+            >
+              {line.text}
+            </span>
+          ))}
         </span>
       </Link>
-      <SyncNowButton view={requests} className="ui-btn ui-btn-sm ui-sync-now" />
+      <div className="ui-sync-acts">
+        <SyncNowButton view={requests} />
+        {waiting ? <CancelRequestButton request={waiting} /> : null}
+      </div>
     </div>
   )
 }

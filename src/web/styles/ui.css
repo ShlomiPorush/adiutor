@@ -478,8 +478,10 @@ button {
   gap: 2px;
   min-width: 0;
 }
-.ui-sync-now {
-  justify-self: start;
+.ui-sync-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-inline: 34px 4px;
 }
 .ui-status-card {
@@ -531,6 +533,9 @@ button {
 }
 .ui-status-text > span.ui-text-warn {
   color: var(--ui-warn);
+}
+.ui-status-text > span.ui-text-fail {
+  color: var(--ui-fail);
 }
 .ui-utilities {
   display: flex;
