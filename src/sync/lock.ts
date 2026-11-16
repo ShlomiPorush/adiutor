@@ -1,11 +1,12 @@
 // A lock file shared by the sync's commands (the agent-access client contract, "The lock"): created exclusively,
 // naming its holder (process id, host, a random token, the start time). It is never taken from a live holder, however
-// old; a holder that died (same host, process gone), or an empty lock older than a minute, is taken over by moving the
-// lock aside atomically, so of two takers only one wins. Used for the Adiutor connection's refresh, the T3 session and
+// old. A holder that died (same host, process gone), or an empty lock older than a minute, is taken over: under a guard
+// file of that dead holder's own, created exclusively, the taker reads the lock again and removes it only when it still
+// names the dead holder. Of several takers only one holds the guard, and none can remove a lock another one created. Used for the Adiutor connection's refresh, the T3 session and
 // the run lock. The folder it lives in is the caller's to prepare.
 
 import { randomBytes } from "node:crypto"
-import { closeSync, linkSync, lstatSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs"
+import { closeSync, lstatSync, openSync, readFileSync, rmSync, writeSync } from "node:fs"
 import { hostname } from "node:os"
 import { ClientError } from "./errors.ts"
 
@@ -15,6 +16,8 @@ export type LockDeps = {
   /** Milliseconds since the epoch. */
   now: () => number
   sleep: (ms: number) => Promise<void>
+  /** Test seam: runs after a taker found the holder dead, before it takes the lock over. */
+  beforeBreak?: (held: Holder) => Promise<void>
 }
 
 /** What a lock file says about its holder; `empty` when it cannot be read (a holder that died while writing it). */
@@ -87,36 +90,54 @@ export function fileLock(lockFile: string, deps: LockDeps) {
       }
       const held = readHolder(lockFile)
       if (options.own && held && !held.empty && held.token === options.own) return options.own
-      const dead = held?.empty
-        ? deps.now() - (held.mtime ?? 0) > 60_000
-        : held &&
-          String(held.host).toLowerCase() === host().toLowerCase() &&
-          !processAlive(Number(held.pid), deps.platform)
-      if (dead && held && breakLock(held)) continue
-      if (deps.now() >= deadline) throw options.busy(held)
+      if (held && dead(held)) {
+        await deps.beforeBreak?.(held)
+        if (breakDead(lockFile, held)) continue
+      }
+      if (deps.now() >= deadline) throw options.busy(readHolder(lockFile) ?? held)
       await deps.sleep(100 + Math.random() * 200)
     }
   }
 
-  /** Moves a dead holder's lock away atomically; puts it back when what was moved is not the dead lock. */
-  function breakLock(held: Holder): boolean {
-    const moved = `${lockFile}.${randomBytes(6).toString("hex")}.dead`
+  const dead = (held: Holder) =>
+    held.empty
+      ? deps.now() - (held.mtime ?? 0) > 60_000
+      : String(held.host).toLowerCase() === host().toLowerCase() && !processAlive(Number(held.pid), deps.platform)
+
+  /** The same holder: the same token, or for an empty lock the same modification time. */
+  const same = (a: Holder | null, b: Holder) =>
+    a !== null && (b.empty ? a.empty === true && a.mtime === b.mtime : !a.empty && a.token === b.token)
+
+  /**
+   * Removes a lock file whose holder was found dead, under a guard file named after that holder, created exclusively:
+   * of several takers only one holds it, and while it does, the dead holder's lock cannot change (nobody else may
+   * remove it, and nobody can create one in its place), so the lock is read again and removed only when it still names
+   * that holder. A guard whose own holder died is removed the same way, one level up. Returns whether to try creating
+   * the lock again; false while another taker is at it.
+   */
+  function breakDead(file: string, held: Holder, depth = 0): boolean {
+    if (depth > 3) return false
+    const id = held.empty ? `empty-${Math.floor(held.mtime ?? 0)}` : String(held.token).replace(/[^A-Za-z0-9]/g, "")
+    const guard = `${file}.${id}.takeover`
+    const token = randomBytes(16).toString("hex")
+    let fd: number | undefined
     try {
-      renameSync(lockFile, moved)
-    } catch {
-      return true
-    }
-    const got = readHolder(moved)
-    if (got && (held.empty ? got.empty : got.token === held.token)) {
-      rmSync(moved, { force: true })
-      return true
+      fd = openSync(guard, "wx", 0o600)
+      writeSync(fd, JSON.stringify({ pid: process.pid, host: host(), token, startedAt: nowS() }))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false
+      const other = readHolder(guard)
+      return other !== null && dead(other) && breakDead(guard, other, depth + 1) && breakDead(file, held, depth)
+    } finally {
+      if (fd !== undefined) closeSync(fd)
     }
     try {
-      // A link, not a rename: a newer lock already in its place wins.
-      linkSync(moved, lockFile)
-    } catch {}
-    rmSync(moved, { force: true })
-    return false
+      if (same(readHolder(file), held)) rmSync(file, { force: true })
+      return true
+    } finally {
+      // Only a taker that found this one dead removes its guard otherwise, and this one is alive.
+      if (readHolder(guard)?.token === token) rmSync(guard, { force: true })
+    }
   }
 
   const mine = (token: string) => readHolder(lockFile)?.token === token
