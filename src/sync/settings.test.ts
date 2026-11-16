@@ -65,7 +65,7 @@ describe("resolveSettings", () => {
   })
 
   it("reports addresses that are not usable, without their values", () => {
-    const env = home({ t3Url: "http://192.168.1.5:3773" })
+    const env = home({ t3Url: "http://203.0.113.5:3773" })
     const resolved = resolveSettings({
       platform: "linux",
       env: { ...env, ADIUTOR_URL: "http://adiutor.example.com/app" },
@@ -74,7 +74,7 @@ describe("resolveSettings", () => {
     expect(resolved.url).toBeUndefined()
     expect(resolved.t3Url).toBeUndefined()
     expect(resolved.problems).toHaveLength(2)
-    expect(resolved.problems.join(" ")).not.toContain("192.168")
+    expect(resolved.problems.join(" ")).not.toContain("203.0.113")
   })
 
   it("reads the tray's pause, and drops one that ended", () => {
