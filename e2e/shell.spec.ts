@@ -264,7 +264,10 @@ test("the sync card opens Settings, Status, or Agent access while the sync is di
   await page.goto("/")
   const card = page.locator(".ui-status-card")
   await expect(card).toContainText(he.shell.syncCard)
-  // No sync is connected to the verification stack: the card says so (connect.spec.ts connects one and ends it).
+  // No sync is connected to the verification stack: the card says so (connect.spec.ts connects one and ends it). Read
+  // it once the overview's read arrived: the card shows one of its states.
+  const states = [he.shell.syncDisconnected, he.sync.last, he.sync.never]
+  await expect(card).toContainText(new RegExp(states.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")))
   const disconnected = (await card.textContent())?.includes(he.shell.syncDisconnected) ?? false
   await card.click()
   await expect(page).toHaveURL(disconnected ? /\/settings\/agents$/ : /\/settings\/status$/)
