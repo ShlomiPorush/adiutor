@@ -377,7 +377,7 @@ export const settings = pgTable(
     privateDomains: text("private_domains").array().notNull().default(sql`'{}'::text[]`),
     /**
      * Whether agents may connect. Off for a new installation; the installation that existed before it is on (a
-     * data migration). Not in the API or the UI yet: the agent access release reads and edits it.
+     * data migration). Read and edited through /api/v1/agents/settings (oauth/), not the general settings API.
      */
     agentsEnabled: boolean("agents_enabled").notNull().default(SETTINGS_DEFAULTS.agentsEnabled),
     /** A connection ends after this many days without a real API or MCP call. Not in the API or the UI yet. */
@@ -608,7 +608,7 @@ export const authPasskey = pgTable(
 )
 
 // --- Agent connections (oidc-provider, the authorization server for agents) ---
-// Nothing reads or writes these tables yet: the agent access release mounts the authorization server on them.
+// Read and written only by oauth/, the authorization server index.ts mounts on them.
 
 /**
  * One row per approval: two agents, even of the same program, never share one. `name` is the agent's own word for

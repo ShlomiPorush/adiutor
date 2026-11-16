@@ -114,8 +114,8 @@ const PENDING_LOCK_KEY = 0x61647471
 
 /**
  * Agent access by approval: the authorization server for the configured public URL, the connection records, every way a
- * connection ends, the per-call token check, the owner's approval, the identity-change hooks and the sweep. Built only
- * where `createApp` is given it (`agentOAuth`); until the agent access release, production does not build it.
+ * connection ends, the per-call token check, the owner's approval, the identity-change hooks and the sweep. Built by
+ * index.ts (mounted through `createApp`'s `agentOAuth`) and by the recovery command (cli.ts, for its identity hooks).
  */
 export async function createAgentAccess(options: AgentAccessOptions) {
   const { ctx } = options

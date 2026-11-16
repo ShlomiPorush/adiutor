@@ -38,8 +38,8 @@ export type SettingsPatch = {
 export type SettingsEnv = { overrides: EnvOverrides; cipher: SettingsCipher }
 
 /**
- * The agent settings: in the row, not yet in the API, the UI or the audit. The agent access release shows and edits
- * them; until then they stay out of every answer and audit row, so nothing changes for the owner.
+ * The agent settings: in the row, but out of the general settings API and its audit rows. Agent access shows and edits
+ * them through /api/v1/agents/settings (oauth/routes.ts), with an audit row of its own.
  */
 function withoutAgentSettings(row: SettingsRow) {
   const { agentsEnabled: _enabled, agentIdleDays: _idle, ...rest } = row

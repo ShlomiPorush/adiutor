@@ -233,7 +233,7 @@ describe("the idle length in Settings", () => {
   })
 })
 
-describe("the agent settings before the agent access release", () => {
+describe("the agent settings in the general settings API", () => {
   it("stay in the row only: not answered, not changed by a save and not audited", async () => {
     await build()
     const hidden = ["agentsEnabled", "agentIdleDays"]

@@ -38,8 +38,8 @@ export type AppDeps = {
   web?: { root: string }
   /**
    * Agent access by approval (oauth/): the authorization server's addresses, the protected resource documents, the
-   * approval API and the owner's agent connections. Mounted only when given (it needs `core`); index.ts does not pass
-   * it until the agent access release, so nothing of it is reachable in production before then.
+   * approval API and the owner's agent connections. Mounted only when given (it needs `core`); index.ts always passes
+   * it, and only tests build an app without it.
    */
   agentOAuth?: AgentOAuthMount
 }
@@ -107,7 +107,7 @@ export function createApp(deps: AppDeps) {
   const app = new Hono()
 
   // Agent access by approval: agents' requests go through the agent channel's policy core (agents/channel.ts), before
-  // any other route of the app. Without it (production until the agent access release) nothing here changes.
+  // any other route of the app. Without it (an app only tests build) /api/v1 and /mcp still take agent keys.
   const agents =
     deps.core && deps.agentOAuth
       ? createAgentChannel({

@@ -29,8 +29,8 @@ import {
 
 /*
  * The agent channel of /api/v1 and the limits and audit it shares with /mcp (the agent-access standard, "The REST
- * channel"). Built only where createApp is given `agentOAuth`; without it /api/v1 and /mcp answer as before (agent keys
- * and the owner's browser session). A request to /api/v1 that carries an Authorization header is an agent's: it goes to
+ * channel"). Built where createApp is given `agentOAuth`, which index.ts always passes; an app built without it (tests
+ * only) answers /api/v1 and /mcp with agent keys and the owner's browser session. A request to /api/v1 that carries an Authorization header is an agent's: it goes to
  * an agent router of its own, built from the open map alone, with the owner's cookie and any key header removed. There
  * the token is checked first (401); a slot is taken (429 busy); then the route and area (403) and the policy revision
  * and declared kind (409), each refusal recorded in the slot. Anything the agent router has no route for is closed.
