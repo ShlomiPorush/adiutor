@@ -116,21 +116,22 @@ const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
 
 const shutdown = (signal: string) => {
   log.info("shutting down", { signal })
-  void telegram
+  // The server stops taking requests at once, while Telegram stops: an agent call still open then writes its audit row
+  // by its deadline, within the container's stop grace period (docker-compose.yml).
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()))
+  const stopped = telegram
     .stop()
     .catch((error: unknown) => log.error("telegram did not stop cleanly", errorFacts(error)))
-    .finally(() => {
-      // The agent calls still running write their audit rows before the pools close.
-      server.close(() => {
-        void agentOAuth
-          .drain()
-          .catch((error: unknown) => log.error("agent calls did not finish cleanly", errorFacts(error)))
-          .finally(() => {
-            access.stop()
-            void Promise.all([database.close(), storeDatabase.close()]).then(() => process.exit(0))
-          })
-      })
-    })
+  void Promise.all([closed, stopped]).then(() =>
+    // The agent calls still running write their audit rows before the pools close.
+    agentOAuth
+      .drain()
+      .catch((error: unknown) => log.error("agent calls did not finish cleanly", errorFacts(error)))
+      .finally(() => {
+        access.stop()
+        void Promise.all([database.close(), storeDatabase.close()]).then(() => process.exit(0))
+      }),
+  )
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"))
 process.on("SIGINT", () => shutdown("SIGINT"))
