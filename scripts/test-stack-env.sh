@@ -141,6 +141,7 @@ no_value_written() {
   lacking "$WORK/broken.env" newline
   before="$(cat "$WORK/broken.env")"
   (
+    # shellcheck disable=SC2317 # called by add_missing_stack_key
     random_hex() { :; }
     add_missing_stack_key "$WORK/broken.env" ADIUTOR_SETTINGS_KEYS
   ) >/dev/null 2>&1 && return 1
