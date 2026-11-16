@@ -665,6 +665,8 @@
       "proposal_accept": "accepted a stage proposal",
       "proposal_reject": "rejected a stage proposal",
       "security_update": "updated security data",
+      "sync_request_create": "asked for a sync",
+      "sync_request_cancel": "cancelled a sync request",
       "suppression_create": "suppressed",
       "suppression_delete": "removed a suppression",
       "settings_update": "changed settings",
@@ -732,7 +734,8 @@
       "account": "The account",
       "api_key": "An agent key",
       "device_code": "An agent approval",
-      "agent_connection": "An agent connection"
+      "agent_connection": "An agent connection",
+      "sync_request": "A sync request"
     },
     "source": {
       "ui": "Board",
@@ -1302,7 +1305,7 @@
       },
       "sync": {
         "name": "Sync",
-        "hint": "Send the sync's snapshots of T3 threads and security checks."
+        "hint": "Send the sync's snapshots of T3 threads and security checks, and take the syncs you ask for here."
       }
     },
     "never": "Agents can never delete items, projects or notes, change a project's stage, or manage agents.",

@@ -232,18 +232,23 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             .from(itemThreads)
             .where(eq(itemThreads.threadId, thread.threadId))
             .for("update")
+          const snooze = snoozeOf(thread)
           const fields = {
             t3ProjectId: thread.t3ProjectId,
             title: title || null,
             lastStatus: thread.status,
             settled: thread.settled,
             lastActivityAt: thread.updatedAt,
+            ...snooze,
           }
           if (link) {
-            // An older snapshot applied after a newer one: the stored state is newer (equal: nothing new).
-            if (link.lastActivityAt && thread.updatedAt.getTime() <= link.lastActivityAt.getTime()) return
-            if (!linkChanged(link, fields)) return
-            const [after] = await tx.update(itemThreads).set(fields).where(eq(itemThreads.id, link.id)).returning()
+            // An older snapshot applied after a newer one: the stored state is newer. At the same activity time only
+            // the snooze can be new (T3 need not move a thread's time when it is snoozed, or when a snooze ends).
+            const stored = link.lastActivityAt?.getTime()
+            if (stored !== undefined && thread.updatedAt.getTime() < stored) return
+            const next = stored === thread.updatedAt.getTime() ? snooze : fields
+            if (!linkChanged(link, next)) return
+            const [after] = await tx.update(itemThreads).set(next).where(eq(itemThreads.id, link.id)).returning()
             await writeAudit(ctx, tx, SYNC, {
               action: "thread.update",
               entityType: "item",
@@ -332,14 +337,21 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
   })
 }
 
+/** A thread's snooze as the link keeps it: an older sync sends none (not snoozed); no time without a snooze. */
+function snoozeOf(thread: { snoozed?: boolean; snoozedUntil?: Date | null }) {
+  const snoozed = thread.snoozed === true
+  return { snoozed, snoozedUntil: snoozed ? (thread.snoozedUntil ?? null) : null }
+}
+
+/** Whether any field given in `next` differs from the stored link. */
 function linkChanged(link: ThreadLinkRow, next: Partial<ThreadLinkRow>): boolean {
-  return (
-    link.t3ProjectId !== next.t3ProjectId ||
-    link.title !== next.title ||
-    link.lastStatus !== next.lastStatus ||
-    link.settled !== next.settled ||
-    link.lastActivityAt?.getTime() !== next.lastActivityAt?.getTime()
-  )
+  const time = (value: Date | null | undefined) => value?.getTime() ?? null
+  return Object.entries(next).some(([key, value]) => {
+    const stored = link[key as keyof ThreadLinkRow]
+    return value instanceof Date || stored instanceof Date
+      ? time(stored as Date | null) !== time(value as Date | null)
+      : stored !== value
+  })
 }
 
 /**
@@ -386,6 +398,7 @@ async function foldChildLink(
             lastStatus: root.status,
             settled: root.settled,
             lastActivityAt: root.updatedAt,
+            ...snoozeOf(root),
           }),
         })
         .where(eq(itemThreads.id, child.id))

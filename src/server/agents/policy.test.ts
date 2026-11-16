@@ -158,6 +158,8 @@ describe("the closed route table", () => {
       "PATCH /api/v1/notes/{id}": "act",
       "POST /api/v1/sync/t3": "act",
       "POST /api/v1/sync/security": "act",
+      // The check-in claims a waiting request: it changes state.
+      "POST /api/v1/sync/checkin": "act",
     }
     expect(Object.fromEntries(OPEN.map((r) => [`${r.method} ${r.path}`, r.kind]))).toEqual(decided)
     for (const r of OPEN.filter((x) => x.area !== null)) expect(AREAS[r.area as AgentArea].kinds).toContain(r.kind)
@@ -235,7 +237,13 @@ describe("the endpoints listing", () => {
     expect(all.count).toBe(OPEN.length)
     const sync = listing([...AGENT_AREAS], "sync")
     expect(sync.endpoints.map((e) => e.path).sort()).toEqual(
-      ["/api/v1/agent/access", "/api/v1/agent/endpoints", "/api/v1/sync/security", "/api/v1/sync/t3"].sort(),
+      [
+        "/api/v1/agent/access",
+        "/api/v1/agent/endpoints",
+        "/api/v1/sync/checkin",
+        "/api/v1/sync/security",
+        "/api/v1/sync/t3",
+      ].sort(),
     )
     expect(listing(["read"], "write").endpoints.every((e) => e.area === "any")).toBe(true)
     for (const e of all.endpoints) expect(e.path).not.toContain(":")

@@ -9,6 +9,7 @@ import {
   securityFamilySchema,
   severitySchema,
   stageSchema,
+  syncPartResultSchema,
 } from "./enums.ts"
 
 // Request bodies of the HTTP API (docs/api.md) and the MCP tools. The UI, the Telegram bot and the sync
@@ -180,6 +181,9 @@ export const t3SnapshotBody = z.object({
         settledAt: isoDate.nullable().optional(),
         parentThreadId: externalId.nullable().optional(),
         updatedAt: isoDate,
+        /** Snoozed in T3, until snoozedUntil when T3 gives a time (D-T6). Absent from an older sync: not snoozed. */
+        snoozed: z.boolean().optional(),
+        snoozedUntil: isoDate.nullable().optional(),
       }),
     )
     .max(20_000),
@@ -208,6 +212,29 @@ export const securitySnapshotBody = z.object({
       }),
     )
     .max(2_000),
+})
+
+/** One request's result: what each part of the run that served it came to. */
+export const syncRequestResultSchema = z.object({ t3: syncPartResultSchema, security: syncPartResultSchema })
+
+/**
+ * The check-in of the sync on the owner's computer, every minute (docs/api.md, "Sync requests"): its state, the run
+ * going (a request it claimed, one of its own, or none) and the requests it finished since its last answered check-in.
+ */
+export const syncCheckinBody = z.object({
+  /** The tray app's version: digits, letters, dots, plus and minus. */
+  version: z.string().regex(/^[0-9A-Za-z.+-]{1,50}$/, "a version"),
+  paused: z.boolean(),
+  /** Null while paused: until resumed. */
+  pausedUntil: isoDate.nullable(),
+  nextRunAt: isoDate.nullable(),
+  running: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("request"), requestId: id }),
+      z.object({ kind: z.literal("local"), startedAt: isoDate }),
+    ])
+    .nullable(),
+  finished: z.array(z.object({ requestId: id, result: syncRequestResultSchema })).max(20),
 })
 
 export const createNoteBody = z.object({
@@ -261,3 +288,4 @@ export type UpdateItemBody = z.infer<typeof updateItemBody>
 export type StartThreadBody = z.infer<typeof startThreadBody>
 export type T3Snapshot = z.infer<typeof t3SnapshotBody>
 export type SecuritySnapshot = z.infer<typeof securitySnapshotBody>
+export type SyncCheckin = z.infer<typeof syncCheckinBody>

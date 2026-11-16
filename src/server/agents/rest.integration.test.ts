@@ -4,10 +4,11 @@ import { connect as netConnect } from "node:net"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
-import { agentConnections, audit, items, notes } from "../db/schema.ts"
+import { agentConnections, audit, items, notes, syncRequests } from "../db/schema.ts"
 import { createItem } from "../services/items.ts"
 import { createNote } from "../services/notes.ts"
 import { createProject } from "../services/projects.ts"
+import { requestSync } from "../services/sync-requests.ts"
 import { createAgentKey } from "../testing/app.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { holdRow as holdRowIn } from "../testing/locks.ts"
@@ -690,6 +691,7 @@ describe("refusals of every act route are 4xx when nothing changed", () => {
       ["POST", "/api/v1/sync/t3", { collectedAt: future, projects: [], threads: [] }, 400, "validation_failed"],
       ["POST", "/api/v1/sync/security", {}, 400, "validation_failed"],
       ["POST", "/api/v1/sync/security", { collectedAt: future, repos: [] }, 400, "validation_failed"],
+      ["POST", "/api/v1/sync/checkin", {}, 400, "validation_failed"],
     ]
     for (const [method, path, body, status, code] of cases) {
       const r = await call(token, method, path, { json: body })
@@ -1004,6 +1006,54 @@ describe("a sync push whose run failed", () => {
     })
     expect([whole.status, whole.body.data.outcome]).toEqual([200, "succeeded"])
     expect((await calls(id)).map((e) => (e.after as { outcome: string }).outcome)).toEqual(["error", "error", "ok"])
+  })
+})
+
+describe("the sync's check-in", () => {
+  const report = (extra: Record<string, unknown> = {}) => ({
+    version: "0.3.0",
+    paused: false,
+    pausedUntil: null,
+    nextRunAt: null,
+    running: null,
+    finished: [],
+    ...extra,
+  })
+
+  it("claims for the connection that checks in, counts as use, and is audited as ok on every call", async () => {
+    await t.ctx.db.delete(syncRequests)
+    const { token, id } = await connect(["sync"], "Sync check-in")
+    const { request } = await requestSync(t.ctx, owner)
+    const first = await call(token, "POST", "/api/v1/sync/checkin", { json: report() })
+    expect([first.status, first.body.data.claim?.requestId]).toEqual([200, request.id])
+    const [claimed] = await t.ctx.db.select().from(syncRequests).where(eq(syncRequests.id, request.id))
+    expect(claimed?.claimedBy).toBe(id)
+    // The same report again (its answer lost): the same claim.
+    const again = await call(token, "POST", "/api/v1/sync/checkin", { json: report() })
+    expect(again.body.data.claim?.requestId).toBe(request.id)
+    const done = report({ finished: [{ requestId: request.id, result: { t3: "partial", security: "accepted" } }] })
+    const finished = await call(token, "POST", "/api/v1/sync/checkin", { json: done })
+    expect([finished.status, finished.body.data.claim]).toEqual([200, null])
+    const rows = await calls(id)
+    expect(rows).toHaveLength(3)
+    for (const row of rows)
+      expect(row.after).toMatchObject({ route: "POST /api/v1/sync/checkin", kind: "act", outcome: "ok", status: 200 })
+    const [connection] = await t.ctx.db.select().from(agentConnections).where(eq(agentConnections.id, id))
+    expect(connection?.lastUsedAt).toBeInstanceOf(Date)
+  })
+
+  it("is the sync area's alone, and refused from the owner's browser and with a bad report", async () => {
+    const other = await connect(["read", "write"])
+    expect((await call(other.token, "POST", "/api/v1/sync/checkin", { json: report() })).status).toBe(403)
+    const { token } = await connect(["sync"], "Sync bad report")
+    const bad = await call(token, "POST", "/api/v1/sync/checkin", { json: report({ running: { kind: "other" } }) })
+    expect([bad.status, bad.body.error]).toEqual([400, "validation_failed"])
+    // The owner's browser reaches the route itself, which takes only a connection's check-in.
+    const browser = await browserCall(h.owner, "/api/v1/sync/checkin", {
+      json: report(),
+      headers: { "x-adiutor-request": "1" },
+    })
+    expect([browser.status, browser.body.error?.code]).toEqual([403, "forbidden"])
   })
 })
 

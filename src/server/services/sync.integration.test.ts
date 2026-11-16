@@ -758,3 +758,44 @@ describe("applySecuritySnapshot", () => {
     expect(last?.after).toMatchObject({ openIssuesCount: 4, openIssuesAsOf: stored?.openIssuesAsOf?.toISOString() })
   })
 })
+
+describe("snoozed threads (D-T6)", () => {
+  const linkOf = async (threadId: string) =>
+    (await t.ctx.db.select().from(itemThreads).where(eq(itemThreads.threadId, threadId)))[0]
+
+  it("keeps a thread's snooze on its link, and an older sync's thread without one as not snoozed", async () => {
+    const until = new Date(t.ctx.clock().getTime() + DAY)
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { snoozed: true, snoozedUntil: until }), thread("b")]))
+    expect(await linkOf("a")).toMatchObject({ snoozed: true, snoozedUntil: until })
+    expect(await linkOf("b")).toMatchObject({ snoozed: false, snoozedUntil: null })
+    // No time without a snooze.
+    await applyT3Snapshot(
+      t.ctx,
+      snapshot([thread("c", { snoozed: false, snoozedUntil: until, updatedAt: ago(HOUR / 2) })]),
+    )
+    expect(await linkOf("c")).toMatchObject({ snoozed: false, snoozedUntil: null })
+  })
+
+  it("takes a snooze that started or ended without a new activity time, and never one from an older snapshot", async () => {
+    const at = ago(HOUR)
+    const until = new Date(t.ctx.clock().getTime() + DAY)
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at })]))
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: true, snoozedUntil: until })]))
+    expect(await linkOf("a")).toMatchObject({ snoozed: true, snoozedUntil: until, lastActivityAt: at })
+    // At the same time only the snooze is taken: the other fields stay as the first snapshot of that time left them.
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, status: "waiting", snoozed: false })]))
+    expect(await linkOf("a")).toMatchObject({ snoozed: false, snoozedUntil: null, lastStatus: "running" })
+    // An older snapshot changes nothing.
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: ago(2 * HOUR), snoozed: true })]))
+    expect((await linkOf("a"))?.snoozed).toBe(false)
+  })
+
+  it("changes no status decision", async () => {
+    const item = await linkedItem("in_progress", ["a"])
+    await applyT3Snapshot(
+      t.ctx,
+      snapshot([thread("a", { status: "waiting", snoozed: true, snoozedUntil: new Date(Date.now() + DAY) })]),
+    )
+    expect((await getItemRow(t.ctx.db, item.id)).status).toBe("waiting_on_you")
+  })
+})
