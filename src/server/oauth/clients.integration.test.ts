@@ -15,8 +15,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { sendCheckin } from "../../sync/checkin.ts"
 import { syncClient } from "../../sync/oauth.ts"
 import { audit, authDeviceCode, items } from "../db/schema.ts"
+import { requestSync } from "../services/sync-requests.ts"
 import { createAgentKey } from "../testing/app.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
 import {
@@ -202,6 +204,13 @@ describe("the sync's connection", () => {
     const payload = { collectedAt: t.ctx.clock().toISOString(), projects: [], threads: [], failedProjects: [] }
     const pushed = await client.push("/api/v1/sync/t3", payload)
     expect(pushed).toMatchObject({ kind: "answer", status: 200 })
+
+    // The check-in through the engine's own sender: the server's listing holds it, and a waiting request is claimed
+    // for this connection, then answered again to the same report.
+    const { request } = await requestSync(t.ctx, ownerBy)
+    const report = { version: "0.3.0", paused: false, pausedUntil: null, nextRunAt: null, running: null, finished: [] }
+    expect(await sendCheckin(client, report)).toEqual({ ok: true, claim: request.id })
+    expect(await sendCheckin(client, report)).toEqual({ ok: true, claim: request.id })
 
     const listed = await browserCall(h.owner, "/api/v1/agents/connections")
     const mine = listed.body.connections.find((c: Loose) => c.name === "Laptop sync")
