@@ -48,9 +48,30 @@ export const NEVER = [
 export const HEADERS = {
   policy: "x-adiutor-policy",
   kind: "x-adiutor-kind",
-  /** The skill's version (PR 5: the `update_skill` notice of `access`); read by nothing yet. */
+  /** The skill's version: the one Adiutor filled in when it served the skill, or r<SKILL_REVISION> (updateSkillNotice). */
   skill: "x-adiutor-skill",
 } as const
+
+/**
+ * The skill's revision this server expects of a copy that was not served (one from Git sends r<n>). Raise it together
+ * with SKILL_REVISION in the skill's three scripts when installed copies must change (distribution-and-versioning).
+ */
+export const SKILL_REVISION = 1
+
+/**
+ * The notice `access` adds as `update_skill` when the agent's skill is older than this Adiutor (the agent-access
+ * standard, distribution-and-versioning, "The version notice"): `sent` is the X-Adiutor-Skill header, `served` the
+ * version a served copy of this build sends (null without a skill). Never a block: the call works either way.
+ */
+export function updateSkillNotice(sent: string | undefined, served: string | null, issuer: string): string | null {
+  const revision = /^r(\d{1,6})$/.exec(sent ?? "")
+  if (revision) {
+    if (Number(revision[1]) >= SKILL_REVISION) return null
+    return "This skill is older than this Adiutor. Go on with your task, and tell the person in one line that the skill needs an update where it was installed from. Do not change its folder. The connection is kept."
+  }
+  if (served && sent === served) return null
+  return `A newer skill is available at ${issuer}/agents/skill/. Go on with your task, and tell the person in one line. Install it again from there only if an agent installed this copy from there (you know it, or the person confirms it). Otherwise do not change its folder. The connection is kept either way.`
+}
 
 export type Parameter = { name: string; in: "path" | "query" | "body"; required: boolean; description?: string }
 
@@ -96,7 +117,7 @@ export const OPEN: OpenRoute[] = [
     kind: "read",
     exempt: true,
     description: data(
-      "What this connection may do: whose account it acts for, its name, the areas granted and not granted, what agents never do in Adiutor, when the connection ends, and Adiutor's version. Call it first.",
+      "What this connection may do: whose account it acts for, its name, the areas granted and not granted, what agents never do in Adiutor, when the connection ends, Adiutor's version, and update_skill when this skill is older than Adiutor. Call it first.",
     ),
     parameters: [],
   },
@@ -403,6 +424,7 @@ export const CLOSED: Record<string, string> = {
   "ALL /oauth/*": OAUTH,
   "ALL /connect/code": OAUTH,
   "ALL /connect/code/*": OAUTH,
+  "GET /agents/skill/*": "the agent skill's files to install (oauth/skill.ts): public, no data and no secret, no token",
   "ALL /connect/approve/*": "approving an agent is for the owner's signed-in browser only",
   "GET /connect/approve/:uid/details": "approving an agent is for the owner's signed-in browser only",
   "POST /connect/approve/:uid/decision": "approving an agent is for the owner's signed-in browser only",

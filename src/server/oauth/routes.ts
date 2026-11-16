@@ -16,6 +16,7 @@ import { type AgentAccess, offeredAreas, type PendingRequest } from "./access.ts
 import { LOOPBACK_HOSTNAMES } from "./issuer.ts"
 import { Mutex, WindowLimit } from "./limits.ts"
 import { agentName, CLI_CLIENT_ID, PROVIDER_ROUTES, RESOURCE_AREAS, resourceUrls } from "./provider.ts"
+import { servedSkillVersion, skillRoutes } from "./skill.ts"
 import { openDeviceRequests, roomForClient, sha256 } from "./store.ts"
 
 type Bindings = { incoming: IncomingMessage; outgoing: ServerResponse }
@@ -94,7 +95,13 @@ function koaOrigin(incoming: IncomingMessage, proxy: boolean): string {
 export type AgentCaps = { clients: number; deviceRequests: number }
 export const AGENT_CAPS: AgentCaps = { clients: MAX_CLIENTS, deviceRequests: MAX_DEVICE_REQUESTS }
 
-export type AgentRouteDeps = AuthDeps & { access: AgentAccess; limits?: AgentLimits; caps?: AgentCaps }
+export type AgentRouteDeps = AuthDeps & {
+  access: AgentAccess
+  limits?: AgentLimits
+  caps?: AgentCaps
+  /** The agent skill's folder (skill/adiutor), served at /agents/skill/; without it the build serves no skill. */
+  skillDir?: string
+}
 
 /**
  * Agent access over HTTP: the protected resource documents (RFC 9728), the approval API of the consent page, the
@@ -170,6 +177,9 @@ export function agentRoutes(deps: AgentRouteDeps) {
   app.get("/.well-known/oauth-protected-resource", resourceMetadata("mcp"))
   app.get("/.well-known/oauth-protected-resource/mcp", resourceMetadata("mcp"))
   app.get("/.well-known/oauth-protected-resource/api/v1", resourceMetadata("rest"))
+
+  // --- The agent skill for agents that run commands (oauth/skill.ts) ---
+  app.route("/", skillRoutes(issuer, live, deps.skillDir))
 
   // --- The consent page's API, under the interaction's address so the library's cookie comes along (S11) ---
 
@@ -483,13 +493,17 @@ export function agentOAuthMount(
   caps?: AgentCaps,
   /** The agent channel's limits (agents/channel.ts); tests pass shorter ones. */
   channel?: ChannelLimits,
+  /** The agent skill's folder (skill/adiutor in the repository), served at /agents/skill/. */
+  skillDir?: string,
 ) {
   /** The agent channels createApp built on this mount (one per app). */
   const channels: AgentChannel[] = []
   return {
     access,
     channel,
-    routes: (deps: AuthDeps) => agentRoutes({ ...deps, access, limits, caps }),
+    /** The version a served copy of the skill sends in X-Adiutor-Skill (null without a skill), for `update_skill`. */
+    skillVersion: servedSkillVersion(skillDir),
+    routes: (deps: AuthDeps) => agentRoutes({ ...deps, access, limits, caps, skillDir }),
     /** createApp hands over the agent channel it built. */
     attach(built: AgentChannel) {
       channels.push(built)

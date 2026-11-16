@@ -1,104 +1,128 @@
 #!/usr/bin/env node
 /*
- * adiutor for agents: connect to Adiutor with a code the owner approves in the browser (Better Auth's device
- * authorization), then keep the owner's board current through Adiutor's /api/v1 routes.
+ * adiutor for agents: connect with a code a person approves (OAuth device flow, RFC 8628), then call Adiutor's REST API
+ * within what the person allowed.
  *
- * One of three versions with one contract: adiutor.mjs (Node 20+), adiutor.ps1 (Windows PowerShell 5.1 and PowerShell 7)
- * and adiutor.sh (POSIX sh and curl). Same commands, same one-line JSON answers and error codes, the same files and the
- * same lock, so they can run side by side on one computer. No secret ever appears in the output.
+ * One of three versions with one contract: adiutor.mjs (Node 20+), adiutor.ps1 (Windows PowerShell 5.1+ and
+ * PowerShell 7) and adiutor.sh (POSIX sh, curl and awk). Same commands, same JSON output and error codes, same files
+ * and the same lock, so they can run side by side on one computer. Tokens never appear in the output.
  *
- * The approved code gives a session token, which is a full owner session. It lives in memory only: the command turns
- * it into one agent key (api-key/create) and ends that session (revoke-session) at once, whatever happens in between.
- * Adiutor has no refresh token: the key is the connection until it ends or the owner disconnects it. What a lost answer
- * or a stopped run may have left on Adiutor (a session, a key) is written to the `left` record before the information
- * is lost, and reported with its Adiutor address until it ends or the owner says he cleaned up.
+ * The connection belongs to the computer user, not to the folder the skill is in: every agent install of this user
+ * shares it, it is kept in the user's profile (~/.adiutor), and the skill's folder is never written.
+ *
+ * The refresh token rotates on every use, and the server ends the connection when one is used twice. So every
+ * change to the connection's file and every request that spends a one-time secret runs under one lock, the access
+ * token is reused until a minute before it runs out, and a refresh whose answer was lost is retried once.
+ *
+ * The kind of a call (read or act) comes only from the server's own list of this connection's calls, kept per
+ * connection with the list's revision, which every call carries. Without a usable list nothing is sent. A call is
+ * sent again only after one of the three refusals the server makes before any route code runs, or, for a read,
+ * after a network failure. An act call whose answer is lost, or that the server failed, is outcome_unknown.
  */
 import { execFileSync } from "node:child_process"
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-const CLIENT_ID = "adiutor-connect"
-const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
-const DAYS_DEFAULT = 90
-const DAYS_MIN = 1
-const DAYS_MAX = 365
-const whole = (value, fallback) => (/^[1-9][0-9]*$/.test(String(value ?? "")) ? Number(value) : fallback)
-const WAIT_SECONDS = whole(process.env.ADIUTOR_WAIT_SECONDS, 90)
-// Test seams: the tests shorten the lock wait and the request timeout, and move the clock forward.
-const LOCK_WAIT_MS = whole(process.env.ADIUTOR_TEST_LOCK_WAIT_MS, 20_000)
-const TIMEOUT_MS = whole(process.env.ADIUTOR_TEST_TIMEOUT_MS, 15_000)
-const CLOCK_OFFSET = whole(process.env.ADIUTOR_TEST_CLOCK_OFFSET, 0)
-// Device codes and keys as Adiutor sends them; anything else is refused before it is stored.
-const SECRET = /^[A-Za-z0-9._~+/=-]{8,512}$/
-// Every value in a file: no quote, backslash or control character, so the shell version reads it too.
+/* ==== Product constants: set these for the product (see README.md). ==== */
+const PRODUCT = "Adiutor"
+const CMD = "adiutor"
+// Environment variables are this prefix plus URL, CREDENTIALS, AGENT_NAME, NO_NODE, WAIT_SECONDS, LOCK_WAIT_MS,
+// and Adiutor's AGENT_LABEL and SKILL_HOME.
+const ENV_PREFIX = "ADIUTOR_"
+// The credentials folder, in the user's home folder.
+const CREDENTIALS_FOLDER = ".adiutor"
+const CLIENT_ID = "adiutor-agent"
+const SCOPE = "read write"
+// The REST API as a resource (RFC 8707): the audience its access tokens are bound to.
+const RESOURCE = "/api/v1"
+// Every API call is under one of these prefixes, so the token goes only to the API.
+const PREFIXES = ["/api/v1/"]
+// A path template in the endpoints list: under PREFIXES, with {name} and {name:path} parts.
+const TEMPLATE = /^\/api\/v1\/[A-Za-z0-9._~{}:/-]*$/
+const ACCESS = "/api/v1/agent/access"
+const ENDPOINTS = "/api/v1/agent/endpoints"
+// The authorization server's device, token and revocation endpoints, after the address.
+const DEVICE_PATH = "/oauth/device"
+const TOKEN_PATH = "/oauth/token"
+const REVOKE_PATH = "/oauth/revoke"
+const SKILL_HEADER_NAME = "x-adiutor-skill"
+const POLICY_HEADER_NAME = "x-adiutor-policy"
+// The header that carries the kind (read or act) the client found for a call, with the policy revision.
+const KIND_HEADER_NAME = "x-adiutor-kind"
+const KINDS_MAGIC = "adiutor-kinds"
+// Filled in with the address when the server serves this file.
+const DEFAULT_URL = "__ADIUTOR_URL__"
+// Filled in with the skill's version when the server serves this file; access then says when a newer one is out.
+const SKILL_VERSION = "__ADIUTOR_SKILL_VERSION__"
+// A copy that was not served (installed from Git) sends r<SKILL_REVISION> instead; raise it with the server's copy.
+const SKILL_REVISION = 1
+/* ==== End of product constants. ==== */
+
+const env = (name) => process.env[`${ENV_PREFIX}${name}`]
+const SKILL_HEADER = SKILL_VERSION.startsWith("__") ? `r${SKILL_REVISION}` : SKILL_VERSION
+const WAIT_SECONDS = Number(env("WAIT_SECONDS")) || 90
+// A pending code is dropped locally only this long after its expiry: until then the server decides
+// (an approved code can be collected for a few minutes after it expires).
+const STALE_CODE_SECONDS = 600
+const LOCK_WAIT_MS = Number(env("LOCK_WAIT_MS")) || 20_000
+const OAUTH_TIMEOUT_MS = 15_000
+// The server answers an API call within 60 s (or says the outcome is unknown); tests shorten it.
+const API_TIMEOUT_MS = Number(env("TEST_API_TIMEOUT_MS")) || 75_000
+// RFC 8628: 5 seconds between polls unless the server says otherwise (tests shorten it).
+const POLL_SECONDS = Number(env("TEST_POLL_SECONDS")) || 5
+// A refresh is retried only once it cannot be in flight any more: twice the request timeout (tests shorten it).
+const REFRESH_GRACE = Number(env("TEST_REFRESH_GRACE") ?? 30)
+// Wait before the one retry of a call the server refused as busy (tests shorten it).
+const BUSY_WAIT_MS = Number(env("TEST_BUSY_WAIT_MS") ?? 2000)
+const KINDS_MAX_AGE = 3600
+const KINDS_FORMAT = "2"
+const SECRET = /^[A-Za-z0-9._~+/=-]{1,4096}$/
+// The policy revision the server gives with its list: a short token, safe in a header and in the kinds file.
+const REVISION = /^[A-Za-z0-9._-]{1,128}$/
+// Every value in a connection file: no quote, backslash or control character, so the shell version reads it too.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
 const PLAIN = /^[^"\\\u0000-\u001f\u007f]*$/
-const LABEL = /^[A-Za-z0-9 ._:-]{1,60}$/
-// The path part: lower-case letters, digits, slash and hyphen only, matched as typed, never decoded.
-const PATH_PART = /^[a-z0-9/-]+$/
-// RFC 3986's query characters, without the apostrophe (fetch would encode it) and with every % followed by two hex
-// digits. Passed on as typed.
-const QUERY = /^(?:[A-Za-z0-9\-._~!$&()*+,;=:@/?]|%[0-9A-Fa-f]{2})*$/
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-// The only calls the command makes on /api/v1: one per MCP tool.
-const ROUTES = [
-  ["POST", "threads/start"],
-  ["GET", "items"],
-  ["GET", "items/{id}"],
-  ["POST", "items"],
-  ["PATCH", "items/{id}"],
-  ["POST", "items/{id}/comments"],
-  ["POST", "capture"],
-  ["POST", "items/{id}/threads"],
-  ["GET", "projects"],
-  ["PATCH", "projects/{id}"],
-  ["POST", "projects/{id}/stage-proposals"],
-  ["GET", "notes"],
-  ["GET", "notes/{id}"],
-  ["POST", "notes"],
-  ["PATCH", "notes/{id}"],
-].map(([method, template]) => [method, new RegExp(`^${template.replace("{id}", UUID)}$`)])
-
-const CONNECTION_FIELDS = [
+// The only address shape kept (the server serves its own address in this shape too): no character an agent's
+// shell would treat specially can reach the commands this one prints.
+const SAFE_ORIGIN = /^https?:\/\/(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(:[1-9][0-9]{0,4})?$/
+// The file that keeps the address of the last working connection, so a copy of the skill without one finds it.
+const ADDRESS = "address"
+// The name an agent gives itself in Adiutor's activity log (--as, or ADIUTOR_AGENT_LABEL), sent as X-Adiutor-Agent.
+const AGENT_LABEL = /^[A-Za-z0-9 ._:-]{1,60}$/
+const AGENT_HEADER_NAME = "x-adiutor-agent"
+// Files of the adiutor command before this one, which kept an agent key: its connection, its approval, what it left
+// on Adiutor, its lock and its temporary files. Never read for a secret, never changed: reported by status and connect.
+const OLD_FILES = /^(?:connection|pending|left|lock|lock\.break|(?:connection|pending|left)\.[0-9a-f]{12}\.tmp)$/
+const OLD_MESSAGE =
+  "The adiutor command used before this one left these files in the folder of the connection. This command never uses or changes them (it reads only the Adiutor address in the old connection); they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed."
+const PATH_CHARS = /^[A-Za-z0-9._~!$&'()*+,;=:@/?%-]+$/
+const UNKNOWN_OUTCOME = "The action may have run. Read its state before trying again."
+const NOT_LISTED = `This connection has no such call. Take the path from \`${CMD} endpoints\`, with its {...} parts filled in; never guess it.`
+const UNAVAILABLE = `The list of allowed calls could not be read from ${PRODUCT}, so nothing was sent. Try again in a moment.`
+const POLICY_CHANGED = `${PRODUCT}'s calls changed, or this path names a different call than the list says. Nothing ran. Run \`${CMD} endpoints\` and take the path from it.`
+const FIELDS = [
   ["v", "n"],
-  ["origin", "s"],
-  ["key", "s"],
-  ["keyName", "s"],
-  ["expiresAt", "s"],
-]
-const PENDING_FIELDS = [
-  ["v", "n"],
-  ["attemptId", "s"],
-  ["origin", "s"],
+  ["issuer", "s"],
+  ["label", "s"],
+  ["generation", "s"],
+  ["refreshToken", "s"],
+  ["accessToken", "s"],
+  ["accessExpiresAt", "n"],
+  ["scope", "s"],
+  ["refreshStartedAt", "n"],
+  ["refreshRetried", "n"],
   ["deviceCode", "s"],
   ["userCode", "s"],
   ["link", "s"],
+  ["deviceExpiresAt", "n"],
   ["interval", "n"],
   ["nextPollAt", "n"],
-  ["codeExpiresAt", "n"],
-  ["days", "n"],
-  ["keyName", "s"],
-  ["phase", "s"],
-  ["pollInFlight", "n"],
-  ["uncertain", "n"],
-  ["sessionOpen", "n"],
-  ["keySaved", "n"],
-  ["noKey", "n"],
+  ["toRevoke", "s"],
 ]
-const LEFT_FIELDS = [
-  ["origin", "s"],
-  ["keyName", "s"],
-  ["expiresAt", "s"],
-  ["reason", "s"],
-  ["at", "s"],
-]
-// Reasons whose key end date came from Adiutor: the entry drops by itself once that date has passed.
-const DATED = new Set(["replaced", "disconnected", "not_saved"])
-const REASONS = new Set([...DATED, "key_unknown", "session_unknown"])
-
 const win = process.platform === "win32"
+let agentLabel = ""
 
 class Fail extends Error {
   constructor(code, message, extra = {}) {
@@ -108,362 +132,401 @@ class Fail extends Error {
   }
 }
 
-/** The attempt changed under this run (another command, after a wrongly broken lock): answer from the new state. */
-class Changed extends Error {}
-
-const now = () => Math.floor(Date.now() / 1000) + CLOCK_OFFSET
-const iso = (seconds) => new Date(seconds * 1000).toISOString()
+const now = () => Math.floor(Date.now() / 1000)
 const hex = (n) => randomBytes(n).toString("hex")
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const print = (value) => process.stdout.write(`${JSON.stringify(value)}\n`)
-const str = (value) => (typeof value === "string" ? value : "")
 const host = () => (win ? process.env.COMPUTERNAME || os.hostname() : os.hostname())
-const sameHost = (name) => String(name).toLowerCase() === host().toLowerCase()
-const rm = (target) => {
-  try {
-    fs.rmSync(target, { recursive: true, force: true })
-  } catch {}
-}
+const sameHost = (h) => String(h).toLowerCase() === host().toLowerCase()
 // Windows tools by their full path: in Git Bash, for one, whoami is a different program.
 const system32 = (exe) => path.join(process.env.SystemRoot || "C:\\Windows", "System32", exe)
-const groupedCode = (code) => (code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code)
-const waitCommand = (origin) => `adiutor connect --wait --url ${origin}`
-const SESSION_TEXT =
-  "Adiutor may have opened a 'adiutor connect (agent approval)' session that was not ended: end it on the Account page."
 
-const HELP = `adiutor: keep the owner's Adiutor board current, after the owner approves this computer user once.
+const HELP = `${CMD}: use ${PRODUCT} after a person approves it.
 
-  connect [--url <address>] [--days <1-365>] [--replace]
-                          Ask to connect; prints a link and a code to show the owner.
-  connect --wait --url <address>
-                          Wait up to ${WAIT_SECONDS} s for the approval; run again while it answers still_waiting.
-  status [--clear-left]   Whether this computer user is connected, and what the command left on Adiutor (no secrets).
-  disconnect              Forget the connection on this computer (the key stays on Adiutor until it ends).
-  get '<path>'            GET /api/v1/<path>, for example: get 'items?q=login'
-  post '<path>' --json '<body>' | --json-file <file>
-  patch '<path>' --json '<body>' | --json-file <file>
-                          --as <label> (or ADIUTOR_AGENT_LABEL) names the agent in Adiutor's activity log.`
+  connect [--replace]   Ask to connect; prints a link and a code to show the person.
+  connect --wait        Wait up to ${WAIT_SECONDS} s for the approval; run again while it answers still_waiting.
+  access                What this connection may read or act on, and until when.
+  endpoints [area]      The calls this connection may make, with their kind (read or act).
+  get <path>            GET a path, for example: get '/api/v1/items?q=report'
+  post|patch <path> [--json <body> | --json-file <file>]
+  status                Whether this computer user is connected (no secrets).
+  disconnect            End this computer user's connection.
 
-/* Arguments */
+  --url <address>       The ${PRODUCT} address (or ${ENV_PREFIX}URL). Kept once connected, for the commands after.
+  --as <name>           Names the agent in ${PRODUCT}'s activity log (or ${ENV_PREFIX}AGENT_LABEL), for example: --as claude`
 
-function parseArgs(args) {
+async function main() {
+  const args = process.argv.slice(2)
+  const command = args.shift() ?? "help"
   const opts = { positional: [] }
-  const value = (name) => {
-    if (!args.length) throw new Fail("bad_option", `${name} needs a value.`)
-    return args.shift()
-  }
   while (args.length) {
     const a = args.shift()
-    if (a === "--url") opts.url = value(a)
-    else if (a === "--days") opts.days = value(a)
-    else if (a === "--json") opts.json = value(a)
-    else if (a === "--json-file") opts.jsonFile = value(a)
-    else if (a === "--as") opts.as = value(a)
+    if (a === "--url") opts.url = args.shift()
     else if (a === "--replace") opts.replace = true
     else if (a === "--wait") opts.wait = true
-    else if (a === "--clear-left") opts.clearLeft = true
-    else if (a.startsWith("--")) throw new Fail("bad_option", `Unknown option ${a}. Run: adiutor help`)
+    else if (a === "--json") opts.json = args.shift()
+    else if (a === "--json-file") opts.jsonFile = args.shift()
+    else if (a === "--as") opts.as = args.shift()
     else opts.positional.push(a)
   }
-  return opts
+  if (command === "help" || command === "--help" || command === "-h") {
+    process.stdout.write(`${HELP}\n`)
+    return
+  }
+  if (Number(process.versions.node.split(".")[0]) < 20)
+    throw new Fail("node_too_old", `Node 20 or later is needed. Use ${CMD}.ps1 or ${CMD}.sh instead.`)
+  const ctx = context(opts.url)
+  agentLabel = opts.as ?? env("AGENT_LABEL") ?? ""
+  if (agentLabel && !AGENT_LABEL.test(agentLabel))
+    throw new Fail("bad_label", "The agent label takes 1 to 60 letters, digits, spaces and . _ : - only.")
+  const first = opts.positional[0]
+  if (command === "status") return status(ctx)
+  if (command === "connect") return opts.wait ? waitForApproval(ctx) : connect(ctx, Boolean(opts.replace))
+  if (command === "access") return api(ctx, "GET", ACCESS)
+  if (command === "endpoints") {
+    if (first !== undefined && !/^[a-z_]{1,40}$/.test(first))
+      throw new Fail("bad_path", "Give an area name, for example: read")
+    return api(ctx, "GET", first === undefined ? ENDPOINTS : `${ENDPOINTS}?area=${first}`)
+  }
+  if (command === "get") return api(ctx, "GET", first)
+  if (command === "post" || command === "patch") return api(ctx, command.toUpperCase(), first, body(opts, "{}"))
+  if (command === "disconnect") return disconnect(ctx)
+  throw new Fail("unknown_command", `Unknown command "${command}". Run: ${CMD} help`)
 }
 
-function daysOf(raw) {
-  if (raw === undefined) return DAYS_DEFAULT
-  const days = /^[0-9]{1,3}$/.test(raw) ? Number(raw) : 0
-  if (days < DAYS_MIN || days > DAYS_MAX) throw new Fail("bad_option", `--days takes ${DAYS_MIN} to ${DAYS_MAX}.`)
-  return days
+function body(opts, fallback) {
+  if (opts.jsonFile !== undefined) {
+    try {
+      return fs.readFileSync(opts.jsonFile, "utf8")
+    } catch {
+      throw new Fail("bad_body", `Cannot read ${opts.jsonFile}.`)
+    }
+  }
+  return opts.json ?? fallback
 }
 
-/** The canonical origin of an address: https, or http on this computer only; no path, query or credentials. */
-function originOf(raw) {
+/**
+ * The server's address and where its connection is kept: one per address for this computer user.
+ * The address: --url, the environment, the one filled in when the server served this file, or the one kept on
+ * connecting.
+ */
+function context(urlOption) {
+  const dir = credentialsDir()
+  let raw = urlOption || env("URL") || (DEFAULT_URL.startsWith("__") ? "" : DEFAULT_URL)
+  const kept = raw ? "" : keptAddress(dir)
+  // A folder the old command used keeps its address in its connection: a copy from Git finds Adiutor again.
+  const old = raw || kept ? "" : oldAddress(dir)
+  raw ||= kept || old
+  if (!raw)
+    throw new Fail("no_url", `No ${PRODUCT} address. Ask the person for it, then run: ${CMD} connect --url "<address>"`)
+  let issuer
+  try {
+    // A kept address is one line: anything else in the file makes it invalid, not a different address.
+    if (kept && /\s/.test(kept)) throw new Fail("insecure_url", "")
+    issuer = issuerOf(raw)
+  } catch (e) {
+    if (!kept && !old) throw e
+    if (!kept)
+      throw new Fail(
+        "no_url",
+        `No ${PRODUCT} address. Ask the person for it, then run: ${CMD} connect --url "<address>"`,
+      )
+    throw new Fail("no_url", `The address kept in ${path.join(dir, ADDRESS)} is not valid. Pass --url "<address>".`)
+  }
+  const key = createHash("sha256").update(issuer).digest("hex").slice(0, 32)
+  return {
+    issuer,
+    dir,
+    file: path.join(dir, `${key}.json`),
+    lock: path.join(dir, `${key}.lock`),
+    kinds: path.join(dir, `${key}.kinds`),
+    label: label(),
+  }
+}
+
+/** The origin of an address: https (http only on this computer), with nothing after it. */
+function issuerOf(raw) {
   let url
   try {
-    url = new URL(String(raw))
+    url = new URL(raw)
   } catch {
-    throw new Fail(
-      "no_url",
-      "That is not an address. Ask the owner for Adiutor's address, for example https://adiutor.example.com.",
-    )
+    throw new Fail("insecure_url", `"${raw}" is not an address.`)
   }
-  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1"
+  const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
-    throw new Fail("no_url", "Adiutor's address must start with https:// (http only for localhost or 127.0.0.1).")
+    throw new Fail("insecure_url", "The address must start with https:// (http only for this computer).")
   if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== ""))
-    throw new Fail("no_url", "Give Adiutor's address alone, for example https://adiutor.example.com.")
+    throw new Fail("insecure_url", "Use the address alone, for example https://adiutor.example.com.")
+  if (!SAFE_ORIGIN.test(url.origin))
+    throw new Fail("insecure_url", "Use the address alone, for example https://adiutor.example.com.")
   return url.origin
 }
 
-/* Where the connection is kept: one folder per computer user, shared by every agent install of that user. */
-
-function context() {
-  const base = win ? process.env.USERPROFILE || os.homedir() : os.homedir()
-  const dir = path.resolve(process.env.ADIUTOR_SKILL_HOME || path.join(base, ".adiutor"))
-  return {
-    dir,
-    connection: path.join(dir, "connection"),
-    pending: path.join(dir, "pending"),
-    left: path.join(dir, "left"),
-    lock: path.join(dir, "lock"),
-    breaker: path.join(dir, "lock.break"),
-  }
-}
-
-const insecure = (message) => new Fail("insecure_credentials", message)
-
-let homeChecked = false
-
-/** Checks the folder (and creates it when asked): a plain folder of this user that only this user can open. */
-function secureHome(ctx, create) {
-  let st
+function keptAddress(dir) {
+  const file = path.join(dir, ADDRESS)
   try {
-    st = fs.lstatSync(ctx.dir)
+    checkFile(file)
+    return fs.readFileSync(file, "utf8").replace(/[\r\n]+$/, "")
   } catch (e) {
-    if (e.code !== "ENOENT") throw new Fail("cannot_save", `Cannot read ${ctx.dir}. Allow this agent to use it.`)
-    if (!create) return false
-    try {
-      fs.mkdirSync(ctx.dir, { recursive: true, mode: 0o700 })
-      if (win) restrictWindows(ctx.dir, true)
-    } catch (e2) {
-      if (e2 instanceof Fail) throw e2
-      throw new Fail("cannot_save", `Cannot create ${ctx.dir}. Allow this agent to write there.`)
-    }
-    st = fs.lstatSync(ctx.dir)
+    if (e.code === "ENOENT") return ""
+    throw e
   }
-  if (st.isSymbolicLink() || !st.isDirectory()) throw insecure(`${ctx.dir} must be a plain folder, not a link.`)
-  if (win) {
-    if (!homeChecked) {
-      const present = [ctx.connection, ctx.pending, ctx.left].filter((f) => fs.existsSync(f))
-      for (const f of present) plainFile(f)
-      checkWindowsAcl(ctx, [ctx.dir, ...present])
-    }
-  } else {
-    if (st.uid !== process.getuid())
-      throw insecure(
-        `${ctx.dir} belongs to another user. Remove it, or set ADIUTOR_SKILL_HOME to a folder of your own.`,
-      )
-    if ((st.mode & 0o777) !== 0o700) throw insecure(`Others can open ${ctx.dir}. Run: chmod 700 '${ctx.dir}'`)
-  }
-  homeChecked = true
-  return true
 }
 
-function plainFile(file) {
-  const st = fs.lstatSync(file)
-  if (st.isSymbolicLink() || !st.isFile()) throw insecure(`${file} must be a plain file, not a link.`)
-  return st
-}
-
-/** Checks one file before it is read; null when it does not exist. */
-function checkFile(ctx, file) {
-  let st
+/** The address in the old command's connection file, or "": only its origin is read, never its key. */
+function oldAddress(dir) {
+  const file = path.join(dir, "connection")
   try {
-    st = plainFile(file)
+    checkFile(file)
+    const origin = JSON.parse(fs.readFileSync(file, "utf8"))?.origin
+    return typeof origin === "string" ? origin : ""
+  } catch (e) {
+    if (e instanceof Fail) throw e
+    return ""
+  }
+}
+
+/** The old command's files in the folder, reported as they are: { old_client: { files, message } }, or nothing. */
+function oldReport(ctx) {
+  let files = []
+  try {
+    files = fs
+      .readdirSync(ctx.dir)
+      .filter((f) => OLD_FILES.test(f))
+      .sort()
+  } catch {}
+  return files.length ? { old_client: { files: files.map((f) => path.join(ctx.dir, f)), message: OLD_MESSAGE } } : {}
+}
+
+/** Keeps the address of a working connection, in one step. Only a convenience: a failure changes nothing. */
+function keepAddress(ctx) {
+  try {
+    if (keptAddress(ctx.dir) === ctx.issuer) return
+    writePrivate(ctx, path.join(ctx.dir, ADDRESS), `${ctx.issuer}\n`)
+  } catch {
+    // The connection works without it: --url, the environment or the served address still find it.
+  }
+}
+
+/** What the connection is called on the approval page and in the product's list of connections. */
+function label() {
+  if (env("AGENT_NAME")) return env("AGENT_NAME").slice(0, 60)
+  return `Agents on ${host()}`.slice(0, 60)
+}
+
+function credentialsDir() {
+  // ADIUTOR_SKILL_HOME was the old command's name for the folder.
+  const override = env("CREDENTIALS") || env("SKILL_HOME")
+  if (win) {
+    const home = path.resolve(process.env.USERPROFILE || os.homedir())
+    const dir = path.resolve(override || path.join(home, CREDENTIALS_FOLDER))
+    const lowerHome = home.toLowerCase()
+    const lower = dir.toLowerCase()
+    if (lower !== lowerHome && !lower.startsWith(`${lowerHome}\\`))
+      throw new Fail("insecure_credentials", `Keep the ${CMD} folder inside your user profile (${home}), not ${dir}.`)
+    return dir
+  }
+  return path.resolve(override || path.join(os.homedir(), CREDENTIALS_FOLDER))
+}
+
+let secured = false
+/** Creates the folder if needed and checks that only this user can read it; never loosens or fixes it silently. */
+function secureDir(dir) {
+  if (secured) return
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  } catch {
+    throw new Fail("cannot_save", `Cannot create ${dir}. Allow this agent to write there.`)
+  }
+  const st = fs.lstatSync(dir)
+  if (st.isSymbolicLink() || !st.isDirectory())
+    throw new Fail("insecure_credentials", `${dir} must be a plain folder, not a link.`)
+  if (win) {
+    // Mode bits are no ACL on Windows: the folder is limited to this user, SYSTEM and Administrators.
+    try {
+      const sid = userSid()
+      execFileSync(
+        system32("icacls.exe"),
+        [
+          dir,
+          "/inheritance:r",
+          "/grant:r",
+          `*${sid}:(OI)(CI)F`,
+          "*S-1-5-18:(OI)(CI)F",
+          "*S-1-5-32-544:(OI)(CI)F",
+          "/Q",
+        ],
+        { stdio: "ignore" },
+      )
+      // The owner may always change an ACL, so the folder and its files must be this user's. (Only now: taking
+      // ownership needs the full control just granted. No /C, which would hide a failure behind exit code 0.)
+      icacls([dir, "/setowner", `*${sid}`, "/T", "/Q"])
+      // Granting does not remove other entries: read the folder's and its files' ACLs back and allow no one else.
+      assertOnlyUser(dir, sid)
+    } catch (e) {
+      if (e instanceof Fail) throw e
+      throw new Fail("insecure_credentials", `Could not limit ${dir} to your user (icacls failed).`)
+    }
+  } else assertOwnMode(dir, st)
+  secured = true
+}
+
+let checked = false
+/**
+ * Before the connection's file is read: the folder must still be one only this user can open, since a restore or a
+ * change of its permissions may have opened it since secureDir set it up. Checks only, never changes it; once per
+ * command.
+ */
+function checkDir(dir) {
+  if (secured || checked) return
+  const st = fs.lstatSync(dir)
+  if (st.isSymbolicLink() || !st.isDirectory())
+    throw new Fail("insecure_credentials", `${dir} must be a plain folder, not a link.`)
+  if (win) {
+    try {
+      assertOnlyUser(dir, userSid())
+    } catch (e) {
+      if (e instanceof Fail) throw e
+      throw new Fail("insecure_credentials", `Could not check who can open ${dir} (icacls failed).`)
+    }
+  } else assertOwnMode(dir, st)
+  checked = true
+}
+
+function userSid() {
+  const sid = /"(S-1-[0-9-]+)"\s*$/.exec(
+    execFileSync(system32("whoami.exe"), ["/user", "/fo", "csv", "/nh"]).toString().trim(),
+  )
+  if (!sid) throw new Error("no SID")
+  return sid[1]
+}
+
+/** Reads the folder's and its files' ACLs back and allows no one but this user, SYSTEM and Administrators. */
+function assertOnlyUser(dir, sid) {
+  const saved = path.join(dir, `.acl-${hex(4)}`)
+  try {
+    icacls([dir, "/save", saved, "/T", "/Q"])
+    const other = othersAllowed(fs.readFileSync(saved).toString("utf16le"), sid)
+    if (other) throw new Fail("insecure_credentials", `Others can open ${dir} (${other}). Remove their access.`)
+  } finally {
+    fs.rmSync(saved, { force: true })
+  }
+}
+
+function assertOwnMode(dir, st) {
+  if (st.uid !== process.getuid())
+    throw new Fail("insecure_credentials", `${dir} belongs to another user. Use a folder of your own.`)
+  if (st.mode & 0o077) throw new Fail("insecure_credentials", `Others can open ${dir}. Run: chmod 700 '${dir}'`)
+}
+
+/** icacls over the folder and its files; tried again while other commands add or replace files in it. */
+function icacls(args) {
+  for (let i = 0; ; i++) {
+    try {
+      execFileSync(system32("icacls.exe"), args, { stdio: "ignore" })
+      return
+    } catch (e) {
+      if (i >= 4) throw e
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100 + Math.random() * 200)
+    }
+  }
+}
+
+/**
+ * What in saved ACLs (icacls /save: one SDDL line per object) lets anyone but this user, SYSTEM and Administrators
+ * in. Anything but plain allow and deny entries (conditional or callback ones) counts too: refused, not guessed.
+ */
+function othersAllowed(saved, userSid) {
+  const allowed = new Set([userSid, "SY", "BA", "S-1-5-18", "S-1-5-32-544"])
+  // SDDL writes the built-in Administrator account (RID 500) as LA, so a user who is that account shows as LA.
+  if (/^S-1-5-21-[0-9-]+-500$/.test(userSid)) allowed.add("LA")
+  for (const line of saved.split(/\r?\n/)) {
+    const at = line.indexOf("D:")
+    if (at < 0) continue
+    const dacl = line.slice(at + 2).split(/S:/)[0]
+    let depth = 0
+    let ace = ""
+    for (const ch of dacl) {
+      if (ch === "(") {
+        depth++
+        if (depth > 1) return "a conditional entry"
+        ace = ""
+      } else if (ch === ")") {
+        depth--
+        const [type, , , , , sid] = ace.split(";")
+        if (!["A", "D", "OA", "OD"].includes(type)) return `an entry of type ${type}`
+        if ((type === "A" || type === "OA") && !allowed.has(sid)) return sid
+      } else if (depth === 1) ace += ch
+    }
+  }
+  return null
+}
+
+function checkFile(file) {
+  const st = fs.lstatSync(file)
+  if (st.isSymbolicLink() || !st.isFile()) throw new Fail("insecure_credentials", `${file} must be a plain file.`)
+  if (!win) {
+    if (st.uid !== process.getuid()) throw new Fail("insecure_credentials", `${file} belongs to another user.`)
+    if (st.mode & 0o077) throw new Fail("insecure_credentials", `Others can read ${file}. Run: chmod 600 '${file}'`)
+  }
+}
+
+function readRecord(ctx) {
+  let text
+  try {
+    checkFile(ctx.file)
+    checkDir(ctx.dir)
+    text = fs.readFileSync(ctx.file, "utf8")
   } catch (e) {
     if (e.code === "ENOENT") return null
     throw e
   }
-  if (win) checkWindowsAcl(ctx, [file])
-  else {
-    if (st.uid !== process.getuid()) throw insecure(`${file} belongs to another user. Remove it and connect again.`)
-    if ((st.mode & 0o777) !== 0o600) throw insecure(`Others can read ${file}. Run: chmod 600 '${file}'`)
-  }
-  return st
-}
-
-function readPrivate(ctx, file) {
-  if (!secureHome(ctx, false)) return null
-  if (!checkFile(ctx, file)) return null
-  try {
-    return fs.readFileSync(file, "utf8")
-  } catch (e) {
-    if (e.code === "ENOENT") return null
-    throw new Fail("cannot_save", `Cannot read ${file}. Allow this agent to use ${ctx.dir}.`)
-  }
-}
-
-/* Windows: access lists instead of mode bits. One entry, for the current user; inheritance removed. */
-
-let userSid = ""
-const aclChecked = new Set()
-
-function currentSid() {
-  if (userSid) return userSid
-  try {
-    const out = execFileSync(system32("whoami.exe"), ["/user", "/fo", "csv", "/nh"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true,
-    })
-    const sid = /"(S-1-[0-9-]+)"\s*$/.exec(out.trim())?.[1]
-    if (sid) userSid = sid
-  } catch {}
-  if (!userSid) throw insecure("Could not tell the current Windows user (whoami failed).")
-  return userSid
-}
-
-function powershell(script) {
-  const exe = path.join(
-    process.env.SystemRoot || "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  )
-  return execFileSync(
-    exe,
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    {
-      encoding: "utf8",
-      env: windowsPowerShellEnv(),
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 60_000,
-      windowsHide: true,
-    },
-  )
-}
-
-/**
- * The environment without PSModulePath: started from PowerShell 7, Windows PowerShell would inherit its module path and
- * fail to load the module Get-Acl is in. Without it, Windows PowerShell builds its own.
- */
-function windowsPowerShellEnv() {
-  const env = { ...process.env }
-  for (const k of Object.keys(env)) if (k.toLowerCase() === "psmodulepath") delete env[k]
-  return env
-}
-
-const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`
-
-/** icacls: inheritance removed and full control for the current user only. */
-function restrictWindows(target, folder) {
-  const sid = currentSid()
-  try {
-    execFileSync(
-      system32("icacls.exe"),
-      [target, "/inheritance:r", "/grant:r", `*${sid}:${folder ? "(OI)(CI)F" : "F"}`, "/Q"],
-      { stdio: "ignore", windowsHide: true },
-    )
-  } catch {
-    throw insecure(`Could not limit ${target} to your user (icacls failed).`)
-  }
-}
-
-/**
- * What in an SDDL string lets anyone but this user in, or null. Owner: this user (the built-in Administrator shows as
- * LA). Access list: protected (no inheritance) and exactly one allow entry with full control for this user, with
- * (OI)(CI) on the folder and no flags on a file.
- */
-function aclProblem(sddl, sid, folder, checkOwner) {
-  const me = (who) => who === sid || (who === "LA" && /^S-1-5-21-[0-9-]+-500$/.test(sid))
-  if (checkOwner) {
-    const owner = /^O:(.*?)(?=G:|D:|S:|$)/.exec(sddl)?.[1] ?? ""
-    if (!me(owner)) return `its owner is ${owner || "unknown"}`
-  }
-  const dacl = /D:([A-Z]*)((?:\([^()]*\))*)(?=S:|$)/.exec(sddl.slice(sddl.indexOf("D:")))
-  if (!dacl || sddl.indexOf("D:") < 0) return "its access list cannot be read"
-  if (!dacl[1].includes("P")) return "it inherits access from its parent folder"
-  const aces = dacl[2].slice(1, -1).split(")(").filter(Boolean)
-  if (aces.length !== 1) return `it has ${aces.length} access entries`
-  const [type, flags, rights, , , who] = aces[0].split(";")
-  if (type !== "A" || !me(who)) return `${who || "someone"} has access`
-  if (!["FA", "0x1f01ff"].includes(rights)) return "your user lacks full control"
-  if (flags !== (folder ? "OICI" : "")) return "its access entry has unexpected flags"
-  return null
-}
-
-/** Reads back the owner and access list of folders and files (once per process), and refuses any other. */
-function checkWindowsAcl(ctx, targets) {
-  const todo = targets.filter((t) => !aclChecked.has(t.toLowerCase()))
-  if (!todo.length) return
-  let lines
-  try {
-    lines = powershell(
-      [
-        "$ErrorActionPreference = 'Stop'",
-        "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-        ...todo.map((t) => `(Get-Acl -LiteralPath ${psQuote(t)}).Sddl`),
-      ].join("\n"),
-    )
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean)
-  } catch {
-    throw insecure(`Could not read who may open ${ctx.dir} (Get-Acl failed).`)
-  }
-  if (lines.length !== todo.length + 1) throw insecure(`Could not read who may open ${ctx.dir}.`)
-  userSid = lines[0]
-  todo.forEach((target, i) => {
-    const folder = target === ctx.dir
-    const problem = aclProblem(lines[i + 1], userSid, folder, true)
-    if (problem)
-      throw insecure(
-        `Others may open ${target} (${problem}). Run: icacls "${target}" /inheritance:r /grant:r "%USERNAME%:${folder ? "(OI)(CI)F" : "F"}"`,
-      )
-    aclChecked.add(target.toLowerCase())
-  })
-}
-
-/** A temporary file's access list, read back with icacls /save (one SDDL line per object). */
-function readBackWindows(ctx, file) {
-  const saved = path.join(ctx.dir, `.acl-${hex(4)}`)
-  try {
-    execFileSync(system32("icacls.exe"), [file, "/save", saved, "/Q"], { stdio: "ignore", windowsHide: true })
-    const text = fs
-      .readFileSync(saved)
-      .toString("utf16le")
-      .replace(/^\uFEFF/, "")
-    const sddl = text.split(/\r?\n/)[1] ?? ""
-    const problem = aclProblem(sddl, currentSid(), false, false)
-    if (problem) throw insecure(`Could not make ${file} private (${problem}).`)
-  } catch (e) {
-    if (e instanceof Fail) throw e
-    throw insecure(`Could not read back who may open ${file} (icacls failed).`)
-  } finally {
-    rm(saved)
-  }
-}
-
-/* Files: one line of JSON each (`left`: one per entry), written in one step through a private temporary file. */
-
-function serialize(fields, rec) {
-  const parts = fields.map(([k, type]) => {
-    if (type === "n") return `"${k}":${Math.max(0, Math.floor(Number(rec[k]) || 0))}`
-    const value = String(rec[k] ?? "")
-    if (!PLAIN.test(value)) throw new Fail("unexpected_answer", `Adiutor sent a value that cannot be stored (${k}).`)
-    return `"${k}":"${value}"`
-  })
-  return `{${parts.join(",")}}`
-}
-
-function parseLine(fields, line, file) {
   let parsed
   try {
-    parsed = JSON.parse(line)
+    parsed = JSON.parse(text)
   } catch {
-    parsed = null
+    throw new Fail("insecure_credentials", `${ctx.file} is damaged. Delete it and connect again.`)
   }
-  if (!parsed || typeof parsed !== "object") throw insecure(`${file} is damaged. Delete it and connect again.`)
   const rec = {}
-  for (const [k, type] of fields) rec[k] = type === "n" ? Number(parsed[k]) || 0 : str(parsed[k])
+  for (const [k, type] of FIELDS) rec[k] = type === "n" ? Number(parsed[k]) || 0 : String(parsed[k] ?? "")
   return rec
 }
 
-function hook(point) {
-  const at = process.env[`ADIUTOR_TEST_HOLD_${point.toUpperCase().replace(/-/g, "_")}`]
-  if (!at) return
-  fs.writeFileSync(`${at}.reached`, String(process.pid))
-  for (let i = 0; i < 1200 && !fs.existsSync(`${at}.go`); i++) pause(50)
+function emptyRecord(ctx) {
+  const rec = {}
+  for (const [k, type] of FIELDS) rec[k] = type === "n" ? 0 : ""
+  return { ...rec, v: 1, issuer: ctx.issuer, label: ctx.label }
 }
+
+function serialize(rec) {
+  const parts = FIELDS.map(([k, type]) => {
+    if (type === "n") return `"${k}":${Math.max(0, Math.floor(Number(rec[k]) || 0))}`
+    const value = String(rec[k] ?? "")
+    if (!PLAIN.test(value)) throw new Fail("unexpected_answer", `${PRODUCT} sent a value that cannot be stored (${k}).`)
+    return `"${k}":"${value}"`
+  })
+  return `{${parts.join(",")}}\n`
+}
+
+/** Writes a file of the connection in one step: a private temp file, synced, renamed over the old one. */
+function writePrivate(ctx, file, text) {
+  secureDir(ctx.dir)
+  const tmp = `${file}.${hex(6)}.tmp`
+  let fd
+  try {
+    fd = fs.openSync(tmp, "wx", 0o600)
+    fs.writeSync(fd, text)
+    fs.fsyncSync(fd)
+  } catch (e) {
+    if (e instanceof Fail) throw e
+    throw new Fail("cannot_save", `Cannot write in ${ctx.dir}. Allow this agent to write there.`)
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
+  renameOver(tmp, file)
+}
+
+const writeRecord = (ctx, rec) => writePrivate(ctx, ctx.file, serialize(rec))
 
 function renameOver(from, to) {
   // On Windows an open handle (an antivirus scan) can refuse the rename for a moment.
@@ -474,404 +537,149 @@ function renameOver(from, to) {
       return
     } catch (e) {
       if (!win || !["EPERM", "EBUSY", "EACCES"].includes(e.code) || Date.now() > until) {
-        rm(from)
-        throw new Fail("cannot_save", `Cannot replace ${to}. Allow this agent to write in its folder.`)
+        fs.rmSync(from, { force: true })
+        throw new Fail("cannot_save", `Cannot replace ${to}.`)
       }
-      pause(100)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
     }
   }
 }
 
-/**
- * Writes a file in one step: a temporary file made private before anything is written, then renamed over. Only by the
- * holder of the lock. A temporary file a stopped command left behind is removed by the next holder (`sweep`).
- */
-function writePrivate(ctx, file, text) {
-  assertMine(ctx)
-  secureHome(ctx, true)
-  const tmp = `${file}.${hex(6)}.tmp`
-  let fd
+function removeRecord(ctx) {
+  fs.rmSync(ctx.file, { force: true })
+  fs.rmSync(ctx.kinds, { force: true })
+}
+
+/* The lock: a file created exclusively, naming its holder. Never taken from a live holder, however old. */
+
+function readLock(file) {
   try {
-    try {
-      fd = fs.openSync(tmp, "wx", 0o600)
-      if (win) {
-        fs.closeSync(fd)
-        fd = undefined
-        restrictWindows(tmp, false)
-        readBackWindows(ctx, tmp)
-        fd = fs.openSync(tmp, "r+")
-      } else {
-        const st = fs.fstatSync(fd)
-        if (st.uid !== process.getuid() || (st.mode & 0o777) !== 0o600)
-          throw insecure(`Could not make ${tmp} private before writing it.`)
-      }
-      hook("temp")
-      fs.writeSync(fd, text)
-      fs.fsyncSync(fd)
-      hook("written")
-    } finally {
-      if (fd !== undefined) fs.closeSync(fd)
-    }
+    const text = fs.readFileSync(file, "utf8")
+    const held = JSON.parse(text)
+    return typeof held?.token === "string" ? held : { empty: true, mtime: fs.statSync(file).mtimeMs }
   } catch (e) {
-    rm(tmp)
-    if (e instanceof Fail) throw e
-    throw new Fail("cannot_save", `Cannot write in ${ctx.dir}. Allow this agent to write there.`)
-  }
-  renameOver(tmp, file)
-  if (win) aclChecked.add(file.toLowerCase())
-}
-
-function removeFile(ctx, file) {
-  assertMine(ctx)
-  try {
-    fs.rmSync(file, { force: true })
-  } catch {
-    throw new Fail("cannot_save", `Cannot remove ${file}. Allow this agent to write in ${ctx.dir}.`)
-  }
-}
-
-function readConnection(ctx) {
-  const text = readPrivate(ctx, ctx.connection)
-  if (text === null) return null
-  const rec = parseLine(CONNECTION_FIELDS, text.trim(), ctx.connection)
-  if (!rec.origin || !rec.key || !rec.keyName)
-    throw insecure(`${ctx.connection} is damaged. Delete it and connect again.`)
-  return rec
-}
-
-function readPending(ctx) {
-  const text = readPrivate(ctx, ctx.pending)
-  if (text === null) return null
-  const rec = parseLine(PENDING_FIELDS, text.trim(), ctx.pending)
-  if (!rec.attemptId || !rec.origin || !rec.deviceCode || !["polling", "creating_key"].includes(rec.phase))
-    throw insecure(`${ctx.pending} is damaged. Delete it and connect again.`)
-  return rec
-}
-
-const writeConnection = (ctx, rec) => writePrivate(ctx, ctx.connection, `${serialize(CONNECTION_FIELDS, rec)}\n`)
-
-/** Two records (or two absent ones) are the same, field by field as they are stored. */
-const same = (fields, a, b) => (a && b ? serialize(fields, a) === serialize(fields, b) : !a && !b)
-
-/**
- * Writes the attempt only while the file is exactly as this command last read or wrote it (`seen`; null: no attempt).
- * Answers what was written, the `seen` of the next save.
- */
-function savePending(ctx, rec, seen) {
-  if (!same(PENDING_FIELDS, readPending(ctx), seen)) throw new Changed()
-  writePrivate(ctx, ctx.pending, `${serialize(PENDING_FIELDS, rec)}\n`)
-  return { ...rec }
-}
-
-/* The left record: what the command left on Adiutor, with non-secret fields only. */
-
-function readLeft(ctx) {
-  const text = readPrivate(ctx, ctx.left)
-  if (text === null) return []
-  return text
-    .split(/\r?\n/)
-    .filter((l) => l.trim())
-    .map((l) => parseLine(LEFT_FIELDS, l, ctx.left))
-    .filter((e) => REASONS.has(e.reason))
-}
-
-/** Entries still worth reporting: a dated entry drops by itself once its key has ended. */
-const current = (entries) =>
-  entries.filter((e) => !DATED.has(e.reason) || !e.expiresAt || Date.parse(e.expiresAt) > now() * 1000)
-
-function writeLeft(ctx, entries) {
-  if (!entries.length) return removeFile(ctx, ctx.left)
-  writePrivate(ctx, ctx.left, entries.map((e) => `${serialize(LEFT_FIELDS, e)}\n`).join(""))
-}
-
-/** Adds entries (under the lock), before the change that would lose what they record. */
-function addLeft(ctx, additions) {
-  const entries = current(readLeft(ctx))
-  for (const add of additions) {
-    const entry = { at: iso(now()), expiresAt: "", ...add }
-    const same = (e) => e.origin === entry.origin && e.keyName === entry.keyName
-    if (entries.some((e) => same(e) && e.reason === entry.reason)) continue
-    // A key whose name and end date are known says more than "a key may exist".
-    if (entry.reason === "key_unknown" && entries.some((e) => same(e) && DATED.has(e.reason))) continue
-    if (DATED.has(entry.reason)) {
-      for (let i = entries.length - 1; i >= 0; i--)
-        if (same(entries[i]) && entries[i].reason === "key_unknown") entries.splice(i, 1)
-    }
-    entries.push(entry)
-  }
-  writeLeft(ctx, entries)
-}
-
-function leftMessage(e) {
-  if (e.reason === "session_unknown") return `On ${e.origin}: ${SESSION_TEXT}`
-  if (e.reason === "key_unknown")
-    return `On ${e.origin}: a key named "${e.keyName}" may exist; delete it in Settings, Agent access.`
-  const why = { replaced: "was replaced", disconnected: "was disconnected", not_saved: "could not be saved" }[e.reason]
-  return `On ${e.origin}: the key "${e.keyName}" ${why} but still works until ${e.expiresAt || "it ends"}; delete it in Settings, Agent access, if nothing uses it.`
-}
-
-/**
- * An entry for the key of the current connection: a run stopped after recording that key as replaced or disconnected
- * and before changing the connection. It is never reported, and the next holder of the lock removes it.
- */
-const stale = (e, conn) =>
-  Boolean(conn) &&
-  ["replaced", "disconnected"].includes(e.reason) &&
-  e.origin === conn.origin &&
-  e.keyName === conn.keyName
-
-function pruneLeft(ctx, conn) {
-  const entries = readLeft(ctx)
-  if (entries.some((e) => stale(e, conn)))
-    writeLeft(
-      ctx,
-      entries.filter((e) => !stale(e, conn)),
-    )
-}
-
-const publicLeft = (entries, conn) =>
-  current(entries)
-    .filter((e) => !stale(e, conn))
-    .map((e) => ({ ...e, message: leftMessage(e) }))
-
-function leftNow(ctx) {
-  try {
-    let conn = null
+    if (e.code === "ENOENT") return null
     try {
-      conn = readConnection(ctx)
-    } catch {}
-    return publicLeft(readLeft(ctx), conn)
-  } catch {
-    return []
-  }
-}
-
-/*
- * The lock: a file created exclusively, naming its holder (token, host, process id and that process's start time).
- * Taken from a holder only when it is certainly gone, under `lock.break` (breakLock), and released by its token only.
- */
-
-/** The start time of a process as the system reports it, the same in every version; "" when it cannot be read. */
-function startOf(pid) {
-  try {
-    if (process.platform === "linux") {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8")
-      // Field 22; the fields after the command name, which may hold spaces, start with field 3.
-      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? ""
+      return { empty: true, mtime: fs.statSync(file).mtimeMs }
+    } catch {
+      return null
     }
-    if (win)
-      return powershell(
-        `(Get-Process -Id ${Number(pid)} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`,
-      ).trim()
-    return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim()
-  } catch {
-    return ""
   }
 }
 
-function running(pid) {
+function alive(pid) {
   try {
     process.kill(pid, 0)
     return true
   } catch (e) {
-    return e.code === "EPERM"
+    // The holder runs as this user, so a process of another user with that number means the holder is gone.
+    return win && e.code === "EPERM"
   }
 }
 
-/** The holder a lock file names: null when there is none, { unreadable } when it cannot be told. */
-function readLock(file) {
-  let text
-  try {
-    if (fs.lstatSync(file).isSymbolicLink()) throw insecure(`${file} must be a plain file, not a link.`)
-    text = fs.readFileSync(file, "utf8")
-  } catch (e) {
-    if (e instanceof Fail) throw e
-    return e.code === "ENOENT" ? null : { unreadable: true }
-  }
-  try {
-    const owner = JSON.parse(text)
-    if (typeof owner?.token === "string" && owner.token) return owner
-  } catch {}
-  return { unreadable: true }
+async function hook(point) {
+  const at = env(`TEST_HOLD_${point.toUpperCase().replace(/-/g, "_")}`)
+  if (!at) return
+  fs.writeFileSync(`${at}.reached`, String(process.pid))
+  for (let i = 0; i < 1200 && !fs.existsSync(`${at}.go`); i++) await sleep(50)
 }
 
-/** free, alive, gone (certainly: same host, and the process ended or its id now runs another start), or unknown. */
-function verdict(held) {
-  if (!held) return "free"
-  if (held.unreadable || !sameHost(held.host)) return "unknown"
-  const pid = Number(held.pid)
-  if (!Number.isInteger(pid) || pid <= 0) return "unknown"
-  if (!running(pid)) return "gone"
-  if (!held.start) return "unknown"
-  const start = startOf(pid)
-  if (!start) return "unknown"
-  return start === String(held.start) ? "alive" : "gone"
-}
-
-/** The token of the lock this command holds; "" when it holds none. */
-let heldToken = ""
-
-async function acquire(ctx) {
-  secureHome(ctx, true)
+/** Takes the lock; `own` is a lock this process held before, which counts as taken if it is back in place. */
+async function acquire(ctx, own) {
+  secureDir(ctx.dir)
   const token = hex(16)
-  const owner = `${JSON.stringify({ token, host: host(), pid: process.pid, start: startOf(process.pid) })}\n`
+  const line = JSON.stringify({ pid: process.pid, host: host(), token, startedAt: now() })
   const deadline = Date.now() + LOCK_WAIT_MS
   for (;;) {
     let fd
     try {
       fd = fs.openSync(ctx.lock, "wx", 0o600)
-    } catch (e) {
-      // Windows refuses for a moment to create a file whose name is still being deleted (a lock just released).
-      const deleting = win && ["EPERM", "EACCES"].includes(e.code) && Date.now() < deadline
-      if (e.code !== "EEXIST" && !deleting)
-        throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}. Allow this agent to write there.`)
-    }
-    if (fd !== undefined) {
-      try {
-        fs.writeSync(fd, owner)
-      } catch {
-        fs.closeSync(fd)
-        rm(ctx.lock)
-        throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}. Allow this agent to write there.`)
-      }
+      fs.writeSync(fd, line)
       fs.closeSync(fd)
-      heldToken = token
-      hook("locked")
-      return
-    }
-    const holder = readLock(ctx.lock)
-    const state = verdict(holder)
-    if (Date.now() > deadline) throw lockBusy(ctx, state)
-    if (state === "gone") {
-      hook("break-observed")
-      if (breakLock(ctx, holder.token, owner)) continue
-    }
-    await sleep(state === "free" ? 50 : 100 + Math.random() * 200)
-  }
-}
-
-/** The answer once the wait for the lock ended; `state` is the verdict on the lock as last read. */
-function lockBusy(ctx, state) {
-  const byHand =
-    "Nothing was sent. If no adiutor command runs on this computer, remove that file by hand and run the command again."
-  if (fs.existsSync(ctx.breaker) || isLink(ctx.breaker))
-    return new Fail(
-      "busy",
-      `Another adiutor command may be removing a lock, or it stopped while doing so and left ${ctx.breaker}. ${byHand}`,
-    )
-  if (state === "unknown")
-    return new Fail(
-      "busy",
-      `Another adiutor command may hold the lock ${ctx.lock}, and this command cannot tell whether it still runs. ${byHand}`,
-    )
-  if (state === "gone")
-    return new Fail(
-      "busy",
-      `The lock ${ctx.lock} was left by an adiutor command that has ended, and this command cannot remove it. ${byHand}`,
-    )
-  return new Fail("busy", "Another adiutor command is using the connection. Nothing was sent; run it again.")
-}
-
-const isLink = (file) => {
-  try {
-    return fs.lstatSync(file).isSymbolicLink()
-  } catch {
-    return false
-  }
-}
-
-/** Removes a file; true when it is gone (also when it was gone already), false when it could not be removed. */
-function unlinkGone(file) {
-  // On Windows an open handle (an antivirus scan) can refuse the delete for a moment.
-  for (let i = 0; ; i++) {
-    try {
-      fs.unlinkSync(file)
-      return true
+      await hook("locked")
+      return token
     } catch (e) {
-      if (e.code === "ENOENT") return true
-      if (!win || i >= 20) return false
-      pause(50)
+      if (fd !== undefined) fs.closeSync(fd)
+      // Windows refuses for a moment to create a file whose name is still being deleted (a lock just released).
+      const deleting = win && (e.code === "EPERM" || e.code === "EACCES") && Date.now() < deadline
+      if (deleting) {
+        await sleep(50 + Math.random() * 100)
+        continue
+      }
+      if (e.code !== "EEXIST") throw new Fail("cannot_save", `Cannot create a lock in ${ctx.dir}.`)
     }
+    const held = readLock(ctx.lock)
+    // Another process moved this one's lock away by mistake and has put it back.
+    if (own && held && !held.empty && held.token === own) return own
+    // A holder that died between creating the lock and writing its name leaves it empty; that takes a moment.
+    const dead = held?.empty
+      ? Date.now() - held.mtime > 60_000
+      : held && sameHost(held.host) && !alive(Number(held.pid))
+    if (dead) {
+      await hook("break-observed")
+      if (await breakLock(ctx, held)) continue
+    }
+    if (Date.now() > deadline) {
+      const old = held && !held.empty && now() - Number(held.startedAt) > 600
+      throw new Fail(
+        "busy",
+        old
+          ? `Another ${CMD} command has held ${ctx.lock} for over 10 minutes. If none is running, delete that file.`
+          : `Another ${CMD} command is using this connection. Nothing was sent; run it again.`,
+      )
+    }
+    await sleep(100 + Math.random() * 200)
   }
 }
 
 /**
- * Removes the lock of the holder `token` names, which is certainly gone. Only the holder of `lock.break` (created
- * exclusively, naming its holder) removes a lock it does not hold, and only while that lock still names the same dead
- * holder: a lock taken meanwhile is never touched. True when the lock is gone or now names another holder (try again
- * at once); false when another command is breaking it or it could not be removed. Nobody else ever removes a
- * `lock.break`: one left behind is named in `busy` for the owner to remove by hand.
+ * Removes a dead holder's lock. Moving it away is atomic, so of two that try only one moves it; if what was moved
+ * is not the dead lock (another process had just taken a fresh one), it goes back unless a newer one is there.
  */
-function breakLock(ctx, token, owner) {
-  let fd
+async function breakLock(ctx, held) {
+  const moved = `${ctx.lock}.${hex(6)}.dead`
   try {
-    fd = fs.openSync(ctx.breaker, "wx", 0o600)
+    fs.renameSync(ctx.lock, moved)
   } catch {
-    return false
+    return true
+  }
+  await hook("break-moved")
+  const got = readLock(moved)
+  if (got && (held.empty ? got.empty : got.token === held.token)) {
+    fs.rmSync(moved, { force: true })
+    return true
   }
   try {
-    try {
-      fs.writeSync(fd, owner)
-    } catch {}
-    fs.closeSync(fd)
-    hook("break-held")
-    const held = readLock(ctx.lock)
-    if (held?.token !== token || verdict(held) !== "gone") return true
-    return unlinkGone(ctx.lock)
-  } finally {
-    unlinkGone(ctx.breaker)
-  }
-}
-
-const mine = (ctx) => {
-  if (!heldToken) return false
-  try {
-    return readLock(ctx.lock)?.token === heldToken
+    fs.linkSync(moved, ctx.lock)
   } catch {
-    return false
+    // A newer lock is there already.
   }
+  fs.rmSync(moved, { force: true })
+  return false
 }
 
-function release(ctx) {
-  if (mine(ctx)) unlinkGone(ctx.lock)
-  heldToken = ""
+const mine = (ctx, token) => readLock(ctx.lock)?.token === token
+
+function release(ctx, token) {
+  if (mine(ctx, token)) fs.rmSync(ctx.lock, { force: true })
 }
 
-/** Before a request that spends a one-time secret, and before every change to a file: the lock must be this command's. */
-function assertMine(ctx) {
-  if (!mine(ctx)) throw new Fail("busy", "Another adiutor command took over the connection. Run it again.")
-}
-
-// A temporary file of writePrivate. Every one is written under the lock, so the holder finds only those a stopped
-// command left behind; they may hold a secret.
-const LEFTOVER = /^(?:connection|pending|left)\.[0-9a-f]{12}\.tmp$/
-
-function sweep(ctx) {
-  assertMine(ctx)
-  for (const name of fs.readdirSync(ctx.dir))
-    if (LEFTOVER.test(name)) {
-      try {
-        fs.unlinkSync(path.join(ctx.dir, name))
-      } catch {}
-    }
-}
-
-async function withLock(ctx, fn) {
-  await acquire(ctx)
+async function withLock(ctx, fn, own) {
+  const token = await acquire(ctx, own)
   try {
-    sweep(ctx)
-    return await fn()
+    return await fn(token)
   } finally {
-    release(ctx)
+    release(ctx, token)
   }
+}
+
+/** Before spending a one-time secret: the lock must still be ours, or nothing is sent. */
+function assertMine(ctx, token) {
+  if (!mine(ctx, token)) throw new Fail("busy", `Another ${CMD} command took over this connection. Run it again.`)
 }
 
 /* Requests */
 
-// Failures that happen before anything reaches the server.
 const NOT_SENT = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
@@ -887,648 +695,617 @@ const NOT_SENT = new Set([
   "ERR_TLS_CERT_ALTNAME_INVALID",
 ])
 
-/** One request to the stored origin only, never following a redirect. `connect` names the request adiutor-connect. */
-async function request(origin, method, url, { json, bearer, connect, label } = {}) {
-  if (new URL(url).origin !== origin) throw new Fail("bad_path", "Only Adiutor's own address is called.")
+async function request(ctx, method, url, { form, bearer, json, policy, kind, timeout = OAUTH_TIMEOUT_MS } = {}) {
   const headers = { accept: "application/json" }
-  if (json !== undefined) headers["content-type"] = "application/json"
-  if (bearer) headers.authorization = `Bearer ${bearer}`
-  if (connect) headers["user-agent"] = CLIENT_ID
-  if (label) headers["x-adiutor-agent"] = label
+  let payload
+  if (form) {
+    headers["content-type"] = "application/x-www-form-urlencoded"
+    payload = new URLSearchParams(form).toString()
+  } else if (json !== undefined) {
+    headers["content-type"] = "application/json"
+    payload = json
+  }
+  if (bearer) {
+    headers.authorization = `Bearer ${bearer}`
+    headers[SKILL_HEADER_NAME] = SKILL_HEADER
+    if (agentLabel) headers[AGENT_HEADER_NAME] = agentLabel
+  }
+  // The revision and the kind go together: the server runs the call only when both still hold for the route it picks.
+  if (policy) {
+    headers[POLICY_HEADER_NAME] = policy
+    headers[KIND_HEADER_NAME] = kind
+  }
   let res
   try {
+    // No redirects: a secret never follows one to another address.
     res = await fetch(url, {
       method,
       headers,
-      body: json === undefined ? undefined : typeof json === "string" ? json : JSON.stringify(json),
+      body: payload,
       redirect: "manual",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeout),
     })
   } catch (e) {
     const code = e?.cause?.code ?? e?.code
-    throw new Fail("unreachable", `Cannot reach ${origin} (${code ?? e?.name ?? "network error"}).`, {
+    throw new Fail("unreachable", `Cannot reach ${ctx.issuer} (${code ?? e?.name ?? "network error"}).`, {
       sent: !NOT_SENT.has(code),
     })
   }
-  if (res.status >= 300 && res.status < 400) {
-    res.body?.cancel().catch(() => {})
-    throw new Fail(
-      "unreachable",
-      `${origin} answered with a redirect (${res.status}), which the command does not follow. Check Adiutor's address.`,
-      { sent: true },
-    )
-  }
   let text
   try {
-    text = await res.text()
+    // As the other versions read it: res.text() would drop a byte order mark, which is not JSON.
+    text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(await res.arrayBuffer())
   } catch {
-    throw new Fail("unreachable", `The answer from ${origin} broke off.`, { sent: true })
+    // The answer started and broke off: the server got the request and may have acted on it.
+    throw new Fail("unreachable", `The answer from ${ctx.issuer} broke off.`, { sent: true })
   }
+  // isJson says whether the text is JSON at all: a JSON null is still JSON.
   let parsed = null
+  let isJson = false
   try {
-    parsed = text ? JSON.parse(text) : null
+    parsed = JSON.parse(text)
+    isJson = true
   } catch {}
-  return { status: res.status, text, json: parsed }
+  return { status: res.status, text, json: parsed, isJson, challenge: res.headers.get("www-authenticate") ?? "" }
 }
 
-/** A refusal: Adiutor's {error: {code, message}} (or Better Auth's code), carried in `body`. */
+const oauth = (ctx, p, form) => request(ctx, "POST", `${ctx.issuer}${p}`, { form: { ...form, client_id: CLIENT_ID } })
+
 function httpFail(r, what) {
   const body = r.json !== null && typeof r.json === "object" ? r.json : null
-  const inner = body?.error && typeof body.error === "object" ? body.error : null
   const detail =
-    str(inner?.message) || str(inner?.code) || str(body?.message) || str(body?.error_description) || str(body?.error)
-  return new Fail(`http_${r.status}`, `${what} failed (${r.status}${detail ? `: ${detail}` : ""}).`, {
-    status: r.status,
-    body,
+    body?.error_description || body?.message || (typeof body?.detail === "string" ? body.detail : "") || body?.error
+  return new Fail(`http_${r.status}`, `${what} failed (${r.status}${detail ? `: ${detail}` : ""}).`, { body })
+}
+
+function tokensFrom(r) {
+  const t = r.json ?? {}
+  const scope = typeof t.scope === "string" ? t.scope : ""
+  const ok = (v) => typeof v === "string" && SECRET.test(v)
+  if (!ok(t.access_token) || !ok(t.refresh_token) || !PLAIN.test(scope))
+    throw new Fail("unexpected_answer", `${PRODUCT} answered without usable tokens.`)
+  return {
+    refreshToken: t.refresh_token,
+    accessToken: t.access_token,
+    accessExpiresAt: now() + Math.max(0, Math.floor(Number(t.expires_in) || 0)),
+    scope,
+  }
+}
+
+async function revokePending(ctx, rec) {
+  if (!rec.toRevoke) return rec
+  const left = []
+  for (const token of rec.toRevoke.split(" ").filter(Boolean)) {
+    const r = await oauth(ctx, REVOKE_PATH, { token, token_type_hint: "refresh_token" }).catch(() => null)
+    if (r?.status !== 200) left.push(token)
+  }
+  const next = { ...rec, toRevoke: left.join(" ") }
+  if (next.toRevoke !== rec.toRevoke) writeRecord(ctx, next)
+  return next
+}
+
+/* Commands */
+
+function status(ctx) {
+  const rec = readRecord(ctx)
+  print({
+    status: rec?.refreshToken ? "connected" : rec?.deviceCode ? "pending" : "not_connected",
+    url: ctx.issuer,
+    label: rec?.label || ctx.label,
+    ...(rec?.refreshToken ? { scope: rec.scope, accessExpiresIn: Math.max(0, rec.accessExpiresAt - now()) } : {}),
+    ...oldReport(ctx),
   })
 }
 
-/* Connecting */
+async function connect(ctx, replace) {
+  // Before any code exists: can it keep a connection here, and is the server there?
+  secureDir(ctx.dir)
+  const probe = path.join(ctx.dir, `.probe-${hex(4)}`)
+  try {
+    fs.writeFileSync(probe, "", { flag: "wx", mode: 0o600 })
+    fs.rmSync(probe)
+  } catch {
+    throw new Fail("cannot_save", `Cannot write in ${ctx.dir}. Allow this agent to write there.`)
+  }
+  const meta = await request(ctx, "GET", `${ctx.issuer}/.well-known/oauth-authorization-server`)
+  if (meta.status !== 200 || meta.json?.issuer !== ctx.issuer)
+    throw new Fail(
+      "unreachable",
+      `${ctx.issuer} does not answer as ${PRODUCT} with agents allowed (${meta.status}). Check the address, and ask an administrator to allow agents in ${PRODUCT}'s settings.`,
+    )
 
-function keyName() {
-  const raw = process.env.ADIUTOR_AGENT_NAME || host()
-  const computer =
-    raw
-      .replace(/[^A-Za-z0-9._-]+/g, "-")
-      .slice(0, 15)
-      .replace(/^-+|-+$/g, "") || "agent"
-  return `skill:${computer}:${hex(4)}`
+  const result = await withLock(ctx, async (lock) => {
+    let rec = readRecord(ctx) ?? emptyRecord(ctx)
+    rec = await revokePending(ctx, rec)
+    if (rec.refreshToken && !replace) return { status: "already_connected", label: rec.label, scope: rec.scope }
+    // The open code again, unless asked for a new one (--replace: the link did not work for the person).
+    if (rec.deviceCode && rec.deviceExpiresAt - now() > 30 && !replace) return pending(ctx, rec)
+    assertMine(ctx, lock)
+    const r = await oauth(ctx, DEVICE_PATH, {
+      scope: SCOPE,
+      resource: `${ctx.issuer}${RESOURCE}`,
+      client_label: ctx.label,
+    })
+    if (r.status !== 200) throw httpFail(r, "Asking to connect")
+    const d = r.json ?? {}
+    const link = String(d.verification_uri_complete ?? "")
+    if (!SECRET.test(String(d.device_code)) || !/^[A-Z0-9-]{4,20}$/.test(String(d.user_code)) || !PLAIN.test(link))
+      throw new Fail("unexpected_answer", `${PRODUCT} answered without a code.`)
+    if (!link.startsWith(`${ctx.issuer}/`))
+      throw new Fail("unexpected_answer", `The approval link is not on ${PRODUCT}.`)
+    const interval = Math.max(POLL_SECONDS, Math.floor(Number(d.interval) || POLL_SECONDS))
+    rec = {
+      ...rec,
+      label: ctx.label,
+      deviceCode: d.device_code,
+      userCode: d.user_code,
+      link,
+      deviceExpiresAt: now() + Math.max(60, Math.floor(Number(d.expires_in) || 600)),
+      interval,
+      nextPollAt: now() + interval,
+    }
+    writeRecord(ctx, rec)
+    return pending(ctx, rec)
+  })
+  if (result.status === "already_connected") keepAddress(ctx)
+  print({ ...result, ...oldReport(ctx) })
 }
 
-function pendingAnswer(pend) {
+/**
+ * The hint names the address, so the wait asks the same server even if the kept address changes meanwhile. Quoted:
+ * a shell would take the brackets of an IPv6 address as a file pattern.
+ */
+function pending(ctx, rec) {
   return {
     status: "pending",
-    origin: pend.origin,
-    link: pend.link,
-    code: groupedCode(pend.userCode),
-    expiresAt: iso(pend.codeExpiresAt),
-    next: waitCommand(pend.origin),
+    link: rec.link,
+    code: rec.userCode,
+    expiresIn: Math.max(0, rec.deviceExpiresAt - now()),
+    next: `End your turn with a reply that shows the person the link and the code and asks them to reply once they approve. When they reply, run: ${CMD} connect --wait --url "${ctx.issuer}"`,
   }
 }
 
-const connectedAnswer = (conn) => ({
-  status: "connected",
-  origin: conn.origin,
-  keyName: conn.keyName,
-  expiresAt: conn.expiresAt,
-})
-
-/** The key name was saved as the connection: the attempt finished creating its key. */
-const keySaved = (pend, conn) => Boolean(pend.keySaved || conn?.keyName === pend.keyName)
-
-/** What may be left on Adiutor if this attempt were removed now; nothing for a completed connect. */
-function attemptWarnings(pend, conn) {
-  const warnings = []
-  if (pend.phase === "creating_key") {
-    // The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts. A create
-    // that Adiutor refused, or that was never sent, made no key.
-    if (!keySaved(pend, conn) && !pend.noKey) warnings.push("key_unknown")
-    if (pend.sessionOpen) warnings.push("session_unknown")
-  } else if (pend.pollInFlight || pend.uncertain || pend.sessionOpen) warnings.push("session_unknown")
-  return warnings
+function clearPending(rec) {
+  return { ...rec, deviceCode: "", userCode: "", link: "", deviceExpiresAt: 0, interval: 0, nextPollAt: 0 }
 }
 
-/**
- * Removes an attempt, after writing what it may have left on Adiutor. Under the lock; the file is removed only while it
- * is exactly as this command last read or wrote it (`seen`).
- */
-function removeAttempt(ctx, pend, conn, seen = pend) {
-  const warnings = attemptWarnings(pend, conn)
-  if (warnings.length)
-    addLeft(
-      ctx,
-      warnings.map((reason) => ({ origin: pend.origin, keyName: pend.keyName, reason })),
-    )
-  if (same(PENDING_FIELDS, readPending(ctx), seen)) removeFile(ctx, ctx.pending)
-  return warnings
-}
-
-function unknownFail(warnings, pend) {
-  const session = warnings.includes("session_unknown") ? ` ${SESSION_TEXT}` : ""
-  if (warnings.includes("key_unknown"))
-    return new Fail(
-      "key_unknown",
-      `The connection to ${pend.origin} did not finish, and a key named "${pend.keyName}" may exist: delete it in Settings, Agent access.${session}`,
-    )
-  return new Fail(
-    "session_unknown",
-    `The connection to ${pend.origin} did not finish, and the command cannot tell what Adiutor did. ${SESSION_TEXT}`,
-  )
-}
-
-/**
- * An attempt a lock holder finds in creating_key belongs to a run that is gone (the lock is held through every step
- * of a redeem): it is removed with what it may have left.
- */
-function settle(ctx, conn, pend) {
-  if (pend?.phase !== "creating_key") return { pend, warnings: [] }
-  return { pend: null, orphan: pend, warnings: removeAttempt(ctx, pend, conn) }
-}
-
-async function connect(ctx, opts) {
-  const days = daysOf(opts.days)
-  secureHome(ctx, true)
-  const result = await withLock(ctx, async () => {
-    const conn = readConnection(ctx)
-    pruneLeft(ctx, conn)
-    const found = readPending(ctx)
-    const { pend } = settle(ctx, conn, found)
-    const origin = opts.url ? originOf(opts.url) : conn?.origin || found?.origin
-    if (!origin)
-      throw new Fail(
-        "no_url",
-        "No Adiutor address is known. Ask the owner for it, then run: adiutor connect --url <address>",
-      )
-    // The open code again, unless asked for a new one (--replace: the link did not work for the owner).
-    if (pend && !opts.replace && pend.origin === origin && pend.phase === "polling" && pend.codeExpiresAt > now())
-      return pendingAnswer(pend)
-    if (conn && !opts.replace)
-      throw new Fail(
-        "already_connected",
-        `Already connected to ${conn.origin} with the key "${conn.keyName}", until ${conn.expiresAt}. To connect again, run: adiutor connect --replace`,
-      )
-    const r = await request(origin, "POST", `${origin}/api/auth/device/code`, {
-      json: { client_id: CLIENT_ID },
-      connect: true,
-    })
-    if (r.status !== 200) throw httpFail(r, "Asking Adiutor for a code")
-    const d = r.json ?? {}
-    const deviceCode = str(d.device_code)
-    const userCode = str(d.user_code)
-    const link = str(d.verification_uri_complete)
-    if (!SECRET.test(deviceCode) || !/^[A-Za-z0-9-]{4,20}$/.test(userCode) || !PLAIN.test(link))
-      throw new Fail("unexpected_answer", "Adiutor answered without a usable code. Nothing was stored.")
-    let linkOrigin = ""
-    try {
-      linkOrigin = new URL(link).origin
-    } catch {}
-    if (linkOrigin !== origin)
-      throw new Fail("unexpected_answer", `Adiutor's approval link is not on ${origin}. Nothing was stored.`)
-    // A pending attempt is replaced only now, once the new code exists; its link stops being used.
-    if (pend) removeAttempt(ctx, pend, conn)
-    const t = now()
-    const interval = Math.max(1, Math.floor(Number(d.interval) || 5))
-    const next = {
-      v: 1,
-      attemptId: hex(8),
-      origin,
-      deviceCode,
-      userCode,
-      link,
-      interval,
-      nextPollAt: t + interval,
-      codeExpiresAt: t + Math.max(1, Math.floor(Number(d.expires_in) || 600)),
-      days,
-      keyName: keyName(),
-      phase: "polling",
-      pollInFlight: 0,
-      uncertain: 0,
-      sessionOpen: 0,
-      keySaved: 0,
-      noKey: 0,
-    }
-    // Only into the state this command read: no attempt, and the connection it decided on.
-    if (!same(CONNECTION_FIELDS, readConnection(ctx), conn)) throw new Changed()
-    savePending(ctx, next, null)
-    return pendingAnswer(next)
-  })
-  print({ ...result, left: leftNow(ctx) })
-}
-
-async function waitForApproval(ctx, opts) {
-  let origin = opts.url ? originOf(opts.url) : ""
-  if (!origin) {
-    origin = readPending(ctx)?.origin ?? ""
-    if (!origin) throw new Fail("not_connected", "No connection is being made. Run: adiutor connect --url <address>")
-  }
+async function waitForApproval(ctx) {
   const until = Date.now() + WAIT_SECONDS * 1000
-  const state = { attemptId: null }
   for (;;) {
-    let step
-    try {
-      step = await withLock(ctx, () => waitStep(ctx, origin, state))
-    } catch (e) {
-      if (e instanceof Changed) continue
-      throw e
+    const step = await withLock(ctx, async (lock) => {
+      let rec = readRecord(ctx)
+      if (!rec?.deviceCode) {
+        if (rec?.refreshToken) return { done: { status: "connected", label: rec.label, scope: rec.scope } }
+        throw new Fail("not_connected", `No connection is being made. Run: ${CMD} connect`)
+      }
+      const t = now()
+      // The server decides when a code has ended: one approved at the last minute can
+      // still be collected for a while after. Only a code long past that is dropped here.
+      if (rec.deviceExpiresAt + STALE_CODE_SECONDS <= t) {
+        writeRecord(ctx, clearPending(rec))
+        throw new Fail("expired", `The code expired before it was approved. Run: ${CMD} connect`)
+      }
+      if (rec.nextPollAt > t) return { wait: rec.nextPollAt - t }
+      assertMine(ctx, lock)
+      let r
+      try {
+        r = await oauth(ctx, TOKEN_PATH, {
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+          device_code: rec.deviceCode,
+        })
+      } catch (e) {
+        if (e.code === "unreachable") {
+          rec.nextPollAt = t + rec.interval
+          writeRecord(ctx, rec)
+        }
+        throw e
+      }
+      if (r.status === 200) {
+        const tokens = tokensFrom(r)
+        // Connecting again (--replace): the old connection is ended once the new one is stored.
+        const old = rec.refreshToken && rec.refreshToken !== tokens.refreshToken ? rec.refreshToken : ""
+        rec = {
+          ...clearPending(rec),
+          ...tokens,
+          generation: hex(8),
+          refreshStartedAt: 0,
+          refreshRetried: 0,
+          toRevoke: [rec.toRevoke, old].filter(Boolean).join(" "),
+        }
+        writeRecord(ctx, rec)
+        fs.rmSync(ctx.kinds, { force: true })
+        rec = await revokePending(ctx, rec)
+        return { done: { status: "connected", label: rec.label, scope: rec.scope } }
+      }
+      const error = r.json?.error
+      if (error === "authorization_pending" || error === "slow_down") {
+        if (error === "slow_down") rec.interval += 5
+        rec.nextPollAt = t + rec.interval
+        writeRecord(ctx, rec)
+        return { wait: rec.interval }
+      }
+      if (error === "access_denied") {
+        writeRecord(ctx, clearPending(rec))
+        throw new Fail("denied", "The person did not approve the connection.")
+      }
+      if (error === "expired_token" || error === "invalid_grant") {
+        writeRecord(ctx, clearPending(rec))
+        throw new Fail("expired", `The code is no longer valid. Run: ${CMD} connect`)
+      }
+      throw httpFail(r, "Waiting for the approval")
+    })
+    if (step.done) {
+      keepAddress(ctx)
+      return print(step.done)
     }
-    if (step.done) return print({ ...step.done, left: leftNow(ctx) })
     if (Date.now() + step.wait * 1000 > until)
-      return print({ status: "still_waiting", next: waitCommand(origin), left: leftNow(ctx) })
+      return print({
+        status: "still_waiting",
+        next: `Not approved yet. Run again: ${CMD} connect --wait --url "${ctx.issuer}"`,
+      })
     await sleep(step.wait * 1000)
   }
 }
 
-/** One look at the attempt under the lock: an answer, the seconds until the next poll, or one poll. */
-async function waitStep(ctx, origin, state) {
-  const conn = readConnection(ctx)
-  pruneLeft(ctx, conn)
-  const settled = settle(ctx, conn, readPending(ctx))
-  const pend = settled.pend
-  if (settled.orphan?.origin === origin) {
-    if (settled.warnings.length) throw unknownFail(settled.warnings, settled.orphan)
-    if (conn?.keyName === settled.orphan.keyName) return { done: connectedAnswer(conn) }
-  }
-  if (!pend || pend.origin !== origin) {
-    // Another command finished this attempt (a parallel --wait), or it was never made here.
-    if (conn?.origin === origin && (state.attemptId || !pend)) return { done: connectedAnswer(conn) }
-    if (state.attemptId) throw new Fail("not_connected", `The connection to ${origin} was cancelled meanwhile.`)
-    throw new Fail("not_connected", `No connection to ${origin} is being made. Run: adiutor connect --url ${origin}`)
-  }
-  // Replaced meanwhile (connect --replace): the new attempt has its own link and code.
-  if (state.attemptId && pend.attemptId !== state.attemptId) return { done: pendingAnswer(pend) }
-  state.attemptId = pend.attemptId
-  // Every save is conditional on the attempt exactly as this command last read or wrote it.
-  let seen = { ...pend }
-  const save = () => {
-    seen = savePending(ctx, pend, seen)
-  }
-  const t = now()
-  if (pend.codeExpiresAt <= t) {
-    const warnings = removeAttempt(ctx, pend, conn)
-    if (warnings.length) throw unknownFail(warnings, pend)
-    throw new Fail("expired", `The code expired before it was approved. Run: adiutor connect --url ${origin}`)
-  }
-  if (pend.nextPollAt > t) return { wait: pend.nextPollAt - t }
-  // A mark left set: the run before this one sent a poll and never recorded its answer.
-  if (pend.pollInFlight) pend.uncertain = 1
-  pend.pollInFlight = 1
-  save()
-  assertMine(ctx)
-  hook("poll")
-  let r
-  try {
-    r = await request(origin, "POST", `${origin}/api/auth/device/token`, {
-      json: { grant_type: DEVICE_GRANT, device_code: pend.deviceCode, client_id: CLIENT_ID },
-      connect: true,
-    })
-  } catch (e) {
-    if (e.code === "unreachable") {
-      pend.pollInFlight = 0
-      if (e.extra.sent !== false) pend.uncertain = 1
-      pend.nextPollAt = now() + pend.interval
-      save()
+const usable = (rec) => rec.accessToken && rec.accessExpiresAt - now() > 60 && !rec.refreshStartedAt
+
+/** A live access token: the stored one while it lasts, else one refresh under the lock. */
+async function accessToken(ctx, stale) {
+  const first = readRecord(ctx)
+  if (!first?.refreshToken) throw new Fail("not_connected", `Not connected. Run: ${CMD} connect`)
+  if (!stale && usable(first)) return first.accessToken
+  return withLock(ctx, async (lock) => {
+    let rec = readRecord(ctx)
+    if (!rec?.refreshToken) throw new Fail("not_connected", `Not connected. Run: ${CMD} connect`)
+    rec = await revokePending(ctx, rec)
+    // Another command refreshed while this one waited for the lock.
+    if (usable(rec) && rec.accessToken !== stale) return rec.accessToken
+    const before = { refreshStartedAt: rec.refreshStartedAt, refreshRetried: rec.refreshRetried }
+    // A refresh that started moments ago may still be on its way (its holder lost the lock): never send it twice.
+    if (rec.refreshStartedAt && now() - rec.refreshStartedAt < REFRESH_GRACE)
+      throw new Fail("busy", `Another ${CMD} command is refreshing this connection. Nothing was sent; run it again.`)
+    if (rec.refreshStartedAt) {
+      // The last refresh got no answer; it may or may not have reached the server. Trying once more either
+      // continues the connection or ends it there, which also ends the new token nobody received.
+      if (rec.refreshRetried)
+        throw new Fail(
+          "connection_ended",
+          `Two refreshes got no answer, so this connection cannot be trusted. Run: ${CMD} connect --replace`,
+        )
+      rec.refreshRetried = 1
     }
-    throw e
-  }
-  const sessionToken = r.status === 200 ? str(r.json?.access_token) : ""
-  if (sessionToken) return { done: await redeem(ctx, seen, conn, sessionToken) }
-  const error = str(r.json?.error)
-  pend.pollInFlight = 0
-  if (error === "authorization_pending" || error === "slow_down" || r.status === 429) {
-    // RFC 8628: 5 seconds longer from now on; a rate-limited poll is the same request to slow down.
-    if (error === "slow_down" || r.status === 429) pend.interval += 5
-    pend.nextPollAt = now() + pend.interval
-    save()
-    return { wait: pend.interval }
-  }
-  if (["access_denied", "expired_token", "invalid_grant"].includes(error)) {
-    const warnings = removeAttempt(ctx, pend, conn, seen)
-    if (warnings.length) throw unknownFail(warnings, pend)
-    if (error === "access_denied")
-      throw new Fail("denied", "The owner did not approve the connection. Nothing was created.")
-    throw new Fail("expired", `The code is no longer valid. Run: adiutor connect --url ${origin}`)
-  }
-  // A failure after the server may have started: a session may exist.
-  if (r.status >= 500 || r.status === 200) pend.uncertain = 1
-  pend.nextPollAt = now() + pend.interval
-  save()
-  throw httpFail(r, "Waiting for the approval")
-}
-
-/**
- * Ends the approval's session with its own token. True only when Adiutor confirmed it. Sent even after the lock was
- * lost: no other command knows this token, and a session left open is the worse outcome.
- */
-async function endSession(origin, sessionToken) {
-  try {
-    const r = await request(origin, "POST", `${origin}/api/auth/revoke-session`, {
-      json: { token: sessionToken },
-      bearer: sessionToken,
-      connect: true,
-    })
-    return r.status === 200 && r.json?.status === true
-  } catch {
-    return false
-  }
-}
-
-/**
- * The approved code gave a session token: record that a key is being created, create it, save the connection, end
- * the session, remove the attempt. In this order in every version, all under the lock. `seen` is the attempt as last
- * written, `conn` the connection as read at the start of this step.
- */
-async function redeem(ctx, seen, conn, sessionToken) {
-  const id = seen.attemptId
-  const att = { pend: { ...seen, phase: "creating_key", sessionOpen: 1, pollInFlight: 0 }, conn, seen }
-  try {
-    att.seen = savePending(ctx, att.pend, seen)
-  } catch (e) {
-    // Nothing is sent before this mark is written: the session ends at once.
-    await endSession(seen.origin, sessionToken)
-    if (e instanceof Changed)
-      throw new Fail("cannot_save", "The connection changed while this command ran. Run: adiutor status")
-    throw e
-  }
-  hook("token")
-  let outcome
-  try {
-    outcome = { conn: await createAndSave(ctx, att, sessionToken) }
-  } catch (e) {
-    outcome = { fail: e }
-  }
-  const ended = await endSession(seen.origin, sessionToken)
-  // A step from here that fails keeps the attempt, and with it what the attempt may have left on Adiutor; it never
-  // replaces the answer.
-  try {
-    if (ended) att.seen = savePending(ctx, { ...att.seen, sessionOpen: 0 }, att.seen)
-  } catch {}
-  hook("revoked")
-  try {
-    const last = readPending(ctx)
-    if (last?.attemptId === id) {
-      // A connection that cannot be read now counts as not saved: the key is then reported, never lost.
-      let saved = null
-      try {
-        saved = readConnection(ctx)
-      } catch {}
-      removeAttempt(ctx, last, saved)
-    } else if (!ended) addLeft(ctx, [{ origin: seen.origin, keyName: seen.keyName, reason: "session_unknown" }])
-  } catch {}
-  hook("done")
-  if (outcome.fail) {
-    if (!ended && outcome.fail instanceof Fail) outcome.fail.message += ` ${SESSION_TEXT}`
-    throw outcome.fail
-  }
-  return {
-    ...connectedAnswer(outcome.conn),
-    ...(ended
-      ? {}
-      : {
-          warning: `Could not confirm that the approval's temporary session ended. End the session "adiutor connect (agent approval)" on the Account page in Adiutor.`,
-        }),
-  }
-}
-
-async function createAndSave(ctx, att, sessionToken) {
-  const { origin, keyName: name, days } = att.pend
-  const unknown = () =>
-    new Fail(
-      "key_unknown",
-      `Adiutor's answer to creating the key was lost, so a key named "${name}" may exist on ${origin}: delete it in Settings, Agent access. Then run: adiutor connect --url ${origin}`,
-    )
-  // Adiutor refused the key, or the request never left: no key exists, and the attempt records it (no key_unknown).
-  const noKey = (fail) => {
+    rec.refreshStartedAt = now()
+    writeRecord(ctx, rec)
+    assertMine(ctx, lock)
+    await hook("before-refresh")
+    let r
     try {
-      att.seen = savePending(ctx, { ...att.seen, noKey: 1 }, att.seen)
-    } catch {}
-    return fail
-  }
-  assertMine(ctx)
-  let r
-  try {
-    r = await request(origin, "POST", `${origin}/api/auth/api-key/create`, {
-      json: { name, expiresIn: days * 86_400 },
-      bearer: sessionToken,
-      connect: true,
-    })
-  } catch (e) {
-    if (e.code === "unreachable" && e.extra.sent !== false) throw unknown()
-    throw noKey(e)
-  }
-  hook("key")
-  if (r.status >= 500) throw unknown()
-  if (r.status !== 200) throw noKey(httpFail(r, "Creating the key"))
-  const key = str(r.json?.key)
-  const expiresAt = str(r.json?.expiresAt)
-  if (!SECRET.test(key) || !PLAIN.test(expiresAt) || Number.isNaN(Date.parse(expiresAt))) throw unknown()
-  // From here the key exists with a known name and end date: any failure records it before the answer.
-  try {
-    // Saved only while both files are as this command read them: a parallel disconnect or --replace wins.
-    if (!same(PENDING_FIELDS, readPending(ctx), att.seen) || !same(CONNECTION_FIELDS, readConnection(ctx), att.conn))
+      r = await oauth(ctx, TOKEN_PATH, {
+        grant_type: "refresh_token",
+        refresh_token: rec.refreshToken,
+        resource: `${ctx.issuer}${RESOURCE}`,
+      })
+    } catch (e) {
+      // Nothing left the computer: the token is as good as before.
+      if (e.code === "unreachable" && e.extra.sent === false) writeRecord(ctx, { ...rec, ...before })
+      throw e
+    }
+    if (r.status === 200) {
+      const next = { ...rec, ...tokensFrom(r), refreshStartedAt: 0, refreshRetried: 0 }
+      await hook("before-write")
+      if (!mine(ctx, lock)) {
+        // The lock was taken while this one waited for the server: keep the new tokens anyway, under a fresh lock.
+        await withLock(ctx, async () => writeRecord(ctx, next), lock)
+      } else writeRecord(ctx, next)
+      return next.accessToken
+    }
+    if (r.json?.error === "invalid_grant") {
+      // An old connection still to be ended (after --replace) keeps its place until the server confirms it.
+      if (rec.toRevoke) writeRecord(ctx, { ...emptyRecord(ctx), label: rec.label, toRevoke: rec.toRevoke })
+      else removeRecord(ctx)
       throw new Fail(
-        "cannot_save",
-        "Another adiutor command disconnected or started a new connection while this one waited, so the new key was not saved. Run: adiutor status",
+        "connection_ended",
+        `This connection has ended (disconnected in ${PRODUCT}, its time ran out, sign-in settings changed, or its token was used twice). Run: ${CMD} connect`,
       )
-    const old = att.conn
-    // The key being replaced stays on Adiutor: recorded before the connection that names it is replaced.
-    if (old && old.keyName !== name) {
-      addLeft(ctx, [{ origin: old.origin, keyName: old.keyName, expiresAt: old.expiresAt, reason: "replaced" }])
-      hook("recorded")
     }
-    writeConnection(ctx, { v: 1, origin, key, keyName: name, expiresAt })
-  } catch (e) {
-    const fail = e instanceof Fail ? e : new Fail("cannot_save", `Cannot save the connection in ${ctx.dir}.`)
-    try {
-      addLeft(ctx, [{ origin, keyName: name, expiresAt, reason: "not_saved" }])
-    } catch {
-      fail.message += ` The key "${name}" on ${origin} works until ${expiresAt}: delete it in Settings, Agent access.`
-    }
-    throw fail
-  }
-  try {
-    att.seen = savePending(ctx, { ...att.seen, keySaved: 1 }, att.seen)
-  } catch {}
-  hook("saved")
-  return { origin, keyName: name, expiresAt }
+    // The server answered with an error before spending the token (a 4xx); a 5xx may have come after.
+    if (r.status < 500) writeRecord(ctx, { ...rec, ...before })
+    throw httpFail(r, "Refreshing the connection")
+  })
 }
 
-/* The other commands */
+/**
+ * The full path of a call (with its query) and the URL to send it to: a path under one of PREFIXES, never
+ * anywhere else, so the token goes only to the API.
+ */
+function apiTarget(ctx, p) {
+  const value = String(p ?? "")
+  const bad = `Give a path from \`${CMD} endpoints\`, for example: get '/api/v1/items?q=report' (percent-encode anything else)`
+  // The same characters in every version (the shell version passes the path to curl as it is).
+  // Encoded dots too: a server or proxy that decodes them would take the token out of the API.
+  if (!PATH_CHARS.test(value) || value.includes("://") || value.startsWith("//") || /%2e/i.test(value))
+    throw new Fail("bad_path", bad)
+  const pathOnly = value.split("?")[0]
+  // The kind is found from the path as it is sent, but a server may decode the path before it routes it. So in the
+  // path an escape may not stand for a character a route template holds as it is (A-Z a-z 0-9 . _ ~ : -), nor for
+  // / \ or % (/api/v1/items/7%2Fsend would match /api/v1/items/{id} here and may run /api/v1/items/{id}/send there), and
+  // every % must start an escape. The query keeps any escape.
+  if (/%(?![0-9A-Fa-f]{2})|%(2[5DEF]|3[0-9A]|4[1-9A-F]|5[0-9ACF]|6[1-9A-F]|7[0-9AE])/i.test(pathOnly))
+    throw new Fail("bad_path", bad)
+  // Some servers drop ;parameters from a segment before they route (/api/v1/items/export;x runs /api/v1/items/export).
+  // The server's check of the declared kind stops such a call too; this refuses it before it is sent.
+  if (pathOnly.includes(";")) throw new Fail("bad_path", bad)
+  if (!PREFIXES.some((x) => pathOnly.startsWith(x) && pathOnly.length > x.length)) throw new Fail("bad_path", bad)
+  if (pathOnly.split("/").some((s) => s === "." || s === "..")) throw new Fail("bad_path", bad)
+  const url = new URL(`${ctx.issuer}${value}`)
+  if (url.origin !== ctx.issuer || url.pathname !== pathOnly) throw new Fail("bad_path", bad)
+  return { url: url.toString(), path: url.pathname, hasQuery: value.includes("?") }
+}
 
-async function status(ctx) {
-  const conn = readConnection(ctx)
-  const pend = readPending(ctx)
-  const out = { status: conn ? "connected" : "not_connected" }
-  if (conn) Object.assign(out, { origin: conn.origin, keyName: conn.keyName, expiresAt: conn.expiresAt })
-  // An attempt whose key was saved and whose session ended is a finished connect that only lost its last step.
-  const finished = pend && pend.phase === "creating_key" && keySaved(pend, conn) && !pend.sessionOpen
-  if (pend && !finished) {
-    const warnings = attemptWarnings(pend, conn)
-    out.pending = {
-      origin: pend.origin,
-      link: pend.link,
-      code: groupedCode(pend.userCode),
-      expiresAt: iso(pend.codeExpiresAt),
-      ...(warnings.length ? { warnings } : {}),
+/*
+ * Kinds: whether a call is a read or an act, from the server's own list of this connection's calls, kept with the
+ * list's revision for the current connection only. Access and the listing itself are reads, exempt from the list.
+ */
+
+const exempt = (method, p) => method === "GET" && (p === ACCESS || p === ENDPOINTS)
+
+/** The usable part of a listing answer, or null when it is not a list with a valid revision. */
+function parseKinds(data) {
+  if (data === null || typeof data !== "object" || Array.isArray(data) || !Array.isArray(data.endpoints)) return null
+  if (typeof data.revision !== "string" || !REVISION.test(data.revision)) return null
+  const entries = []
+  for (const e of data.endpoints) {
+    const method = String(e?.method ?? "")
+    const template = String(e?.path ?? "")
+    // Anything but an explicit read counts as an act.
+    const kind = e?.kind === "read" ? "read" : "act"
+    if (/^[A-Z]{3,7}$/.test(method) && TEMPLATE.test(template)) entries.push({ method, template, kind })
+  }
+  return { revision: data.revision, entries }
+}
+
+function readKinds(ctx, rec) {
+  let text
+  try {
+    text = fs.readFileSync(ctx.kinds, "utf8")
+  } catch {
+    return null
+  }
+  const lines = text.split(/\r?\n/)
+  const head = (lines.shift() ?? "").split(" ")
+  if (head[0] !== KINDS_MAGIC || head[1] !== KINDS_FORMAT || !rec.generation || head[2] !== rec.generation) return null
+  if (now() - Number(head[3] || 0) > KINDS_MAX_AGE) return null
+  if (!REVISION.test(head[4] ?? "")) return null
+  const entries = []
+  for (const line of lines) {
+    const [method, template, kind] = line.split(" ")
+    if (/^[A-Z]{3,7}$/.test(method ?? "") && TEMPLATE.test(template ?? "") && (kind === "read" || kind === "act"))
+      entries.push({ method, template, kind })
+  }
+  return { revision: head[4], entries }
+}
+
+/** Keeps a list for the connection it was fetched under. Only a cache: a failure changes nothing. */
+function storeKinds(ctx, generation, list) {
+  const rec = readRecord(ctx)
+  if (!generation || rec?.generation !== generation) return
+  const lines = [`${KINDS_MAGIC} ${KINDS_FORMAT} ${generation} ${now()} ${list.revision}`]
+  for (const e of list.entries) lines.push(`${e.method} ${e.template} ${e.kind}`)
+  try {
+    writePrivate(ctx, ctx.kinds, `${lines.join("\n")}\n`)
+  } catch {}
+}
+
+/**
+ * The list from the server, kept for this connection. Fails closed: when the listing cannot be read, or its answer
+ * is not a list, nothing is sent (endpoints_unavailable). Errors of the connection itself are passed on as they are.
+ */
+async function fetchKinds(ctx) {
+  const generation = readRecord(ctx)?.generation ?? ""
+  let r
+  try {
+    r = await send(ctx, "GET", `${ctx.issuer}${ENDPOINTS}`, undefined, { kind: "read", revision: "", both: false })
+  } catch (e) {
+    if (e.extra?.api) throw new Fail("endpoints_unavailable", UNAVAILABLE)
+    throw e
+  }
+  const list = r.status === 200 ? parseKinds(r.json) : null
+  if (!list) throw new Fail("endpoints_unavailable", UNAVAILABLE)
+  storeKinds(ctx, generation, list)
+  return list
+}
+
+function templateMatches(template, p) {
+  const t = template.split("/")
+  const s = p.split("/")
+  for (let i = 0; i < t.length; i++) {
+    if (/^\{[^}]*:path\}$/.test(t[i])) return i === t.length - 1 && s.length > i && s.slice(i).join("") !== ""
+    if (i >= s.length) return false
+    if (/^\{[^}]*\}$/.test(t[i])) {
+      if (s[i] === "") return false
+    } else if (t[i] !== s[i]) return false
+  }
+  return t.length === s.length
+}
+
+/**
+ * "read", "act", "both" (a read and an act both match the path, such as /api/v1/items/export and /api/v1/items/{id}), or
+ * null when the list does not hold the call.
+ */
+function lookup(list, method, p) {
+  const hits = list.entries.filter((e) => e.method === method && templateMatches(e.template, p))
+  const act = hits.some((e) => e.kind === "act")
+  const read = hits.some((e) => e.kind !== "act")
+  if (act && read) return "both"
+  return act ? "act" : read ? "read" : null
+}
+
+/**
+ * How a call is sent: its kind, and the revision of the list it was classified with. A path the list does not hold
+ * is not sent (bad_path), after the list was fetched again in case it changed. A path that a read and an act both
+ * match goes as an act first (both: send may send it once more as a read).
+ */
+async function classify(ctx, method, p) {
+  if (exempt(method, p)) return { kind: "read", revision: "", path: p, both: false }
+  const rec = readRecord(ctx)
+  let list = rec?.refreshToken ? readKinds(ctx, rec) : null
+  let fresh = false
+  for (;;) {
+    if (!list) {
+      list = await fetchKinds(ctx)
+      fresh = true
+    }
+    const kind = lookup(list, method, p)
+    if (kind === "both") return { kind: "act", revision: list.revision, path: p, both: true }
+    if (kind) return { kind, revision: list.revision, path: p, both: false }
+    if (fresh) throw new Fail("bad_path", NOT_LISTED)
+    list = null
+  }
+}
+
+/** The top object's own field `key` when it is a string (as JSON.parse reads the answer), else undefined. */
+function topText(r, key) {
+  const body = r.json
+  if (body === null || typeof body !== "object" || Array.isArray(body) || !Object.hasOwn(body, key)) return undefined
+  return typeof body[key] === "string" ? body[key] : undefined
+}
+
+// The three refusals the server makes before any route code runs. Nothing ran, so the call may go again. The markers
+// count only as the top object's exact key error with a string value.
+const tokenRefused = (r) => r.status === 401 && r.challenge.includes('error="invalid_token"')
+const busyRefused = (r) => r.status === 429 && topText(r, "error") === "busy"
+const policyRefused = (r) => r.status === 409 && topText(r, "error") === "policy_changed"
+
+/**
+ * One API call with its retries, each at most once: after a 401 with the invalid_token challenge, a refresh and the
+ * call again; after a 429 busy, a wait and the call again; after a 409 policy_changed, the list again and the call
+ * again under its new kind. A path that a read and an act both match went as an act; when the list read again still
+ * has both for it, it goes once more as a read (the router picked the read route). Every one of these follows a
+ * refusal made before any route code ran. Any other answer is the answer. For a read, one retry after a network
+ * failure; an act is never sent again once it may have reached the server.
+ */
+async function send(ctx, method, url, json, call) {
+  let token = await accessToken(ctx)
+  let refreshed = false
+  let busyRetried = false
+  let netRetried = false
+  let policyRetried = false
+  for (;;) {
+    let r
+    try {
+      r = await request(ctx, method, url, {
+        bearer: token,
+        json,
+        policy: call.revision,
+        kind: call.kind,
+        timeout: API_TIMEOUT_MS,
+      })
+    } catch (e) {
+      if (e.code !== "unreachable") throw e
+      e.extra.api = true
+      if (call.kind === "act") {
+        if (e.extra.sent === false) throw e
+        throw new Fail("outcome_unknown", UNKNOWN_OUTCOME)
+      }
+      if (netRetried) throw e
+      netRetried = true
+      continue
+    }
+    if (tokenRefused(r) && !refreshed) {
+      refreshed = true
+      token = await accessToken(ctx, token)
+      continue
+    }
+    if (busyRefused(r) && !busyRetried) {
+      busyRetried = true
+      await sleep(BUSY_WAIT_MS)
+      continue
+    }
+    if (call.revision && policyRefused(r)) {
+      if (policyRetried) throw new Fail("policy_changed", POLICY_CHANGED, { status: r.status })
+      policyRetried = true
+      const list = await fetchKinds(ctx)
+      const kind = lookup(list, method, call.path)
+      if (!kind) throw new Fail("bad_path", NOT_LISTED)
+      call.kind = kind === "both" ? (call.both ? "read" : "act") : kind
+      call.revision = list.revision
+      continue
+    }
+    if (call.kind === "act" && r.status >= 500) throw new Fail("outcome_unknown", UNKNOWN_OUTCOME, { status: r.status })
+    return r
+  }
+}
+
+/** The answer as JSON text on one line: a JSON answer as it is (its line breaks are only spacing), text as a string. */
+function dataText(r) {
+  if (r.isJson) return r.text.replace(/[\r\n]/g, "").trim()
+  return JSON.stringify(r.text)
+}
+
+const failedAnswer = (data) =>
+  data !== null &&
+  typeof data === "object" &&
+  !Array.isArray(data) &&
+  (data.success === false || data.status === "error")
+
+async function api(ctx, method, p, json) {
+  const target = apiTarget(ctx, p)
+  if (json !== undefined) {
+    try {
+      JSON.parse(json)
+    } catch {
+      throw new Fail("bad_body", "The body is not JSON.")
     }
   }
-  const entries = readLeft(ctx)
-  if (entries.some((e) => stale(e, conn))) {
-    try {
-      await withLock(ctx, async () => pruneLeft(ctx, readConnection(ctx)))
-    } catch {}
+  const listing = method === "GET" && target.path === ENDPOINTS && !target.hasQuery
+  const generation = listing ? (readRecord(ctx)?.generation ?? "") : ""
+  const call = await classify(ctx, method, target.path)
+  const r = await send(ctx, method, target.url, json, call)
+  if (r.status >= 200 && r.status < 300) {
+    if (listing) {
+      const list = parseKinds(r.json)
+      if (list) storeKinds(ctx, generation, list)
+    }
+    const data = dataText(r)
+    if (failedAnswer(r.json)) {
+      process.stdout.write(
+        `{"error":"failed","message":${JSON.stringify(`${method} ${p} answered that it failed.`)},"status":${r.status},"data":${data}}\n`,
+      )
+      process.exitCode = 1
+      return
+    }
+    process.stdout.write(`{"status":${r.status},"data":${data}}\n`)
+    return
   }
-  out.left = publicLeft(entries, conn)
-  return out
+  const body = r.json !== null && typeof r.json === "object" && !Array.isArray(r.json) ? r.json : null
+  // The server's own refusals for agents carry a code and a message: passed on as they are.
+  if (body && typeof body.error === "string" && /^[a-z_]{1,40}$/.test(body.error) && typeof body.message === "string")
+    throw new Fail(body.error, body.message, { status: r.status })
+  throw httpFail(r, `${method} ${p}`)
 }
 
 async function disconnect(ctx) {
-  if (!secureHome(ctx, false)) return print({ status: "not_connected", left: [] })
-  const result = await withLock(ctx, async () => {
-    const conn = readConnection(ctx)
-    pruneLeft(ctx, conn)
-    const pend = readPending(ctx)
-    if (pend) removeAttempt(ctx, pend, conn)
-    if (!conn) return { status: "not_connected" }
-    // The key stays on Adiutor (a key cannot delete itself): recorded before the connection is removed.
-    addLeft(ctx, [{ origin: conn.origin, keyName: conn.keyName, expiresAt: conn.expiresAt, reason: "disconnected" }])
-    hook("recorded")
-    if (!same(CONNECTION_FIELDS, readConnection(ctx), conn)) throw new Changed()
-    removeFile(ctx, ctx.connection)
-    return {
-      status: "disconnected",
-      origin: conn.origin,
-      keyName: conn.keyName,
-      expiresAt: conn.expiresAt,
-      message: `Forgot the connection on this computer. The key "${conn.keyName}" still works on ${conn.origin} until ${conn.expiresAt}: delete it in Settings, Agent access, if nothing uses it.`,
+  const result = await withLock(ctx, async (lock) => {
+    const rec = readRecord(ctx)
+    if (!rec) return { status: "not_connected" }
+    assertMine(ctx, lock)
+    const tokens = [rec.refreshToken, ...rec.toRevoke.split(" ")].filter(Boolean)
+    const left = []
+    for (const token of tokens) {
+      const r = await oauth(ctx, REVOKE_PATH, { token, token_type_hint: "refresh_token" }).catch(() => null)
+      if (r?.status !== 200) left.push(token)
     }
+    if (left.length) {
+      writeRecord(ctx, { ...rec, refreshToken: "", accessToken: "", accessExpiresAt: 0, toRevoke: left.join(" ") })
+      throw new Fail(
+        "disconnect_failed",
+        `${PRODUCT} did not confirm the disconnect. Run it again, or end the connection in ${PRODUCT}.`,
+      )
+    }
+    removeRecord(ctx)
+    return { status: "disconnected" }
   })
-  print({ ...result, left: leftNow(ctx) })
-}
-
-/* The API */
-
-function apiPath(method, raw) {
-  const bad = (why) =>
-    new Fail(
-      "bad_path",
-      `${why} Use one of the paths in SKILL.md, for example: get 'items?q=login' (percent-encode anything else in a query).`,
-    )
-  let value = String(raw ?? "")
-  if (value.startsWith("/")) value = value.slice(1)
-  const q = value.indexOf("?")
-  const part = q < 0 ? value : value.slice(0, q)
-  const query = q < 0 ? "" : value.slice(q + 1)
-  if (!PATH_PART.test(part) || part.includes("//"))
-    throw bad("The path may hold only lower-case letters, digits, / and -.")
-  if (q >= 0 && method !== "GET") throw bad("Only get takes a query.")
-  if (!QUERY.test(query)) throw bad("The query holds a character that must be percent-encoded.")
-  if (!ROUTES.some(([m, re]) => m === method && re.test(part)))
-    throw bad(`${method.toLowerCase()} '${part}' is not a call this skill makes.`)
-  return q < 0 ? part : `${part}?${query}`
-}
-
-function bodyOf(method, opts) {
-  if (method === "GET") {
-    if (opts.json !== undefined || opts.jsonFile !== undefined) throw new Fail("bad_json", "get takes no body.")
-    return undefined
-  }
-  let text = opts.json
-  if (opts.jsonFile !== undefined) {
-    if (text !== undefined) throw new Fail("bad_json", "Give either --json or --json-file, not both.")
-    try {
-      text = fs.readFileSync(opts.jsonFile, "utf8")
-    } catch {
-      throw new Fail("bad_json", `Cannot read ${opts.jsonFile}.`)
-    }
-  }
-  if (text === undefined)
-    throw new Fail("bad_json", `${method.toLowerCase()} needs a body: --json '<body>' or --json-file <file>.`)
-  try {
-    JSON.parse(text)
-  } catch {
-    throw new Fail("bad_json", "The body is not JSON.")
-  }
-  return text
-}
-
-function labelOf(opts) {
-  const label = opts.as ?? process.env.ADIUTOR_AGENT_LABEL ?? ""
-  if (label === "" && opts.as === undefined) return ""
-  if (!LABEL.test(label))
-    throw new Fail("bad_label", "The agent label takes 1 to 60 letters, digits, spaces and . _ : - only.")
-  return label
-}
-
-/** A key Adiutor no longer accepts is forgotten, while it is still the saved one. */
-async function forget(ctx, conn) {
-  try {
-    await withLock(ctx, async () => {
-      const saved = readConnection(ctx)
-      if (same(CONNECTION_FIELDS, saved, conn)) removeFile(ctx, ctx.connection)
-    })
-  } catch {}
-}
-
-async function api(ctx, method, opts) {
-  if (opts.positional.length !== 1)
-    throw new Fail("bad_path", `Give one path: adiutor ${method.toLowerCase()} '<path>'`)
-  const target = apiPath(method, opts.positional[0])
-  const label = labelOf(opts)
-  const body = bodyOf(method, opts)
-  const conn = readConnection(ctx)
-  if (!conn) throw new Fail("not_connected", "Not connected to Adiutor. Run: adiutor connect")
-  if (opts.url && originOf(opts.url) !== conn.origin)
-    throw new Fail("not_connected", `Connected to ${conn.origin}, not to ${originOf(opts.url)}.`)
-  const unknown = (status) =>
-    new Fail(
-      "outcome_unknown",
-      `The ${method} was sent, but its answer was lost${status ? ` (${status})` : ""}: it may still be written. Read the state once before doing anything else, and never send it again blindly.`,
-      status ? { status } : {},
-    )
-  let r
-  try {
-    r = await request(conn.origin, method, `${conn.origin}/api/v1/${target}`, {
-      json: body,
-      bearer: conn.key,
-      label,
-    })
-  } catch (e) {
-    if (e.code === "unreachable" && method !== "GET" && e.extra.sent !== false) throw unknown()
-    throw e
-  }
-  if (r.status === 401) {
-    await forget(ctx, conn)
-    throw new Fail(
-      "connection_ended",
-      `Adiutor no longer accepts this connection's key (it was disconnected in Settings or it expired). Run: adiutor connect --url ${conn.origin}`,
-    )
-  }
-  if (method !== "GET" && [502, 503, 504].includes(r.status)) throw unknown(r.status)
-  if (r.status >= 200 && r.status < 300) {
-    // Adiutor answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
-    const answer = r.json
-    if (answer && typeof answer === "object" && !Array.isArray(answer) && "data" in answer) {
-      const { status: _ignored, ...fields } = answer
-      return print({ status: r.status, ...fields })
-    }
-    return print({ status: r.status, data: answer })
-  }
-  throw httpFail(r, `${method} ${target.split("?")[0]}`)
-}
-
-async function main() {
-  const args = process.argv.slice(2)
-  const command = args.shift() ?? "help"
-  if (["help", "--help", "-h"].includes(command)) return process.stdout.write(`${HELP}\n`)
-  if (Number(process.versions.node.split(".")[0]) < 20)
-    throw new Fail("node_too_old", "Node 20 or later is needed. Use the adiutor launcher, which picks another version.")
-  if (!win) process.umask(0o077)
-  const opts = parseArgs(args)
-  const ctx = context()
-  try {
-    if (command === "status") {
-      if (opts.clearLeft) {
-        secureHome(ctx, true)
-        await withLock(ctx, async () => writeLeft(ctx, []))
-      }
-      return print(await status(ctx))
-    }
-    if (command === "connect") return opts.wait ? await waitForApproval(ctx, opts) : await connect(ctx, opts)
-    if (command === "disconnect") return await disconnect(ctx)
-    if (command === "get") return await api(ctx, "GET", opts)
-    if (command === "post") return await api(ctx, "POST", opts)
-    if (command === "patch") return await api(ctx, "PATCH", opts)
-  } catch (err) {
-    // The files changed under a lock this command no longer held: nothing more was done.
-    const e =
-      err instanceof Changed
-        ? new Fail("busy", "Another adiutor command changed the connection meanwhile. Run: adiutor status")
-        : err
-    // What the command left on Adiutor travels with every answer about the connection.
-    if (e instanceof Fail && ["connect", "disconnect", "status"].includes(command)) e.extra.left = leftNow(ctx)
-    throw e
-  }
-  throw new Fail("unknown_command", `Unknown command "${command}". Run: adiutor help`)
+  print(result)
 }
 
 main().catch((e) => {
@@ -1538,7 +1315,6 @@ main().catch((e) => {
       message: e.message,
       ...(e.extra.status !== undefined ? { status: e.extra.status } : {}),
       ...(e.extra.body !== undefined && e.extra.body !== null ? { body: e.extra.body } : {}),
-      ...(e.extra.left?.length ? { left: e.extra.left } : {}),
     })
   } else {
     print({ error: "failed", message: String(e?.message ?? e) })

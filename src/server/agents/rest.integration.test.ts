@@ -234,8 +234,8 @@ describe("the reserved refusals", () => {
 
   it("409: the exact policy_changed body for a missing, old, unknown, repeated or wrong revision or kind", async () => {
     const { token } = await connect(["read", "write"])
-    const exact =
-      '{"error":"policy_changed","message":"Adiutor\'s calls changed, or this path names a different call than the list says, or this skill is older than Adiutor. Nothing ran. Run `adiutor endpoints` and take the path from it."}'
+    // It names where to install the skill again: a copy older than the policy headers never reads update_skill.
+    const exact = `{"error":"policy_changed","message":"Adiutor's calls changed, or this path names a different call than the list says, or this skill is older than Adiutor. Nothing ran. Run \`adiutor endpoints\` and take the path from it; if this keeps happening, install the skill again from ${h.issuer}/agents/skill/."}`
     const cases: Record<string, string>[] = [
       { [HEADERS.policy]: "" },
       { [HEADERS.policy]: "0123456789abcdef" },

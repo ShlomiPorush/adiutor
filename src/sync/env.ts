@@ -2,11 +2,11 @@
 // (KEY=VALUE lines) so a scheduled task needs no system environment variables. Error messages never
 // include a value.
 
+import { issuerOf } from "./oauth.ts"
+
 export class SyncConfigError extends Error {
   override name = "SyncConfigError"
 }
-
-export const MIN_TOKEN_LENGTH = 32
 
 const KEY = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -34,21 +34,24 @@ export function parseEnvFile(text: string): Record<string, string> {
 }
 
 export type SyncConfig = {
-  /** Base URL of the Adiutor server, without a trailing slash. */
+  /** Adiutor's address as an issuer (a plain origin): the connection `connect` kept for it is used. */
   url?: string
-  /** The agent token. Never printed, logged or passed to a child process. */
-  token?: string
   /** Path of the T3 Code CLI; on Windows usually a .cmd file. */
   cliPath?: string
   /** The owner's overview checkout. */
   overviewDir?: string
+  /**
+   * Whether ADIUTOR_AGENT_TOKEN, the sync's agent key before agent approval, is still set: the sync no longer uses it,
+   * says so once per run, and never prints or passes it on.
+   */
+  oldToken: boolean
 }
 
 const NAMES = ["ADIUTOR_URL", "ADIUTOR_AGENT_TOKEN", "T3CODE_CLI_PATH", "ADIUTOR_OVERVIEW_DIR"] as const
 
 /**
  * Merges the environment with the env file (the file wins: it is the explicit choice of the caller)
- * and checks the values. The server URL and the token are required only when something is sent.
+ * and checks the values. The server URL is required only when something is sent.
  */
 export function loadSyncConfig(
   env: Record<string, string | undefined>,
@@ -60,28 +63,21 @@ export function loadSyncConfig(
     return value === "" ? undefined : value
   }
   const problems: string[] = []
-  const url = pick("ADIUTOR_URL")
-  const token = pick("ADIUTOR_AGENT_TOKEN")
-
+  let url = pick("ADIUTOR_URL")
   if (url !== undefined) {
-    const parsed = URL.canParse(url) ? new URL(url) : undefined
-    if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:"))
-      problems.push("ADIUTOR_URL must be an http or https URL")
-    else if (parsed.username || parsed.password || parsed.search || parsed.hash)
-      problems.push("ADIUTOR_URL must not contain credentials, a query or a fragment")
+    try {
+      url = issuerOf(url)
+    } catch {
+      problems.push("ADIUTOR_URL must be Adiutor's address alone: https, or http on localhost")
+    }
   } else if (options.requireServer) problems.push("ADIUTOR_URL is required")
-
-  if (token !== undefined) {
-    if (token.length < MIN_TOKEN_LENGTH)
-      problems.push(`ADIUTOR_AGENT_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`)
-  } else if (options.requireServer) problems.push("ADIUTOR_AGENT_TOKEN is required")
 
   if (problems.length > 0) throw new SyncConfigError(`Invalid configuration: ${problems.join("; ")}`)
   return {
-    url: url?.replace(/\/+$/, ""),
-    token,
+    url,
     cliPath: pick("T3CODE_CLI_PATH"),
     overviewDir: pick("ADIUTOR_OVERVIEW_DIR"),
+    oldToken: pick("ADIUTOR_AGENT_TOKEN") !== undefined,
   }
 }
 

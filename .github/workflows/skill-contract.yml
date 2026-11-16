@@ -1,0 +1,87 @@
+# The agent skill's contract tests on the systems where agents run its command: Windows (Node, Windows PowerShell 5.1,
+# PowerShell 7) and macOS (Node, POSIX sh). Linux runs the same tests (node and sh, and node on Node 20) in
+# scripts/verify.sh, and the guards check the sh scripts with shellcheck and shfmt (owner's decision D11).
+#
+# The suite runs only when the skill, the suite, the sync (src/sync, an OAuth client of the same contract) or this
+# workflow change. The checks are skipped only when the detection succeeded and found no such change. When the detection
+# fails or gives no answer, they run. A skipped job counts as passed for a required check.
+#
+# The workflow uses no secret: the fake server makes every token and code at run time.
+name: Skill contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  SKILL_SCRIPTS: skill/adiutor/scripts
+  SUITE_DIR: skill/test
+
+jobs:
+  changes:
+    name: Skill changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Detect changes
+        id: detect
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKFLOW: ${{ github.workflow_ref }}
+        shell: bash
+        run: |
+          # Fails closed: any doubt runs the suite. --no-renames counts a moved file at its old and its new path.
+          run=true
+          wf=${WORKFLOW#*/*/}; wf=${wf%@*}
+          # -z keeps paths as they are: without it, Git quotes unusual names and they would not match.
+          changed="$RUNNER_TEMP/changed"
+          if [ -n "$BASE" ] && [ "$BASE" != 0000000000000000000000000000000000000000 ] \
+            && git diff -z --no-renames --name-only "$BASE" "$HEAD" -- >"$changed"; then
+            run=false
+            while IFS= read -r -d '' f; do
+              case "$f" in
+                skill/* | src/sync/* | "$wf") run=true ;;
+              esac
+            done <"$changed"
+          fi
+          echo "run=$run" >>"$GITHUB_OUTPUT"
+          echo "Run the skill checks: $run"
+
+  skill:
+    name: Skill (${{ matrix.os }})
+    needs: changes
+    # Runs unless the detection succeeded and found no change: a failed detection runs the checks.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            impls: node,ps,pwsh
+          - os: macos-latest
+            impls: node,sh
+    runs-on: ${{ matrix.os }}
+    # The Windows run takes about 15 to 20 minutes with three versions.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Contract tests
+        working-directory: ${{ env.SUITE_DIR }}
+        env:
+          ADIUTOR_IMPLS: ${{ matrix.impls }}
+          ADIUTOR_TEST_TMP: ${{ runner.temp }}
+          ADIUTOR_SCRIPTS_DIR: ${{ github.workspace }}/${{ env.SKILL_SCRIPTS }}
+        run: node --test --test-concurrency=1 contract.test.mjs

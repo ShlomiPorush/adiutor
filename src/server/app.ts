@@ -120,6 +120,7 @@ export function createApp(deps: AppDeps) {
           version: deps.core.config.version,
           clientIp: deps.core.clientIp ?? socketAddress,
           ...(deps.agentOAuth.channel ? { limits: deps.agentOAuth.channel } : {}),
+          skillVersion: deps.agentOAuth.skillVersion,
         })
       : undefined
   if (agents) {

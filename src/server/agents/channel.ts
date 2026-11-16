@@ -24,6 +24,7 @@ import {
   type OpenRoute,
   REVISION,
   TOOLS,
+  updateSkillNotice,
 } from "./policy.ts"
 
 /*
@@ -71,11 +72,6 @@ export type Outcome = "ok" | "error" | "denied" | "unknown"
 /** The reserved refusals (the standard's exact bodies) and the channel's own refusals. Messages hold no request value. */
 export const REFUSALS = {
   busy: { error: "busy", message: "This connection runs too many calls at once. Nothing was sent; try again." },
-  policyChanged: {
-    error: "policy_changed",
-    message:
-      "Adiutor's calls changed, or this path names a different call than the list says, or this skill is older than Adiutor. Nothing ran. Run `adiutor endpoints` and take the path from it.",
-  },
   invalidToken: { error: "invalid_token", message: "The token is not valid here, or the connection has ended." },
   invalidRequest: { error: "invalid_request", message: "Send exactly one Authorization: Bearer <token> header." },
   unauthorized: { error: "unauthorized", message: "Connect to Adiutor first: this call needs a token." },
@@ -100,6 +96,16 @@ export const REFUSALS = {
   connectionEnded: { error: "connection_ended", message: "This connection has ended. Connect again." },
   tooLarge: { error: "too_large", message: "The request body is too large." },
 } as const
+
+/**
+ * The reserved 409. It names where to install the skill again, because a copy older than the policy headers never
+ * reads `update_skill` (distribution-and-versioning, "Rolling out a client change the server enforces"); the client
+ * reads only its `error`.
+ */
+export const policyChanged = (issuer: string) => ({
+  error: "policy_changed",
+  message: `Adiutor's calls changed, or this path names a different call than the list says, or this skill is older than Adiutor. Nothing ran. Run \`adiutor endpoints\` and take the path from it; if this keeps happening, install the skill again from ${issuer}/agents/skill/.`,
+})
 
 /** A failure whose outcome may be unknown (a 5xx after an action). */
 const INTERNAL = { error: "internal_error", message: "Something went wrong on the server." } as const
@@ -158,6 +164,8 @@ export type AgentChannelOptions = {
   version: string
   clientIp: (c: Context) => string
   limits?: ChannelLimits
+  /** The version a served copy of this build's skill sends (oauth/skill.ts), null without a skill: `update_skill`. */
+  skillVersion?: string | null
 }
 
 /** A request's checked token: the token and what agent access answered for it. */
@@ -289,9 +297,17 @@ export function createAgentChannel(options: AgentChannelOptions) {
     return { token: match[1], check }
   }
 
-  /** What `access` and the MCP tool get_access answer. */
-  async function accessAnswer(check: Extract<TokenCheck, { ok: true }>, resource: AgentResource) {
+  /**
+   * What `access` and the MCP tool get_access answer. `skill` is the X-Adiutor-Skill header of a REST call: the skill
+   * sends it, so only REST answers `update_skill` (an MCP client is no skill).
+   */
+  async function accessAnswer(
+    check: Extract<TokenCheck, { ok: true }>,
+    resource: AgentResource,
+    skill?: { sent: string | undefined },
+  ) {
     const { connection, areas } = check
+    const notice = skill ? updateSkillNotice(skill.sent, options.skillVersion ?? null, issuer) : null
     const [owner] = await ctx.db.select({ username: authUser.username, name: authUser.name }).from(authUser).limit(1)
     const { idleDays } = await access.agentSettings()
     const since = connection.lastUsedAt ?? connection.approvedAt
@@ -308,7 +324,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
         endsAt: new Date(since.getTime() + idleDays * 86_400_000).toISOString(),
       },
       version: options.version,
-      // PR 5: `update_skill`, from the X-Adiutor-Skill header (HEADERS.skill), when the skill is older than Adiutor.
+      ...(notice ? { update_skill: notice } : {}),
     }
   }
 
@@ -346,7 +362,8 @@ export function createAgentChannel(options: AgentChannelOptions) {
 
   const handlers: Record<string, RouteHandler> = {
     ...openRouteHandlers({ ctx }),
-    "GET /api/v1/agent/access": async (c) => c.json(await accessAnswer(callOf(c).check, "rest")),
+    "GET /api/v1/agent/access": async (c) =>
+      c.json(await accessAnswer(callOf(c).check, "rest", { sent: c.req.header(HEADERS.skill) })),
     "GET /api/v1/agent/endpoints": async (c) => {
       const only = c.req.query("area")
       if (only !== undefined && !(["read", "write", "sync"] as string[]).includes(only))
@@ -383,7 +400,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
       }
       if (!mayCall(check.areas, route.area)) return refuse(403, { ...REFUSALS.areaNotGranted, area: route.area })
       if (!route.exempt && (c.req.header(HEADERS.policy) !== REVISION || c.req.header(HEADERS.kind) !== route.kind))
-        return refuse(409, REFUSALS.policyChanged)
+        return refuse(409, policyChanged(issuer))
       let tooLarge = false
       const done = await guarded(
         call,
