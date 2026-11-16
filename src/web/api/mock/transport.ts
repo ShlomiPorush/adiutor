@@ -708,7 +708,6 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
         kind: "t3",
         startedAt: ago(27.1),
         finishedAt: ago(27),
-        collectedAt: ago(27.2),
         outcome: "partial",
         counts: { itemsUpdated: 4 },
         errors: [{ record: "thread:thr_x", code: "conflict" }],

@@ -6,6 +6,7 @@ import { audit, syncRequests } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
 import { addSyncConnection } from "../testing/agents.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
+import { holdRow } from "../testing/locks.ts"
 import {
   cancelSyncRequest,
   checkIn,
@@ -234,6 +235,45 @@ describe("the check-in", () => {
     const answers = await Promise.all([a, b])
     for (const answer of answers) expect(answer.claim?.requestId).toBe(request.id)
     expect((await row(request.id)).state).toBe("claimed")
+  })
+
+  it("applies finished requests in the order of their ids, so two check-ins with reversed lists never deadlock", async () => {
+    const computer = randomUUID()
+    // Two requests this connection holds: one whose lease passed (unknown), and the claim after it.
+    const first = (await requestSync(t.ctx, owner)).request
+    await checkIn(t.ctx, computer, report())
+    t.clock.travel(SYNC_LEASE_MS + MINUTE)
+    const second = (await requestSync(t.ctx, owner)).request
+    await checkIn(t.ctx, computer, report())
+    expect([(await row(first.id)).state, (await row(second.id)).state]).toEqual(["unknown", "claimed"])
+    const [low, high] = [first.id, second.id].sort()
+    const result = { t3: "accepted" as const, security: "accepted" as const }
+    // Both check-ins wait behind a held row; released, each would take the rows in the order it was sent.
+    const held = await holdRow(t, "sync_requests", low as string)
+    const a = checkIn(
+      t.ctx,
+      computer,
+      report({
+        finished: [
+          { requestId: low as string, result },
+          { requestId: high as string, result },
+        ],
+      }),
+    )
+    const b = checkIn(
+      t.ctx,
+      computer,
+      report({
+        finished: [
+          { requestId: high as string, result },
+          { requestId: low as string, result },
+        ],
+      }),
+    )
+    await held.waiting(2)
+    await held.release()
+    await Promise.all([a, b])
+    expect([(await row(first.id)).state, (await row(second.id)).state]).toEqual(["done", "done"])
   })
 
   it("makes a claim whose lease passed unknown, and still takes its late result", async () => {

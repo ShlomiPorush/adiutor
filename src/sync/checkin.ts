@@ -124,6 +124,12 @@ export async function keepClaim(
 
 export const CHECKIN_LOCK = "checkin.lock"
 
+const CONNECTION_CHANGED: CheckinOutcome = {
+  ok: false,
+  code: "connection_changed",
+  message: "The sync connected again while it checked in: that answer belonged to the old connection and was dropped.",
+}
+
 /**
  * One check-in round, from sending the report to keeping the claim, under the check-in lock (src/sync/lock.ts): two
  * check-ins at once take turns, so an answer that arrives late never writes back a claim another check-in already
@@ -142,6 +148,11 @@ export async function checkinRound(
   return lock.withLock(options, async () => {
     const identity = await client.identity()
     const sent = await sendCheckin(client, report)
+    // The connection may have changed while the answer was on its way (connect --replace takes another lock): an
+    // answer for a connection that is no longer the kept one is dropped, and its claim never kept or answered.
+    const now = await client.identity()
+    if (sent.ok && (identity === null || now !== identity))
+      return { sent: CONNECTION_CHANGED, claim: readClaim(dir, now), identity: now }
     if (!sent.ok || identity === null) return { sent, claim: readClaim(dir, identity), identity }
     return { sent, claim: await keepClaim(dir, identity, report, sent.claim, deps), identity }
   })

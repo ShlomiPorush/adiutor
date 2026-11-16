@@ -143,7 +143,12 @@ export async function checkIn(
           ? { kind: "request", requestId: report.running.requestId }
           : { kind: "local", startedAt: report.running.startedAt.toISOString() }
 
-    for (const { requestId, result } of report.finished) {
+    // In the order of their ids, whatever order the computer sent them in: two check-ins at once lock the same rows
+    // in the same order, so neither waits for the other in a circle.
+    const finished = [...report.finished].sort((a, b) =>
+      a.requestId < b.requestId ? -1 : a.requestId > b.requestId ? 1 : 0,
+    )
+    for (const { requestId, result } of finished) {
       await tx
         .update(syncRequests)
         .set({ state: finishedState(result), result, finishedAt: now })

@@ -1,5 +1,5 @@
 {
-  "id": "dd77708f-4334-4286-8a21-5076e230e8d2",
+  "id": "fe9153b8-6251-4b43-bbe6-f435230456f1",
   "prevId": "b146bc31-7f05-426f-b144-2db3e453a004",
   "version": "7",
   "dialect": "postgresql",
@@ -1640,6 +1640,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "snooze_as_of": {
+          "name": "snooze_as_of",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "last_activity_at": {
           "name": "last_activity_at",
           "type": "timestamp with time zone",
@@ -3116,12 +3122,6 @@
         },
         "finished_at": {
           "name": "finished_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "collected_at": {
-          "name": "collected_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false

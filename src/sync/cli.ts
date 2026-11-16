@@ -175,6 +175,19 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
         return await checkinCommand(settings, deps, out)
       case "run": {
         if (values.request !== undefined && !isRequestId(values.request)) return usage(out, "--request must be an id")
+        // Only the claim kept for the connection and address of now: Adiutor takes a result from that connection alone.
+        if (values.request !== undefined) {
+          const all = connectDeps(deps)
+          const identity = settings.url ? await syncClient(settings.url, all).identity() : null
+          const claim = readClaim(dataDir(all.platform, deps.env), identity)
+          if (claim?.requestId !== values.request.toLowerCase()) {
+            const message =
+              "This request is not the one Adiutor handed this connection, so it does not run: check in again first."
+            out.say(`run: ${message}`)
+            out.result({ command: "run", ok: false, error: { code: "request_not_claimed", message } })
+            return EXIT_NOTHING_PUSHED
+          }
+        }
         const { exit, body } = await runSync(
           {
             collect: !values["no-collect"],

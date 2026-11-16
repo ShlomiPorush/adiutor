@@ -147,6 +147,8 @@ export const itemThreads = pgTable(
     /** Snoozed in T3 (D-T6), until `snoozed_until` when T3 gives a time. Shown on the item; no sync rule reads it. */
     snoozed: boolean("snoozed").notNull().default(false),
     snoozedUntil: at("snoozed_until"),
+    /** The newest collectedAt of a snapshot that held this thread: a snooze is taken only from one no older. */
+    snoozeAsOf: at("snooze_as_of"),
     lastActivityAt: at("last_activity_at"),
     linkedAt: at("linked_at").notNull().defaultNow(),
   },
@@ -304,11 +306,6 @@ export const syncRuns = pgTable(
     kind: text("kind").notNull(),
     startedAt: at("started_at").notNull().defaultNow(),
     finishedAt: at("finished_at"),
-    /**
-     * When the sync collected the snapshot this run applies; null for a snapshot refused whole and for runs from before
-     * it was recorded. The newest T3 one is the snooze's watermark (services/sync.ts newerSnapshotApplied).
-     */
-    collectedAt: at("collected_at"),
     /** Null while the run is in progress. */
     outcome: text("outcome", { enum: SYNC_OUTCOMES }),
     counts: jsonb("counts").$type<Record<string, number>>().notNull().default({}),

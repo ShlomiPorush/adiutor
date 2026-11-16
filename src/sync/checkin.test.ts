@@ -187,6 +187,31 @@ describe("checkin --json", () => {
     expect(kept()).toBeNull()
   })
 
+  it("drops an answer that arrives after the sync connected again: its claim is the old connection's", async () => {
+    const requestId = randomUUID()
+    fake.claim = requestId
+    let open = () => {}
+    fake.checkinGates.push(
+      new Promise<void>((resolve) => {
+        open = resolve
+      }),
+    )
+    const pending = checkin()
+    await vi.waitFor(() => expect(fake.checkins).toHaveLength(1))
+    // connect --replace while the answer, claiming the request for the old connection, is on its way.
+    await connectSync()
+    open()
+    const { exit, result } = await pending
+    expect([exit, result.ok, (result.error as { code: string }).code, result.claim]).toEqual([
+      1,
+      false,
+      "connection_changed",
+      null,
+    ])
+    expect(kept()).toBeNull()
+    expect((await json(["status"])).result.claim).toBeNull()
+  })
+
   it("keeps the next claim when the answer to a finished report hands one", async () => {
     const [first, next] = [randomUUID(), randomUUID()]
     fake.claim = first
@@ -332,13 +357,33 @@ describe("parseReport", () => {
 describe("run --request", () => {
   it("names the request it served in its report and in the status file", async () => {
     const requestId = randomUUID()
-    const { result } = await json(["run", "--no-collect", "--request", requestId])
+    fake.claim = requestId
+    await checkin()
+    const { result } = await json(["run", "--no-collect", "--request", requestId.toUpperCase()])
     const report = (result as { report?: RunReport }).report
     expect(report?.requestId).toBe(requestId)
     const status = JSON.parse(readFileSync(join(data(), "status.json"), "utf8"))
     expect(status.lastRun.requestId).toBe(requestId)
     const plain = await json(["run", "--no-collect"])
     expect((plain.result as { report?: RunReport }).report?.requestId).toBeNull()
+  })
+
+  it("runs nothing for a request that is not this connection's kept claim", async () => {
+    const other = randomUUID()
+    const refused = await json(["run", "--no-collect", "--request", other])
+    expect([refused.exit, refused.result.ok, (refused.result.error as { code: string }).code]).toEqual([
+      1,
+      false,
+      "request_not_claimed",
+    ])
+    // A claim of the connection before connect --replace is not this connection's either.
+    fake.claim = other
+    await checkin()
+    await connectSync()
+    const replaced = await json(["run", "--no-collect", "--request", other])
+    expect((replaced.result.error as { code: string }).code).toBe("request_not_claimed")
+    expect(existsSync(join(data(), "status.json"))).toBe(false)
+    expect(fake.pushes).toHaveLength(0)
   })
 
   it("refuses a request id that is not one", async () => {

@@ -25,6 +25,6 @@ CREATE TABLE "sync_requests" (
 --> statement-breakpoint
 ALTER TABLE "item_threads" ADD COLUMN "snoozed" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE "item_threads" ADD COLUMN "snoozed_until" timestamp with time zone;--> statement-breakpoint
-ALTER TABLE "sync_runs" ADD COLUMN "collected_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "item_threads" ADD COLUMN "snooze_as_of" timestamp with time zone;--> statement-breakpoint
 CREATE UNIQUE INDEX "sync_requests_one_open_idx" ON "sync_requests" USING btree ((true)) WHERE "sync_requests"."state" in ('waiting', 'claimed');--> statement-breakpoint
 CREATE INDEX "sync_requests_requested_idx" ON "sync_requests" USING btree ("requested_at");

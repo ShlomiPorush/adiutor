@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { audit, items, itemThreads, projects, securitySources, suppressions, syncRuns } from "../db/schema.ts"
@@ -802,7 +802,7 @@ describe("snoozed threads (D-T6)", () => {
     await applyT3Snapshot(t.ctx, snapshot([snoozed], { collectedAt: t1 }))
     await applyT3Snapshot(t.ctx, snapshot([snoozed], { collectedAt: t3 }))
     await applyT3Snapshot(t.ctx, snapshot([awake], { collectedAt: t2 }))
-    expect(await linkOf("a")).toMatchObject({ snoozed: true, snoozedUntil: until })
+    expect(await linkOf("a")).toMatchObject({ snoozed: true, snoozedUntil: until, snoozeAsOf: t3 })
   })
 
   it("and the other way: a late snapshot never brings back a snooze that a newer one left ended", async () => {
@@ -816,9 +816,39 @@ describe("snoozed threads (D-T6)", () => {
     await applyT3Snapshot(t.ctx, snapshot([awake], { collectedAt: t1 }))
     await applyT3Snapshot(t.ctx, snapshot([awake], { collectedAt: t3 }))
     await applyT3Snapshot(t.ctx, snapshot([snoozed], { collectedAt: t2 }))
-    expect(await linkOf("a")).toMatchObject({ snoozed: false, snoozedUntil: null })
-    const [run] = await t.ctx.db.select().from(syncRuns).orderBy(desc(syncRuns.startedAt)).limit(1)
-    expect(run?.collectedAt).toEqual(t2)
+    expect(await linkOf("a")).toMatchObject({ snoozed: false, snoozedUntil: null, snoozeAsOf: t3 })
+  })
+
+  it("is not blocked by a newer run that stopped before it applied anything", async () => {
+    const at = ago(HOUR)
+    const t3 = t.ctx.clock()
+    const t2 = new Date(t3.getTime() - 10 * 60_000)
+    const t1 = new Date(t3.getTime() - 20 * 60_000)
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: true })], { collectedAt: t1 }))
+    const crash = applyT3Snapshot(
+      t.ctx,
+      snapshot([thread("a", { updatedAt: at, snoozed: true })], { collectedAt: t3 }),
+      {
+        afterLoad: async () => {
+          throw new Error("stopped")
+        },
+      },
+    )
+    await expect(crash).rejects.toThrow("stopped")
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: false })], { collectedAt: t2 }))
+    expect(await linkOf("a")).toMatchObject({ snoozed: false, snoozeAsOf: t2 })
+  })
+
+  it("is not blocked by a newer partial run that did not read the thread's project", async () => {
+    const at = ago(HOUR)
+    const t3 = t.ctx.clock()
+    const t2 = new Date(t3.getTime() - 10 * 60_000)
+    const t1 = new Date(t3.getTime() - 20 * 60_000)
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: true })], { collectedAt: t1 }))
+    const partial = await applyT3Snapshot(t.ctx, snapshot([], { collectedAt: t3, failedProjects: ["t3-garden"] }))
+    expect(partial.outcome).toBe("partial")
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: false })], { collectedAt: t2 }))
+    expect(await linkOf("a")).toMatchObject({ snoozed: false, snoozeAsOf: t2 })
   })
 
   it("changes no status decision", async () => {
