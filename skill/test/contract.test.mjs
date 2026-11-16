@@ -17,20 +17,21 @@ const ENV = "ADIUTOR_"
 const URL_PLACEHOLDER = "__ADIUTOR_URL__"
 const VERSION_PLACEHOLDER = "__ADIUTOR_SKILL_VERSION__"
 const SKILL_REVISION = 1
-const SCOPE = "read act"
+const SCOPE = "read write"
 const KINDS_MAGIC = "adiutor-kinds"
-const CLIENT_ID = "adiutor-cli"
+const CLIENT_ID = "adiutor-agent"
 const POLICY_HEADER = "x-adiutor-policy"
 const KIND_HEADER = "x-adiutor-kind"
 /* ---- End of product constants. ---- */
 
 const win = process.platform === "win32"
-// The skill's scripts: ADIUTOR_SCRIPTS_DIR, or ../scripts from this file. Keep the suite outside the skill folder
-// that installers copy from Git, and point ADIUTOR_SCRIPTS_DIR at the scripts.
+// The skill's scripts: ADIUTOR_SCRIPTS_DIR, or ../adiutor/scripts from this file (the skill next to this suite).
+// Keep the suite outside the skill folder that installers copy from Git, and point ADIUTOR_SCRIPTS_DIR at the scripts.
 const scripts = path.resolve(
-  process.env[`${ENV}SCRIPTS_DIR`] || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts"),
+  process.env[`${ENV}SCRIPTS_DIR`] || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", NAME, "scripts"),
 )
-if (!fs.existsSync(path.join(scripts, `${NAME}.mjs`))) throw new Error(`No ${NAME} scripts in ${scripts}. Set ${ENV}SCRIPTS_DIR.`)
+if (!fs.existsSync(path.join(scripts, `${NAME}.mjs`)))
+  throw new Error(`No ${NAME} scripts in ${scripts}. Set ${ENV}SCRIPTS_DIR.`)
 // ps is Windows PowerShell 5.1, pwsh PowerShell 7: the same adiutor.ps1 runs on both.
 const impls = (process.env[`${ENV}IMPLS`] ?? (win ? "node,ps,pwsh" : "node,sh")).split(",").filter(Boolean)
 const tmpBase = process.env[`${ENV}TEST_TMP`] || os.tmpdir()
@@ -86,6 +87,8 @@ function baseEnv(impl, inst) {
     ...process.env,
     [`${ENV}URL`]: "",
     [`${ENV}CREDENTIALS`]: inst.creds,
+    [`${ENV}SKILL_HOME`]: "",
+    [`${ENV}AGENT_LABEL`]: "",
     [`${ENV}NO_NODE`]: impl === "node" ? "" : "1",
     [`${ENV}TEST_POLL_SECONDS`]: "1",
     [`${ENV}TEST_BUSY_WAIT_MS`]: "100",
@@ -256,13 +259,13 @@ for (const impl of impls) {
       const c = await run(impl, inst, server, ["connect"])
       assert.equal(c.code, 0, c.out + c.err)
       assert.equal(c.json.status, "pending")
-      assert.match(c.json.link, new RegExp(`^${server.issuer}/connect/device\\?user_code=`))
+      assert.match(c.json.link, new RegExp(`^${server.issuer}/connect/code\\?user_code=`))
       assert.match(c.json.code, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/)
       // The same hint from every version: the link and the code go in the reply that ends the agent's turn.
       assert.equal(c.json.next, connectNext(server.issuer))
       assert.match(server.last.label, /^Agents on .+/)
       assert.equal(server.last.deviceScope, SCOPE)
-      assert.equal(server.last.resource, `${server.issuer}/api`)
+      assert.equal(server.last.resource, `${server.issuer}/api/v1`)
       assert.equal((await run(impl, inst, server, ["status"])).json.status, "pending")
       // Asking again while the code is open shows the same code, without a new one.
       const again = await run(impl, inst, server, ["connect"])
@@ -316,13 +319,13 @@ for (const impl of impls) {
       const inst = fresh()
       await connected(impl, inst, server)
       const before = server.counts.refresh
-      const r = await run(impl, inst, server, ["get", "/api/items?status=open"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items?status=open"])
       assert.equal(r.code, 0, r.out + r.err)
-      assert.equal(r.json.data.path, "/api/items")
+      assert.equal(r.json.data.path, "/api/v1/items")
       assert.equal(r.json.data.query, "?status=open")
       assert.equal(server.counts.refresh, before, "no refresh while the token lasts")
       server.expireAccessTokens()
-      const again = await run(impl, inst, server, ["get", "/api/items/12"])
+      const again = await run(impl, inst, server, ["get", "/api/v1/items/12"])
       assert.equal(again.code, 0, again.out + again.err)
       assert.equal(server.counts.refresh, before + 1, "one refresh after the token refusal")
       assert.equal(server.counts.reuse, 0)
@@ -335,7 +338,7 @@ for (const impl of impls) {
       server.refreshAccessTtl = 900
       await connected(impl, inst, server)
       const before = server.counts.refresh
-      const all = await Promise.all(Array.from({ length: 10 }, () => run(impl, inst, server, ["get", "/api/items"])))
+      const all = await Promise.all(Array.from({ length: 10 }, () => run(impl, inst, server, ["get", "/api/v1/items"])))
       for (const r of all) assert.equal(r.code, 0, r.out + r.err)
       assert.equal(server.counts.refresh, before + 1)
       assert.equal(server.counts.reuse, 0)
@@ -346,22 +349,22 @@ for (const impl of impls) {
       await connected(impl, inst, server)
       const body = path.join(inst.base, "body.json")
       fs.writeFileSync(body, JSON.stringify({ name: "Quarterly report", tags: ["finance"] }))
-      const r = await run(impl, inst, server, ["post", "/api/items", "--json-file", body])
+      const r = await run(impl, inst, server, ["post", "/api/v1/items", "--json-file", body])
       assert.equal(r.code, 0, r.out + r.err)
       assert.deepEqual(r.json.data.body, { name: "Quarterly report", tags: ["finance"] })
-      const empty = await run(impl, inst, server, ["post", "/api/items/4/archive"])
+      const empty = await run(impl, inst, server, ["post", "/api/v1/items/4/archive"])
       assert.equal(empty.json?.data?.method, "POST", empty.out + empty.err)
       assert.deepEqual(empty.json.data.body, {})
       server.afterRun.push({ status: 403, body: { error: "not_allowed", message: "This item is locked." } })
-      const refused = await run(impl, inst, server, ["post", "/api/items/4/archive"])
+      const refused = await run(impl, inst, server, ["post", "/api/v1/items/4/archive"])
       assert.equal(refused.json?.error, "not_allowed", refused.out + refused.err)
       assert.equal(refused.json.message, "This item is locked.")
       assert.equal(refused.json.status, 403)
       server.afterRun.push({ status: 200, body: { success: false, reason: "duplicate" } })
-      const failed = await run(impl, inst, server, ["post", "/api/items", "--json", "{}"])
+      const failed = await run(impl, inst, server, ["post", "/api/v1/items", "--json", "{}"])
       assert.equal(failed.json?.error, "failed", failed.out + failed.err)
       assert.equal(failed.code, 1)
-      const notJson = await run(impl, inst, server, ["post", "/api/items", "--json", "name=x"])
+      const notJson = await run(impl, inst, server, ["post", "/api/v1/items", "--json", "name=x"])
       assert.equal(notJson.json?.error, "bad_body", notJson.out + notJson.err)
     })
 
@@ -380,7 +383,7 @@ for (const impl of impls) {
         [' \t{"x":"\\u00e9\\n"}\r\n', { x: "\xe9\n" }],
       ]) {
         fs.writeFileSync(file, text)
-        const r = await run(impl, inst, server, ["post", "/api/items", "--json-file", file])
+        const r = await run(impl, inst, server, ["post", "/api/v1/items", "--json-file", file])
         assert.deepEqual(r.json?.data?.body, value, `${JSON.stringify(text)}: ${r.out}${r.err}`)
         sent++
       }
@@ -404,28 +407,27 @@ for (const impl of impls) {
         `${BOM}{}`,
       ]) {
         fs.writeFileSync(file, text)
-        const r = await run(impl, inst, server, ["post", "/api/items", "--json-file", file])
+        const r = await run(impl, inst, server, ["post", "/api/v1/items", "--json-file", file])
         assert.equal(r.json?.error, "bad_body", `${JSON.stringify(text)}: ${r.out}${r.err}`)
       }
-      assert.equal(server.arrivals("POST", "/api/items"), sent, "nothing else was sent")
+      assert.equal(server.arrivals("POST", "/api/v1/items"), sent, "nothing else was sent")
     })
 
-    it("sends put, patch and delete, with or without a body", async () => {
+    it("sends patch, with a body or the empty object, and has no put or delete", async () => {
       const inst = fresh()
       await listed(impl, inst, server)
-      const put = await run(impl, inst, server, ["put", "/api/items/5", "--json", '{"name":"b"}'])
-      assert.equal(put.json?.data?.method, "PUT", put.out + put.err)
-      assert.deepEqual(put.json.data.body, { name: "b" })
-      const patch = await run(impl, inst, server, ["patch", "/api/items/5", "--json", '{"name":"c"}'])
+      const patch = await run(impl, inst, server, ["patch", "/api/v1/items/5", "--json", '{"name":"c"}'])
       assert.equal(patch.json?.data?.method, "PATCH", patch.out + patch.err)
-      const del = await run(impl, inst, server, ["delete", "/api/items/5"])
-      assert.equal(del.json?.data?.method, "DELETE", del.out + del.err)
-      assert.equal(del.json.data.body, null)
-      const delBody = await run(impl, inst, server, ["delete", "/api/items/6", "--json", '{"reason":"old"}'])
-      assert.deepEqual(delBody.json?.data?.body, { reason: "old" }, delBody.out + delBody.err)
-      assert.equal(server.runs("PUT", "/api/items/{id}"), 1)
-      assert.equal(server.runs("PATCH", "/api/items/{id}"), 1)
-      assert.equal(server.runs("DELETE", "/api/items/{id}"), 2)
+      assert.deepEqual(patch.json.data.body, { name: "c" })
+      const bare = await run(impl, inst, server, ["patch", "/api/v1/items/6"])
+      assert.deepEqual(bare.json?.data?.body, {}, bare.out + bare.err)
+      assert.equal(server.runs("PATCH", "/api/v1/items/{id}"), 2)
+      // Adiutor opens no PUT or DELETE route to agents: the command has neither.
+      for (const method of ["put", "delete"]) {
+        const r = await run(impl, inst, server, [method, "/api/v1/items/5"])
+        assert.equal(r.json?.error, "unknown_command", r.out + r.err)
+      }
+      assert.equal(server.arrivals("PUT", "/api/v1/items/5") + server.arrivals("DELETE", "/api/v1/items/5"), 0)
     })
 
     it("refuses an address without https, and a path outside the API", async () => {
@@ -442,122 +444,138 @@ for (const impl of impls) {
       assert.equal(res.json.error, "insecure_url")
       await connected(impl, inst, server)
       for (const p of [
-        "/api/../oauth/token",
-        "/api/%2e%2e/oauth/token",
-        "/api/%2E%2e/%2e%2E/oauth/token",
-        "/api/./items",
-        "https://evil.example/api/items",
-        "//evil.example/api/items",
-        "/api/a b",
+        "/api/v1/../oauth/token",
+        "/api/v1/%2e%2e/oauth/token",
+        "/api/v1/%2E%2e/%2e%2E/oauth/token",
+        "/api/v1/./items",
+        "https://evil.example/api/v1/items",
+        "//evil.example/api/v1/items",
+        "/api/v1/a b",
         "/oauth/token",
-        "/api/",
+        "/api/v1/",
         "items",
       ]) {
         const r = await run(impl, inst, server, ["get", p])
         assert.equal(r.json?.error, "bad_path", `${p}: ${r.out}`)
       }
-      assert.equal([...server.arrivalCounts.values()].reduce((a, b) => a + b, 0), 0, "nothing reached the API")
+      assert.equal(
+        [...server.arrivalCounts.values()].reduce((a, b) => a + b, 0),
+        0,
+        "nothing reached the API",
+      )
     })
 
     it("refuses an escape in the path that a server would decode into another call, and sends nothing", async () => {
       const inst = fresh()
-      // Act routes next to the read route /api/items/{id}, which the encoded paths below match as they are. The fake
+      // Act routes next to the read route /api/v1/items/{id}, which the encoded paths below match as they are. The fake
       // server decodes the path before it routes, as many real servers do.
       server.policy.unshift(
-        { method: "GET", path: "/api/items/{id}/send", kind: "act", area: "items", description: "Send an item." },
-        { method: "GET", path: "/api/items/export", kind: "act", area: "items", description: "Export the items." },
+        { method: "GET", path: "/api/v1/items/{id}/send", kind: "act", area: "items", description: "Send an item." },
+        { method: "GET", path: "/api/v1/items/export", kind: "act", area: "items", description: "Export the items." },
       )
       await listed(impl, inst, server)
       const arrived = () => [...server.arrivalCounts.values()].reduce((a, b) => a + b, 0)
       const listedArrivals = arrived()
       for (const p of [
-        "/api/items/7%2Fsend",
-        "/api/items/7%2fsend",
-        "/api/items/7%5Csend",
-        "/api/items/7%5csend",
-        "/api/items/7%252Fsend",
-        "/api/items/%65xport",
-        "/api/items/expor%74",
-        "/api/items/%45%58",
-        "/api/items/7%3Asend",
-        "/api/items/7%7E",
-        "/api/items/7%",
-        "/api/items/7%2",
-        "/api/items/7%zz",
+        "/api/v1/items/7%2Fsend",
+        "/api/v1/items/7%2fsend",
+        "/api/v1/items/7%5Csend",
+        "/api/v1/items/7%5csend",
+        "/api/v1/items/7%252Fsend",
+        "/api/v1/items/%65xport",
+        "/api/v1/items/expor%74",
+        "/api/v1/items/%45%58",
+        "/api/v1/items/7%3Asend",
+        "/api/v1/items/7%7E",
+        "/api/v1/items/7%",
+        "/api/v1/items/7%2",
+        "/api/v1/items/7%zz",
       ]) {
         const r = await run(impl, inst, server, ["get", p])
         assert.equal(r.json?.error, "bad_path", `${p}: ${r.out}${r.err}`)
       }
       assert.equal(arrived(), listedArrivals, "nothing reached the API")
       // Other escapes in the path, and any escape in the query, are sent as they are.
-      const spaced = await run(impl, inst, server, ["get", "/api/items/a%20b"])
-      assert.equal(spaced.json?.data?.path, "/api/items/a%20b", spaced.out + spaced.err)
-      const q = await run(impl, inst, server, ["get", "/api/items?q=a%2Fb%5Cc%25d"])
+      const spaced = await run(impl, inst, server, ["get", "/api/v1/items/a%20b"])
+      assert.equal(spaced.json?.data?.path, "/api/v1/items/a%20b", spaced.out + spaced.err)
+      const q = await run(impl, inst, server, ["get", "/api/v1/items?q=a%2Fb%5Cc%25d"])
       assert.equal(q.json?.data?.query, "?q=a%2Fb%5Cc%25d", q.out + q.err)
-      assert.equal(server.runs("GET", "/api/items/{id}/send"), 0)
-      assert.equal(server.runs("GET", "/api/items/export"), 0)
+      assert.equal(server.runs("GET", "/api/v1/items/{id}/send"), 0)
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 0)
     })
 
     it("never runs an act that a case-insensitive router picked for a path the list holds as a read", async () => {
       const inst = fresh()
-      // /api/items/EXPORT matches the read /api/items/{id} in the client; the server, like ASP.NET Core by default,
-      // routes it to the act /api/items/export. Its answer is lost, which would make the client send a read again.
-      server.policy.unshift({ method: "GET", path: "/api/items/export", kind: "act", area: "items", description: "" })
+      // /api/v1/items/EXPORT matches the read /api/v1/items/{id} in the client; the server, like ASP.NET Core by default,
+      // routes it to the act /api/v1/items/export. Its answer is lost, which would make the client send a read again.
+      server.policy.unshift({
+        method: "GET",
+        path: "/api/v1/items/export",
+        kind: "act",
+        area: "items",
+        description: "",
+      })
       server.caseInsensitiveRoutes = true
       await listed(impl, inst, server)
       server.afterRun = ["drop", "drop"]
-      const r = await run(impl, inst, server, ["get", "/api/items/EXPORT"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items/EXPORT"])
       server.afterRun = []
-      assert.equal(server.runs("GET", "/api/items/export"), 0, "the act never ran")
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 0, "the act never ran")
       assert.equal(r.json?.error, "policy_changed", r.out + r.err)
-      assert.equal(server.arrivals("GET", "/api/items/EXPORT"), 2, "sent again once, after the list was read again")
+      assert.equal(server.arrivals("GET", "/api/v1/items/EXPORT"), 2, "sent again once, after the list was read again")
       // The path the list holds as an act goes as an act, and runs.
-      const act = await run(impl, inst, server, ["get", "/api/items/export"])
+      const act = await run(impl, inst, server, ["get", "/api/v1/items/export"])
       assert.equal(act.code, 0, act.out + act.err)
-      assert.equal(server.runs("GET", "/api/items/export"), 1)
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 1)
     })
 
     it("never runs an act that a router which drops ;parameters picked for a path the list holds as a read", async () => {
       const inst = fresh()
-      server.policy.unshift({ method: "GET", path: "/api/items/export", kind: "act", area: "items", description: "" })
+      server.policy.unshift({
+        method: "GET",
+        path: "/api/v1/items/export",
+        kind: "act",
+        area: "items",
+        description: "",
+      })
       server.stripPathParameters = true
       await listed(impl, inst, server)
       const arrived = () => [...server.arrivalCounts.values()].reduce((a, b) => a + b, 0)
       const listedArrivals = arrived()
       // A ; in the path is refused before anything is sent.
       server.afterRun = ["drop", "drop"]
-      for (const p of ["/api/items/export;x", "/api/items/export;", "/api/items/7;v=1"]) {
+      for (const p of ["/api/v1/items/export;x", "/api/v1/items/export;", "/api/v1/items/7;v=1"]) {
         const r = await run(impl, inst, server, ["get", p])
         assert.equal(r.json?.error, "bad_path", `${p}: ${r.out}${r.err}`)
       }
       assert.equal(arrived(), listedArrivals, "nothing reached the API")
-      assert.equal(server.runs("GET", "/api/items/export"), 0)
-      // An escaped ; passes the client as the read /api/items/{id}; the server decodes it, drops the parameter and
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 0)
+      // An escaped ; passes the client as the read /api/v1/items/{id}; the server decodes it, drops the parameter and
       // picks the act. Its check of the declared kind stops it before the route runs.
-      const r = await run(impl, inst, server, ["get", "/api/items/export%3Bx"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items/export%3Bx"])
       server.afterRun = []
-      assert.equal(server.runs("GET", "/api/items/export"), 0, "the act never ran")
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 0, "the act never ran")
       assert.equal(r.json?.error, "policy_changed", r.out + r.err)
-      assert.equal(server.arrivals("GET", "/api/items/export%3Bx"), 2)
+      assert.equal(server.arrivals("GET", "/api/v1/items/export%3Bx"), 2)
       // The query keeps a ;.
-      const q = await run(impl, inst, server, ["get", "/api/items?q=a;b"])
+      const q = await run(impl, inst, server, ["get", "/api/v1/items?q=a;b"])
       assert.equal(q.json?.data?.query, "?q=a;b", q.out + q.err)
     })
 
     it("declares the kind it found with every call but access and the listing", async () => {
       const inst = fresh()
       await listed(impl, inst, server)
-      const g = await run(impl, inst, server, ["get", "/api/items/7"])
+      const g = await run(impl, inst, server, ["get", "/api/v1/items/7"])
       assert.equal(g.code, 0, g.out + g.err)
       assert.equal(server.last.kind, "read")
       assert.equal(server.last.policy, server.revision())
-      const search = await run(impl, inst, server, ["post", "/api/items/search", "--json", "{}"])
+      const search = await run(impl, inst, server, ["post", "/api/v1/items/search", "--json", "{}"])
       assert.equal(search.code, 0, search.out + search.err)
       assert.equal(server.last.kind, "read", "a read sent as POST")
-      const p = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      const p = await run(impl, inst, server, ["post", "/api/v1/items", "--json", '{"name":"a"}'])
       assert.equal(p.code, 0, p.out + p.err)
       assert.equal(server.last.kind, "act")
-      assert.equal(server.runs("POST", "/api/items"), 1)
+      assert.equal(server.runs("POST", "/api/v1/items"), 1)
       assert.equal((await run(impl, inst, server, ["access"])).code, 0)
       assert.equal(server.last.kind, undefined, "not on access")
       assert.equal((await run(impl, inst, server, ["endpoints"])).code, 0)
@@ -607,10 +625,10 @@ for (const impl of impls) {
       const inst = fresh()
       await connected(impl, inst, server)
       server.listingStatus = 500
-      const r = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      const r = await run(impl, inst, server, ["post", "/api/v1/items", "--json", '{"name":"a"}'])
       assert.equal(r.json?.error, "endpoints_unavailable", r.out + r.err)
       assert.equal(r.code, 1)
-      assert.equal(server.arrivals("POST", "/api/items"), 0, "the call was not sent")
+      assert.equal(server.arrivals("POST", "/api/v1/items"), 0, "the call was not sent")
       // Access and the listing do not need the list.
       const a = await run(impl, inst, server, ["access"])
       assert.equal(a.code, 0, a.out + a.err)
@@ -621,43 +639,49 @@ for (const impl of impls) {
         '{"endpoints":"all","revision":"abc"}',
         '{"endpoints":[]}',
         '{"endpoints":[],"revision":"not valid!"}',
-        '{"items":[{"method":"GET","path":"/api/items","kind":"read"}],"revision":"abc"}',
+        '{"items":[{"method":"GET","path":"/api/v1/items","kind":"read"}],"revision":"abc"}',
         // A whole listing wrapped in a top array is not a listing (PowerShell 7 unwraps it if read loosely).
-        '[{"endpoints":[{"method":"GET","path":"/api/items","kind":"read"}],"revision":"abc"}]',
+        '[{"endpoints":[{"method":"GET","path":"/api/v1/items","kind":"read"}],"revision":"abc"}]',
         // Keys in another letter case are other keys.
-        '{"Endpoints":[{"method":"GET","path":"/api/items","kind":"read"}],"Revision":"abc"}',
+        '{"Endpoints":[{"method":"GET","path":"/api/v1/items","kind":"read"}],"Revision":"abc"}',
       ]) {
         server.listingBody = garbage
-        const g = await run(impl, inst, server, ["get", "/api/items"])
+        const g = await run(impl, inst, server, ["get", "/api/v1/items"])
         assert.equal(g.json?.error, "endpoints_unavailable", `${garbage}: ${g.out}${g.err}`)
       }
-      assert.equal(server.arrivals("GET", "/api/items"), 0, "the call was not sent")
+      assert.equal(server.arrivals("GET", "/api/v1/items"), 0, "the call was not sent")
       // An empty list is a list: the call is not in it.
       server.listingBody = '{"endpoints":[],"revision":"abc"}'
-      const empty = await run(impl, inst, server, ["get", "/api/items"])
+      const empty = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(empty.json?.error, "bad_path", empty.out + empty.err)
       server.listingBody = null
-      const ok = await run(impl, inst, server, ["get", "/api/items"])
+      const ok = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(ok.code, 0, ok.out + ok.err)
-      assert.equal(server.runs("GET", "/api/items"), 1)
+      assert.equal(server.runs("GET", "/api/v1/items"), 1)
     })
 
     it("refuses a call the list does not hold, after reading the list again, without sending it", async () => {
       const inst = fresh()
       await connected(impl, inst, server)
-      const r = await run(impl, inst, server, ["get", "/api/nothing"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/nothing"])
       assert.equal(r.json?.error, "bad_path", r.out + r.err)
-      assert.equal(server.arrivals("GET", "/api/nothing"), 0)
+      assert.equal(server.arrivals("GET", "/api/v1/nothing"), 0)
       // A listed path with a method the list does not hold for it.
-      const d = await run(impl, inst, server, ["delete", "/api/items"])
+      const d = await run(impl, inst, server, ["patch", "/api/v1/items"])
       assert.equal(d.json?.error, "bad_path", d.out + d.err)
-      assert.equal(server.arrivals("DELETE", "/api/items"), 0)
+      assert.equal(server.arrivals("PATCH", "/api/v1/items"), 0)
       // A call added after the list was kept: the list is read again, and the call goes.
-      server.policy.push({ method: "GET", path: "/api/reports/{id}", kind: "read", area: "reports", description: "" })
-      const added = await run(impl, inst, server, ["get", "/api/reports/9"])
+      server.policy.push({
+        method: "GET",
+        path: "/api/v1/reports/{id}",
+        kind: "read",
+        area: "reports",
+        description: "",
+      })
+      const added = await run(impl, inst, server, ["get", "/api/v1/reports/9"])
       assert.equal(added.code, 0, added.out + added.err)
-      assert.equal(server.runs("GET", "/api/reports/{id}"), 1)
-      assert.equal(server.arrivals("GET", "/api/reports/9"), 1, "sent with the new revision at once")
+      assert.equal(server.runs("GET", "/api/v1/reports/{id}"), 1)
+      assert.equal(server.arrivals("GET", "/api/v1/reports/9"), 1, "sent with the new revision at once")
     })
 
     it("sends the stored revision with every call but access and the listing", async () => {
@@ -674,7 +698,7 @@ for (const impl of impls) {
       assert.equal(head[1], "2")
       assert.equal(head[4], server.revision())
       const listing = server.counts.listing
-      const g = await run(impl, inst, server, ["get", "/api/items/3"])
+      const g = await run(impl, inst, server, ["get", "/api/v1/items/3"])
       assert.equal(g.code, 0, g.out + g.err)
       assert.equal(server.last.policy, server.revision())
       assert.equal(server.counts.listing, listing, "the kept list was used")
@@ -699,42 +723,137 @@ for (const impl of impls) {
       assert.equal(server.last.skill, "2026.11.12-a1b2c3")
     })
 
+    it("names the agent in Adiutor's activity log with --as or ADIUTOR_AGENT_LABEL, and refuses another label", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      assert.equal((await run(impl, inst, server, ["get", "/api/v1/items"])).code, 0)
+      assert.equal(server.last.agent, undefined)
+      const as = await run(impl, inst, server, ["get", "/api/v1/items", "--as", "claude code"])
+      assert.equal(as.code, 0, as.out + as.err)
+      assert.equal(server.last.agent, "claude code")
+      const fromEnv = await run(impl, inst, server, ["post", "/api/v1/items", "--json", "{}"], {
+        [`${ENV}AGENT_LABEL`]: "codex:1.2",
+      })
+      assert.equal(fromEnv.code, 0, fromEnv.out + fromEnv.err)
+      assert.equal(server.last.agent, "codex:1.2")
+      const arrivals = server.arrivals("GET", "/api/v1/items")
+      for (const bad of ["a;b", "x".repeat(61), "a/b"]) {
+        const r = await run(impl, inst, server, ["get", "/api/v1/items", "--as", bad])
+        assert.equal(r.json?.error, "bad_label", `${bad}: ${r.out}${r.err}`)
+      }
+      assert.equal(server.arrivals("GET", "/api/v1/items"), arrivals, "nothing was sent")
+    })
+
+    it("reports the old command's files, never changes them, and finds Adiutor through its connection", async () => {
+      const inst = fresh()
+      fs.mkdirSync(inst.creds, { recursive: true, mode: 0o700 })
+      // The files the key-based command wrote, with values made now: an agent key, an approval, a lock, a temp file.
+      const key = `adt_${randomBytes(32).toString("hex")}`
+      const hex = (n) => randomBytes(n).toString("hex")
+      const old = {
+        connection: `{"v":1,"origin":"${server.issuer}","key":"${key}","keyName":"skill:pc:${hex(4)}","expiresAt":"2027-02-01T00:00:00.000Z"}\n`,
+        pending: `{"v":1,"attemptId":"${hex(6)}","origin":"${server.issuer}","deviceCode":"${hex(16)}","phase":"polling"}\n`,
+        left: `{"origin":"${server.issuer}","keyName":"skill:pc:${hex(4)}","expiresAt":"2027-01-01T00:00:00.000Z","reason":"replaced","at":"2026-11-01T00:00:00.000Z"}\n`,
+        lock: `{"token":"${hex(16)}","host":"another-computer","pid":4242,"startedAt":1}\n`,
+        "lock.break": `{"token":"${hex(16)}","host":"another-computer","pid":4243,"startedAt":1}\n`,
+        [`connection.${hex(6)}.tmp`]: `{"v":1,"origin":"${server.issuer}","key":"${key}"}`,
+      }
+      for (const [name, text] of Object.entries(old))
+        fs.writeFileSync(path.join(inst.creds, name), text, { mode: 0o600 })
+      const names = Object.keys(old).sort()
+      const reported = (r) => (r.json?.old_client?.files ?? []).map((f) => path.basename(f)).sort()
+      // No address given: the old connection's address is used, and the old lock does not stand in the way.
+      const c = await run(impl, inst, null, ["connect"])
+      assert.equal(c.json?.status, "pending", c.out + c.err)
+      assert.deepEqual(reported(c), names)
+      assert.match(c.json.old_client.message, /never reads or changes them/)
+      server.approve()
+      const w = await run(impl, inst, null, ["connect", "--wait"])
+      assert.equal(w.json?.status, "connected", w.out + w.err)
+      const g = await run(impl, inst, null, ["get", "/api/v1/items"])
+      assert.equal(g.code, 0, g.out + g.err)
+      const s = await run(impl, inst, null, ["status"])
+      assert.equal(s.json?.status, "connected", s.out + s.err)
+      assert.deepEqual(reported(s), names)
+      const again = await run(impl, inst, null, ["connect"])
+      assert.equal(again.json?.status, "already_connected", again.out + again.err)
+      assert.deepEqual(reported(again), names)
+      for (const [name, text] of Object.entries(old))
+        assert.equal(fs.readFileSync(path.join(inst.creds, name), "utf8"), text, `${name} changed`)
+      for (const r of [c, w, g, s, again]) assert.ok(!r.out.includes(key), "the old key appeared in the output")
+      noSecrets(server, c, w, g, s, again)
+    })
+
+    it("reports no address when the old connection's address is not a plain one", async () => {
+      const inst = fresh()
+      fs.mkdirSync(inst.creds, { recursive: true, mode: 0o700 })
+      const origin = "https://a$(id).example.com"
+      fs.writeFileSync(
+        path.join(inst.creds, "connection"),
+        `{"v":1,"origin":"${origin}","key":"adt_${randomBytes(16).toString("hex")}"}\n`,
+        {
+          mode: 0o600,
+        },
+      )
+      const r = await run(impl, inst, null, ["status"])
+      assert.equal(r.json?.error, "no_url", r.out + r.err)
+      assert.ok(!r.out.includes("$(id)"), "the address is not repeated")
+    })
+
+    it("keeps the connection in ADIUTOR_SKILL_HOME, the old command's name for the folder", async () => {
+      const inst = fresh()
+      const env = { [`${ENV}CREDENTIALS`]: "", [`${ENV}SKILL_HOME`]: inst.creds }
+      const c = await run(impl, inst, server, ["connect"], env)
+      assert.equal(c.json?.status, "pending", c.out + c.err)
+      server.approve()
+      const w = await run(impl, inst, server, ["connect", "--wait"], env)
+      assert.equal(w.json?.status, "connected", w.out + w.err)
+      assert.ok(
+        fs.readdirSync(inst.creds).some((f) => f.endsWith(".json")),
+        "the connection is in that folder",
+      )
+      assert.equal((await run(impl, inst, server, ["status"])).json?.status, "connected")
+    })
+
     it("passes back a 401 or 429 that is not a refusal before the route, sending the call once", async () => {
       const inst = fresh()
       await listed(impl, inst, server)
       const refreshes = server.counts.refresh
       server.afterRun.push({ status: 401, body: { error: "upstream_denied", message: "The mail service refused." } })
-      const u = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      const u = await run(impl, inst, server, ["post", "/api/v1/items/7/archive"])
       assert.equal(u.json?.error, "upstream_denied", u.out + u.err)
       assert.equal(u.json.status, 401)
-      assert.equal(server.arrivals("POST", "/api/items/7/archive"), 1)
-      assert.equal(server.runs("POST", "/api/items/{id}/archive"), 1)
+      assert.equal(server.arrivals("POST", "/api/v1/items/7/archive"), 1)
+      assert.equal(server.runs("POST", "/api/v1/items/{id}/archive"), 1)
       assert.equal(server.counts.refresh, refreshes, "no refresh without the token challenge")
       server.afterRun.push({ status: 429, body: { error: "rate_limited", message: "The mail service is busy." } })
-      const l = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      const l = await run(impl, inst, server, ["post", "/api/v1/items/7/archive"])
       assert.equal(l.json?.error, "rate_limited", l.out + l.err)
-      assert.equal(server.runs("POST", "/api/items/{id}/archive"), 2)
+      assert.equal(server.runs("POST", "/api/v1/items/{id}/archive"), 2)
       server.afterRun.push({ status: 429, body: "" })
-      const bare = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      const bare = await run(impl, inst, server, ["post", "/api/v1/items/7/archive"])
       assert.equal(bare.json?.error, "http_429", bare.out + bare.err)
-      assert.equal(server.runs("POST", "/api/items/{id}/archive"), 3)
-      assert.equal(server.arrivals("POST", "/api/items/7/archive"), 3, "each sent once")
+      assert.equal(server.runs("POST", "/api/v1/items/{id}/archive"), 3)
+      assert.equal(server.arrivals("POST", "/api/v1/items/7/archive"), 3, "each sent once")
       // A marker nested in a route's own answer is not one of the refusals before the route.
-      server.afterRun.push({ status: 429, body: { error: "rate_limited", message: "Later.", detail: { error: "busy" } } })
-      const nestedBusy = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      server.afterRun.push({
+        status: 429,
+        body: { error: "rate_limited", message: "Later.", detail: { error: "busy" } },
+      })
+      const nestedBusy = await run(impl, inst, server, ["post", "/api/v1/items/7/archive"])
       assert.equal(nestedBusy.json?.error, "rate_limited", nestedBusy.out + nestedBusy.err)
       server.afterRun.push({
         status: 409,
         body: { error: "conflict", message: "Changed meanwhile.", detail: { error: "policy_changed" } },
       })
-      const nestedPolicy = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      const nestedPolicy = await run(impl, inst, server, ["post", "/api/v1/items/7/archive"])
       assert.equal(nestedPolicy.json?.error, "conflict", nestedPolicy.out + nestedPolicy.err)
-      assert.equal(server.arrivals("POST", "/api/items/7/archive"), 5, "each sent once")
-      assert.equal(server.runs("POST", "/api/items/{id}/archive"), 5)
+      assert.equal(server.arrivals("POST", "/api/v1/items/7/archive"), 5, "each sent once")
+      assert.equal(server.runs("POST", "/api/v1/items/{id}/archive"), 5)
       // A read is not sent again for them either.
       server.afterRun.push({ status: 401, body: { error: "upstream_denied", message: "No." } })
-      await run(impl, inst, server, ["get", "/api/items/7"])
-      assert.equal(server.arrivals("GET", "/api/items/7"), 1)
+      await run(impl, inst, server, ["get", "/api/v1/items/7"])
+      assert.equal(server.arrivals("GET", "/api/v1/items/7"), 1)
     })
 
     it("reads a refusal or a list only from a complete, strict JSON answer", async () => {
@@ -756,46 +875,46 @@ for (const impl of impls) {
         [409, "{'error':'policy_changed'}"],
       ]) {
         server.afterRun.push({ status, body })
-        const r = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+        const r = await run(impl, inst, server, ["post", "/api/v1/items/7/archive"])
         runs++
         assert.equal(r.json?.error, `http_${status}`, `${body}: ${r.out}${r.err}`)
-        assert.equal(server.runs("POST", "/api/items/{id}/archive"), runs, `${body}: ran once`)
-        assert.equal(server.arrivals("POST", "/api/items/7/archive"), runs, `${body}: sent once`)
+        assert.equal(server.runs("POST", "/api/v1/items/{id}/archive"), runs, `${body}: ran once`)
+        assert.equal(server.arrivals("POST", "/api/v1/items/7/archive"), runs, `${body}: sent once`)
       }
       // A duplicated key counts as JSON.parse reads it: the last value wins.
       server.beforeRun.push({ status: 429, body: '{"error":"busy","error":null}' })
-      const notBusy = await run(impl, inst, server, ["post", "/api/items/8/archive"])
+      const notBusy = await run(impl, inst, server, ["post", "/api/v1/items/8/archive"])
       assert.equal(notBusy.json?.error, "http_429", notBusy.out + notBusy.err)
-      assert.equal(server.arrivals("POST", "/api/items/8/archive"), 1, "not sent again")
+      assert.equal(server.arrivals("POST", "/api/v1/items/8/archive"), 1, "not sent again")
       server.beforeRun.push({ status: 429, body: '{"error":null,"error":"busy"}' })
-      const busy = await run(impl, inst, server, ["post", "/api/items/9/archive"])
+      const busy = await run(impl, inst, server, ["post", "/api/v1/items/9/archive"])
       assert.equal(busy.code, 0, busy.out + busy.err)
-      assert.equal(server.arrivals("POST", "/api/items/9/archive"), 2, "sent again once")
+      assert.equal(server.arrivals("POST", "/api/v1/items/9/archive"), 2, "sent again once")
       // A listing that is not a complete, strict JSON list is no list: nothing is sent. (Without the kept list, so
       // that the call needs a listing; a listing that is no list is not kept.)
       for (const f of fs.readdirSync(inst.creds)) if (f.endsWith(".kinds")) fs.rmSync(path.join(inst.creds, f))
-      const entry = '{"method":"GET","path":"/api/items","kind":"read"}'
+      const entry = '{"method":"GET","path":"/api/v1/items","kind":"read"}'
       for (const body of [
         `{"endpoints":[${entry}],"revision":"abc"`,
         `{"endpoints":[${entry}`,
         `{"endpoints":[${entry}],"revision":"abc"}}`,
-        `{'endpoints':[{'method':'GET','path':'/api/items','kind':'read'}],'revision':'abc'}`,
+        `{'endpoints':[{'method':'GET','path':'/api/v1/items','kind':'read'}],'revision':'abc'}`,
         `{"endpoints":[${entry},],"revision":"abc"}`,
         `{"endpoints":[${entry}],"revision":"abc","endpoints":"all"}`,
         `{"endpoints":[${entry}],"revision":"abc","revision":null}`,
       ]) {
         server.listingBody = body
-        const r = await run(impl, inst, server, ["get", "/api/items"])
+        const r = await run(impl, inst, server, ["get", "/api/v1/items"])
         assert.equal(r.json?.error, "endpoints_unavailable", `${body}: ${r.out}${r.err}`)
       }
-      assert.equal(server.arrivals("GET", "/api/items"), 0, "the call was not sent")
+      assert.equal(server.arrivals("GET", "/api/v1/items"), 0, "the call was not sent")
       // The last of two kinds wins too (the server's table says act as well, so its check of the kind agrees).
-      server.setKind("GET", "/api/items", "act")
-      server.listingBody = `{"endpoints":[{"method":"GET","path":"/api/items","kind":"read","kind":"act"}],"revision":"${server.revision()}"}`
+      server.setKind("GET", "/api/v1/items", "act")
+      server.listingBody = `{"endpoints":[{"method":"GET","path":"/api/v1/items","kind":"read","kind":"act"}],"revision":"${server.revision()}"}`
       server.afterRun.push("drop")
-      const act = await run(impl, inst, server, ["get", "/api/items"])
+      const act = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(act.json?.error, "outcome_unknown", act.out + act.err)
-      assert.equal(server.arrivals("GET", "/api/items"), 1, "an act is not sent again")
+      assert.equal(server.arrivals("GET", "/api/v1/items"), 1, "an act is not sent again")
     })
 
     it("reads busy and policy_changed only as a string under the exact key error of a top object", async () => {
@@ -816,23 +935,23 @@ for (const impl of impls) {
         [409, '[{"error":"policy_changed"}]'],
       ]) {
         server.afterRun.push({ status, body })
-        const r = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+        const r = await run(impl, inst, server, ["post", "/api/v1/items/7/archive"])
         runs++
         assert.equal(r.json?.error, `http_${status}`, `${body}: ${r.out}${r.err}`)
         assert.equal(r.code, 1, `${body}: ${r.out}${r.err}`)
-        assert.equal(server.runs("POST", "/api/items/{id}/archive"), runs, `${body}: ran once`)
-        assert.equal(server.arrivals("POST", "/api/items/7/archive"), runs, `${body}: sent once`)
+        assert.equal(server.runs("POST", "/api/v1/items/{id}/archive"), runs, `${body}: ran once`)
+        assert.equal(server.arrivals("POST", "/api/v1/items/7/archive"), runs, `${body}: sent once`)
       }
       // Before the route: the marker counts as JSON.parse reads it, escapes and all, beside keys of any shape.
       let sent = 0
       for (const body of ['{"error":"busy","":"x"}', '{"error":"busy","Error":"x"}', '{"\\u0065rror":"bus\\u0079"}']) {
         server.beforeRun.push({ status: 429, body })
-        const r = await run(impl, inst, server, ["post", "/api/items/9/archive"])
+        const r = await run(impl, inst, server, ["post", "/api/v1/items/9/archive"])
         runs++
         sent += 2
         assert.equal(r.code, 0, `${body}: ${r.out}${r.err}`)
-        assert.equal(server.runs("POST", "/api/items/{id}/archive"), runs, `${body}: ran once`)
-        assert.equal(server.arrivals("POST", "/api/items/9/archive"), sent, `${body}: sent again once`)
+        assert.equal(server.runs("POST", "/api/v1/items/{id}/archive"), runs, `${body}: ran once`)
+        assert.equal(server.arrivals("POST", "/api/v1/items/9/archive"), sent, `${body}: sent again once`)
       }
     })
 
@@ -845,7 +964,7 @@ for (const impl of impls) {
         '{"success":false,"size":1e400}',
       ]) {
         server.afterRun.push({ status: 200, body })
-        const r = await run(impl, inst, server, ["get", "/api/items/7"])
+        const r = await run(impl, inst, server, ["get", "/api/v1/items/7"])
         assert.equal(r.json?.error, "failed", `${body}: ${r.out}${r.err}`)
         assert.equal(r.code, 1, `${body}: ${r.out}${r.err}`)
         assert.equal(r.json.status, 200, body)
@@ -861,24 +980,30 @@ for (const impl of impls) {
         '{"status":"error","status":"ok"}',
       ]) {
         server.afterRun.push({ status: 200, body })
-        const r = await run(impl, inst, server, ["get", "/api/items/7"])
+        const r = await run(impl, inst, server, ["get", "/api/v1/items/7"])
         assert.equal(r.code, 0, `${body}: ${r.out}${r.err}`)
         assert.deepEqual(r.json?.data, JSON.parse(body), body)
       }
       // Any JSON value keeps its type in data: a null, a boolean, a number or a string is not turned into text.
       for (const body of ["null", "false", "12", '"x"', "[]"]) {
         server.afterRun.push({ status: 200, body })
-        const r = await run(impl, inst, server, ["get", "/api/items/7"])
+        const r = await run(impl, inst, server, ["get", "/api/v1/items/7"])
         assert.equal(r.code, 0, `${body}: ${r.out}${r.err}`)
         assert.ok(r.json && "data" in r.json, `${body}: ${r.out}${r.err}`)
         assert.deepEqual(r.json.data, JSON.parse(body), body)
       }
     })
 
-    // A read and an act that both match one path: the static read /api/items/export and the act /api/items/{id}.
+    // A read and an act that both match one path: the static read /api/v1/items/export and the act /api/v1/items/{id}.
     const overlapping = () => {
-      server.setKind("GET", "/api/items/{id}", "act")
-      server.policy.unshift({ method: "GET", path: "/api/items/export", kind: "read", area: "items", description: "" })
+      server.setKind("GET", "/api/v1/items/{id}", "act")
+      server.policy.unshift({
+        method: "GET",
+        path: "/api/v1/items/export",
+        kind: "read",
+        area: "items",
+        description: "",
+      })
     }
 
     it("sends a path that a read and an act both match as a read after the act was refused, when the router picks the read", async () => {
@@ -886,24 +1011,24 @@ for (const impl of impls) {
       overlapping()
       server.routePreference = "static"
       await listed(impl, inst, server)
-      const r = await run(impl, inst, server, ["get", "/api/items/export"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items/export"])
       assert.equal(r.code, 0, r.out + r.err)
       assert.equal(r.json?.data?.kind, "read")
-      assert.equal(server.runs("GET", "/api/items/export"), 1, "the read ran once")
-      assert.equal(server.runs("GET", "/api/items/{id}"), 0, "the act never ran")
-      assert.equal(server.arrivals("GET", "/api/items/export"), 2, "the refused act and the read")
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 1, "the read ran once")
+      assert.equal(server.runs("GET", "/api/v1/items/{id}"), 0, "the act never ran")
+      assert.equal(server.arrivals("GET", "/api/v1/items/export"), 2, "the refused act and the read")
       // A further policy_changed ends the command, and nothing runs.
       server.beforeRun.push("policy_changed", "policy_changed")
-      const twice = await run(impl, inst, server, ["get", "/api/items/export"])
+      const twice = await run(impl, inst, server, ["get", "/api/v1/items/export"])
       assert.equal(twice.json?.error, "policy_changed", twice.out + twice.err)
-      assert.equal(server.arrivals("GET", "/api/items/export"), 4)
-      assert.equal(server.runs("GET", "/api/items/export"), 1)
+      assert.equal(server.arrivals("GET", "/api/v1/items/export"), 4)
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 1)
       // From a list read for the call (none kept) too.
       for (const f of fs.readdirSync(inst.creds)) if (f.endsWith(".kinds")) fs.rmSync(path.join(inst.creds, f))
-      const fetched = await run(impl, inst, server, ["get", "/api/items/export"])
+      const fetched = await run(impl, inst, server, ["get", "/api/v1/items/export"])
       assert.equal(fetched.code, 0, fetched.out + fetched.err)
-      assert.equal(server.runs("GET", "/api/items/export"), 2)
-      assert.equal(server.runs("GET", "/api/items/{id}"), 0, "the act never ran")
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 2)
+      assert.equal(server.runs("GET", "/api/v1/items/{id}"), 0, "the act never ran")
     })
 
     it("sends a path that a read and an act both match as an act, once, when the router picks the act", async () => {
@@ -911,18 +1036,18 @@ for (const impl of impls) {
       overlapping()
       server.routePreference = "dynamic"
       await listed(impl, inst, server)
-      const r = await run(impl, inst, server, ["get", "/api/items/export"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items/export"])
       assert.equal(r.code, 0, r.out + r.err)
       assert.equal(r.json?.data?.kind, "act")
-      assert.equal(server.runs("GET", "/api/items/{id}"), 1, "the act ran once")
-      assert.equal(server.arrivals("GET", "/api/items/export"), 1, "sent once")
+      assert.equal(server.runs("GET", "/api/v1/items/{id}"), 1, "the act ran once")
+      assert.equal(server.arrivals("GET", "/api/v1/items/export"), 1, "sent once")
       // Its answer is lost: the outcome is unknown, and it is not sent again.
       server.afterRun.push("drop")
-      const lost = await run(impl, inst, server, ["get", "/api/items/export"])
+      const lost = await run(impl, inst, server, ["get", "/api/v1/items/export"])
       assert.equal(lost.json?.error, "outcome_unknown", lost.out + lost.err)
-      assert.equal(server.runs("GET", "/api/items/{id}"), 2, "the act ran once more, for the second command only")
-      assert.equal(server.arrivals("GET", "/api/items/export"), 2, "sent once")
-      assert.equal(server.runs("GET", "/api/items/export"), 0, "the read never ran")
+      assert.equal(server.runs("GET", "/api/v1/items/{id}"), 2, "the act ran once more, for the second command only")
+      assert.equal(server.arrivals("GET", "/api/v1/items/export"), 2, "sent once")
+      assert.equal(server.runs("GET", "/api/v1/items/export"), 0, "the read never ran")
     })
 
     it("refreshes and sends again once after the token refusal", async () => {
@@ -930,17 +1055,17 @@ for (const impl of impls) {
       await listed(impl, inst, server)
       const refreshes = server.counts.refresh
       server.beforeRun.push("invalid_token")
-      const r = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      const r = await run(impl, inst, server, ["post", "/api/v1/items", "--json", '{"name":"a"}'])
       assert.equal(r.code, 0, r.out + r.err)
-      assert.equal(server.arrivals("POST", "/api/items"), 2)
-      assert.equal(server.runs("POST", "/api/items"), 1)
+      assert.equal(server.arrivals("POST", "/api/v1/items"), 2)
+      assert.equal(server.runs("POST", "/api/v1/items"), 1)
       assert.equal(server.counts.refresh, refreshes + 1)
       server.beforeRun.push("invalid_token", "invalid_token")
-      const twice = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      const twice = await run(impl, inst, server, ["post", "/api/v1/items", "--json", '{"name":"a"}'])
       assert.equal(twice.code, 1, twice.out + twice.err)
       assert.equal(twice.json?.error, "http_401")
-      assert.equal(server.arrivals("POST", "/api/items"), 4, "sent again only once")
-      assert.equal(server.runs("POST", "/api/items"), 1)
+      assert.equal(server.arrivals("POST", "/api/v1/items"), 4, "sent again only once")
+      assert.equal(server.runs("POST", "/api/v1/items"), 1)
       assert.equal(server.counts.reuse, 0)
     })
 
@@ -948,88 +1073,88 @@ for (const impl of impls) {
       const inst = fresh()
       await listed(impl, inst, server)
       server.beforeRun.push("busy")
-      const r = await run(impl, inst, server, ["patch", "/api/items/2", "--json", '{"name":"a"}'])
+      const r = await run(impl, inst, server, ["patch", "/api/v1/items/2", "--json", '{"name":"a"}'])
       assert.equal(r.code, 0, r.out + r.err)
-      assert.equal(server.arrivals("PATCH", "/api/items/2"), 2)
-      assert.equal(server.runs("PATCH", "/api/items/{id}"), 1)
+      assert.equal(server.arrivals("PATCH", "/api/v1/items/2"), 2)
+      assert.equal(server.runs("PATCH", "/api/v1/items/{id}"), 1)
       server.beforeRun.push("busy", "busy")
-      const twice = await run(impl, inst, server, ["patch", "/api/items/2", "--json", '{"name":"a"}'])
+      const twice = await run(impl, inst, server, ["patch", "/api/v1/items/2", "--json", '{"name":"a"}'])
       assert.equal(twice.json?.error, "busy", twice.out + twice.err)
-      assert.equal(server.arrivals("PATCH", "/api/items/2"), 4, "sent again only once")
-      assert.equal(server.runs("PATCH", "/api/items/{id}"), 1)
+      assert.equal(server.arrivals("PATCH", "/api/v1/items/2"), 4, "sent again only once")
+      assert.equal(server.runs("PATCH", "/api/v1/items/{id}"), 1)
     })
 
     it("reads the list again after policy_changed and sends the call once more", async () => {
       const inst = fresh()
       await listed(impl, inst, server)
       // The policy changes after the list was kept.
-      server.setKind("GET", "/api/files/{name:path}", "act")
+      server.setKind("GET", "/api/v1/files/{name:path}", "act")
       const listing = server.counts.listing
-      const r = await run(impl, inst, server, ["get", "/api/items"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(r.code, 0, r.out + r.err)
-      assert.equal(server.arrivals("GET", "/api/items"), 2)
-      assert.equal(server.runs("GET", "/api/items"), 1)
+      assert.equal(server.arrivals("GET", "/api/v1/items"), 2)
+      assert.equal(server.runs("GET", "/api/v1/items"), 1)
       assert.equal(server.counts.listing, listing + 1)
       assert.equal(server.last.policy, server.revision())
       // A second policy_changed in a row ends the command; nothing more is sent.
       server.beforeRun.push("policy_changed", "policy_changed")
-      const twice = await run(impl, inst, server, ["post", "/api/items", "--json", "{}"])
+      const twice = await run(impl, inst, server, ["post", "/api/v1/items", "--json", "{}"])
       assert.equal(twice.json?.error, "policy_changed", twice.out + twice.err)
-      assert.equal(server.arrivals("POST", "/api/items"), 2)
-      assert.equal(server.runs("POST", "/api/items"), 0)
+      assert.equal(server.arrivals("POST", "/api/v1/items"), 2)
+      assert.equal(server.runs("POST", "/api/v1/items"), 0)
       // A call the new list no longer holds is not sent again.
-      server.policy = server.policy.filter((e) => !(e.method === "GET" && e.path === "/api/items/{id}"))
-      const gone = await run(impl, inst, server, ["get", "/api/items/4"])
+      server.policy = server.policy.filter((e) => !(e.method === "GET" && e.path === "/api/v1/items/{id}"))
+      const gone = await run(impl, inst, server, ["get", "/api/v1/items/4"])
       assert.equal(gone.json?.error, "bad_path", gone.out + gone.err)
-      assert.equal(server.arrivals("GET", "/api/items/4"), 1)
+      assert.equal(server.arrivals("GET", "/api/v1/items/4"), 1)
     })
 
     it("sends a call under its new kind after policy_changed: a read become an act is not sent twice", async () => {
       const inst = fresh()
       await connected(impl, inst, server)
       // The list says read; the server changes it to act before the call arrives, then loses the call's answer.
-      server.reclassifyAfterListing = { method: "GET", path: "/api/items/{id}", kind: "act" }
+      server.reclassifyAfterListing = { method: "GET", path: "/api/v1/items/{id}", kind: "act" }
       server.afterRun.push("drop")
-      const r = await run(impl, inst, server, ["get", "/api/items/8"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items/8"])
       assert.equal(r.json?.error, "outcome_unknown", r.out + r.err)
-      assert.equal(server.runs("GET", "/api/items/{id}"), 1, "ran exactly once")
-      assert.equal(server.arrivals("GET", "/api/items/8"), 2, "the refused send and the one that ran")
+      assert.equal(server.runs("GET", "/api/v1/items/{id}"), 1, "ran exactly once")
+      assert.equal(server.arrivals("GET", "/api/v1/items/8"), 2, "the refused send and the one that ran")
     })
 
     it("never sends an act twice: a lost or broken answer, or a server failure, is outcome_unknown", async () => {
       const inst = fresh()
       await listed(impl, inst, server)
       server.afterRun.push("drop")
-      const lost = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      const lost = await run(impl, inst, server, ["post", "/api/v1/items", "--json", '{"name":"a"}'])
       assert.equal(lost.json?.error, "outcome_unknown", lost.out + lost.err)
-      assert.equal(server.runs("POST", "/api/items"), 1)
+      assert.equal(server.runs("POST", "/api/v1/items"), 1)
       server.afterRun.push("truncate")
-      const broken = await run(impl, inst, server, ["patch", "/api/items/3", "--json", '{"name":"b"}'])
+      const broken = await run(impl, inst, server, ["patch", "/api/v1/items/3", "--json", '{"name":"b"}'])
       assert.equal(broken.json?.error, "outcome_unknown", broken.out + broken.err)
-      assert.equal(server.runs("PATCH", "/api/items/{id}"), 1)
+      assert.equal(server.runs("PATCH", "/api/v1/items/{id}"), 1)
       server.afterRun.push({ status: 500, body: { error: "server_error" } })
-      const failed = await run(impl, inst, server, ["delete", "/api/items/3"])
+      const failed = await run(impl, inst, server, ["post", "/api/v1/items/3/archive"])
       assert.equal(failed.json?.error, "outcome_unknown", failed.out + failed.err)
       assert.equal(failed.json.status, 500)
-      assert.equal(server.runs("DELETE", "/api/items/{id}"), 1)
+      assert.equal(server.runs("POST", "/api/v1/items/{id}/archive"), 1)
     })
 
     it("sends a read once more when its answer was lost, whatever its method", async () => {
       const inst = fresh()
       await listed(impl, inst, server)
       server.afterRun.push("drop")
-      const r = await run(impl, inst, server, ["get", "/api/items/3"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items/3"])
       assert.equal(r.code, 0, r.out + r.err)
-      assert.equal(server.runs("GET", "/api/items/{id}"), 2)
+      assert.equal(server.runs("GET", "/api/v1/items/{id}"), 2)
       // A search sent as POST is a read in the list.
       server.afterRun.push("truncate")
-      const s = await run(impl, inst, server, ["post", "/api/items/search", "--json", '{"q":"x"}'])
+      const s = await run(impl, inst, server, ["post", "/api/v1/items/search", "--json", '{"q":"x"}'])
       assert.equal(s.code, 0, s.out + s.err)
-      assert.equal(server.runs("POST", "/api/items/search"), 2)
+      assert.equal(server.runs("POST", "/api/v1/items/search"), 2)
       server.afterRun.push("drop", "drop")
-      const twice = await run(impl, inst, server, ["get", "/api/items/3"])
+      const twice = await run(impl, inst, server, ["get", "/api/v1/items/3"])
       assert.equal(twice.json?.error, "unreachable", twice.out + twice.err)
-      assert.equal(server.runs("GET", "/api/items/{id}"), 4)
+      assert.equal(server.runs("GET", "/api/v1/items/{id}"), 4)
     })
 
     it("ends when the server ended the connection, and forgets it", async () => {
@@ -1037,7 +1162,7 @@ for (const impl of impls) {
       await connected(impl, inst, server)
       server.endAllGrants()
       server.expireAccessTokens()
-      const r = await run(impl, inst, server, ["get", "/api/items"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(r.json.error, "connection_ended", r.out + r.err)
       assert.equal((await run(impl, inst, server, ["status"])).json.status, "not_connected")
     })
@@ -1047,15 +1172,15 @@ for (const impl of impls) {
       await connected(impl, inst, server)
       server.expireAccessTokens()
       server.dropNextRefresh = true
-      const lost = await run(impl, inst, server, ["get", "/api/items"])
+      const lost = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(lost.json.error, "unreachable", lost.out + lost.err)
       const orphan = server.orphan
       const refreshes = server.counts.refresh
       // Right after, the lost refresh might still be on its way: nothing is sent.
-      const soon = await run(impl, inst, server, ["get", "/api/items"])
+      const soon = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(soon.json.error, "busy", soon.out + soon.err)
       assert.equal(server.counts.refresh, refreshes)
-      const next = await run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_REFRESH_GRACE`]: "0" })
+      const next = await run(impl, inst, server, ["get", "/api/v1/items"], { [`${ENV}TEST_REFRESH_GRACE`]: "0" })
       assert.equal(next.json.error, "connection_ended", next.out + next.err)
       assert.equal(server.grants.get(server.refresh.get(orphan).grant).alive, false, "the orphaned token's grant ended")
     })
@@ -1065,11 +1190,11 @@ for (const impl of impls) {
       await connected(impl, inst, server)
       server.expireAccessTokens()
       server.truncateNextRefresh = true
-      const broken = await run(impl, inst, server, ["get", "/api/items"])
+      const broken = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(broken.json.error, "unreachable", broken.out + broken.err)
       assert.equal((await run(impl, inst, server, ["status"])).json.status, "connected", "the connection is kept")
       const orphan = server.orphan
-      const next = await run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_REFRESH_GRACE`]: "0" })
+      const next = await run(impl, inst, server, ["get", "/api/v1/items"], { [`${ENV}TEST_REFRESH_GRACE`]: "0" })
       assert.equal(next.json.error, "connection_ended", next.out + next.err)
       assert.equal(server.grants.get(server.refresh.get(orphan).grant).alive, false)
     })
@@ -1081,10 +1206,10 @@ for (const impl of impls) {
       server.refreshAccessTtl = 900
       await connected(impl, inst, server)
       await server.stop()
-      const down = await run(impl, inst, server, ["get", "/api/items"])
+      const down = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(down.json.error, "unreachable", down.out + down.err)
       await server.start()
-      const up = await run(impl, inst, server, ["get", "/api/items"])
+      const up = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(up.code, 0, up.out + up.err)
       assert.equal(server.counts.refresh, 1, "only the refresh that reached the server")
       assert.equal(server.counts.reuse, 0)
@@ -1105,7 +1230,7 @@ for (const impl of impls) {
       // The new connection ends; the old one must still be ended.
       for (const id of alive()) if (id !== old && !others.has(id)) server.grants.get(id).alive = false
       server.expireAccessTokens()
-      const ended = await run(impl, inst, server, ["get", "/api/items"])
+      const ended = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(ended.json.error, "connection_ended", ended.out + ended.err)
       server.revokeStatus = 200
       const again = await run(impl, inst, server, ["connect"])
@@ -1121,8 +1246,8 @@ for (const impl of impls) {
       server.accessTtl = 30
       server.refreshAccessTtl = 900
       await connected(impl, inst, server)
-      assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
-      assert.equal((await run(impl, inst, server, ["post", "/api/items", "--json", "{}"])).code, 0)
+      assert.equal((await run(impl, inst, server, ["get", "/api/v1/items"])).code, 0)
+      assert.equal((await run(impl, inst, server, ["post", "/api/v1/items", "--json", "{}"])).code, 0)
       assert.equal(fs.readFileSync(path.join(inst.base, "my"), "utf8"), "keep")
       const left = fs.readdirSync(inst.creds).filter((f) => !/^[0-9a-f]{32}\.(json|kinds)$/.test(f) && f !== "address")
       assert.deepEqual(left, [])
@@ -1136,7 +1261,7 @@ for (const impl of impls) {
       const s = await run(impl, other, server, ["status"])
       assert.equal(s.json.status, "connected", s.out + s.err)
       assert.equal((await run(impl, other, server, ["connect"])).json.status, "already_connected")
-      assert.equal((await run(impl, other, server, ["get", "/api/items"])).code, 0)
+      assert.equal((await run(impl, other, server, ["get", "/api/v1/items"])).code, 0)
       assert.equal(server.counts.device, devices, "no second connection")
       // Another user (another credentials folder) has a connection of its own.
       assert.equal((await run(impl, fresh(), server, ["status"])).json.status, "not_connected")
@@ -1149,7 +1274,7 @@ for (const impl of impls) {
       if (!win) fs.chmodSync(skillDir, 0o555)
       try {
         await connected(impl, inst, server)
-        assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+        assert.equal((await run(impl, inst, server, ["get", "/api/v1/items"])).code, 0)
         assert.equal((await run(impl, inst, server, ["disconnect"])).json.status, "disconnected")
       } finally {
         if (!win) fs.chmodSync(skillDir, 0o755)
@@ -1174,7 +1299,7 @@ for (const impl of impls) {
       const s = await run(impl, inst, null, ["status"])
       assert.equal(s.json.status, "connected", s.out + s.err)
       assert.equal(s.json.url, server.issuer)
-      assert.equal((await run(impl, inst, null, ["get", "/api/items"])).code, 0)
+      assert.equal((await run(impl, inst, null, ["get", "/api/v1/items"])).code, 0)
       // An address given, or the one a copy served by the server carries, comes before the kept one.
       const other = "https://other.example"
       assert.equal((await run(impl, inst, null, ["status", "--url", other])).json.url, other)
@@ -1271,9 +1396,9 @@ for (const impl of impls) {
         v6.approve()
         const w = await run(impl, inst, v6, ["connect", "--wait"])
         assert.equal(w.json?.status, "connected", w.out + w.err)
-        const g = await run(impl, inst, v6, ["get", "/api/items"])
-        assert.equal(g.json?.data?.path, "/api/items", g.out + g.err)
-        const r = await run(impl, inst, v6, ["post", "/api/items/1/archive"])
+        const g = await run(impl, inst, v6, ["get", "/api/v1/items"])
+        assert.equal(g.json?.data?.path, "/api/v1/items", g.out + g.err)
+        const r = await run(impl, inst, v6, ["post", "/api/v1/items/1/archive"])
         assert.equal(r.json?.data?.method, "POST", r.out + r.err)
       } finally {
         await v6.close()
@@ -1296,7 +1421,7 @@ for (const impl of impls) {
         const w = await run(impl, inst, null, ["connect", "--wait", "--url", server.issuer])
         assert.equal(w.json?.status, "connected", w.out + w.err)
         assert.equal(server.counts.reuse, 0)
-        assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+        assert.equal((await run(impl, inst, server, ["get", "/api/v1/items"])).code, 0)
       } finally {
         await second.close()
       }
@@ -1342,7 +1467,7 @@ for (const impl of impls) {
       )
       // The old connection's list is not used for the new one.
       const listing = server.counts.listing
-      assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+      assert.equal((await run(impl, inst, server, ["get", "/api/v1/items"])).code, 0)
       assert.equal(server.counts.listing, listing + 1)
     })
 
@@ -1351,10 +1476,10 @@ for (const impl of impls) {
       await listed(impl, inst, server)
       server.expireAccessTokens()
       const hold = path.join(inst.base, "hold-live")
-      const holder = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
+      const holder = run(impl, inst, server, ["get", "/api/v1/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
       await reached(hold)
       const before = server.counts.refresh
-      const other = await run(impl, inst, server, ["get", "/api/items"], { [`${ENV}LOCK_WAIT_MS`]: "1500" })
+      const other = await run(impl, inst, server, ["get", "/api/v1/items"], { [`${ENV}LOCK_WAIT_MS`]: "1500" })
       assert.equal(other.json.error, "busy", other.out + other.err)
       assert.equal(server.counts.refresh, before)
       fs.writeFileSync(`${hold}.go`, "")
@@ -1367,11 +1492,11 @@ for (const impl of impls) {
       await listed(impl, inst, server)
       server.expireAccessTokens()
       const hold = path.join(inst.base, "hold-dead")
-      const holder = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
+      const holder = run(impl, inst, server, ["get", "/api/v1/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
       await reached(hold)
       holder.child.kill("SIGKILL")
       await holder
-      const next = await run(impl, inst, server, ["get", "/api/items"])
+      const next = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(next.code, 0, next.out + next.err)
       assert.equal(server.counts.reuse, 0)
     })
@@ -1382,16 +1507,16 @@ for (const impl of impls) {
       server.expireAccessTokens()
       // A dead lock, as a killed holder leaves it.
       const hold = path.join(inst.base, "hold-dead2")
-      const holder = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
+      const holder = run(impl, inst, server, ["get", "/api/v1/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
       await reached(hold)
       holder.child.kill("SIGKILL")
       await holder
       // B sees the dead lock and stops just before moving it; C breaks it, takes a fresh lock, and holds it.
       const b = path.join(inst.base, "b")
       const cHold = path.join(inst.base, "c")
-      const pb = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_BREAK_OBSERVED`]: b })
+      const pb = run(impl, inst, server, ["get", "/api/v1/items"], { [`${ENV}TEST_HOLD_BREAK_OBSERVED`]: b })
       await reached(b)
-      const pc = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_LOCKED`]: cHold })
+      const pc = run(impl, inst, server, ["get", "/api/v1/items"], { [`${ENV}TEST_HOLD_LOCKED`]: cHold })
       await reached(cHold)
       // B now moves C's fresh lock, sees it is not the dead one, and puts it back.
       fs.writeFileSync(`${b}.go`, "")
@@ -1409,7 +1534,7 @@ for (const impl of impls) {
       server.refreshAccessTtl = 900
       await connected(impl, inst, server)
       const hold = path.join(inst.base, "hold-write")
-      const p = run(impl, inst, server, ["get", "/api/items"], {
+      const p = run(impl, inst, server, ["get", "/api/v1/items"], {
         [`${ENV}TEST_HOLD_BEFORE_WRITE`]: hold,
         [`${ENV}LOCK_WAIT_MS`]: "8000",
       })
@@ -1430,7 +1555,7 @@ for (const impl of impls) {
       const r = await p
       assert.equal(r.code, 0, r.out + r.err)
       const refreshes = server.counts.refresh
-      assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+      assert.equal((await run(impl, inst, server, ["get", "/api/v1/items"])).code, 0)
       assert.equal(server.counts.refresh, refreshes, "the new tokens were kept")
       assert.equal(server.counts.reuse, 0)
     })
@@ -1463,9 +1588,9 @@ for (const impl of impls) {
       // As a restore or a change of the folder's permissions would leave it.
       if (win) execFileSync("icacls", [inst.creds, "/grant", "*S-1-1-0:(OI)(CI)R", "/Q"], { stdio: "ignore" })
       else fs.chmodSync(inst.creds, 0o755)
-      const r = await run(impl, inst, server, ["get", "/api/items"])
+      const r = await run(impl, inst, server, ["get", "/api/v1/items"])
       assert.equal(r.json?.error, "insecure_credentials", r.out + r.err)
-      assert.equal(server.arrivals("GET", "/api/items"), 0, "nothing was sent")
+      assert.equal(server.arrivals("GET", "/api/v1/items"), 0, "nothing was sent")
       assert.equal(server.counts.refresh, refreshes)
       if (!win) assert.equal(fs.statSync(inst.creds).mode & 0o777, 0o755, "not changed silently")
     })
@@ -1521,58 +1646,58 @@ describe(`${NAME} fake server policy check`, () => {
   it("refuses a missing, unknown or wrong kind, or a missing revision, before the route runs", async () => {
     server.reset()
     const rev = server.revision()
-    refused(await call("GET", "/api/items/7", { [POLICY_HEADER]: rev }), "no kind")
+    refused(await call("GET", "/api/v1/items/7", { [POLICY_HEADER]: rev }), "no kind")
     for (const kind of ["", "READ", "Act", "write", "read,act"])
-      refused(await call("GET", "/api/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: kind }), `kind ${kind}`)
-    refused(await call("GET", "/api/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" }), "act for a read")
-    refused(await call("POST", "/api/items", { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" }), "read for an act")
-    refused(await call("GET", "/api/items/7", { [KIND_HEADER]: "read" }), "no revision")
-    assert.equal(server.runs("GET", "/api/items/{id}"), 0)
-    assert.equal(server.runs("POST", "/api/items"), 0)
-    assert.equal((await call("GET", "/api/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" })).status, 200)
-    assert.equal((await call("POST", "/api/items", { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" })).status, 200)
-    assert.equal(server.runs("GET", "/api/items/{id}"), 1)
-    assert.equal(server.runs("POST", "/api/items"), 1)
+      refused(await call("GET", "/api/v1/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: kind }), `kind ${kind}`)
+    refused(await call("GET", "/api/v1/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" }), "act for a read")
+    refused(await call("POST", "/api/v1/items", { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" }), "read for an act")
+    refused(await call("GET", "/api/v1/items/7", { [KIND_HEADER]: "read" }), "no revision")
+    assert.equal(server.runs("GET", "/api/v1/items/{id}"), 0)
+    assert.equal(server.runs("POST", "/api/v1/items"), 0)
+    assert.equal((await call("GET", "/api/v1/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" })).status, 200)
+    assert.equal((await call("POST", "/api/v1/items", { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" })).status, 200)
+    assert.equal(server.runs("GET", "/api/v1/items/{id}"), 1)
+    assert.equal(server.runs("POST", "/api/v1/items"), 1)
   })
 
   it("checks the kind of the route its router picked, not of the path as it was sent", async () => {
     server.reset()
-    server.policy.unshift({ method: "GET", path: "/api/items/export", kind: "act", area: "items", description: "" })
+    server.policy.unshift({ method: "GET", path: "/api/v1/items/export", kind: "act", area: "items", description: "" })
     const rev = server.revision()
     const read = { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" }
     const act = { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" }
     server.caseInsensitiveRoutes = true
-    refused(await call("GET", "/api/items/EXPORT", read), "a case change")
-    assert.equal(server.runs("GET", "/api/items/export"), 0)
-    assert.equal((await call("GET", "/api/items/EXPORT", act)).status, 200)
-    assert.equal(server.runs("GET", "/api/items/export"), 1)
+    refused(await call("GET", "/api/v1/items/EXPORT", read), "a case change")
+    assert.equal(server.runs("GET", "/api/v1/items/export"), 0)
+    assert.equal((await call("GET", "/api/v1/items/EXPORT", act)).status, 200)
+    assert.equal(server.runs("GET", "/api/v1/items/export"), 1)
     server.caseInsensitiveRoutes = false
     server.stripPathParameters = true
-    for (const p of ["/api/items/export;x", "/api/items/export%3Bx", "/api/items/export;"])
+    for (const p of ["/api/v1/items/export;x", "/api/v1/items/export%3Bx", "/api/v1/items/export;"])
       refused(await call("GET", p, read), p)
-    assert.equal(server.runs("GET", "/api/items/export"), 1)
-    assert.equal((await call("GET", "/api/items/7;v=1", read)).status, 200)
-    assert.equal(server.runs("GET", "/api/items/{id}"), 1)
+    assert.equal(server.runs("GET", "/api/v1/items/export"), 1)
+    assert.equal((await call("GET", "/api/v1/items/7;v=1", read)).status, 200)
+    assert.equal(server.runs("GET", "/api/v1/items/{id}"), 1)
   })
 
   it("picks the first, the static or the dynamic one of two routes that match a path, as set", async () => {
     server.reset()
-    server.setKind("GET", "/api/items/{id}", "act")
-    server.policy.push({ method: "GET", path: "/api/items/export", kind: "read", area: "items", description: "" })
+    server.setKind("GET", "/api/v1/items/{id}", "act")
+    server.policy.push({ method: "GET", path: "/api/v1/items/export", kind: "read", area: "items", description: "" })
     const rev = server.revision()
     const read = { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" }
     const act = { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" }
-    // The table holds /api/items/{id} first.
-    refused(await call("GET", "/api/items/export", read), "first: the act")
-    assert.equal((await call("GET", "/api/items/export", act)).json?.kind, "act")
+    // The table holds /api/v1/items/{id} first.
+    refused(await call("GET", "/api/v1/items/export", read), "first: the act")
+    assert.equal((await call("GET", "/api/v1/items/export", act)).json?.kind, "act")
     server.routePreference = "static"
-    refused(await call("GET", "/api/items/export", act), "static: the read")
-    assert.equal((await call("GET", "/api/items/export", read)).json?.kind, "read")
+    refused(await call("GET", "/api/v1/items/export", act), "static: the read")
+    assert.equal((await call("GET", "/api/v1/items/export", read)).json?.kind, "read")
     server.routePreference = "dynamic"
-    refused(await call("GET", "/api/items/export", read), "dynamic: the act")
-    assert.equal((await call("GET", "/api/items/export", act)).json?.kind, "act")
-    assert.equal(server.runs("GET", "/api/items/export"), 1)
-    assert.equal(server.runs("GET", "/api/items/{id}"), 2)
+    refused(await call("GET", "/api/v1/items/export", read), "dynamic: the act")
+    assert.equal((await call("GET", "/api/v1/items/export", act)).json?.kind, "act")
+    assert.equal(server.runs("GET", "/api/v1/items/export"), 1)
+    assert.equal(server.runs("GET", "/api/v1/items/{id}"), 2)
   })
 })
 
@@ -1596,7 +1721,7 @@ if (first && second) {
       assert.equal(s.json.status, "connected", s.out + s.err)
       const before = server.counts.refresh
       const all = await Promise.all(
-        Array.from({ length: 8 }, (_, i) => run(i % 2 ? second : first, inst, server, ["get", "/api/items"])),
+        Array.from({ length: 8 }, (_, i) => run(i % 2 ? second : first, inst, server, ["get", "/api/v1/items"])),
       )
       for (const r of all) assert.equal(r.code, 0, r.out + r.err)
       assert.equal(server.counts.refresh, before + 1)
@@ -1604,8 +1729,8 @@ if (first && second) {
       assert.equal(server.counts.device, devices, "no second connection")
       // The list one version kept is the one the other uses.
       const listing = server.counts.listing
-      assert.equal((await run(second, inst, server, ["post", "/api/items", "--json", "{}"])).code, 0)
-      assert.equal((await run(first, inst, server, ["delete", "/api/items/1"])).code, 0)
+      assert.equal((await run(second, inst, server, ["post", "/api/v1/items", "--json", "{}"])).code, 0)
+      assert.equal((await run(first, inst, server, ["patch", "/api/v1/items/1", "--json", "{}"])).code, 0)
       assert.equal(server.counts.listing, listing)
     })
   })
@@ -1626,7 +1751,7 @@ describe(`${NAME} entry points`, () => {
     it(`${entry} ${name} keeps a query with & as it is`, async () => {
       const inst = install()
       await connected("node", inst, server)
-      const r = await run(entry, inst, server, ["get", "/api/items?status=open&owner=x"], env)
+      const r = await run(entry, inst, server, ["get", "/api/v1/items?status=open&owner=x"], env)
       assert.equal(r.code, 0, r.out + r.err)
       assert.equal(r.json.data.query, "?status=open&owner=x")
     })

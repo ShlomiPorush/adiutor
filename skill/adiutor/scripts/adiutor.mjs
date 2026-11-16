@@ -28,20 +28,21 @@ import path from "node:path"
 /* ==== Product constants: set these for the product (see README.md). ==== */
 const PRODUCT = "Adiutor"
 const CMD = "adiutor"
-// Environment variables are this prefix plus URL, CREDENTIALS, AGENT_NAME, NO_NODE, WAIT_SECONDS, LOCK_WAIT_MS.
+// Environment variables are this prefix plus URL, CREDENTIALS, AGENT_NAME, NO_NODE, WAIT_SECONDS, LOCK_WAIT_MS,
+// and Adiutor's AGENT_LABEL and SKILL_HOME.
 const ENV_PREFIX = "ADIUTOR_"
 // The credentials folder, in the user's home folder.
 const CREDENTIALS_FOLDER = ".adiutor"
-const CLIENT_ID = "adiutor-cli"
-const SCOPE = "read act"
+const CLIENT_ID = "adiutor-agent"
+const SCOPE = "read write"
 // The REST API as a resource (RFC 8707): the audience its access tokens are bound to.
-const RESOURCE = "/api"
+const RESOURCE = "/api/v1"
 // Every API call is under one of these prefixes, so the token goes only to the API.
-const PREFIXES = ["/api/"]
+const PREFIXES = ["/api/v1/"]
 // A path template in the endpoints list: under PREFIXES, with {name} and {name:path} parts.
-const TEMPLATE = /^\/api\/[A-Za-z0-9._~{}:/-]*$/
-const ACCESS = "/api/agent/access"
-const ENDPOINTS = "/api/agent/endpoints"
+const TEMPLATE = /^\/api\/v1\/[A-Za-z0-9._~{}:/-]*$/
+const ACCESS = "/api/v1/agent/access"
+const ENDPOINTS = "/api/v1/agent/endpoints"
 // The authorization server's device, token and revocation endpoints, after the address.
 const DEVICE_PATH = "/oauth/device"
 const TOKEN_PATH = "/oauth/token"
@@ -88,6 +89,14 @@ const PLAIN = /^[^"\\\u0000-\u001f\u007f]*$/
 const SAFE_ORIGIN = /^https?:\/\/(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(:[1-9][0-9]{0,4})?$/
 // The file that keeps the address of the last working connection, so a copy of the skill without one finds it.
 const ADDRESS = "address"
+// The name an agent gives itself in Adiutor's activity log (--as, or ADIUTOR_AGENT_LABEL), sent as X-Adiutor-Agent.
+const AGENT_LABEL = /^[A-Za-z0-9 ._:-]{1,60}$/
+const AGENT_HEADER_NAME = "x-adiutor-agent"
+// Files of the adiutor command before this one, which kept an agent key: its connection, its approval, what it left
+// on Adiutor, its lock and its temporary files. Never read for a secret, never changed: reported by status and connect.
+const OLD_FILES = /^(?:connection|pending|left|lock|lock\.break|(?:connection|pending|left)\.[0-9a-f]{12}\.tmp)$/
+const OLD_MESSAGE =
+  "The adiutor command used before this one left these files in the folder of the connection. This command never reads or changes them; they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed."
 const PATH_CHARS = /^[A-Za-z0-9._~!$&'()*+,;=:@/?%-]+$/
 const UNKNOWN_OUTCOME = "The action may have run. Read its state before trying again."
 const NOT_LISTED = `This connection has no such call. Take the path from \`${CMD} endpoints\`, with its {...} parts filled in; never guess it.`
@@ -113,6 +122,7 @@ const FIELDS = [
   ["toRevoke", "s"],
 ]
 const win = process.platform === "win32"
+let agentLabel = ""
 
 class Fail extends Error {
   constructor(code, message, extra = {}) {
@@ -137,13 +147,13 @@ const HELP = `${CMD}: use ${PRODUCT} after a person approves it.
   connect --wait        Wait up to ${WAIT_SECONDS} s for the approval; run again while it answers still_waiting.
   access                What this connection may read or act on, and until when.
   endpoints [area]      The calls this connection may make, with their kind (read or act).
-  get <path>            GET a path, for example: get '/api/items?q=report'
-  post|put|patch <path> [--json <body> | --json-file <file>]
-  delete <path> [--json <body> | --json-file <file>]
+  get <path>            GET a path, for example: get '/api/v1/items?q=report'
+  post|patch <path> [--json <body> | --json-file <file>]
   status                Whether this computer user is connected (no secrets).
   disconnect            End this computer user's connection.
 
-  --url <address>       The ${PRODUCT} address (or ${ENV_PREFIX}URL). Kept once connected, for the commands after.`
+  --url <address>       The ${PRODUCT} address (or ${ENV_PREFIX}URL). Kept once connected, for the commands after.
+  --as <name>           Names the agent in ${PRODUCT}'s activity log (or ${ENV_PREFIX}AGENT_LABEL), for example: --as claude`
 
 async function main() {
   const args = process.argv.slice(2)
@@ -156,6 +166,7 @@ async function main() {
     else if (a === "--wait") opts.wait = true
     else if (a === "--json") opts.json = args.shift()
     else if (a === "--json-file") opts.jsonFile = args.shift()
+    else if (a === "--as") opts.as = args.shift()
     else opts.positional.push(a)
   }
   if (command === "help" || command === "--help" || command === "-h") {
@@ -165,19 +176,20 @@ async function main() {
   if (Number(process.versions.node.split(".")[0]) < 20)
     throw new Fail("node_too_old", `Node 20 or later is needed. Use ${CMD}.ps1 or ${CMD}.sh instead.`)
   const ctx = context(opts.url)
+  agentLabel = opts.as ?? env("AGENT_LABEL") ?? ""
+  if (agentLabel && !AGENT_LABEL.test(agentLabel))
+    throw new Fail("bad_label", "The agent label takes 1 to 60 letters, digits, spaces and . _ : - only.")
   const first = opts.positional[0]
   if (command === "status") return status(ctx)
   if (command === "connect") return opts.wait ? waitForApproval(ctx) : connect(ctx, Boolean(opts.replace))
   if (command === "access") return api(ctx, "GET", ACCESS)
   if (command === "endpoints") {
     if (first !== undefined && !/^[a-z_]{1,40}$/.test(first))
-      throw new Fail("bad_path", "Give an area name, for example: items")
+      throw new Fail("bad_path", "Give an area name, for example: read")
     return api(ctx, "GET", first === undefined ? ENDPOINTS : `${ENDPOINTS}?area=${first}`)
   }
   if (command === "get") return api(ctx, "GET", first)
-  if (command === "post" || command === "put" || command === "patch")
-    return api(ctx, command.toUpperCase(), first, body(opts, "{}"))
-  if (command === "delete") return api(ctx, "DELETE", first, body(opts, undefined))
+  if (command === "post" || command === "patch") return api(ctx, command.toUpperCase(), first, body(opts, "{}"))
   if (command === "disconnect") return disconnect(ctx)
   throw new Fail("unknown_command", `Unknown command "${command}". Run: ${CMD} help`)
 }
@@ -202,7 +214,9 @@ function context(urlOption) {
   const dir = credentialsDir()
   let raw = urlOption || env("URL") || (DEFAULT_URL.startsWith("__") ? "" : DEFAULT_URL)
   const kept = raw ? "" : keptAddress(dir)
-  raw ||= kept
+  // A folder the old command used keeps its address in its connection: a copy from Git finds Adiutor again.
+  const old = raw || kept ? "" : oldAddress(dir)
+  raw ||= kept || old
   if (!raw)
     throw new Fail("no_url", `No ${PRODUCT} address. Ask the person for it, then run: ${CMD} connect --url "<address>"`)
   let issuer
@@ -211,7 +225,12 @@ function context(urlOption) {
     if (kept && /\s/.test(kept)) throw new Fail("insecure_url", "")
     issuer = issuerOf(raw)
   } catch (e) {
-    if (!kept) throw e
+    if (!kept && !old) throw e
+    if (!kept)
+      throw new Fail(
+        "no_url",
+        `No ${PRODUCT} address. Ask the person for it, then run: ${CMD} connect --url "<address>"`,
+      )
     throw new Fail("no_url", `The address kept in ${path.join(dir, ADDRESS)} is not valid. Pass --url "<address>".`)
   }
   const key = createHash("sha256").update(issuer).digest("hex").slice(0, 32)
@@ -254,6 +273,31 @@ function keptAddress(dir) {
   }
 }
 
+/** The address in the old command's connection file, or "": only its origin is read, never its key. */
+function oldAddress(dir) {
+  const file = path.join(dir, "connection")
+  try {
+    checkFile(file)
+    const origin = JSON.parse(fs.readFileSync(file, "utf8"))?.origin
+    return typeof origin === "string" ? origin : ""
+  } catch (e) {
+    if (e instanceof Fail) throw e
+    return ""
+  }
+}
+
+/** The old command's files in the folder, reported as they are: { old_client: { files, message } }, or nothing. */
+function oldReport(ctx) {
+  let files = []
+  try {
+    files = fs
+      .readdirSync(ctx.dir)
+      .filter((f) => OLD_FILES.test(f))
+      .sort()
+  } catch {}
+  return files.length ? { old_client: { files: files.map((f) => path.join(ctx.dir, f)), message: OLD_MESSAGE } } : {}
+}
+
 /** Keeps the address of a working connection, in one step. Only a convenience: a failure changes nothing. */
 function keepAddress(ctx) {
   try {
@@ -271,7 +315,8 @@ function label() {
 }
 
 function credentialsDir() {
-  const override = env("CREDENTIALS")
+  // ADIUTOR_SKILL_HOME was the old command's name for the folder.
+  const override = env("CREDENTIALS") || env("SKILL_HOME")
   if (win) {
     const home = path.resolve(process.env.USERPROFILE || os.homedir())
     const dir = path.resolve(override || path.join(home, CREDENTIALS_FOLDER))
@@ -302,7 +347,15 @@ function secureDir(dir) {
       const sid = userSid()
       execFileSync(
         system32("icacls.exe"),
-        [dir, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "/Q"],
+        [
+          dir,
+          "/inheritance:r",
+          "/grant:r",
+          `*${sid}:(OI)(CI)F`,
+          "*S-1-5-18:(OI)(CI)F",
+          "*S-1-5-32-544:(OI)(CI)F",
+          "/Q",
+        ],
         { stdio: "ignore" },
       )
       // The owner may always change an ACL, so the folder and its files must be this user's. (Only now: taking
@@ -655,6 +708,7 @@ async function request(ctx, method, url, { form, bearer, json, policy, kind, tim
   if (bearer) {
     headers.authorization = `Bearer ${bearer}`
     headers[SKILL_HEADER_NAME] = SKILL_HEADER
+    if (agentLabel) headers[AGENT_HEADER_NAME] = agentLabel
   }
   // The revision and the kind go together: the server runs the call only when both still hold for the route it picks.
   if (policy) {
@@ -695,8 +749,7 @@ async function request(ctx, method, url, { form, bearer, json, policy, kind, tim
   return { status: res.status, text, json: parsed, isJson, challenge: res.headers.get("www-authenticate") ?? "" }
 }
 
-const oauth = (ctx, p, form) =>
-  request(ctx, "POST", `${ctx.issuer}${p}`, { form: { ...form, client_id: CLIENT_ID } })
+const oauth = (ctx, p, form) => request(ctx, "POST", `${ctx.issuer}${p}`, { form: { ...form, client_id: CLIENT_ID } })
 
 function httpFail(r, what) {
   const body = r.json !== null && typeof r.json === "object" ? r.json : null
@@ -740,6 +793,7 @@ function status(ctx) {
     url: ctx.issuer,
     label: rec?.label || ctx.label,
     ...(rec?.refreshToken ? { scope: rec.scope, accessExpiresIn: Math.max(0, rec.accessExpiresAt - now()) } : {}),
+    ...oldReport(ctx),
   })
 }
 
@@ -794,7 +848,7 @@ async function connect(ctx, replace) {
     return pending(ctx, rec)
   })
   if (result.status === "already_connected") keepAddress(ctx)
-  print(result)
+  print({ ...result, ...oldReport(ctx) })
 }
 
 /**
@@ -966,7 +1020,7 @@ async function accessToken(ctx, stale) {
  */
 function apiTarget(ctx, p) {
   const value = String(p ?? "")
-  const bad = `Give a path from \`${CMD} endpoints\`, for example: get '/api/items?q=report' (percent-encode anything else)`
+  const bad = `Give a path from \`${CMD} endpoints\`, for example: get '/api/v1/items?q=report' (percent-encode anything else)`
   // The same characters in every version (the shell version passes the path to curl as it is).
   // Encoded dots too: a server or proxy that decodes them would take the token out of the API.
   if (!PATH_CHARS.test(value) || value.includes("://") || value.startsWith("//") || /%2e/i.test(value))
@@ -974,11 +1028,11 @@ function apiTarget(ctx, p) {
   const pathOnly = value.split("?")[0]
   // The kind is found from the path as it is sent, but a server may decode the path before it routes it. So in the
   // path an escape may not stand for a character a route template holds as it is (A-Z a-z 0-9 . _ ~ : -), nor for
-  // / \ or % (/api/items/7%2Fsend would match /api/items/{id} here and may run /api/items/{id}/send there), and
+  // / \ or % (/api/v1/items/7%2Fsend would match /api/v1/items/{id} here and may run /api/v1/items/{id}/send there), and
   // every % must start an escape. The query keeps any escape.
   if (/%(?![0-9A-Fa-f]{2})|%(2[5DEF]|3[0-9A]|4[1-9A-F]|5[0-9ACF]|6[1-9A-F]|7[0-9AE])/i.test(pathOnly))
     throw new Fail("bad_path", bad)
-  // Some servers drop ;parameters from a segment before they route (/api/items/export;x runs /api/items/export).
+  // Some servers drop ;parameters from a segment before they route (/api/v1/items/export;x runs /api/v1/items/export).
   // The server's check of the declared kind stops such a call too; this refuses it before it is sent.
   if (pathOnly.includes(";")) throw new Fail("bad_path", bad)
   if (!PREFIXES.some((x) => pathOnly.startsWith(x) && pathOnly.length > x.length)) throw new Fail("bad_path", bad)
@@ -1075,7 +1129,7 @@ function templateMatches(template, p) {
 }
 
 /**
- * "read", "act", "both" (a read and an act both match the path, such as /api/items/export and /api/items/{id}), or
+ * "read", "act", "both" (a read and an act both match the path, such as /api/v1/items/export and /api/v1/items/{id}), or
  * null when the list does not hold the call.
  */
 function lookup(list, method, p) {
@@ -1189,7 +1243,10 @@ function dataText(r) {
 }
 
 const failedAnswer = (data) =>
-  data !== null && typeof data === "object" && !Array.isArray(data) && (data.success === false || data.status === "error")
+  data !== null &&
+  typeof data === "object" &&
+  !Array.isArray(data) &&
+  (data.success === false || data.status === "error")
 
 async function api(ctx, method, p, json) {
   const target = apiTarget(ctx, p)

@@ -13,7 +13,7 @@ if [ -z "$no_node" ] && command -v node >/dev/null 2>&1 &&
   script="$here/$name.mjs"
   if [ $windows = 1 ]; then
     script=$(cygpath -w "$script")
-    # Git Bash would otherwise rewrite arguments such as /api/items into Windows paths.
+    # Git Bash would otherwise rewrite arguments such as /api/v1/items into Windows paths.
     export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
   fi
   exec node "$script" "$@"

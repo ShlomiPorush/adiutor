@@ -13,20 +13,21 @@ Set-StrictMode -Version 2
 # ==== Product constants: set these for the product (see README.md). ====
 $Product = 'Adiutor'
 $Cmd = 'adiutor'
-# Environment variables are this prefix plus URL, CREDENTIALS, AGENT_NAME, NO_NODE, WAIT_SECONDS, LOCK_WAIT_MS.
+# Environment variables are this prefix plus URL, CREDENTIALS, AGENT_NAME, NO_NODE, WAIT_SECONDS, LOCK_WAIT_MS,
+# and Adiutor's AGENT_LABEL and SKILL_HOME.
 $EnvPrefix = 'ADIUTOR_'
 # The credentials folder, in the user's profile.
 $CredentialsFolder = '.adiutor'
-$ClientId = 'adiutor-cli'
-$Scope = 'read act'
+$ClientId = 'adiutor-agent'
+$Scope = 'read write'
 # The REST API as a resource (RFC 8707): the audience its access tokens are bound to.
-$Resource = '/api'
+$Resource = '/api/v1'
 # Every API call is under one of these prefixes, so the token goes only to the API.
-$Prefixes = @('/api/')
+$Prefixes = @('/api/v1/')
 # A path template in the endpoints list: under $Prefixes, with {name} and {name:path} parts.
-$TemplatePattern = '^/api/[A-Za-z0-9._~{}:/-]*\z'
-$AccessPath = '/api/agent/access'
-$EndpointsPath = '/api/agent/endpoints'
+$TemplatePattern = '^/api/v1/[A-Za-z0-9._~{}:/-]*\z'
+$AccessPath = '/api/v1/agent/access'
+$EndpointsPath = '/api/v1/agent/endpoints'
 # The authorization server's device, token and revocation endpoints, after the address.
 $DevicePath = '/oauth/device'
 $TokenPath = '/oauth/token'
@@ -137,13 +138,13 @@ ${Cmd}: use $Product after a person approves it.
   connect --wait        Wait up to $WaitSeconds s for the approval; run again while it answers still_waiting.
   access                What this connection may read or act on, and until when.
   endpoints [area]      The calls this connection may make, with their kind (read or act).
-  get <path>            GET a path, for example: get '/api/items?q=report'
-  post|put|patch <path> [--json <body> | --json-file <file>]
-  delete <path> [--json <body> | --json-file <file>]
+  get <path>            GET a path, for example: get '/api/v1/items?q=report'
+  post|patch <path> [--json <body> | --json-file <file>]
   status                Whether this computer user is connected (no secrets).
   disconnect            End this computer user's connection.
 
   --url <address>       The $Product address (or ${EnvPrefix}URL). Kept once connected, for the commands after.
+  --as <name>           Names the agent in $Product's activity log (or ${EnvPrefix}AGENT_LABEL), for example: --as claude
 "@
 
 # Reads a file the other commands may replace or delete meanwhile. ReadAllText shares it for reading only, so on
@@ -159,6 +160,15 @@ function Read-Shared([string]$file) {
 # The address: --url, the environment, the one filled in when the server served this file, or the one kept on
 # connecting.
 
+# The name an agent gives itself in Adiutor's activity log (--as, or ADIUTOR_AGENT_LABEL), sent as X-Adiutor-Agent.
+$AgentLabelPattern = '^[A-Za-z0-9 ._:-]{1,60}\z'
+$AgentHeaderName = 'x-adiutor-agent'
+$script:AgentLabel = ''
+# Files of the adiutor command before this one, which kept an agent key: its connection, its approval, what it left
+# on Adiutor, its lock and its temporary files. Never read for a secret, never changed: reported by status and connect.
+$OldFilesPattern = '^(connection|pending|left|lock|lock\.break|(connection|pending|left)\.[0-9a-f]{12}\.tmp)\z'
+$OldMessage = 'The adiutor command used before this one left these files in the folder of the connection. This command never reads or changes them; they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed.'
+
 function Get-Context([string]$urlOption) {
   $dir = Get-CredentialsDir
   $raw = $urlOption
@@ -166,13 +176,17 @@ function Get-Context([string]$urlOption) {
   if (-not $raw -and -not $DefaultUrl.StartsWith('__')) { $raw = $DefaultUrl }
   $kept = ''
   if (-not $raw) { $kept = Get-KeptAddress $dir; $raw = $kept }
+  # A folder the old command used keeps its address in its connection: a copy from Git finds Adiutor again.
+  $old = ''
+  if (-not $raw) { $old = Get-OldAddress $dir; $raw = $old }
   if (-not $raw) { Fail 'no_url' "No $Product address. Ask the person for it, then run: $Cmd connect --url `"<address>`"" }
   try {
     # A kept address is one line: anything else in the file makes it invalid, not a different address.
     if ($kept -and $kept -match '\s') { Fail 'insecure_url' '' }
     $issuer = Get-Issuer $raw
   } catch [ClientFail] {
-    if (-not $kept) { throw }
+    if (-not $kept -and -not $old) { throw }
+    if (-not $kept) { Fail 'no_url' "No $Product address. Ask the person for it, then run: $Cmd connect --url `"<address>`"" }
     Fail 'no_url' "The address kept in $(Join-Path $dir $AddressFile) is not valid. Pass --url `"<address>`"."
   }
   $sha = [Security.Cryptography.SHA256]::Create().ComputeHash($Utf8.GetBytes($issuer))
@@ -304,6 +318,33 @@ function Get-KeptAddress([string]$dir) {
   $text -replace '[\r\n]+\z', ''
 }
 
+# The address in the old command's connection file, or '': only its origin is read, never its key.
+function Get-OldAddress([string]$dir) {
+  $file = Join-Path $dir 'connection'
+  try { $attr = [IO.File]::GetAttributes($file) } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return '' }
+  if (($attr -band [IO.FileAttributes]::ReparsePoint) -or ($attr -band [IO.FileAttributes]::Directory)) {
+    Fail 'insecure_credentials' "$file must be a plain file."
+  }
+  try { $parsed = Read-JsonText (Read-Shared $file) } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return '' }
+  if ($null -eq $parsed) { return '' }
+  $origin = Get-TopText $parsed 'origin'
+  if ($null -eq $origin) { return '' }
+  $origin
+}
+
+# The old command's files in the folder, reported as they are (old_client), into $out.
+function Add-OldReport($ctx, $out) {
+  $files = @()
+  try {
+    $files = @([IO.Directory]::GetFileSystemEntries($ctx.dir) | ForEach-Object { [IO.Path]::GetFileName($_) } |
+        Where-Object { $_ -cmatch $OldFilesPattern } | Sort-Object -CaseSensitive)
+  } catch {}
+  if ($files.Count) {
+    $out.old_client = [ordered]@{ files = @($files | ForEach-Object { Join-Path $ctx.dir $_ }); message = $OldMessage }
+  }
+  $out
+}
+
 # Keeps the address of a working connection, in one step. Only a convenience: a failure changes nothing.
 function Save-Address($ctx) {
   try {
@@ -364,7 +405,9 @@ function Get-Label {
 
 function Get-CredentialsDir {
   if ([Environment]::OSVersion.Platform -ne 'Win32NT') { Fail 'failed' "On Linux and macOS, run $Cmd (or $Cmd.sh)." }
+  # ADIUTOR_SKILL_HOME was the old command's name for the folder.
   $dir = Get-Env 'CREDENTIALS'
+  if (-not $dir) { $dir = Get-Env 'SKILL_HOME' }
   if (-not $dir) { $dir = Join-Path $env:USERPROFILE $CredentialsFolder }
   $dir = [IO.Path]::GetFullPath($dir).TrimEnd('\')
   $userHome = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\').ToLowerInvariant()
@@ -666,6 +709,7 @@ function Invoke-Http($ctx, [string]$method, [string]$url, $form, [string]$bearer
   }
   $head = "$method $($u.PathAndQuery) HTTP/1.1`r`nHost: $($u.Authority)`r`nAccept: application/json`r`nConnection: close`r`nUser-Agent: $Cmd`r`n"
   if ($bearer) { $head += "Authorization: Bearer $bearer`r`n${SkillHeaderName}: $SkillHeader`r`n" }
+  if ($bearer -and $script:AgentLabel) { $head += "${AgentHeaderName}: $($script:AgentLabel)`r`n" }
   # The revision and the kind go together: the server runs the call only when both still hold for the route it picks.
   if ($policy) { $head += "${PolicyHeaderName}: $policy`r`n${KindHeaderName}: $kind`r`n" }
   if ($null -ne $bodyBytes) { $head += "Content-Type: $contentType`r`nContent-Length: $($bodyBytes.Length)`r`n" }
@@ -917,7 +961,7 @@ function Show-Status($ctx) {
   if ($rec -and $rec.label) { $label = $rec.label }
   $out = [ordered]@{ status = $state; url = $ctx.issuer; label = $label }
   if ($state -eq 'connected') { $out.scope = $rec.scope; $out.accessExpiresIn = [Math]::Max([long]0, $rec.accessExpiresAt - (Now)) }
-  Write-Json $out
+  Write-Json (Add-OldReport $ctx $out)
 }
 
 # The hint names the address, so the wait asks the same server even if the kept address changes meanwhile. Quoted:
@@ -949,10 +993,10 @@ function Invoke-Connect($ctx, [bool]$replace) {
     $rec = Invoke-RevokePending $ctx $rec
     if ($rec.refreshToken -and -not $replace) {
       Save-Address $ctx
-      return Write-Json ([ordered]@{ status = 'already_connected'; label = $rec.label; scope = $rec.scope })
+      return Write-Json (Add-OldReport $ctx ([ordered]@{ status = 'already_connected'; label = $rec.label; scope = $rec.scope }))
     }
     # The open code again, unless asked for a new one (--replace: the link did not work for the person).
-    if ($rec.deviceCode -and ($rec.deviceExpiresAt - (Now)) -gt 30 -and -not $replace) { return Write-Json (Get-Pending $ctx $rec) }
+    if ($rec.deviceCode -and ($rec.deviceExpiresAt - (Now)) -gt 30 -and -not $replace) { return Write-Json (Add-OldReport $ctx (Get-Pending $ctx $rec)) }
     Assert-Mine $ctx $lock
     $r = Invoke-OAuth $ctx $DevicePath ([ordered]@{ scope = $Scope; resource = "$($ctx.issuer)$Resource"; client_label = $ctx.label })
     if ($r.status -ne 200) { throw (New-HttpFail $r 'Asking to connect') }
@@ -968,7 +1012,7 @@ function Invoke-Connect($ctx, [bool]$replace) {
       deviceExpiresAt = (Now) + [Math]::Max([long]60, $expires); interval = $interval; nextPollAt = (Now) + $interval
     }
     Write-Record $ctx $rec
-    Write-Json (Get-Pending $ctx $rec)
+    Write-Json (Add-OldReport $ctx (Get-Pending $ctx $rec))
   } finally { Exit-Lock $ctx $lock }
 }
 
@@ -1097,17 +1141,17 @@ function Test-Prefixed([string]$pathOnly) {
 }
 
 function Get-ApiTarget($ctx, [string]$p) {
-  $bad = "Give a path from ``$Cmd endpoints``, for example: get '/api/items?q=report' (percent-encode anything else)"
+  $bad = "Give a path from ``$Cmd endpoints``, for example: get '/api/v1/items?q=report' (percent-encode anything else)"
   if (-not $p) { Fail 'bad_path' $bad }
   # Encoded dots too: a server or proxy that decodes them would take the token out of the API.
   if ($p -notmatch $PathChars -or $p.Contains('://') -or $p.StartsWith('//') -or $p -match '%2e') { Fail 'bad_path' $bad }
   $pathOnly = ($p -split '\?', 2)[0]
   # The kind is found from the path as it is sent, but a server may decode the path before it routes it. So in the
   # path an escape may not stand for a character a route template holds as it is (A-Z a-z 0-9 . _ ~ : -), nor for
-  # / \ or % (/api/items/7%2Fsend would match /api/items/{id} here and may run /api/items/{id}/send there), and
+  # / \ or % (/api/v1/items/7%2Fsend would match /api/v1/items/{id} here and may run /api/v1/items/{id}/send there), and
   # every % must start an escape. The query keeps any escape.
   if ($pathOnly -match '%(?![0-9a-f]{2})|%(2[5def]|3[0-9a]|4[1-9a-f]|5[0-9acf]|6[1-9a-f]|7[0-9ae])') { Fail 'bad_path' $bad }
-  # Some servers drop ;parameters from a segment before they route (/api/items/export;x runs /api/items/export).
+  # Some servers drop ;parameters from a segment before they route (/api/v1/items/export;x runs /api/v1/items/export).
   # The server's check of the declared kind stops such a call too; this refuses it before it is sent.
   if ($pathOnly.Contains(';')) { Fail 'bad_path' $bad }
   if (-not (Test-Prefixed $pathOnly)) { Fail 'bad_path' $bad }
@@ -1207,7 +1251,7 @@ function Test-TemplateMatch([string]$template, [string]$path) {
   $t.Count -eq $s.Count
 }
 
-# 'read', 'act', 'both' (a read and an act both match the path, such as /api/items/export and /api/items/{id}), or
+# 'read', 'act', 'both' (a read and an act both match the path, such as /api/v1/items/export and /api/v1/items/{id}), or
 # $null when the list does not hold the call.
 function Find-Kind($list, [string]$method, [string]$path) {
   $read = $false; $act = $false
@@ -1366,7 +1410,7 @@ function Invoke-Main([string[]]$argv) {
   foreach ($a in $argv) { $list.Add($a) }
   $command = 'help'
   if ($list.Count) { $command = $list[0]; $list.RemoveAt(0) }
-  $o = @{ url = ''; replace = $false; wait = $false; json = $null; jsonFile = $null; positional = @() }
+  $o = @{ url = ''; replace = $false; wait = $false; json = $null; jsonFile = $null; as = $null; positional = @() }
   for ($i = 0; $i -lt $list.Count; $i++) {
     $a = $list[$i]
     if ($a -eq '--url') { $i++; $o.url = $list[$i] }
@@ -1374,10 +1418,17 @@ function Invoke-Main([string[]]$argv) {
     elseif ($a -eq '--wait') { $o.wait = $true }
     elseif ($a -eq '--json') { $i++; $o.json = $list[$i] }
     elseif ($a -eq '--json-file') { $i++; $o.jsonFile = $list[$i] }
+    elseif ($a -eq '--as') { $i++; $o.as = $list[$i] }
     else { $o.positional += $a }
   }
   if (@('help', '--help', '-h') -contains $command) { Write-Line $Help; return }
   $ctx = Get-Context $o.url
+  $script:AgentLabel = $o.as
+  if ($null -eq $script:AgentLabel) { $script:AgentLabel = Get-Env 'AGENT_LABEL' }
+  if ($null -eq $script:AgentLabel) { $script:AgentLabel = '' }
+  if ($script:AgentLabel -and $script:AgentLabel -cnotmatch $AgentLabelPattern) {
+    Fail 'bad_label' 'The agent label takes 1 to 60 letters, digits, spaces and . _ : - only.'
+  }
   $first = $null
   if ($o.positional.Count) { $first = $o.positional[0] }
   switch -CaseSensitive ($command) {
@@ -1386,14 +1437,12 @@ function Invoke-Main([string[]]$argv) {
     'access' { Invoke-Api $ctx 'GET' $AccessPath $null }
     'endpoints' {
       if ($null -eq $first) { Invoke-Api $ctx 'GET' $EndpointsPath $null }
-      elseif ($first -cnotmatch '^[a-z_]{1,40}\z') { Fail 'bad_path' 'Give an area name, for example: items' }
+      elseif ($first -cnotmatch '^[a-z_]{1,40}\z') { Fail 'bad_path' 'Give an area name, for example: read' }
       else { Invoke-Api $ctx 'GET' "$($EndpointsPath)?area=$first" $null }
     }
     'get' { Invoke-Api $ctx 'GET' $first $null }
     'post' { Invoke-Api $ctx 'POST' $first (Get-Body $o '{}') }
-    'put' { Invoke-Api $ctx 'PUT' $first (Get-Body $o '{}') }
     'patch' { Invoke-Api $ctx 'PATCH' $first (Get-Body $o '{}') }
-    'delete' { Invoke-Api $ctx 'DELETE' $first (Get-Body $o $null) }
     'disconnect' { Invoke-Disconnect $ctx }
     default { Fail 'unknown_command' "Unknown command `"$command`". Run: $Cmd help" }
   }

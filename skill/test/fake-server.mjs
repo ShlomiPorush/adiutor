@@ -6,27 +6,27 @@ import { createHash, randomBytes } from "node:crypto"
 import http from "node:http"
 
 /* ---- Product constants: the same values as in the scripts' constant block. ---- */
-const CLIENT_ID = "adiutor-cli"
-const API_PREFIX = "/api/"
-const ACCESS_PATH = "/api/agent/access"
-const ENDPOINTS_PATH = "/api/agent/endpoints"
+const CLIENT_ID = "adiutor-agent"
+const API_PREFIX = "/api/v1/"
+const ACCESS_PATH = "/api/v1/agent/access"
+const ENDPOINTS_PATH = "/api/v1/agent/endpoints"
 const SKILL_HEADER = "x-adiutor-skill"
 const POLICY_HEADER = "x-adiutor-policy"
 const KIND_HEADER = "x-adiutor-kind"
+// Adiutor's own: the name an agent gives itself in the activity log (--as).
+const AGENT_HEADER = "x-adiutor-agent"
 /* ---- End of product constants. ---- */
 
 /** A sample policy table: every route an agent may call, with its area and kind (read or act, by effect). */
 export const SAMPLE_POLICY = [
-  { method: "GET", path: "/api/items", kind: "read", area: "items", description: "List items." },
-  { method: "GET", path: "/api/items/{id}", kind: "read", area: "items", description: "Read one item." },
-  { method: "POST", path: "/api/items", kind: "act", area: "items", description: "Create an item." },
-  { method: "PUT", path: "/api/items/{id}", kind: "act", area: "items", description: "Replace an item." },
-  { method: "PATCH", path: "/api/items/{id}", kind: "act", area: "items", description: "Change an item." },
-  { method: "DELETE", path: "/api/items/{id}", kind: "act", area: "items", description: "Delete an item." },
-  { method: "POST", path: "/api/items/{id}/archive", kind: "act", area: "items", description: "Archive an item." },
+  { method: "GET", path: "/api/v1/items", kind: "read", area: "items", description: "List items." },
+  { method: "GET", path: "/api/v1/items/{id}", kind: "read", area: "items", description: "Read one item." },
+  { method: "POST", path: "/api/v1/items", kind: "act", area: "items", description: "Create an item." },
+  { method: "PATCH", path: "/api/v1/items/{id}", kind: "act", area: "items", description: "Change an item." },
+  { method: "POST", path: "/api/v1/items/{id}/archive", kind: "act", area: "items", description: "Archive an item." },
   // A search that changes nothing, sent as POST: its kind is read, whatever its method.
-  { method: "POST", path: "/api/items/search", kind: "read", area: "items", description: "Search items." },
-  { method: "GET", path: "/api/files/{name:path}", kind: "read", area: "files", description: "Read a file." },
+  { method: "POST", path: "/api/v1/items/search", kind: "read", area: "items", description: "Search items." },
+  { method: "GET", path: "/api/v1/files/{name:path}", kind: "read", area: "files", description: "Read a file." },
 ]
 
 const id = () => randomBytes(18).toString("base64url")
@@ -85,13 +85,13 @@ export async function startFakeServer(port = 0, host = "127.0.0.1") {
       // What happens after the route's code ran, one per run, in order: "drop" (no answer), "truncate" (the answer
       // starts and breaks off), or { status, body, headers } to answer with.
       afterRun: [],
-      // The router: like ASP.NET Core's, it matches the fixed parts of a route in any case (/api/items/EXPORT runs
-      // /api/items/export); like Spring's or Tomcat's, it drops ;parameters from every segment (/api/items/export;x
-      // runs /api/items/export). Either way it can pick another route than the client matched.
+      // The router: like ASP.NET Core's, it matches the fixed parts of a route in any case (/api/v1/items/EXPORT runs
+      // /api/v1/items/export); like Spring's or Tomcat's, it drops ;parameters from every segment (/api/v1/items/export;x
+      // runs /api/v1/items/export). Either way it can pick another route than the client matched.
       caseInsensitiveRoutes: false,
       stripPathParameters: false,
       // Which of two routes that both match a path the router picks: "first" (the first in the table), "static" (the
-      // one with fewer {...} parts, as most routers do: /api/items/export before /api/items/{id}) or "dynamic".
+      // one with fewer {...} parts, as most routers do: /api/v1/items/export before /api/v1/items/{id}) or "dynamic".
       routePreference: "first",
       policy: SAMPLE_POLICY.map((e) => ({ ...e })),
       last: {},
@@ -158,8 +158,8 @@ export async function startFakeServer(port = 0, host = "127.0.0.1") {
       return send(200, {
         device_code: deviceCode,
         user_code: userCode,
-        verification_uri: `${s.issuer}/connect/device`,
-        verification_uri_complete: `${s.issuer}/connect/device?user_code=${userCode}`,
+        verification_uri: `${s.issuer}/connect/code`,
+        verification_uri_complete: `${s.issuer}/connect/code?user_code=${userCode}`,
         expires_in: 600,
         ...(s.deviceInterval ? { interval: s.deviceInterval } : {}),
       })
@@ -240,17 +240,18 @@ export async function startFakeServer(port = 0, host = "127.0.0.1") {
       const key = `${req.method} ${url.pathname}`
       s.arrivalCounts.set(key, (s.arrivalCounts.get(key) ?? 0) + 1)
       s.last.skill = req.headers[SKILL_HEADER]
+      s.last.agent = req.headers[AGENT_HEADER]
       s.last.policy = req.headers[POLICY_HEADER]
       s.last.kind = req.headers[KIND_HEADER]
-      // Like many real servers, it decodes the path before it routes: /api/items/7%2Fsend runs the route of
-      // /api/items/7/send, and /api/items/%65xport the one of /api/items/export.
+      // Like many real servers, it decodes the path before it routes: /api/v1/items/7%2Fsend runs the route of
+      // /api/v1/items/7/send, and /api/v1/items/%65xport the one of /api/v1/items/export.
       let routed
       try {
         routed = decodeURIComponent(url.pathname)
       } catch {
         return send(400, { error: "bad_request", message: "The path is not valid." })
       }
-      // The ;parameters go after the decoding, the harsher order: /api/items/export%3Bx runs /api/items/export too.
+      // The ;parameters go after the decoding, the harsher order: /api/v1/items/export%3Bx runs /api/v1/items/export too.
       if (s.stripPathParameters) routed = routed.replace(/;[^/]*/g, "")
       // 1. The token check, before anything else.
       const bearer = (req.headers.authorization ?? "").replace(/^Bearer /, "")

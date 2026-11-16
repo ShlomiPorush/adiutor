@@ -13,20 +13,21 @@ umask 077
 # ==== Product constants: set these for the product (see README.md). ====
 PRODUCT="Adiutor"
 CMD="adiutor"
-# Environment variables are this prefix plus URL, CREDENTIALS, AGENT_NAME, NO_NODE, WAIT_SECONDS, LOCK_WAIT_MS.
+# Environment variables are this prefix plus URL, CREDENTIALS, AGENT_NAME, NO_NODE, WAIT_SECONDS, LOCK_WAIT_MS,
+# and Adiutor's AGENT_LABEL and SKILL_HOME.
 ENV_PREFIX="ADIUTOR_"
 # The credentials folder, in the user's home folder.
 CREDENTIALS_FOLDER=".adiutor"
-CLIENT_ID="adiutor-cli"
-SCOPE="read act"
+CLIENT_ID="adiutor-agent"
+SCOPE="read write"
 # The REST API as a resource (RFC 8707): the audience its access tokens are bound to.
-RESOURCE="/api"
+RESOURCE="/api/v1"
 # Every API call is under one of these prefixes (separated by spaces), so the token goes only to the API.
-PREFIXES="/api/"
+PREFIXES="/api/v1/"
 # A path template in the endpoints list (an awk pattern): under PREFIXES, with {name} and {name:path} parts.
-TEMPLATE_RE='^/api/[A-Za-z0-9._~{}:/-]*$'
-ACCESS_PATH="/api/agent/access"
-ENDPOINTS_PATH="/api/agent/endpoints"
+TEMPLATE_RE='^/api/v1/[A-Za-z0-9._~{}:/-]*$'
+ACCESS_PATH="/api/v1/agent/access"
+ENDPOINTS_PATH="/api/v1/agent/endpoints"
 # The authorization server's device, token and revocation endpoints, after the address.
 DEVICE_PATH="/oauth/device"
 TOKEN_PATH="/oauth/token"
@@ -71,6 +72,9 @@ UNKNOWN_OUTCOME="The action may have run. Read its state before trying again."
 NOT_LISTED="This connection has no such call. Take the path from \`$CMD endpoints\`, with its {...} parts filled in; never guess it."
 UNAVAILABLE="The list of allowed calls could not be read from $PRODUCT, so nothing was sent. Try again in a moment."
 POLICY_CHANGED="$PRODUCT's calls changed, or this path names a different call than the list says. Nothing ran. Run \`$CMD endpoints\` and take the path from it."
+# The name an agent gives itself in Adiutor's activity log (--as, or ADIUTOR_AGENT_LABEL), sent as X-Adiutor-Agent.
+AGENT_HEADER_NAME="x-adiutor-agent"
+OLD_MESSAGE="The adiutor command used before this one left these files in the folder of the connection. This command never reads or changes them; they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed."
 FIELDS="v:n issuer:s label:s generation:s refreshToken:s accessToken:s accessExpiresAt:n scope:s refreshStartedAt:n refreshRetried:n deviceCode:s userCode:s link:s deviceExpiresAt:n interval:n nextPollAt:n toRevoke:s"
 
 LOCKTOKEN=""
@@ -307,13 +311,13 @@ HELP="$CMD: use $PRODUCT after a person approves it.
   connect --wait        Wait up to $WAIT_SECONDS s for the approval; run again while it answers still_waiting.
   access                What this connection may read or act on, and until when.
   endpoints [area]      The calls this connection may make, with their kind (read or act).
-  get <path>            GET a path, for example: get '/api/items?q=report'
-  post|put|patch <path> [--json <body> | --json-file <file>]
-  delete <path> [--json <body> | --json-file <file>]
+  get <path>            GET a path, for example: get '/api/v1/items?q=report'
+  post|patch <path> [--json <body> | --json-file <file>]
   status                Whether this computer user is connected (no secrets).
   disconnect            End this computer user's connection.
 
-  --url <address>       The $PRODUCT address (or ${ENV_PREFIX}URL). Kept once connected, for the commands after."
+  --url <address>       The $PRODUCT address (or ${ENV_PREFIX}URL). Kept once connected, for the commands after.
+  --as <name>           Names the agent in $PRODUCT's activity log (or ${ENV_PREFIX}AGENT_LABEL), for example: --as claude"
 
 sha() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -330,6 +334,8 @@ sha() {
 setup() {
   command -v curl >/dev/null 2>&1 || fail missing_curl "curl is needed. Install curl, or Node 20 or later."
   creds=$(envv CREDENTIALS)
+  # ADIUTOR_SKILL_HOME was the old command's name for the folder.
+  [ -n "$creds" ] || creds=$(envv SKILL_HOME)
   [ -n "${HOME:-}" ] || [ -n "$creds" ] || fail cannot_save "HOME is not set, so there is no folder to keep the connection in."
   DIR="${creds:-${HOME:-}/$CREDENTIALS_FOLDER}"
   case "$DIR" in /*) ;; *) DIR="$(pwd -P)/$DIR" ;; esac
@@ -340,6 +346,10 @@ setup() {
   KEPT=""
   [ -n "$raw" ] || kept_address
   [ -n "$raw" ] || raw=$KEPT
+  # A folder the old command used keeps its address in its connection: a copy from Git finds Adiutor again.
+  OLD=""
+  [ -n "$raw" ] || old_address
+  [ -n "$raw" ] || raw=$OLD
   [ -n "$raw" ] || fail no_url "No $PRODUCT address. Ask the person for it, then run: $CMD connect --url \"<address>\""
   # A kept address is one line: anything else in the file makes it invalid, not a different address.
   if [ -n "$KEPT" ]; then case "$KEPT" in *[[:space:]]*) bad_url "" ;; esac fi
@@ -470,6 +480,7 @@ NR == 1 {
 
 # An address that is not one: from the kept file, the file is what is wrong.
 bad_url() {
+  [ -z "$OLD" ] || fail no_url "No $PRODUCT address. Ask the person for it, then run: $CMD connect --url \"<address>\""
   [ -z "$KEPT" ] || fail no_url "The address kept in $ADDRESS is not valid. Pass --url \"<address>\"."
   fail insecure_url "$1"
 }
@@ -494,6 +505,39 @@ kept_address() {
       *) break ;;
     esac
   done
+}
+
+# The address in the old command's connection file (OLD): only its origin is read, never its key.
+old_address() {
+  of="$DIR/connection"
+  [ -e "$of" ] || [ -L "$of" ] || return 0
+  if ! { [ -f "$of" ] && [ ! -L "$of" ]; }; then fail insecure_credentials "$of must be a plain file."; fi
+  check_private "$of"
+  OLD=$(jstr origin "$of")
+}
+
+# old_report: the old command's files in the folder, reported as they are, as JSON members to add to an answer.
+old_report() {
+  found=""
+  for f in connection pending left lock lock.break "$DIR"/connection.*.tmp "$DIR"/pending.*.tmp "$DIR"/left.*.tmp; do
+    case "$f" in
+      "$DIR"/*) n=${f#"$DIR"/} ;;
+      *) n=$f ;;
+    esac
+    case "$n" in
+      connection | pending | left | lock | lock.break) ;;
+      *.tmp)
+        h=${n#*.}
+        h=${h%.tmp}
+        case "$h" in ????????????) ;; *) continue ;; esac
+        case "$h" in *[!0-9a-f]*) continue ;; esac
+        ;;
+    esac
+    [ -e "$DIR/$n" ] || [ -L "$DIR/$n" ] || continue
+    found="$found${found:+,}\"$(esc "$DIR/$n")\""
+  done
+  [ -n "$found" ] || return 0
+  printf ',"old_client":{"files":[%s],"message":"%s"}' "$found" "$(esc "$OLD_MESSAGE")"
 }
 
 # Keeps the address of a working connection, in one step. Only a convenience: a failure changes nothing (so it
@@ -802,8 +846,8 @@ clear_pending() { R_deviceCode='' R_userCode='' R_link='' R_deviceExpiresAt=0 R_
 print_pending() {
   left=$((R_deviceExpiresAt - $(now)))
   [ $left -lt 0 ] && left=0
-  printf '{"status":"pending","link":"%s","code":"%s","expiresIn":%s,"next":"End your turn with a reply that shows the person the link and the code and asks them to reply once they approve. When they reply, run: %s connect --wait --url %s"}\n' \
-    "$(esc "$R_link")" "$(esc "$R_userCode")" "$left" "$CMD" "$(esc "\"$ISSUER\"")"
+  printf '{"status":"pending","link":"%s","code":"%s","expiresIn":%s,"next":"End your turn with a reply that shows the person the link and the code and asks them to reply once they approve. When they reply, run: %s connect --wait --url %s"%s}\n' \
+    "$(esc "$R_link")" "$(esc "$R_userCode")" "$left" "$CMD" "$(esc "\"$ISSUER\"")" "${1:-}"
 }
 
 # Commands
@@ -812,12 +856,12 @@ cmd_status() {
   if record_read && [ -n "$R_refreshToken" ]; then
     left=$((R_accessExpiresAt - $(now)))
     [ $left -lt 0 ] && left=0
-    printf '{"status":"connected","url":"%s","label":"%s","scope":"%s","accessExpiresIn":%s}\n' \
-      "$ISSUER" "$(esc "$R_label")" "$(esc "$R_scope")" "$left"
+    printf '{"status":"connected","url":"%s","label":"%s","scope":"%s","accessExpiresIn":%s%s}\n' \
+      "$ISSUER" "$(esc "$R_label")" "$(esc "$R_scope")" "$left" "$(old_report)"
   elif [ -n "$R_deviceCode" ]; then
-    printf '{"status":"pending","url":"%s","label":"%s"}\n' "$ISSUER" "$(esc "$R_label")"
+    printf '{"status":"pending","url":"%s","label":"%s"%s}\n' "$ISSUER" "$(esc "$R_label")" "$(old_report)"
   else
-    printf '{"status":"not_connected","url":"%s","label":"%s"}\n' "$ISSUER" "$(esc "$LABEL")"
+    printf '{"status":"not_connected","url":"%s","label":"%s"%s}\n' "$ISSUER" "$(esc "$LABEL")" "$(old_report)"
   fi
 }
 
@@ -839,12 +883,12 @@ cmd_connect() {
   revoke_pending
   if [ -n "$R_refreshToken" ] && [ "$REPLACE" != 1 ]; then
     keep_address
-    printf '{"status":"already_connected","label":"%s","scope":"%s"}\n' "$(esc "$R_label")" "$(esc "$R_scope")"
+    printf '{"status":"already_connected","label":"%s","scope":"%s"%s}\n' "$(esc "$R_label")" "$(esc "$R_scope")" "$(old_report)"
     return 0
   fi
   # The open code again, unless asked for a new one (--replace: the link did not work for the person).
   if [ -n "$R_deviceCode" ] && [ $((R_deviceExpiresAt - $(now))) -gt 30 ] && [ "$REPLACE" != 1 ]; then
-    print_pending
+    print_pending "$(old_report)"
     return 0
   fi
   assert_mine
@@ -866,7 +910,7 @@ cmd_connect() {
   R_label=$LABEL R_deviceCode=$dc R_userCode=$uc R_link=$link
   R_deviceExpiresAt=$(($(now) + expires)) R_interval=$interval R_nextPollAt=$(($(now) + interval))
   record_write
-  print_pending
+  print_pending "$(old_report)"
 }
 
 cmd_wait() {
@@ -1024,7 +1068,7 @@ access_token() {
 # api_url PATH: sets URL (to send to), APATH (the path alone) and HASQ (1 when there is a query). The path is under
 # one of PREFIXES, never anywhere else, so the token goes only to the API.
 api_url() {
-  bad="Give a path from \`$CMD endpoints\`, for example: get '/api/items?q=report' (percent-encode anything else)"
+  bad="Give a path from \`$CMD endpoints\`, for example: get '/api/v1/items?q=report' (percent-encode anything else)"
   p=$1
   case "$p" in "" | *://* | //* | *[!A-Za-z0-9._~!\$\&\'\(\)*+,\;=:@/?%-]*) fail bad_path "$bad" ;; esac
   # Encoded dots too: a server or proxy that decodes them would take the token out of the API.
@@ -1032,13 +1076,13 @@ api_url() {
   pathonly=${p%%\?*}
   # The kind is found from the path as it is sent, but a server may decode the path before it routes it. So in the
   # path an escape may not stand for a character a route template holds as it is (A-Z a-z 0-9 . _ ~ : -), nor for
-  # / \ or % (/api/items/7%2Fsend would match /api/items/{id} here and may run /api/items/{id}/send there), and
+  # / \ or % (/api/v1/items/7%2Fsend would match /api/v1/items/{id} here and may run /api/v1/items/{id}/send there), and
   # every % must start an escape. The query keeps any escape.
   case "$pathonly" in
     *% | *%? | *%[!0-9A-Fa-f]* | *%?[!0-9A-Fa-f]* | *%2[5DdEeFf]* | *%3[0-9Aa]* | *%4[1-9A-Fa-f]* | *%5[0-9AaCcFf]* | \
       *%6[1-9A-Fa-f]* | *%7[0-9AaEe]*) fail bad_path "$bad" ;;
   esac
-  # Some servers drop ;parameters from a segment before they route (/api/items/export;x runs /api/items/export).
+  # Some servers drop ;parameters from a segment before they route (/api/v1/items/export;x runs /api/v1/items/export).
   # The server's check of the declared kind stops such a call too; this refuses it before it is sent.
   case "$pathonly" in *\;*) fail bad_path "$bad" ;; esac
   prefixed=0
@@ -1057,6 +1101,7 @@ api_url() {
 # The revision and the kind go together: the server runs the call only when both still hold for the route it picks.
 api_call() {
   settings=$(printf 'header = "Authorization: Bearer %s"\nheader = "%s: %s"' "$3" "$SKILL_HEADER_NAME" "$SKILL_HEADER")
+  if [ -n "$AGENT_LABEL" ]; then settings=$(printf '%s\nheader = "%s: %s"' "$settings" "$AGENT_HEADER_NAME" "$AGENT_LABEL"); fi
   if [ -n "$REVISION" ]; then
     settings=$(printf '%s\nheader = "%s: %s"\nheader = "%s: %s"' "$settings" "$POLICY_HEADER_NAME" "$REVISION" \
       "$KIND_HEADER_NAME" "$KIND")
@@ -1136,7 +1181,7 @@ api_send() {
 # list's revision for the current connection only. Access and the listing itself are reads, exempt from the list.
 
 # kinds_lookup FILE METHOD PATH GENERATION: prints "read REVISION", "act REVISION", "both REVISION" (a read and an act
-# both match the path, such as /api/items/export and /api/items/{id}), none (the list does not hold the call) or stale
+# both match the path, such as /api/v1/items/export and /api/v1/items/{id}), none (the list does not hold the call) or stale
 # (no usable list). Kind and revision come from one read of the file.
 kinds_lookup() {
   [ -f "$1" ] || {
@@ -1325,7 +1370,7 @@ cmd_disconnect() {
 
 COMMAND=${1:-help}
 [ $# -gt 0 ] && shift
-URL_OPTION="" REPLACE=0 WAIT=0 JSON_BODY="" HAVE_JSON=0 JSON_FILE="" ARG="" HAVEARG=0
+URL_OPTION="" REPLACE=0 WAIT=0 JSON_BODY="" HAVE_JSON=0 JSON_FILE="" ARG="" HAVEARG=0 AS_OPTION="" HAVE_AS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL_OPTION=${2:-} && shift ;;
@@ -1333,6 +1378,7 @@ while [ $# -gt 0 ]; do
     --wait) WAIT=1 ;;
     --json) JSON_BODY=${2:-} HAVE_JSON=1 && shift ;;
     --json-file) JSON_FILE=${2:-} && shift ;;
+    --as) AS_OPTION=${2:-} HAVE_AS=1 && shift ;;
     *) [ $HAVEARG = 0 ] && ARG=$1 && HAVEARG=1 ;;
   esac
   shift
@@ -1345,6 +1391,14 @@ case "$COMMAND" in
     ;;
 esac
 setup
+AGENT_LABEL=$AS_OPTION
+[ "$HAVE_AS" = 1 ] || AGENT_LABEL=$(envv AGENT_LABEL)
+if [ -n "$AGENT_LABEL" ]; then
+  case "$AGENT_LABEL" in
+    *[!A-Za-z0-9\ ._:-]*) fail bad_label "The agent label takes 1 to 60 letters, digits, spaces and . _ : - only." ;;
+  esac
+  [ ${#AGENT_LABEL} -le 60 ] || fail bad_label "The agent label takes 1 to 60 letters, digits, spaces and . _ : - only."
+fi
 case "$COMMAND" in
   status) cmd_status ;;
   connect) if [ "$WAIT" = 1 ]; then cmd_wait; else cmd_connect; fi ;;
@@ -1353,15 +1407,13 @@ case "$COMMAND" in
     if [ $HAVEARG = 0 ]; then
       cmd_api GET "$ENDPOINTS_PATH"
     else
-      case "$ARG" in "" | *[!a-z_]*) fail bad_path "Give an area name, for example: items" ;; esac
+      case "$ARG" in "" | *[!a-z_]*) fail bad_path "Give an area name, for example: read" ;; esac
       cmd_api GET "$ENDPOINTS_PATH?area=$ARG"
     fi
     ;;
   get) cmd_api GET "$ARG" ;;
   post) cmd_api POST "$ARG" ;;
-  put) cmd_api PUT "$ARG" ;;
   patch) cmd_api PATCH "$ARG" ;;
-  delete) cmd_api DELETE "$ARG" ;;
   disconnect) cmd_disconnect ;;
   *) fail unknown_command "Unknown command \"$COMMAND\". Run: $CMD help" ;;
 esac
