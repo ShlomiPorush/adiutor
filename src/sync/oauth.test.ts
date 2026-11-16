@@ -303,6 +303,23 @@ describe("disconnect", () => {
     expect(await u.client().disconnect()).toEqual({ wasConnected: false, revocationPending: false })
   })
 
+  it("marks the connection disconnected, its revocation pending, before the revocation leaves the computer", async () => {
+    const u = user()
+    await connected(u)
+    const token = record(u).json.refreshToken
+    let seen: unknown
+    const deps = {
+      ...u.deps,
+      fetch: async (input: string, init: RequestInit) => {
+        // What a crash during the revocation would leave on disk.
+        if (input.endsWith("/oauth/revoke")) seen = { ...record(u).json }
+        return fetch(input, init)
+      },
+    }
+    expect(await syncClient(fake.issuer, deps).disconnect()).toEqual({ wasConnected: true, revocationPending: false })
+    expect(seen).toMatchObject({ refreshToken: "", accessToken: "", toRevoke: token })
+  })
+
   it("keeps a revocation whose answer was lost, with no connection, and the next command retries it", async () => {
     const u = user()
     await connected(u)

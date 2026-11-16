@@ -81,9 +81,10 @@ type PartOutcome = { result: PartResult; reason?: string; message?: string; http
 /**
  * A push's answer as a part's result. Adiutor answers a push it ran with 200 and `data.outcome` (succeeded, partial or
  * failed: src/server/services/sync.ts); a 2xx without a readable outcome may have done anything, so its outcome is
- * unknown. Projects the sync could not read make the part partial at best.
+ * unknown. A part whose input was incomplete (projects not read, repositories missing from the snapshot) is partial at
+ * best, with that reason.
  */
-export function partOf(result: PushResult, incomplete: boolean): PartOutcome {
+export function partOf(result: PushResult, incomplete?: string): PartOutcome {
   if (result.kind === "outcome_unknown")
     return { result: "outcome_unknown", ...(result.status ? { httpStatus: result.status } : {}) }
   if (result.kind === "failed") return { result: "failed", reason: result.code, message: result.message }
@@ -95,7 +96,7 @@ export function partOf(result: PushResult, incomplete: boolean): PartOutcome {
   const outcome = body?.data?.outcome
   if (outcome === "succeeded")
     return incomplete
-      ? { result: "partial", reason: "projects_missing", httpStatus: result.status }
+      ? { result: "partial", reason: incomplete, httpStatus: result.status }
       : { result: "accepted", httpStatus: result.status }
   if (outcome === "partial") return { result: "partial", reason: "server_partial", httpStatus: result.status }
   if (outcome === "failed") return { result: "failed", reason: "server_failed", httpStatus: result.status }
@@ -270,6 +271,8 @@ async function runLocked(
   const collectedAt = deps.now().toISOString()
   let projects: T3Project[] | undefined
   let environmentId: string | undefined
+  // The session this run read with: an identity failure later in the run ends this one, never a newer one.
+  let sessionId: string | undefined
   const session =
     settings.t3Url !== undefined
       ? t3Session({
@@ -294,6 +297,7 @@ async function runLocked(
       if (read.kind === "ok") {
         projects = read.projects.projects
         environmentId = read.environmentId
+        sessionId = read.sessionId
         Object.assign(t3, { projectsFrom: "t3", projectsAt: collectedAt })
         const skipped = read.projects.skipped ? ` (${read.projects.skipped} skipped: deleted or unusable ids)` : ""
         say(`t3: ${projects.length} projects${skipped}`)
@@ -308,6 +312,7 @@ async function runLocked(
         if (last && last.environmentId === read.environmentId) {
           projects = last.projects
           environmentId = read.environmentId
+          sessionId = read.sessionId
           Object.assign(t3, { projectsFrom: "last_good", projectsAt: last.savedAt })
           say(`t3: ${read.message}; T3 projects from ${last.savedAt} (${projects.length} projects)`)
         } else stopT3("t3_unavailable", `${read.message}, and there is no last good project list; T3 is not read`)
@@ -345,6 +350,14 @@ async function runLocked(
         continue
       }
       if (result.environments.some((id) => id !== environmentId)) otherEnvironment = true
+      // A thread whose environment cannot be checked is not sent: its project counts as not read.
+      if (result.unverified > 0) {
+        failed.push(result.project.id)
+        say(
+          `t3: project ${result.project.id} has ${result.unverified} threads without a link to check their environment; not read`,
+        )
+        continue
+      }
       invalid += result.invalid
       if (result.invalid > 0) {
         incomplete.push(result.project.id)
@@ -354,8 +367,7 @@ async function runLocked(
     }
     if (otherEnvironment) {
       // The CLI reads another T3 than the session's: an identity failure, which stops the T3 part until t3-connect.
-      const id = await session.currentId().catch(() => undefined)
-      if (id) await session.markEnded("other_environment", id).catch(() => {})
+      if (sessionId) await session.markEnded("other_environment", sessionId).catch(() => {})
       stopT3(
         "t3_other_environment",
         "the T3 CLI reads another environment than the sync's session; check the CLI path and connect T3 again (t3-connect)",
@@ -394,6 +406,7 @@ async function runLocked(
   // 4. Security for the GitHub repositories of the projects. It reads nothing from T3: when this run has no project
   // list, the last good list (a local file) still maps the projects to their repositories.
   let securityPayload: { collectedAt: string; repos: ReturnType<typeof securityReports>["reports"] } | undefined
+  let securityMissing = 0
   let securityProjects: { repo?: string }[] | undefined
   if (snapshot && readable) {
     securityProjects = projectRecords
@@ -417,6 +430,7 @@ async function runLocked(
         (missing.length ? `, ${missing.length} project repositories not in the snapshot` : ""),
     )
     security.repos = reports.length
+    securityMissing = missing.length
     if (reports.length > 0) securityPayload = { collectedAt, repos: reports }
     else Object.assign(security, { reason: "no_repos", message: "no project repository is in the snapshot" })
   }
@@ -455,7 +469,7 @@ async function runLocked(
     path: string,
     payload: unknown,
     part: T3Part | SecurityPart,
-    partial: boolean,
+    incomplete: string | undefined,
   ) => {
     if (!client) return
     if (ended) {
@@ -465,15 +479,29 @@ async function runLocked(
     }
     const result = await client.push(path, payload)
     say(describeResult(name, result))
-    Object.assign(part, partOf(result, partial))
+    Object.assign(part, partOf(result, incomplete))
     if (result.kind === "failed" && DISCONNECTED.has(result.code)) {
       ended = true
       say(disconnected(url, settings.envFile))
     }
   }
-  if (canSendT3) await pushOne("t3 sync", "/api/v1/sync/t3", t3Payload, t3, failedProjects.length > 0)
+  if (canSendT3)
+    await pushOne(
+      "t3 sync",
+      "/api/v1/sync/t3",
+      t3Payload,
+      t3,
+      failedProjects.length > 0 ? "projects_missing" : undefined,
+    )
   else say("t3 sync: not sent (no threads could be read)")
-  if (securityPayload) await pushOne("security sync", "/api/v1/sync/security", securityPayload, security, false)
+  if (securityPayload)
+    await pushOne(
+      "security sync",
+      "/api/v1/sync/security",
+      securityPayload,
+      security,
+      securityMissing > 0 ? "repos_missing" : undefined,
+    )
   else say("security sync: not sent (no snapshot data)")
 
   return finish()

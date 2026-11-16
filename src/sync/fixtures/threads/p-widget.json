@@ -16,6 +16,7 @@
   },
   {
     "threadId": "thread-w2",
+    "link": "https://app.t3.codes/threads/fixture-env/thread-w2",
     "projectId": "p-widget",
     "title": "Review: export button",
     "status": "completed",
@@ -28,6 +29,7 @@
   },
   {
     "threadId": "thread-w3",
+    "link": "https://app.t3.codes/threads/fixture-env/thread-w3",
     "projectId": "p-widget",
     "title": "Fix the date format; $(echo not a command)",
     "status": "completed",

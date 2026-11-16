@@ -43,8 +43,8 @@ export async function startFakeT3(options: { cliPath: string; projects: unknown;
     revokeFailures: 0,
     /** The next session lists fail while this is above 0. */
     listFailures: 0,
-    /** What the next project lists answer, in order: "drop" (no answer) or a status. */
-    projectsAnswer: [] as Array<"drop" | number>,
+    /** What the next project lists answer, in order: "drop" (no answer), a status, or a status whose body breaks off. */
+    projectsAnswer: [] as Array<"drop" | number | { status: number; cut: true }>,
     /** What the next environment descriptors answer, in order: "drop" or a status. */
     descriptorAnswer: [] as Array<"drop" | number>,
     /** Process ids of issue children that are still running (for the pending record's recovery). */
@@ -167,6 +167,13 @@ export async function startFakeT3(options: { cliPath: string; projects: unknown;
       const next = s.projectsAnswer.shift()
       if (next === "drop") return req.socket.destroy()
       if (typeof next === "number") return send(next, { error: "failed" })
+      if (next) {
+        // The status and headers arrive; the body breaks off.
+        res.writeHead(next.status, { "content-type": "application/json", "content-length": "1000" })
+        res.write('{"error":')
+        setTimeout(() => req.socket.destroy(), 20)
+        return
+      }
       const bearer = (req.headers.authorization ?? "").replace(/^Bearer /, "")
       const session = s.live().find((x) => x.token === bearer && x.environmentId === httpEnv)
       if (!session) return send(401, { _tag: "EnvironmentAuthInvalidError", code: "auth_invalid" })

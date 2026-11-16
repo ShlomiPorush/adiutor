@@ -66,9 +66,17 @@ describe("mapThreads", () => {
   })
 
   it("collects the environment ids the threads' links name, for the environment check", () => {
-    expect(mapThreads(fixture("threads/p-widget.json"), "p-widget").environments).toEqual(["fixture-env"])
-    // No link: nothing to check.
-    expect(mapThreads(fixture("threads/p-gizmo.json"), "p-gizmo").environments).toEqual([])
+    expect(mapThreads(fixture("threads/p-widget.json"), "p-widget")).toMatchObject({
+      environments: ["fixture-env"],
+      unverified: 0,
+    })
+    // A thread without a link, or with a link of another shape, cannot be checked: counted.
+    const noLink = JSON.stringify([
+      { threadId: "a", status: "running" },
+      { threadId: "b", status: "running", link: "https://app.t3.codes/elsewhere" },
+      { threadId: "c", status: "running", link: "https://app.t3.codes/threads/env-1/c" },
+    ])
+    expect(mapThreads(noLink, "p")).toMatchObject({ environments: ["env-1"], unverified: 2 })
   })
 
   it("skips records without a thread id and counts them", () => {

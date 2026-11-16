@@ -226,7 +226,13 @@ describe("run", () => {
       threads: 5,
       failedProjects: 2,
     })
-    expect(status.lastRun.security).toMatchObject({ result: "accepted", repos: 3, snapshotRunId: "20261101T060000Z" })
+    // A project repository missing from the snapshot (acme/missing) makes security partial: Adiutor got a subset.
+    expect(status.lastRun.security).toMatchObject({
+      result: "partial",
+      reason: "repos_missing",
+      repos: 3,
+      snapshotRunId: "20261101T060000Z",
+    })
     expect(status.lastGoodSyncAt).toBeNull()
     for (const text of filesOutsideConnection()) for (const secret of secrets()) expect(text).not.toContain(secret)
   })
@@ -329,6 +335,65 @@ describe("run", () => {
     expect(status.result).toMatchObject({ t3: { state: "ended", reason: "other_environment" } })
   })
 
+  it("an identity failure ends only the session the run read with, not one t3-connect saved meanwhile", async () => {
+    t3.projects = two
+    let reconnected = false
+    const run: Runner = async (command, args, opts) => {
+      if (args[0] === "thread" && !reconnected) {
+        reconnected = true
+        // The owner connects T3 again while this run reads threads; then the CLI names another environment.
+        await t3Session({
+          runner: t3.runner,
+          fetch: (input, init) => fetch(input, init),
+          platform: "linux",
+          env: { HOME: home, XDG_CONFIG_HOME: join(home, ".config") },
+          now: () => Date.now(),
+          sleep: async () => {},
+          systemCommand: async () => undefined,
+          cliPath: CLI,
+          origin: t3.origin,
+          processCreation: t3.processCreation,
+        }).connect()
+        t3.cliEnvironmentId = "another-environment"
+      }
+      return runner().run(command, args, opts)
+    }
+    const { deps: d, lines } = deps({ runner: run })
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_other_environment" })
+    t3.cliEnvironmentId = ""
+    const status = await json(["status"], d, lines)
+    expect(status.result).toMatchObject({ t3: { state: "connected" } })
+  })
+
+  it("a project whose threads' environment cannot be checked is not read, and none of its threads is sent", async () => {
+    t3.projects = two
+    // p-widget's threads come without a link.
+    const run: Runner = async (command, args, opts) => {
+      const result = await runner().run(command, args, opts)
+      const noLinks = result.stdout.replace(/^\s*"link": "[^"]*",\r?\n/gm, "")
+      return args[3] === "p-widget" ? { ...result, stdout: noLinks } : result
+    }
+    const { deps: d, lines } = deps({ runner: run })
+    const report = reportOf((await json(["run"], d, lines)).result)
+    const body = fake.pushes[0]?.body as { threads: Array<{ threadId: string }>; failedProjects: string[] }
+    expect(body.threads.map((t) => t.threadId)).toEqual(["thread-g1"])
+    expect(body.failedProjects).toEqual(["p-widget"])
+    expect(report.t3).toMatchObject({ result: "partial", reason: "projects_missing", failedProjects: 1 })
+  })
+
+  it("a 401 whose body broke off stops the T3 part, without the last good list or the CLI", async () => {
+    t3.projects = two
+    const first = deps()
+    await json(["run"], first.deps, first.lines)
+    t3.calls.length = 0
+    t3.projectsAnswer.push({ status: 401, cut: true })
+    const { deps: d, lines } = deps()
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_rejected", projectsFrom: null })
+    expect(t3.calls.filter((c) => c.args[0] === "thread")).toHaveLength(0)
+  })
+
   it("one run at a time: a second run answers busy with the first one's start time", async () => {
     let open: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
@@ -422,17 +487,19 @@ describe("run", () => {
 describe("partOf", () => {
   it("maps each answer of a push to a part's result", () => {
     const answer = (status: number, body: unknown) => ({ kind: "answer" as const, status, body })
-    expect(partOf(answer(200, { data: { outcome: "succeeded" } }), false).result).toBe("accepted")
-    expect(partOf(answer(200, { data: { outcome: "succeeded" } }), true)).toMatchObject({ result: "partial" })
-    expect(partOf(answer(200, { data: { outcome: "partial" } }), false).result).toBe("partial")
-    expect(partOf(answer(200, { data: { outcome: "failed" } }), false).result).toBe("failed")
-    expect(partOf(answer(200, "not json"), false).result).toBe("outcome_unknown")
-    expect(partOf(answer(400, { error: "validation_failed" }), false)).toMatchObject({
+    expect(partOf(answer(200, { data: { outcome: "succeeded" } }), undefined).result).toBe("accepted")
+    expect(partOf(answer(200, { data: { outcome: "succeeded" } }), "projects_missing")).toMatchObject({
+      result: "partial",
+    })
+    expect(partOf(answer(200, { data: { outcome: "partial" } }), undefined).result).toBe("partial")
+    expect(partOf(answer(200, { data: { outcome: "failed" } }), undefined).result).toBe("failed")
+    expect(partOf(answer(200, "not json"), undefined).result).toBe("outcome_unknown")
+    expect(partOf(answer(400, { error: "validation_failed" }), undefined)).toMatchObject({
       result: "failed",
       reason: "validation_failed",
     })
-    expect(partOf({ kind: "outcome_unknown" }, false).result).toBe("outcome_unknown")
-    expect(partOf({ kind: "failed", code: "not_connected", message: "m" }, false)).toMatchObject({
+    expect(partOf({ kind: "outcome_unknown" }, undefined).result).toBe("outcome_unknown")
+    expect(partOf({ kind: "failed", code: "not_connected", message: "m" }, undefined)).toMatchObject({
       result: "failed",
       reason: "not_connected",
     })

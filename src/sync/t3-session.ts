@@ -80,9 +80,10 @@ type Pending = { issues: PendingIssue[]; revokes: PendingRevoke[] }
 
 /** What the projects read came to. */
 export type ProjectsRead =
-  | { kind: "ok"; projects: Projects; environmentId: string; renewal?: string }
+  /** sessionId: the session this run uses from here on (the renewed one after a renewal). */
+  | { kind: "ok"; projects: Projects; environmentId: string; sessionId: string; renewal?: string }
   /** T3 cannot be reached or failed (connection refused, timeout, 5xx): the last good list may stand in. */
-  | { kind: "unavailable"; environmentId: string; message: string }
+  | { kind: "unavailable"; environmentId: string; sessionId: string; message: string }
   /** The T3 part stops: not connected, ended, refused, another environment, or an answer that cannot be read. */
   | { kind: "stop"; code: string; message: string; ended?: boolean }
 
@@ -210,8 +211,8 @@ export function t3Session(deps: T3SessionDeps) {
     try {
       text = await response.text()
     } catch {
-      // The answer broke off.
-      return "unavailable"
+      // The body broke off after the status came: the status still counts (only a failure before it is availability).
+      return { status: response.status, json: null }
     }
     let json: unknown = null
     try {
@@ -342,14 +343,21 @@ export function t3Session(deps: T3SessionDeps) {
   // --- Recovery of what a cut-off command left ---
 
   /**
-   * Pending revokes: the old session is revoked only when the saved session is no longer it; otherwise it is kept and
-   * the entry dropped. Pending issues: once the issuing child is certainly gone (or, without a child, after two
+   * Pending revokes: a disconnect's entry for the saved session finishes the disconnect (the session is deleted and
+   * revoked). A replacement's old session is revoked only when the saved session is no longer it; otherwise it is kept
+   * and the entry dropped. Pending issues: once the issuing child is certainly gone (or, without a child, after two
    * minutes), the label is looked up in T3's list; the saved session is kept, any other with that label revoked.
    */
   async function recover(): Promise<void> {
     const pending = await readPending()
     if (pending.issues.length === 0 && pending.revokes.length === 0) return
-    const current = (await readSession())?.sessionId
+    let current = (await readSession())?.sessionId
+    // A disconnect cut off before it deleted the session: the owner asked for it, so it is finished (deleted now, and
+    // revoked below), and the T3 part stops. A replacement's entry for the saved session is the opposite: kept.
+    if (current && pending.revokes.some((r) => r.after === "disconnected" && r.sessionId === current)) {
+      folder.remove(SESSION_FILE)
+      current = undefined
+    }
     const revokes: PendingRevoke[] = []
     for (const entry of pending.revokes) {
       if (entry.sessionId === current) continue
@@ -508,6 +516,7 @@ export function t3Session(deps: T3SessionDeps) {
           return {
             kind: "unavailable",
             environmentId: session.environmentId,
+            sessionId: session.sessionId,
             message: `T3 at ${deps.origin} did not answer`,
           }
         // No environment id at all (not T3, or an answer it cannot read): this run stops, the session stays.
@@ -526,6 +535,7 @@ export function t3Session(deps: T3SessionDeps) {
           return {
             kind: "unavailable",
             environmentId: session.environmentId,
+            sessionId: session.sessionId,
             message: `T3 at ${deps.origin} did not answer`,
           }
         if (read.kind === "rejected") {
@@ -539,9 +549,11 @@ export function t3Session(deps: T3SessionDeps) {
             message: `T3 answered its project list with ${read.status}, which the sync cannot read`,
           }
         let renewal: string | undefined
+        let used = session.sessionId
         if (Date.parse(session.expiresAt) - deps.now() < RENEW_LEFT_MS) {
           try {
             const renewed = await replace(session.environmentId)
+            used = renewed.session.sessionId
             renewal = `the T3 session was renewed until ${renewed.session.expiresAt}`
           } catch (error) {
             renewal = `the T3 session could not be renewed (${error instanceof ClientError ? error.message : "unexpected error"}); it stays until ${session.expiresAt}`
@@ -551,6 +563,7 @@ export function t3Session(deps: T3SessionDeps) {
           kind: "ok",
           projects: read.projects,
           environmentId: session.environmentId,
+          sessionId: used,
           ...(renewal ? { renewal } : {}),
         }
       })
@@ -558,10 +571,6 @@ export function t3Session(deps: T3SessionDeps) {
 
     /** The CLI's threads named another environment: the session ends (src/sync/run.ts checks the links). */
     markEnded,
-    /** The saved session's id, to mark exactly that one ended. */
-    async currentId(): Promise<string | undefined> {
-      return (await readSession())?.sessionId
-    },
   }
 }
 

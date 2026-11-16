@@ -244,19 +244,43 @@ describe("a command cut off at each step of the lifecycle", () => {
     expect(u.read(PENDING_FILE)).toBeNull()
   })
 
-  it("in t3-disconnect, before the revoke: the session is kept; after it: the next use finds it refused", async () => {
+  it("in t3-disconnect, before the revoke: the next command finishes the disconnect, and nothing is read", async () => {
     const u = user()
-    const session = await u.session().connect()
+    await u.session().connect()
     u.control.crashAt = "revoke entry"
     await expect(u.session().disconnect()).rejects.toThrow("crash")
-    expect((await u.session().readProjects()).kind).toBe("ok")
-    expect(live()).toEqual([session.sessionId])
+    const projectsBefore = fake.counts.projects
+    expect(await u.session().readProjects()).toMatchObject({ kind: "stop", code: "t3_not_connected" })
+    expect(fake.counts.projects).toBe(projectsBefore)
+    expect(live()).toEqual([])
+    expect(u.read(SESSION_FILE)).toBeNull()
+    expect(u.read(PENDING_FILE)).toBeNull()
+    expect(issues()).toHaveLength(1)
+  })
+
+  it("in t3-disconnect, after the revoke: the next command finishes the disconnect", async () => {
+    const u = user()
+    await u.session().connect()
     u.control.crashAt = "revoked"
     await expect(u.session().disconnect()).rejects.toThrow("crash")
+    expect(await u.session().readProjects()).toMatchObject({ kind: "stop", code: "t3_not_connected" })
+    expect(await u.session().status()).toEqual({ state: "not_connected", revocationPending: false })
     expect(live()).toEqual([])
-    // Never issued again on its own: the T3 part stops until t3-connect.
-    expect(await u.session().readProjects()).toMatchObject({ kind: "stop", code: "t3_rejected" })
     expect(issues()).toHaveLength(1)
+  })
+
+  it("a disconnect whose revoke fails stays pending, and the next command revokes it", async () => {
+    const u = user()
+    const session = await u.session().connect()
+    fake.revokeFailures = 2
+    u.control.crashAt = "revoked"
+    await expect(u.session().disconnect()).rejects.toThrow("crash")
+    fake.listFailures = 1
+    expect(await u.session().readProjects()).toMatchObject({ kind: "stop", code: "t3_not_connected" })
+    expect(live()).toEqual([session.sessionId])
+    expect((await u.session().status()).revocationPending).toBe(true)
+    await u.session().disconnect()
+    expect(live()).toEqual([])
   })
 })
 
@@ -331,6 +355,13 @@ describe("readProjects", () => {
     expect((await u.session().status()).revocationPending).toBe(false)
   })
 
+  it("a 401 whose body broke off is a 401, not an availability failure", async () => {
+    const u = user()
+    await u.session().connect()
+    fake.projectsAnswer.push({ status: 401, cut: true })
+    expect(await u.session().readProjects()).toMatchObject({ kind: "stop", code: "t3_rejected", ended: true })
+  })
+
   it("a 401 ends the session: the T3 part stops and nothing is issued or read until t3-connect", async () => {
     const u = user()
     await u.session().connect()
@@ -365,6 +396,11 @@ describe("readProjects", () => {
     expect(await u.session().readProjects()).toMatchObject({ kind: "unavailable" })
     fake.projectsAnswer.push("drop")
     expect(await u.session().readProjects()).toMatchObject({ kind: "unavailable" })
+    // A status whose body broke off is still that status: 5xx is availability, 404 is not.
+    fake.projectsAnswer.push({ status: 503, cut: true })
+    expect(await u.session().readProjects()).toMatchObject({ kind: "unavailable" })
+    fake.projectsAnswer.push({ status: 404, cut: true })
+    expect(await u.session().readProjects()).toMatchObject({ kind: "stop", code: "t3_projects_unreadable" })
     // An address that does not answer as T3: this run stops, the session is not sent there, and it stays.
     fake.descriptorAnswer.push(404)
     const before = fake.counts.projects

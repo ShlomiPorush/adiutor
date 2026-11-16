@@ -111,6 +111,8 @@ export type ThreadList = {
   invalid: number
   /** The environment ids the threads' links name. */
   environments: string[]
+  /** Threads without a link that names an environment: their environment cannot be checked. */
+  unverified: number
 }
 
 /** Maps the CLI's JSON output. Records without a thread id or status are skipped and counted. */
@@ -120,6 +122,7 @@ export function mapThreads(output: string, t3ProjectId: string): ThreadList {
   const threads: ThreadRecord[] = []
   const environments = new Set<string>()
   let invalid = 0
+  let unverified = 0
   for (const item of asArray(list)) {
     const data = asObject(item)
     const thread = data ? mapThread(data, t3ProjectId) : undefined
@@ -127,8 +130,9 @@ export function mapThreads(output: string, t3ProjectId: string): ThreadList {
     else invalid += 1
     const environment = data ? linkEnvironment(data.link) : undefined
     if (environment) environments.add(environment)
+    else if (thread) unverified += 1
   }
-  return { threads, invalid, environments: [...environments] }
+  return { threads, invalid, environments: [...environments], unverified }
 }
 
 /** A project's threads through the T3 CLI, called by id, from T3's default data folder (src/sync/exec.ts, t3Env). */

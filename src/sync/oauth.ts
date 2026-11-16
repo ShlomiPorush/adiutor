@@ -553,10 +553,14 @@ export function syncClient(issuer: string, deps: ClientDeps) {
       const rec = await readRecord()
       if (!rec) return { wasConnected: false, revocationPending: false }
       const wasConnected = Boolean(rec.refreshToken) && !rec.endedAt
+      const tokens = [rec.toRevoke, rec.refreshToken].filter(Boolean).join(" ")
+      // The intent first, in one step: no usable token is left, and every token to revoke is kept. A crash or a lost
+      // answer from here on leaves the connection disconnected with its revocation pending, never active.
+      await writeRecord({ ...emptyRecord(rec.label), toRevoke: tokens })
       assertMine(lock)
-      const left = await revokeAll([rec.toRevoke, rec.refreshToken].filter(Boolean).join(" "))
-      if (left) await writeRecord({ ...emptyRecord(rec.label), toRevoke: left })
-      else folder.remove(name)
+      const left = await revokeAll(tokens)
+      if (!left) folder.remove(name)
+      else if (left !== tokens) await writeRecord({ ...emptyRecord(rec.label), toRevoke: left })
       return { wasConnected, revocationPending: left !== "" }
     })
   }

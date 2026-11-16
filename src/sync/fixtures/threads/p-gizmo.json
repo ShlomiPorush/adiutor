@@ -2,6 +2,7 @@
   { "projectId": "p-gizmo", "title": "A record without a thread id", "status": "running" },
   {
     "threadId": "thread-z1",
+    "link": "https://app.t3.codes/threads/fixture-env/thread-z1",
     "projectId": "p-gizmo",
     "title": "Release 1.2",
     "status": "completed",
