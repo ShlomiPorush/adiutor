@@ -74,7 +74,7 @@ UNAVAILABLE="The list of allowed calls could not be read from $PRODUCT, so nothi
 POLICY_CHANGED="$PRODUCT's calls changed, or this path names a different call than the list says. Nothing ran. Run \`$CMD endpoints\` and take the path from it."
 # The name an agent gives itself in Adiutor's activity log (--as, or ADIUTOR_AGENT_LABEL), sent as X-Adiutor-Agent.
 AGENT_HEADER_NAME="x-adiutor-agent"
-OLD_MESSAGE="The adiutor command used before this one left these files in the folder of the connection. This command never reads or changes them; they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed."
+OLD_MESSAGE="The adiutor command used before this one left these files in the folder of the connection. This command never uses or changes them (it reads only the Adiutor address in the old connection); they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed."
 FIELDS="v:n issuer:s label:s generation:s refreshToken:s accessToken:s accessExpiresAt:n scope:s refreshStartedAt:n refreshRetried:n deviceCode:s userCode:s link:s deviceExpiresAt:n interval:n nextPollAt:n toRevoke:s"
 
 LOCKTOKEN=""

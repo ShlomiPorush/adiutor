@@ -766,7 +766,7 @@ for (const impl of impls) {
       const c = await run(impl, inst, null, ["connect"])
       assert.equal(c.json?.status, "pending", c.out + c.err)
       assert.deepEqual(reported(c), names)
-      assert.match(c.json.old_client.message, /never reads or changes them/)
+      assert.match(c.json.old_client.message, /never uses or changes them/)
       server.approve()
       const w = await run(impl, inst, null, ["connect", "--wait"])
       assert.equal(w.json?.status, "connected", w.out + w.err)
@@ -1748,7 +1748,10 @@ describe(`${NAME} entry points`, () => {
     ["with Node", { [`${ENV}NO_NODE`]: "" }],
     ["without Node", { [`${ENV}NO_NODE`]: "1" }],
   ]) {
-    it(`${entry} ${name} keeps a query with & as it is`, async () => {
+    // Without Node the entry point runs the PowerShell or sh version: only where that version is under test (verify.sh
+    // runs the node version alone on a Node 20 image, which has no curl).
+    const skip = name === "without Node" && !impls.includes(win ? "ps" : "sh")
+    it(`${entry} ${name} keeps a query with & as it is`, { skip }, async () => {
       const inst = install()
       await connected("node", inst, server)
       const r = await run(entry, inst, server, ["get", "/api/v1/items?status=open&owner=x"], env)

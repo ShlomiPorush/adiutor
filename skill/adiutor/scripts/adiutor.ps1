@@ -167,7 +167,7 @@ $script:AgentLabel = ''
 # Files of the adiutor command before this one, which kept an agent key: its connection, its approval, what it left
 # on Adiutor, its lock and its temporary files. Never read for a secret, never changed: reported by status and connect.
 $OldFilesPattern = '^(connection|pending|left|lock|lock\.break|(connection|pending|left)\.[0-9a-f]{12}\.tmp)\z'
-$OldMessage = 'The adiutor command used before this one left these files in the folder of the connection. This command never reads or changes them; they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed.'
+$OldMessage = 'The adiutor command used before this one left these files in the folder of the connection. This command never uses or changes them (it reads only the Adiutor address in the old connection); they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed.'
 
 function Get-Context([string]$urlOption) {
   $dir = Get-CredentialsDir

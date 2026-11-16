@@ -96,7 +96,7 @@ const AGENT_HEADER_NAME = "x-adiutor-agent"
 // on Adiutor, its lock and its temporary files. Never read for a secret, never changed: reported by status and connect.
 const OLD_FILES = /^(?:connection|pending|left|lock|lock\.break|(?:connection|pending|left)\.[0-9a-f]{12}\.tmp)$/
 const OLD_MESSAGE =
-  "The adiutor command used before this one left these files in the folder of the connection. This command never reads or changes them; they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed."
+  "The adiutor command used before this one left these files in the folder of the connection. This command never uses or changes them (it reads only the Adiutor address in the old connection); they may hold its agent key or its approval. Tell the person once: delete the files, and delete the old agent key in Adiutor (Settings, Agent access) if it is still listed."
 const PATH_CHARS = /^[A-Za-z0-9._~!$&'()*+,;=:@/?%-]+$/
 const UNKNOWN_OUTCOME = "The action may have run. Read its state before trying again."
 const NOT_LISTED = `This connection has no such call. Take the path from \`${CMD} endpoints\`, with its {...} parts filled in; never guess it.`
