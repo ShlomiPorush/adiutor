@@ -185,7 +185,7 @@ export function SettingsPage() {
   const sectionTitle = t(`settings.sections.${active}.title`)
   usePageMeta(t("settings.title"), [], { label: sectionTitle, pageTo: "/settings" })
   const query = usePageQuery({ queryKey: qk.settings, queryFn: api.settings, every: EVERY.slow })
-  // Agent access's own settings join the one draft where it is mounted (null where the server answers 404).
+  // Agent access's own settings join the one draft once they are read.
   const agents = useAgentSettings()
   const form = useSettingsDraft(query.data, agents.data, active)
 
@@ -542,11 +542,7 @@ export function keepRevealed(
 type FieldError = { field: DraftField; text: string }
 
 /** The one settings draft for every section, its save bar and its guard (SV-1, R2). */
-function useSettingsDraft(
-  saved: Settings | undefined,
-  agentSaved: AgentSettings | null | undefined,
-  active: SettingsSection,
-) {
+function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings | undefined, active: SettingsSection) {
   const { t, tc, language, setLanguage } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -571,7 +567,7 @@ function useSettingsDraft(
   const [error, setError] = useState<FieldError | null>(null)
   const [focusing, setFocusing] = useState<DraftField | null>(null)
   const patch = saved ? changedFields(saved, draft) : {}
-  // Agent access is saved to its own route, and only where it is mounted (agentSaved is null where it is not).
+  // Agent access is saved to its own route, once its settings are read.
   const agentPatch = agentChanges(agentSaved, draft)
   const count = Object.keys(patch).length + Object.keys(agentPatch).length
   useUnsaved("settings", { count, kind: "leave", keeps: (next) => isSettingsPath(next.pathname) })

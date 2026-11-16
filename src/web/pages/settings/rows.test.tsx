@@ -127,6 +127,19 @@ async function transport({ method, path, body }: TransportRequest) {
       status: 200,
       body: { data: { configured: true, polling: true, lastUpdateAt: null, lastMorning: null } },
     }
+  if (path === "/agents/settings" && method === "GET")
+    return {
+      status: 200,
+      body: {
+        enabled: true,
+        idleDays: 90,
+        issuer: "https://adiutor.example.com",
+        issuerProblem: null,
+        mcpUrl: "https://adiutor.example.com/mcp",
+        restUrl: "https://adiutor.example.com/api/v1",
+      },
+    }
+  if (path === "/agents/connections" && method === "GET") return { status: 200, body: { connections: [] } }
   return { status: 404, body: { error: { code: "not_found", message: "Not here." } } }
 }
 
@@ -667,13 +680,13 @@ describe("bulk actions at the end of a list's head (S-12, DS-20)", () => {
     expect(buttons(head("account-browsers") as HTMLElement).map((b) => b.textContent)).toEqual([en.account.endAll])
   })
 
-  it("Agent access: Disconnect all sits in the list's head, names the count and deletes every key", async () => {
+  it("Agent access: Delete all of the old keys sits in their list's head, names the count and deletes every key", async () => {
     auth.keys = [agentKey("k1"), agentKey("k2"), agentKey("k3")]
     await render("/settings/agents")
     const acts = head("settings-agent-keys") as HTMLElement
-    await click(button(en.agentKeys.disconnectAll, acts))
-    expect(plain(question()?.textContent)).toContain(en.agentKeys.disconnectAllMessage.other.replace("{count}", "3"))
-    await click(button(en.agentKeys.disconnectAll, question() as HTMLElement))
+    await click(button(en.agentKeys.deleteAll, acts))
+    expect(plain(question()?.textContent)).toContain(en.agentKeys.deleteAllMessage.other.replace("{count}", "3"))
+    await click(button(en.agentKeys.deleteAll, question() as HTMLElement))
     await settle()
     expect(
       auth.calls
