@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
 ### Added
 
 - **Passkeys**: sign in with a passkey alone, with your fingerprint, face or device PIN, instead of the password and the code. Add, rename and remove passkeys on the Account page (up to 20); the browser must support passkeys to add one or sign in with it, and listing, renaming and removing work in any browser. The password and the authenticator app keep working. A passkey belongs to the host name of `ADIUTOR_PUBLIC_URL`: changing that host name makes every passkey stop working. Adding a passkey needs two-factor on. Each change, and each sign-in with a passkey, is in the activity log. The server's password reset keeps passkeys, so after a restore or a lost device check them on the Account page.
