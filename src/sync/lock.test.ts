@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -53,6 +53,29 @@ describe("the lock", () => {
     })
     await expect(late.acquire(options)).rejects.toThrow("busy")
     expect(fileLock(file, deps).holder()).toEqual(newHolder)
+  })
+
+  it("gives two spellings of the same lock file the same guard, so only one taker removes the dead lock", async () => {
+    // Two spellings of one folder, as Windows allows by case, separators or a short name: here a link to the folder.
+    const work = mkdtempSync(join(dir, "spellings-"))
+    const real = join(work, "data")
+    mkdirSync(real)
+    const alias = join(work, "alias")
+    symlinkSync(real, alias, "junction")
+    writeFileSync(join(real, "run.lock"), deadLock())
+    const b = fileLock(join(alias, "run.lock"), deps)
+    let bResult: string | Error | undefined
+    // A checked the dead lock under its guard; before it removes the lock, B tries through the other spelling.
+    const a = fileLock(join(real, "run.lock"), {
+      ...deps,
+      beforeRemove: async () => {
+        bResult = await b.acquire(options).catch((error: Error) => error)
+      },
+    })
+    const aResult = await a.acquire(options).catch((error: Error) => error)
+    const holders = [aResult, bResult].filter((r) => typeof r === "string")
+    expect(holders).toHaveLength(1)
+    expect(a.holder()?.token).toBe(holders[0])
   })
 
   it("recovers from a chain of guards that takers left when they died one after another", async () => {

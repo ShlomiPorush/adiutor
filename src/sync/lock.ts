@@ -18,6 +18,8 @@ export type LockDeps = {
   sleep: (ms: number) => Promise<void>
   /** Test seam: runs after a taker found the holder dead, before it takes the lock over. */
   beforeBreak?: (held: Holder) => Promise<void>
+  /** Test seam: runs once a taker holds the guard and found the lock still dead, before it removes the lock. */
+  beforeRemove?: () => Promise<void>
 }
 
 /** What a lock file says about its holder; `empty` when it cannot be read (a holder that died while writing it). */
@@ -61,17 +63,17 @@ export type AcquireOptions = {
 }
 
 /**
- * The takeover guard of a file (the lock, or a guard whose own taker died) for the dead holder found in it. Its name
- * has a fixed length at every level, next to the lock, so a chain of guards left by takers that died cannot outgrow a
- * file name.
+ * The takeover guard of a file (the lock, or a guard whose own taker died) for the dead holder found in it, next to the
+ * lock. Its name depends only on the dead holder and the guard level below (the hash in that guard's name; none for the
+ * lock itself), never on how the lock's path is spelled: every spelling of the same file (on Windows by case,
+ * separators or a short name) reaches the same guard. The name has a fixed length at every level, so a chain of guards
+ * left by takers that died cannot outgrow a file name.
  */
 export function takeoverGuard(lockFile: string, file: string, held: Holder): string {
+  const below = /\.([0-9a-f]{32})\.takeover$/i.exec(file)?.[1]?.toLowerCase() ?? ""
   const id = held.empty ? `empty-${Math.floor(held.mtime ?? 0)}` : String(held.token)
-  return `${lockFile}.${createHash("sha256")
-    .update(`${file}
-${id}`)
-    .digest("hex")
-    .slice(0, 32)}.takeover`
+  const hash = createHash("sha256").update(`${below}\n${id}`).digest("hex").slice(0, 32)
+  return `${lockFile}.${hash}.takeover`
 }
 
 export function fileLock(lockFile: string, deps: LockDeps) {
@@ -106,7 +108,7 @@ export function fileLock(lockFile: string, deps: LockDeps) {
       if (options.own && held && !held.empty && held.token === options.own) return options.own
       if (held && dead(held)) {
         await deps.beforeBreak?.(held)
-        if (breakDead(lockFile, held)) continue
+        if (await breakDead(lockFile, held)) continue
       }
       if (deps.now() >= deadline) throw options.busy(readHolder(lockFile) ?? held)
       await deps.sleep(100 + Math.random() * 200)
@@ -130,7 +132,7 @@ export function fileLock(lockFile: string, deps: LockDeps) {
    * that takers which died left on disk, however long, and never gives up at a fixed level. Returns whether to try
    * creating the lock again; false while another taker is at it.
    */
-  function breakDead(file: string, held: Holder): boolean {
+  async function breakDead(file: string, held: Holder): Promise<boolean> {
     const guard = takeoverGuard(lockFile, file, held)
     const token = randomBytes(16).toString("hex")
     let fd: number | undefined
@@ -140,12 +142,15 @@ export function fileLock(lockFile: string, deps: LockDeps) {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false
       const other = readHolder(guard)
-      return other !== null && dead(other) && breakDead(guard, other) && breakDead(file, held)
+      return other !== null && dead(other) && (await breakDead(guard, other)) && (await breakDead(file, held))
     } finally {
       if (fd !== undefined) closeSync(fd)
     }
     try {
-      if (same(readHolder(file), held)) rmSync(file, { force: true })
+      if (same(readHolder(file), held)) {
+        if (deps.beforeRemove) await deps.beforeRemove()
+        rmSync(file, { force: true })
+      }
       return true
     } finally {
       // Only a taker that found this one dead removes its guard otherwise, and this one is alive.
