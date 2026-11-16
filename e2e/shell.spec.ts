@@ -259,11 +259,13 @@ test("More on a phone: Escape and Back close it, a page chosen in it takes its B
   await expect(page).toHaveURL(/\/projects$/)
 })
 
-test("the sync card opens Settings, Status", async () => {
+test("the sync card opens Settings, Status, or Agent access while the sync is disconnected", async () => {
   test.skip(isPhone(), "the card is in the sidebar")
   await page.goto("/")
   const card = page.locator(".ui-status-card")
   await expect(card).toContainText(he.shell.syncCard)
+  // No sync is connected to the verification stack: the card says so (connect.spec.ts connects one and ends it).
+  const disconnected = (await card.textContent())?.includes(he.shell.syncDisconnected) ?? false
   await card.click()
-  await expect(page).toHaveURL(/\/settings\/status$/)
+  await expect(page).toHaveURL(disconnected ? /\/settings\/agents$/ : /\/settings\/status$/)
 })

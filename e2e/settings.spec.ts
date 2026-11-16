@@ -248,7 +248,7 @@ test("Back and Forward bring each section back to where it was scrolled; a new s
   expect(general).toBeGreaterThan(0)
   // Agent access, not Telegram: with Telegram off here, its section is too short to scroll on every screen.
   await openSection("agents")
-  await expect(page.getByRole("heading", { name: he.agentKeys.howTitle })).toBeVisible()
+  await expect(page.getByRole("heading", { name: he.agentAccess.connectTitle })).toBeVisible()
   if (!isPhone()) expect(await scrolled()).toBe(0)
   const agents = await scrolled(120)
   expect(agents).toBeGreaterThan(0)
@@ -262,15 +262,19 @@ test("Back and Forward bring each section back to where it was scrolled; a new s
   await fullScreen()
 })
 
-test("Agent access has no manual key: it shows how to connect an agent and the sync, with this address", async () => {
+test("Agent access shows both ways to connect an agent and the sync's commands, with this address and no key", async () => {
   await page.goto("/settings/agents")
   const panel = page.locator("#agents")
-  await expect(panel.getByRole("heading", { name: he.agentKeys.howTitle })).toBeVisible()
-  await expect(panel).toContainText(`Connect Adiutor at ${BASE_URL}`)
-  await expect(panel.getByRole("heading", { name: he.agentKeys.bundleTitle })).toBeVisible()
-  await expect(panel).toContainText(`node dist/sync/adiutor-sync.js connect --url ${BASE_URL} --name sync --for sync`)
-  await expect(panel).toContainText("--name claude --for claude")
-  await expect(panel).toContainText("--name codex --for codex")
+  await expect(panel.getByRole("heading", { name: he.agentAccess.connectTitle })).toBeVisible()
+  await expect(panel).toContainText(`claude mcp add --transport http adiutor "${BASE_URL}/mcp"`)
+  await expect(panel).toContainText(
+    `Install the adiutor skill into your personal skills folder as described at ${BASE_URL}/agents/skill/, then connect to Adiutor.`,
+  )
+  await expect(panel.getByRole("heading", { name: he.agentAccess.syncTitle })).toBeVisible()
+  await expect(panel).toContainText(`node dist/sync/adiutor-sync.js connect --name "sync" --url "${BASE_URL}"`)
+  await expect(panel).toContainText(`node dist/sync/adiutor-sync.js setup-mcp --for claude --url "${BASE_URL}"`)
+  await expect(panel).toContainText(`node dist/sync/adiutor-sync.js setup-mcp --for codex --url "${BASE_URL}"`)
+  await expect(panel).not.toContainText("--days")
 })
 
 test("Changed marks a value that differs from its default, and Reset puts the default back in the draft", async () => {
