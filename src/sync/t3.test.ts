@@ -1,14 +1,13 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import type { Runner } from "./exec.ts"
-import { listThreads, mapThreads, parseProjectsFile } from "./t3.ts"
+import { linkEnvironment, listThreads, mapThreads, parseProjectList } from "./t3.ts"
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8")
 
-describe("parseProjectsFile", () => {
-  it("keeps usable projects and counts the rest", () => {
-    const file = parseProjectsFile(fixture("t3-projects.json"))
-    expect(file.collectedAt).toBe("2026-11-01T05:30:00.000Z")
+describe("parseProjectList", () => {
+  it("keeps usable projects of T3's answer and counts the rest", () => {
+    const file = parseProjectList(JSON.parse(fixture("t3-projects.json")))
     expect(file.projects.map((p) => p.id)).toEqual(["p-widget", "mcp:p-gadget", "p-gizmo", "p-notes", "p-missing"])
     // Deleted, an id with shell characters, and no id.
     expect(file.skipped).toBe(3)
@@ -21,9 +20,9 @@ describe("parseProjectsFile", () => {
     expect(file.projects[1]?.repositoryIdentity).toBeUndefined()
   })
 
-  it("refuses a file that is not a projects file", () => {
-    expect(() => parseProjectsFile("[]")).toThrow("no projects array")
-    expect(() => parseProjectsFile("{")).toThrow("not valid JSON")
+  it("refuses an answer that is not a project list", () => {
+    expect(() => parseProjectList([])).toThrow("no projects array")
+    expect(() => parseProjectList({ projects: {} })).toThrow("no projects array")
   })
 })
 
@@ -65,6 +64,12 @@ describe("mapThreads", () => {
     ])
   })
 
+  it("collects the environment ids the threads' links name, for the environment check", () => {
+    expect(mapThreads(fixture("threads/p-widget.json"), "p-widget").environments).toEqual(["fixture-env"])
+    // No link: nothing to check.
+    expect(mapThreads(fixture("threads/p-gizmo.json"), "p-gizmo").environments).toEqual([])
+  })
+
   it("skips records without a thread id and counts them", () => {
     const { threads, invalid } = mapThreads(fixture("threads/p-gizmo.json"), "p-gizmo")
     expect(threads.map((t) => t.threadId)).toEqual(["thread-z1"])
@@ -77,22 +82,40 @@ describe("mapThreads", () => {
   })
 })
 
+describe("linkEnvironment", () => {
+  it("reads the environment id from a thread link and nothing else", () => {
+    expect(linkEnvironment("https://app.t3.codes/threads/env-1/thread-2")).toBe("env-1")
+    for (const other of [undefined, 3, "", "not a link", "https://app.t3.codes/threads/env-1", "http://x/env/thread"])
+      expect(linkEnvironment(other)).toBeUndefined()
+  })
+})
+
 describe("listThreads", () => {
-  it("calls the CLI with an argument array", async () => {
-    const calls: Array<[string, string[]]> = []
-    const runner: Runner = async (command, args) => {
-      calls.push([command, args])
+  it("calls the CLI with an argument array, without T3's data folder overrides", async () => {
+    const calls: Array<[string, string[], NodeJS.ProcessEnv | undefined]> = []
+    const runner: Runner = async (command, args, opts) => {
+      calls.push([command, args, opts.env])
       return { code: 0, stdout: "[]", stderr: "" }
     }
-    await listThreads(runner, "C:\\t3\\t3.cmd", "mcp:p-gadget", 1000)
-    expect(calls).toEqual([["C:\\t3\\t3.cmd", ["thread", "list", "--project", "mcp:p-gadget", "--json"]]])
+    const env = {
+      PATH: "/bin",
+      T3CODE_HOME: "/elsewhere",
+      t3code_home: "/x",
+      VITE_DEV_SERVER_URL: "http://dev",
+      T3CODE_BOOTSTRAP_FD: "3",
+      ADIUTOR_AGENT_TOKEN: "old",
+    }
+    await listThreads(runner, "C:\\t3\\t3.cmd", "mcp:p-gadget", 1000, env)
+    expect(calls).toEqual([
+      ["C:\\t3\\t3.cmd", ["thread", "list", "--project", "mcp:p-gadget", "--json"], { PATH: "/bin" }],
+    ])
   })
 
   it("never puts an unusual project id on a command line", async () => {
     const runner: Runner = async () => {
       throw new Error("the runner must not be called")
     }
-    await expect(listThreads(runner, "t3", "a & del x", 1000)).rejects.toThrow("unsupported project id")
+    await expect(listThreads(runner, "t3", "a & del x", 1000, {})).rejects.toThrow("unsupported project id")
   })
 
   it("reports a failed CLI run with its last error line", async () => {
@@ -102,6 +125,8 @@ describe("listThreads", () => {
       stderr: "warn\nNo T3 Code project matches 'x'\n",
       error: "exit code 1",
     })
-    await expect(listThreads(runner, "t3", "x", 1000)).rejects.toThrow("exit code 1: No T3 Code project matches 'x'")
+    await expect(listThreads(runner, "t3", "x", 1000, {})).rejects.toThrow(
+      "exit code 1: No T3 Code project matches 'x'",
+    )
   })
 })

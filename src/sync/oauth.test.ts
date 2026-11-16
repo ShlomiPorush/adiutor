@@ -86,7 +86,13 @@ describe("connecting", () => {
     expect(statSync(r.dir).mode & 0o777).toBe(0o700)
     expect(statSync(r.file).mode & 0o777).toBe(0o600)
     expect(r.json).toMatchObject({ issuer: fake.issuer, label: "Sync on the laptop", scope: "sync" })
-    expect(await u.client().status()).toEqual({ connected: true, label: "Sync on the laptop", scope: "sync" })
+    expect(await u.client().status()).toEqual({
+      connected: true,
+      state: "connected",
+      label: "Sync on the laptop",
+      scope: "sync",
+      revocationPending: false,
+    })
   })
 
   it("never presents a code again when the answer to a poll was lost", async () => {
@@ -98,7 +104,7 @@ describe("connecting", () => {
     fake.dropNextPoll = true
     await expect(client.waitForApproval(device, "Sync")).rejects.toMatchObject({ code: "unreachable" })
     expect(fake.counts.reuse).toBe(0)
-    expect(await client.status()).toEqual({ connected: false })
+    expect(await client.status()).toEqual({ connected: false, state: "not_connected", revocationPending: false })
   })
 
   it("polls only under the connection's lock: while another command holds it, the code is not spent", async () => {
@@ -267,7 +273,9 @@ describe("the refresh", () => {
     // The token the lost answer spent comes back: Adiutor ends the whole connection, and the sync says so.
     expect(await u.client().push("/api/v1/sync/t3", {})).toMatchObject({ kind: "failed", code: "connection_ended" })
     expect(fake.aliveGrants()).toBe(alive - 1)
-    expect(readdirSync(credentialsDir("linux", u.deps.env)).filter((f) => f.endsWith(".json"))).toHaveLength(0)
+    // Kept as ended, without a token, so the state can say Adiutor ended it.
+    expect(record(u).json).toMatchObject({ refreshToken: "", accessToken: "", endedAt: expect.any(Number) })
+    expect((await u.client().status()).state).toBe("ended")
     expect(fake.pushes).toHaveLength(0)
   })
 
@@ -276,8 +284,37 @@ describe("the refresh", () => {
     await connected(u)
     fake.endAllGrants()
     expect(await u.client().push("/api/v1/sync/t3", {})).toMatchObject({ kind: "failed", code: "connection_ended" })
-    expect(await u.client().status()).toEqual({ connected: false })
+    expect(await u.client().status()).toEqual({ connected: false, state: "ended", revocationPending: false })
     expect(await u.client().push("/api/v1/sync/t3", {})).toMatchObject({ kind: "failed", code: "not_connected" })
+  })
+})
+
+describe("disconnect", () => {
+  it("revokes the connection at Adiutor's revocation endpoint, which ends the grant, then deletes it", async () => {
+    const u = user()
+    await connected(u)
+    const alive = fake.aliveGrants()
+    const revokes = fake.counts.revoke
+    expect(await u.client().disconnect()).toEqual({ wasConnected: true, revocationPending: false })
+    expect(fake.counts.revoke).toBe(revokes + 1)
+    expect(fake.aliveGrants()).toBe(alive - 1)
+    expect(readdirSync(credentialsDir("linux", u.deps.env)).filter((f) => f.endsWith(".json"))).toHaveLength(0)
+    expect(await u.client().status()).toEqual({ connected: false, state: "not_connected", revocationPending: false })
+    expect(await u.client().disconnect()).toEqual({ wasConnected: false, revocationPending: false })
+  })
+
+  it("keeps a revocation whose answer was lost, with no connection, and the next command retries it", async () => {
+    const u = user()
+    await connected(u)
+    const token = record(u).json.refreshToken
+    fake.dropNextRevoke = true
+    expect(await u.client().disconnect()).toEqual({ wasConnected: true, revocationPending: true })
+    expect(record(u).json).toMatchObject({ refreshToken: "", accessToken: "", toRevoke: token })
+    expect(await u.client().status()).toEqual({ connected: false, state: "not_connected", revocationPending: true })
+    const revokes = fake.counts.revoke
+    expect(await u.client().retryRevocations()).toBe(false)
+    expect(fake.counts.revoke).toBe(revokes + 1)
+    expect(readdirSync(credentialsDir("linux", u.deps.env)).filter((f) => f.endsWith(".json"))).toHaveLength(0)
   })
 
   it("never writes a token anywhere but its own file", async () => {

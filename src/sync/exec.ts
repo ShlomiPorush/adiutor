@@ -118,9 +118,25 @@ export async function systemCommand(
 
 /** The environment for a child process: the agent token never leaves this process. */
 export function childEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const copy = { ...env }
-  delete copy.ADIUTOR_AGENT_TOKEN
-  return copy
+  return withoutVariables(env, ["ADIUTOR_AGENT_TOKEN"])
+}
+
+/**
+ * Variables that move T3's data folder away from its default (T3's own server config: T3CODE_HOME is the data folder,
+ * VITE_DEV_SERVER_URL selects its dev state, T3CODE_BOOTSTRAP_FD can carry a data folder). The sync reads T3's default
+ * data folder only, so every T3 CLI call runs without them.
+ */
+export const T3_DATA_OVERRIDES = ["T3CODE_HOME", "VITE_DEV_SERVER_URL", "T3CODE_BOOTSTRAP_FD"] as const
+
+/** The environment of a T3 CLI call: the child's environment without T3's data folder overrides. */
+export function t3Env(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return withoutVariables(childEnv(env), T3_DATA_OVERRIDES)
+}
+
+/** A copy without the named variables, in any case (Windows names are case-insensitive, and a copy keeps them). */
+function withoutVariables(env: NodeJS.ProcessEnv, names: readonly string[]): NodeJS.ProcessEnv {
+  const drop = new Set(names.map((name) => name.toUpperCase()))
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !drop.has(key.toUpperCase())))
 }
 
 export type RunResult = {
@@ -135,7 +151,14 @@ export type RunResult = {
 export type Runner = (
   command: string,
   args: string[],
-  options: { cwd?: string; timeoutMs: number },
+  options: {
+    cwd?: string
+    timeoutMs: number
+    /** The child's environment before childEnv; the process's own when not given. */
+    env?: NodeJS.ProcessEnv
+    /** Called with the child's process id once it started. */
+    onSpawn?: (pid: number) => void
+  },
 ) => Promise<RunResult>
 
 export const runProcess: Runner = (command, args, options) =>
@@ -147,7 +170,7 @@ export const runProcess: Runner = (command, args, options) =>
       resolve({ code: null, stdout: "", stderr: "", error: (error as Error).message })
       return
     }
-    execFile(
+    const child = execFile(
       invocation.file,
       invocation.args,
       {
@@ -158,7 +181,7 @@ export const runProcess: Runner = (command, args, options) =>
         windowsHide: true,
         shell: false,
         windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-        env: childEnv(),
+        env: childEnv(options.env ?? process.env),
       },
       (error: ExecFileException | null, stdout: string, stderr: string) => {
         if (!error) {
@@ -173,6 +196,7 @@ export const runProcess: Runner = (command, args, options) =>
         resolve({ code, stdout, stderr, error: reason })
       },
     )
+    if (child.pid !== undefined) options.onSpawn?.(child.pid)
   })
 
 /** The last non-empty line of a process's error output, shortened, for a one-line message. */

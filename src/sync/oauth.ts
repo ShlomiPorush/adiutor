@@ -115,10 +115,12 @@ type Record_ = {
   scope: string
   refreshStartedAt: number
   refreshRetried: number
-  /** Refresh tokens of a replaced connection, still to be revoked. */
+  /** When Adiutor ended the connection (seconds); the tokens are gone or unusable then. 0 while it lives. */
+  endedAt: number
+  /** Refresh tokens of a replaced or disconnected connection, still to be revoked. */
   toRevoke: string
 }
-const NUMBERS = ["v", "accessExpiresAt", "refreshStartedAt", "refreshRetried"] as const
+const NUMBERS = ["v", "accessExpiresAt", "refreshStartedAt", "refreshRetried", "endedAt"] as const
 const TEXTS = ["issuer", "label", "refreshToken", "accessToken", "scope", "toRevoke"] as const
 
 type Answer = { status: number; text: string; json: unknown; isJson: boolean; challenge: string }
@@ -186,6 +188,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     scope: "",
     refreshStartedAt: 0,
     refreshRetried: 0,
+    endedAt: 0,
     toRevoke: "",
   })
 
@@ -296,14 +299,22 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     }
   }
 
-  async function revokeLeft(rec: Record_): Promise<Record_> {
-    if (!rec.toRevoke) return rec
+  /**
+   * Revokes refresh tokens at Adiutor's revocation endpoint (the library's own /oauth/revoke, which ends the whole
+   * grant). Returns the ones whose outcome is not known to be done, to keep and retry.
+   */
+  async function revokeAll(tokens: string): Promise<string> {
     const left: string[] = []
-    for (const token of rec.toRevoke.split(" ").filter(Boolean)) {
+    for (const token of tokens.split(" ").filter(Boolean)) {
       const r = await oauth(PATHS.revoke, { token, token_type_hint: "refresh_token" }).catch(() => null)
       if (r?.status !== 200) left.push(token)
     }
-    const next = { ...rec, toRevoke: left.join(" ") }
+    return left.join(" ")
+  }
+
+  async function revokeLeft(rec: Record_): Promise<Record_> {
+    if (!rec.toRevoke) return rec
+    const next = { ...rec, toRevoke: await revokeAll(rec.toRevoke) }
     if (next.toRevoke !== rec.toRevoke) await writeRecord(next)
     return next
   }
@@ -337,11 +348,13 @@ export function syncClient(issuer: string, deps: ClientDeps) {
         )
       if (rec.refreshStartedAt) {
         // The last refresh got no answer. Trying once more either continues the connection or ends it on the server.
-        if (rec.refreshRetried)
+        if (rec.refreshRetried) {
+          if (!rec.endedAt) await writeRecord({ ...rec, endedAt: nowS() })
           throw new ClientError(
             "connection_ended",
             "Two refreshes got no answer, so this connection cannot be trusted. Connect the sync again with --replace.",
           )
+        }
         rec.refreshRetried = 1
       }
       rec.refreshStartedAt = nowS()
@@ -367,8 +380,8 @@ export function syncClient(issuer: string, deps: ClientDeps) {
         return next.accessToken
       }
       if (field(r, "error") === "invalid_grant") {
-        if (rec.toRevoke) await writeRecord({ ...emptyRecord(rec.label), toRevoke: rec.toRevoke })
-        else rmSync(file, { force: true })
+        // Kept as ended (no token), so the state shows that Adiutor ended it.
+        await writeRecord({ ...emptyRecord(rec.label), toRevoke: rec.toRevoke, endedAt: nowS() })
         throw ended()
       }
       // Refused before the token was spent (a 4xx); a 5xx may have come after.
@@ -503,12 +516,49 @@ export function syncClient(issuer: string, deps: ClientDeps) {
 
   // --- Connecting: the device grant, approved in the browser ---
 
-  /** Whether a connection is kept for this address, and its name and areas. */
+  /** Whether a connection is kept for this address (its name and areas), or ended; and whether a revoke is pending. */
   async function status() {
     const rec = await readRecord()
-    return rec?.refreshToken
-      ? { connected: true as const, label: rec.label, scope: rec.scope }
-      : { connected: false as const }
+    const revocationPending = Boolean(rec?.toRevoke)
+    return rec?.refreshToken && !rec.endedAt
+      ? { connected: true as const, state: "connected" as const, label: rec.label, scope: rec.scope, revocationPending }
+      : {
+          connected: false as const,
+          state: rec?.endedAt ? ("ended" as const) : ("not_connected" as const),
+          revocationPending,
+        }
+  }
+
+  /** Every command retries the revocations a disconnect or a replaced connection left (outcome unknown). */
+  async function retryRevocations(): Promise<boolean> {
+    const first = await readRecord()
+    if (!first?.toRevoke) return false
+    return withLock(async (lock) => {
+      let rec = await readRecord()
+      if (!rec?.toRevoke) return false
+      assertMine(lock)
+      rec = await revokeLeft(rec)
+      // Nothing left in it: a disconnected connection is gone.
+      if (!rec.refreshToken && !rec.toRevoke && !rec.endedAt) folder.remove(name)
+      return rec.toRevoke !== ""
+    })
+  }
+
+  /**
+   * disconnect: revokes the connection at Adiutor (which ends the whole grant), then deletes it. When the revocation's
+   * outcome is unknown, the token is kept, with no connection, and the next command retries it.
+   */
+  async function disconnect(): Promise<{ wasConnected: boolean; revocationPending: boolean }> {
+    return withLock(async (lock) => {
+      const rec = await readRecord()
+      if (!rec) return { wasConnected: false, revocationPending: false }
+      const wasConnected = Boolean(rec.refreshToken) && !rec.endedAt
+      assertMine(lock)
+      const left = await revokeAll([rec.toRevoke, rec.refreshToken].filter(Boolean).join(" "))
+      if (left) await writeRecord({ ...emptyRecord(rec.label), toRevoke: left })
+      else folder.remove(name)
+      return { wasConnected, revocationPending: left !== "" }
+    })
   }
 
   /** Checks that the folder can keep a connection and that the address answers as Adiutor, before any code exists. */
@@ -583,6 +633,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
             label,
             refreshStartedAt: 0,
             refreshRetried: 0,
+            endedAt: 0,
             toRevoke: [rec.toRevoke, old].filter(Boolean).join(" "),
           }
           await writeRecord(rec)
@@ -605,7 +656,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     }
   }
 
-  return { dir, file, status, prepare, deviceCode, waitForApproval, push }
+  return { dir, file, status, prepare, deviceCode, waitForApproval, push, disconnect, retryRevocations }
 }
 
 export type SyncClient = ReturnType<typeof syncClient>

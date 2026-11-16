@@ -66,6 +66,8 @@ export function fileLock(lockFile: string, deps: LockDeps) {
     const token = randomBytes(16).toString("hex")
     const line = JSON.stringify({ pid: process.pid, host: host(), token, startedAt: nowS() })
     const deadline = deps.now() + options.waitMs
+    // A name still being deleted is waited for even by a lock that does not wait for a live holder.
+    const transient = deps.now() + Math.max(options.waitMs, 2_000)
     for (;;) {
       let fd: number | undefined
       try {
@@ -77,7 +79,7 @@ export function fileLock(lockFile: string, deps: LockDeps) {
         if (fd !== undefined) closeSync(fd)
         const code = (error as NodeJS.ErrnoException).code
         // Windows refuses for a moment to create a file whose name is still being deleted.
-        if (win && (code === "EPERM" || code === "EACCES") && deps.now() < deadline) {
+        if (win && (code === "EPERM" || code === "EACCES") && deps.now() < transient) {
           await deps.sleep(50 + Math.random() * 100)
           continue
         }

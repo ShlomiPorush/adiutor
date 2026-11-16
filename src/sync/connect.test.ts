@@ -70,7 +70,7 @@ describe("connect", () => {
   it("connects with a code for the sync area, keeps the connection and writes the address into the env file", async () => {
     const d = deps()
     const devices = fake.counts.device
-    expect(await connect(options(d.envFile), d.deps)).toBe(0)
+    expect((await connect(options(d.envFile), d.deps)).exit).toBe(0)
     expect(fake.counts.device - devices).toBe(1)
     expect(fake.last).toMatchObject({ scope: "sync", label: "Laptop sync", resource: `${fake.issuer}/api/v1` })
     const text = d.output()
@@ -86,33 +86,33 @@ describe("connect", () => {
 
   it("says it is connected already, and connects again with --replace, ending the old connection", async () => {
     const d = deps()
-    expect(await connect(options(d.envFile), d.deps)).toBe(0)
+    expect((await connect(options(d.envFile), d.deps)).exit).toBe(0)
     const devices = fake.counts.device
     const again = deps("approve", { env: d.deps.env })
-    expect(await connect(options(d.envFile), again.deps)).toBe(0)
+    expect((await connect(options(d.envFile), again.deps)).exit).toBe(0)
     expect(fake.counts.device).toBe(devices)
     expect(again.output()).toContain("connected to")
     expect(again.output()).toContain("add --replace")
     const alive = fake.aliveGrants()
     const replaced = deps("approve", { env: d.deps.env })
-    expect(await connect(options(d.envFile, { replace: true }), replaced.deps)).toBe(0)
+    expect((await connect(options(d.envFile, { replace: true }), replaced.deps)).exit).toBe(0)
     expect(fake.counts.device - devices).toBe(1)
     expect(fake.aliveGrants()).toBe(alive)
   })
 
   it("stops when the owner denies, and says when the sync area was not approved", async () => {
     const denied = deps("deny")
-    expect(await connect(options(denied.envFile), denied.deps)).toBe(1)
+    expect((await connect(options(denied.envFile), denied.deps)).exit).toBe(1)
     expect(denied.output()).toContain("connect: The owner did not approve the connection.")
     fake.grantScope = "read"
     const narrow = deps()
-    expect(await connect(options(narrow.envFile), narrow.deps)).toBe(0)
+    expect((await connect(options(narrow.envFile), narrow.deps)).exit).toBe(0)
     expect(narrow.output()).toContain("The sync area was not approved")
   })
 
   it("opens the approval page without a shell", async () => {
     const d = deps()
-    expect(await connect(options(d.envFile, { open: true }), d.deps)).toBe(0)
+    expect((await connect(options(d.envFile, { open: true }), d.deps)).exit).toBe(0)
     expect(d.ran[0]).toEqual({ command: "xdg-open", args: [expect.stringMatching(/\/connect\/code\?user_code=/)] })
   })
 
@@ -123,7 +123,7 @@ describe("connect", () => {
     })
     d.deps.env = { ...d.deps.env, USERNAME: "owner", USERDOMAIN: "PC" }
     const devices = fake.counts.device
-    expect(await connect(options(join(d.home, "sync.env")), d.deps)).toBe(1)
+    expect((await connect(options(join(d.home, "sync.env")), d.deps)).exit).toBe(1)
     expect(d.output()).toContain("icacls was not found")
     expect(fake.counts.device).toBe(devices)
   })
@@ -145,7 +145,7 @@ describe("the env file", () => {
     mkdirSync(dir, { recursive: true })
     const old = `ADIUTOR_AGENT_TOKEN=adt_${randomBytes(32).toString("hex")}`
     writeFileSync(file, `${old}\n`, { mode: 0o600 })
-    expect(await connect(options(file), d.deps)).toBe(0)
+    expect((await connect(options(file), d.deps)).exit).toBe(0)
     expect(readFileSync(file, "utf8")).toBe(`${old}\nADIUTOR_URL=${fake.issuer}\n`)
   })
 

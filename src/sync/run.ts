@@ -1,18 +1,22 @@
-import { readFile } from "node:fs/promises"
-import { loadSyncConfig, parseEnvFile, redactor, type SyncConfig } from "./env.ts"
+import type { Output, PartResult, RunBody, RunReport, SecurityPart, T3Part } from "./contract.ts"
+import { ClientError } from "./errors.ts"
 import { lastLine, type Runner, systemCommand } from "./exec.ts"
 import type { FetchLike } from "./http.ts"
 import { type PushResult, type SyncClient, syncClient } from "./oauth.ts"
 import { resolveRepo } from "./repo.ts"
+import { dataDir, type Resolved } from "./settings.ts"
 import { readLatestSnapshot, type Snapshot, securityReports } from "./snapshot.ts"
-import { listThreads, parseProjectsFile, type ThreadRecord } from "./t3.ts"
+import { readProjectList, readStatus, saveProjectList, takeRunLock, writeStatus } from "./state.ts"
+import { listThreads, type T3Project, type ThreadRecord } from "./t3.ts"
+import { type CheckpointStep, t3Session } from "./t3-session.ts"
 
 export type RunOptions = {
-  projectsFile: string
-  overviewDir?: string
-  envFile?: string
   collect: boolean
   dryRun: boolean
+  /** The settings (src/sync/settings.ts): the command line, the env file, the environment and the settings file. */
+  settings: Resolved
+  /** Whether ADIUTOR_AGENT_TOKEN, the sync's agent key before agent approval, is still set (never its value). */
+  oldToken: boolean
 }
 
 export type Deps = {
@@ -31,10 +35,13 @@ export type Deps = {
   platform?: NodeJS.Platform
   systemCommand?: (name: string) => Promise<string | undefined>
   sleep?: (ms: number) => Promise<void>
+  /** For the T3 session's pending records (src/sync/process-info.ts) and its test seam. */
+  processCreation?: (pid: number) => Promise<string | null | undefined>
+  t3Checkpoint?: (step: CheckpointStep) => void
 }
 
 export const EXIT_OK = 0
-/** Nothing could be pushed. */
+/** Nothing could be pushed, or another run holds the run lock. */
 export const EXIT_NOTHING_PUSHED = 1
 /** Bad arguments or configuration. */
 export const EXIT_USAGE = 2
@@ -64,10 +71,36 @@ function describeResult(name: string, result: PushResult): string {
     return `${name}: outcome unknown${result.status ? ` (HTTP ${result.status})` : ""}: it may have reached Adiutor, and its answer was lost or failed. It is not sent again; the next run sends the whole state again.`
   if (result.kind === "failed") return `${name}: not sent: ${result.code}: ${result.message}`
   const body = result.body === undefined ? "" : ` ${compact(result.body)}`
-  return ok(result) ? `${name}: sent (HTTP ${result.status})${body}` : `${name}: refused (HTTP ${result.status})${body}`
+  return result.status >= 200 && result.status < 300
+    ? `${name}: sent (HTTP ${result.status})${body}`
+    : `${name}: refused (HTTP ${result.status})${body}`
 }
 
-const ok = (result: PushResult) => result.kind === "answer" && result.status >= 200 && result.status < 300
+type PartOutcome = { result: PartResult; reason?: string; message?: string; httpStatus?: number }
+
+/**
+ * A push's answer as a part's result. Adiutor answers a push it ran with 200 and `data.outcome` (succeeded, partial or
+ * failed: src/server/services/sync.ts); a 2xx without a readable outcome may have done anything, so its outcome is
+ * unknown. Projects the sync could not read make the part partial at best.
+ */
+export function partOf(result: PushResult, incomplete: boolean): PartOutcome {
+  if (result.kind === "outcome_unknown")
+    return { result: "outcome_unknown", ...(result.status ? { httpStatus: result.status } : {}) }
+  if (result.kind === "failed") return { result: "failed", reason: result.code, message: result.message }
+  const body = result.body as { data?: { outcome?: unknown }; error?: unknown } | undefined
+  if (result.status < 200 || result.status >= 300) {
+    const code = typeof body?.error === "string" ? body.error : `http_${result.status}`
+    return { result: "failed", reason: code, httpStatus: result.status }
+  }
+  const outcome = body?.data?.outcome
+  if (outcome === "succeeded")
+    return incomplete
+      ? { result: "partial", reason: "projects_missing", httpStatus: result.status }
+      : { result: "accepted", httpStatus: result.status }
+  if (outcome === "partial") return { result: "partial", reason: "server_partial", httpStatus: result.status }
+  if (outcome === "failed") return { result: "failed", reason: "server_failed", httpStatus: result.status }
+  return { result: "outcome_unknown", reason: "unreadable_answer", httpStatus: result.status }
+}
 
 /** The sync's connection ended or was never made: the output says so, and how to reconnect. */
 const DISCONNECTED = new Set(["connection_ended", "not_connected"])
@@ -77,41 +110,127 @@ function disconnected(url: string, envFile: string | undefined): string {
 }
 
 /**
- * One sync run: the overview collector, the T3 read, then the T3 push and the security push.
- * Returns the exit code: non-zero only when nothing could be pushed (or, in a dry run, nothing read).
+ * One sync run under the run lock: the overview collector, T3's project list with the sync's session (or the last good
+ * list when T3 cannot be reached), the threads through the T3 CLI, then the T3 push and the security push. The report
+ * states each part's result; the status file keeps it for `status`. The exit code is non-zero only when nothing could
+ * be pushed (or, in a dry run, nothing read); it is not the result.
  */
-export async function runSync(options: RunOptions, deps: Deps): Promise<number> {
-  let fileVars: Record<string, string> = {}
-  let say = (line: string) => deps.out(redactor([deps.env.ADIUTOR_AGENT_TOKEN])(line))
+export async function runSync(options: RunOptions, deps: Deps, out: Output): Promise<{ exit: number; body: RunBody }> {
+  const platform = deps.platform ?? process.platform
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  const nowMs = () => deps.now().getTime()
+  const say = out.say
+  const { settings } = options
+  const data = dataDir(platform, deps.env)
+  const lockDeps = { platform, env: deps.env, now: nowMs, sleep }
 
-  if (options.envFile) {
-    try {
-      fileVars = parseEnvFile(await readFile(options.envFile, "utf8"))
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      say(`config: cannot read the env file: ${code ?? (error as Error).message}`)
-      return EXIT_USAGE
-    }
-    say = (line) => deps.out(redactor([deps.env.ADIUTOR_AGENT_TOKEN, fileVars.ADIUTOR_AGENT_TOKEN])(line))
+  if (!options.dryRun && !settings.url) {
+    const message = settings.problems[0] ?? "ADIUTOR_URL is required"
+    say(`config: Invalid configuration: ${message}`)
+    return { exit: EXIT_USAGE, body: { error: { code: "usage", message } } }
   }
 
-  let config: SyncConfig
+  // One run at a time across the tray and the command line, for the whole run, the collector included.
+  const held = await takeRunLock(data, lockDeps)
+  if (held.busy) {
+    say(`run: another run is going (since ${held.startedAt ?? "an unknown time"}); nothing ran`)
+    return { exit: EXIT_NOTHING_PUSHED, body: { busy: { startedAt: held.startedAt } } }
+  }
   try {
-    config = loadSyncConfig(deps.env, fileVars, { requireServer: !options.dryRun })
-  } catch (error) {
-    say(`config: ${(error as Error).message}`)
-    return EXIT_USAGE
+    const report = await runLocked(options, deps, say, { platform, sleep, nowMs, data, lockDeps })
+    if (!options.dryRun) {
+      const before = readStatus(data)
+      const good = report.t3.result === "accepted" && report.security.result === "accepted"
+      report.lastGoodSyncAt = good ? report.finishedAt : before.lastGoodSyncAt
+      await writeStatus(data, { v: 1, lastRun: report, lastGoodSyncAt: report.lastGoodSyncAt }, lockDeps)
+    }
+    const sent = (part: { result: PartResult }) => part.result === "accepted" || part.result === "partial"
+    const exit = options.dryRun
+      ? report.t3.reason === "dry_run" || report.security.reason === "dry_run"
+        ? EXIT_OK
+        : EXIT_NOTHING_PUSHED
+      : sent(report.t3) || sent(report.security)
+        ? EXIT_OK
+        : EXIT_NOTHING_PUSHED
+    return { exit, body: { report } }
+  } finally {
+    held.release()
   }
-  if (config.oldToken)
+}
+
+async function runLocked(
+  options: RunOptions,
+  deps: Deps,
+  say: (line: string) => void,
+  ctx: {
+    platform: NodeJS.Platform
+    sleep: (ms: number) => Promise<void>
+    nowMs: () => number
+    data: string
+    lockDeps: Parameters<typeof saveProjectList>[2]
+  },
+): Promise<RunReport> {
+  const { settings } = options
+  const startedAt = deps.now().toISOString()
+  const t3: T3Part = {
+    result: "not_run",
+    projectsFrom: null,
+    projectsAt: null,
+    projects: 0,
+    threads: 0,
+    failedProjects: 0,
+  }
+  const security: SecurityPart = { result: "not_run", snapshotRunId: null, snapshotAt: null, repos: 0 }
+  const stopT3 = (reason: string, message: string) => {
+    Object.assign(t3, { result: "not_run", reason, message })
+    say(`t3: ${message}`)
+  }
+  const sysCommand = deps.systemCommand ?? ((name: string) => systemCommand(name, deps.env))
+
+  if (options.oldToken)
     say(
       "config: ADIUTOR_AGENT_TOKEN, the sync's old agent key, is set but no longer used: the sync uses the connection `connect` keeps. Delete that line, and the key in Settings, Agent access, if it is still listed.",
     )
 
+  // 0. The Adiutor connection: revocations a disconnect left are retried first.
+  let client: SyncClient | undefined
+  if (!options.dryRun && settings.url) {
+    try {
+      client = syncClient(settings.url, {
+        fetch: deps.fetch,
+        runner: deps.runner,
+        systemCommand: sysCommand,
+        platform: ctx.platform,
+        env: deps.env,
+        now: ctx.nowMs,
+        sleep: ctx.sleep,
+        ...(deps.httpTimeoutMs ? { httpTimeoutMs: deps.httpTimeoutMs } : {}),
+      })
+      if (await client.retryRevocations())
+        say("connection: a disconnected connection could not be revoked yet; the next command tries again")
+    } catch (error) {
+      say(`connection: ${(error as Error).message}`)
+      if (!client) {
+        const finishedAt = deps.now().toISOString()
+        const reason = error instanceof ClientError ? error.code : "connection_failed"
+        return {
+          startedAt,
+          finishedAt,
+          dryRun: false,
+          t3: { ...t3, reason },
+          security: { ...security, reason },
+          lastGoodSyncAt: null,
+        }
+      }
+    }
+  }
+
   // 1. The overview collector, then its newest snapshot (even when the collector failed).
-  const overviewDir = options.overviewDir ?? config.overviewDir
+  const overviewDir = settings.overviewDir
   let snapshot: Snapshot | undefined
   if (!overviewDir) {
     say("overview: no folder (set ADIUTOR_OVERVIEW_DIR or pass --overview); security is not sent")
+    Object.assign(security, { reason: "no_overview", message: "no overview folder is set" })
   } else {
     if (options.collect) {
       const result = await deps.runner(deps.nodePath, ["src/cli.mjs", "collect"], {
@@ -127,39 +246,83 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
     } else say("overview: collector skipped (--no-collect)")
     try {
       snapshot = await readLatestSnapshot(overviewDir)
+      security.snapshotRunId = snapshot.runId
+      security.snapshotAt = snapshot.finishedAt
       say(`overview: snapshot ${snapshot.runId}${snapshot.finishedAt ? ` finished ${snapshot.finishedAt}` : ""}`)
     } catch (error) {
       say(`overview: ${(error as Error).message}; security is not sent`)
+      Object.assign(security, { reason: "no_snapshot", message: (error as Error).message })
     }
   }
 
-  // 2. The T3 projects file written by the scheduled agent.
-  let projectsFile: ReturnType<typeof parseProjectsFile>
-  try {
-    projectsFile = parseProjectsFile(await readFile(options.projectsFile, "utf8"))
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    say(`t3: cannot read the projects file: ${code ?? (error as Error).message}`)
-    return EXIT_NOTHING_PUSHED
-  }
-  const { projects } = projectsFile
-  const skipped = projectsFile.skipped ? ` (${projectsFile.skipped} records skipped)` : ""
-  say(`t3: ${projects.length} projects in the projects file${skipped}`)
-
-  // 3. Threads per project through the T3 CLI.
+  // 2. T3's project list with the sync's session; the last good list only when T3 cannot be reached.
   const collectedAt = deps.now().toISOString()
+  let projects: T3Project[] | undefined
+  let environmentId: string | undefined
+  const session =
+    settings.t3Url !== undefined
+      ? t3Session({
+          runner: deps.runner,
+          fetch: deps.fetch,
+          platform: ctx.platform,
+          env: deps.env,
+          now: ctx.nowMs,
+          sleep: ctx.sleep,
+          systemCommand: sysCommand,
+          cliPath: settings.cliPath,
+          origin: settings.t3Url,
+          ...(deps.processCreation ? { processCreation: deps.processCreation } : {}),
+          ...(deps.t3Checkpoint ? { checkpoint: deps.t3Checkpoint } : {}),
+          ...(deps.httpTimeoutMs ? { httpTimeoutMs: deps.httpTimeoutMs } : {}),
+        })
+      : undefined
+  if (!session) stopT3("t3_settings", "T3's address is not usable; T3 is not read")
+  else {
+    try {
+      const read = await session.readProjects()
+      if (read.kind === "ok") {
+        projects = read.projects.projects
+        environmentId = read.environmentId
+        Object.assign(t3, { projectsFrom: "t3", projectsAt: collectedAt })
+        const skipped = read.projects.skipped ? ` (${read.projects.skipped} skipped: deleted or unusable ids)` : ""
+        say(`t3: ${projects.length} projects${skipped}`)
+        if (read.renewal) say(`t3: ${read.renewal}`)
+        try {
+          await saveProjectList(ctx.data, { savedAt: collectedAt, environmentId, projects }, ctx.lockDeps)
+        } catch {
+          say("t3: the project list could not be kept as the last good list")
+        }
+      } else if (read.kind === "unavailable") {
+        const last = readProjectList(ctx.data)
+        if (last && last.environmentId === read.environmentId) {
+          projects = last.projects
+          environmentId = read.environmentId
+          Object.assign(t3, { projectsFrom: "last_good", projectsAt: last.savedAt })
+          say(`t3: ${read.message}; T3 projects from ${last.savedAt} (${projects.length} projects)`)
+        } else stopT3("t3_unavailable", `${read.message}, and there is no last good project list; T3 is not read`)
+      } else stopT3(read.code, read.message)
+    } catch (error) {
+      stopT3(
+        error instanceof ClientError ? error.code : "t3_failed",
+        `the T3 session could not be used: ${(error as Error).message}`,
+      )
+    }
+  }
+
+  // 3. Threads per project through the T3 CLI, from T3's default data folder.
   const threads = new Map<string, ThreadRecord>()
   const failed: string[] = []
   // Projects with invalid thread records: their threads are sent, but the picture is not complete.
   const incomplete: string[] = []
   let invalid = 0
-  if (!config.cliPath) {
-    say("t3: T3CODE_CLI_PATH is not set; threads are not read")
-  } else {
-    const cliPath = config.cliPath
+  let otherEnvironment = false
+  if (projects && environmentId && session) {
     const results = await mapLimit(projects, THREAD_CONCURRENCY, async (project) => {
       try {
-        return { project, ...(await listThreads(deps.runner, cliPath, project.id, deps.threadTimeoutMs ?? 120_000)) }
+        return {
+          project,
+          ...(await listThreads(deps.runner, settings.cliPath, project.id, deps.threadTimeoutMs ?? 120_000, deps.env)),
+        }
       } catch (error) {
         return { project, error: (error as Error).message }
       }
@@ -170,6 +333,7 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
         say(`t3: threads of project ${result.project.id} not read: ${result.error}`)
         continue
       }
+      if (result.environments.some((id) => id !== environmentId)) otherEnvironment = true
       invalid += result.invalid
       if (result.invalid > 0) {
         incomplete.push(result.project.id)
@@ -177,89 +341,122 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
       }
       for (const thread of result.threads) if (!threads.has(thread.threadId)) threads.set(thread.threadId, thread)
     }
+    if (otherEnvironment) {
+      // The CLI reads another T3 than the session's: an identity failure, which stops the T3 part until t3-connect.
+      const id = await session.currentId().catch(() => undefined)
+      if (id) await session.markEnded("other_environment", id).catch(() => {})
+      stopT3(
+        "t3_other_environment",
+        "the T3 CLI reads another environment than the sync's session; check the CLI path and connect T3 again (t3-connect)",
+      )
+    }
   }
 
+  const readable = projects !== undefined && !otherEnvironment
+  const projectList = readable ? (projects ?? []) : []
   const local = snapshot?.local ?? []
-  const projectRecords = projects.map((project) => {
+  const projectRecords = projectList.map((project) => {
     const repo = resolveRepo(project, local)
     return { t3ProjectId: project.id, title: project.title, ...(repo ? { repo } : {}) }
   })
-  const threadRecords = [...threads.values()]
-  const children = threadRecords.filter((t) => t.parentThreadId).length
-  say(
-    `t3: ${threadRecords.length} threads (${children} child threads)` +
-      (invalid ? `, ${invalid} records skipped` : "") +
-      (failed.length ? `, ${failed.length} of ${projects.length} projects not read` : ""),
-  )
-  // The server must not read the missing threads of an unread or partly read project as "no threads".
-  const t3Payload = {
-    collectedAt,
-    projects: projectRecords,
-    threads: threadRecords,
-    failedProjects: [...incomplete, ...failed],
+  const threadRecords = readable ? [...threads.values()] : []
+  if (readable) {
+    const children = threadRecords.filter((t) => t.parentThreadId).length
+    say(
+      `t3: ${threadRecords.length} threads (${children} child threads)` +
+        (invalid ? `, ${invalid} records skipped` : "") +
+        (failed.length ? `, ${failed.length} of ${projectList.length} projects not read` : ""),
+    )
   }
-  const canSendT3 = config.cliPath !== undefined && failed.length < projects.length
+  // The server must not read the missing threads of an unread or partly read project as "no threads".
+  const failedProjects = [...incomplete, ...failed]
+  const t3Payload = { collectedAt, projects: projectRecords, threads: threadRecords, failedProjects }
+  const canSendT3 = readable && failed.length < projectList.length
+  if (readable)
+    Object.assign(t3, {
+      projects: projectList.length,
+      threads: threadRecords.length,
+      failedProjects: failedProjects.length,
+    })
+  if (readable && !canSendT3) stopT3("no_threads", "no project's threads could be read; the T3 part is not sent")
 
-  // 4. Security for the GitHub repositories of the projects.
+  // 4. Security for the GitHub repositories of the projects. When this run has no project list (T3 stopped), the
+  // repositories of the last good list are used for security alone; nothing of it goes to the T3 part.
   let securityPayload: { collectedAt: string; repos: ReturnType<typeof securityReports>["reports"] } | undefined
-  if (snapshot) {
-    const repos = projectRecords.map((p) => p.repo).filter((r): r is string => r !== undefined)
+  let repoProjects = projectList
+  if (!readable && snapshot) {
+    const last = readProjectList(ctx.data)
+    if (last) {
+      repoProjects = last.projects
+      say(`security: repositories from the last good T3 project list of ${last.savedAt}`)
+    } else Object.assign(security, { reason: "no_projects", message: "no T3 project list to find the repositories" })
+  }
+  if (snapshot && (readable || repoProjects.length > 0)) {
+    const repos = repoProjects.map((project) => resolveRepo(project, local)).filter((r): r is string => r !== undefined)
     const { reports, missing } = securityReports(snapshot, repos)
     say(
       `security: ${reports.length} repositories` +
         (missing.length ? `, ${missing.length} project repositories not in the snapshot` : ""),
     )
+    security.repos = reports.length
     if (reports.length > 0) securityPayload = { collectedAt, repos: reports }
+    else Object.assign(security, { reason: "no_repos", message: "no project repository is in the snapshot" })
   }
+
+  const finish = (): RunReport => ({
+    startedAt,
+    finishedAt: deps.now().toISOString(),
+    dryRun: options.dryRun,
+    t3,
+    security,
+    lastGoodSyncAt: null,
+  })
 
   if (options.dryRun) {
     say("dry run: nothing is sent")
     const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value))
     say(`dry run: t3 payload ${size(t3Payload)} bytes${canSendT3 ? "" : " (would not be sent)"}`)
     if (securityPayload) say(`dry run: security payload ${size(securityPayload)} bytes`)
+    // Ids and counts only: titles and paths stay out of the output.
     const sample = {
-      project: projectRecords[0],
-      thread: threadRecords.find((t) => !t.parentThreadId) ?? threadRecords[0],
-      repo: securityPayload?.repos[0],
+      project: projectRecords[0]?.t3ProjectId,
+      thread: (threadRecords.find((t) => !t.parentThreadId) ?? threadRecords[0])?.threadId,
+      repo: securityPayload?.repos[0]?.repo,
     }
     say(`dry run: sample ${compact(sample, 4000)}`)
-    return canSendT3 || securityPayload ? EXIT_OK : EXIT_NOTHING_PUSHED
+    if (canSendT3) Object.assign(t3, { reason: "dry_run", message: undefined })
+    if (securityPayload) Object.assign(security, { reason: "dry_run", message: undefined })
+    return finish()
   }
 
   // 5. Push: T3 first, then security, over the sync's connection (src/sync/oauth.ts).
-  const url = config.url as string
-  let client: SyncClient
-  try {
-    client = syncClient(url, {
-      fetch: deps.fetch,
-      runner: deps.runner,
-      systemCommand: deps.systemCommand ?? ((name) => systemCommand(name, deps.env)),
-      platform: deps.platform ?? process.platform,
-      env: deps.env,
-      now: () => deps.now().getTime(),
-      sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
-      ...(deps.httpTimeoutMs ? { httpTimeoutMs: deps.httpTimeoutMs } : {}),
-    })
-  } catch (error) {
-    say(`connection: ${(error as Error).message}`)
-    return EXIT_USAGE
-  }
-  let pushed = 0
+  const url = settings.url as string
   let ended = false
-  const pushOne = async (name: string, path: string, payload: unknown) => {
-    if (ended) return say(`${name}: not sent (the sync is disconnected)`)
+  const pushOne = async (
+    name: string,
+    path: string,
+    payload: unknown,
+    part: T3Part | SecurityPart,
+    partial: boolean,
+  ) => {
+    if (!client) return
+    if (ended) {
+      say(`${name}: not sent (the sync is disconnected)`)
+      Object.assign(part, { result: "not_run", reason: "connection_ended" })
+      return
+    }
     const result = await client.push(path, payload)
     say(describeResult(name, result))
+    Object.assign(part, partOf(result, partial))
     if (result.kind === "failed" && DISCONNECTED.has(result.code)) {
       ended = true
-      say(disconnected(url, options.envFile))
+      say(disconnected(url, settings.envFile))
     }
-    if (ok(result)) pushed += 1
   }
-  if (canSendT3) await pushOne("t3 sync", "/api/v1/sync/t3", t3Payload)
+  if (canSendT3) await pushOne("t3 sync", "/api/v1/sync/t3", t3Payload, t3, failedProjects.length > 0)
   else say("t3 sync: not sent (no threads could be read)")
-  if (securityPayload) await pushOne("security sync", "/api/v1/sync/security", securityPayload)
+  if (securityPayload) await pushOne("security sync", "/api/v1/sync/security", securityPayload, security, false)
   else say("security sync: not sent (no snapshot data)")
 
-  return pushed > 0 ? EXIT_OK : EXIT_NOTHING_PUSHED
+  return finish()
 }

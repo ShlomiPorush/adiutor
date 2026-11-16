@@ -1,8 +1,5 @@
-// Configuration of the sync tool: the process environment, optionally completed by a local env file
-// (KEY=VALUE lines) so a scheduled task needs no system environment variables. Error messages never
-// include a value.
-
-import { issuerOf } from "./oauth.ts"
+// The sync's env file (KEY=VALUE lines), one of the places its settings come from (src/sync/settings.ts), and the
+// redaction of secrets in output. Error messages never include a value.
 
 export class SyncConfigError extends Error {
   override name = "SyncConfigError"
@@ -31,54 +28,6 @@ export function parseEnvFile(text: string): Record<string, string> {
     vars[key] = value
   })
   return vars
-}
-
-export type SyncConfig = {
-  /** Adiutor's address as an issuer (a plain origin): the connection `connect` kept for it is used. */
-  url?: string
-  /** Path of the T3 Code CLI; on Windows usually a .cmd file. */
-  cliPath?: string
-  /** The owner's overview checkout. */
-  overviewDir?: string
-  /**
-   * Whether ADIUTOR_AGENT_TOKEN, the sync's agent key before agent approval, is still set: the sync no longer uses it,
-   * says so once per run, and never prints or passes it on.
-   */
-  oldToken: boolean
-}
-
-const NAMES = ["ADIUTOR_URL", "ADIUTOR_AGENT_TOKEN", "T3CODE_CLI_PATH", "ADIUTOR_OVERVIEW_DIR"] as const
-
-/**
- * Merges the environment with the env file (the file wins: it is the explicit choice of the caller)
- * and checks the values. The server URL is required only when something is sent.
- */
-export function loadSyncConfig(
-  env: Record<string, string | undefined>,
-  fileVars: Record<string, string>,
-  options: { requireServer: boolean },
-): SyncConfig {
-  const pick = (name: (typeof NAMES)[number]) => {
-    const value = (fileVars[name] ?? env[name] ?? "").trim()
-    return value === "" ? undefined : value
-  }
-  const problems: string[] = []
-  let url = pick("ADIUTOR_URL")
-  if (url !== undefined) {
-    try {
-      url = issuerOf(url)
-    } catch {
-      problems.push("ADIUTOR_URL must be Adiutor's address alone: https, or http on localhost")
-    }
-  } else if (options.requireServer) problems.push("ADIUTOR_URL is required")
-
-  if (problems.length > 0) throw new SyncConfigError(`Invalid configuration: ${problems.join("; ")}`)
-  return {
-    url,
-    cliPath: pick("T3CODE_CLI_PATH"),
-    overviewDir: pick("ADIUTOR_OVERVIEW_DIR"),
-    oldToken: pick("ADIUTOR_AGENT_TOKEN") !== undefined,
-  }
 }
 
 /** Replaces every occurrence of the given secrets in a line of output. */

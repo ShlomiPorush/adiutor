@@ -3,7 +3,7 @@
     "threadId": "thread-w1",
     "projectId": "p-widget",
     "title": "Add an export button",
-    "link": "http://127.0.0.1:3773/env/thread-w1",
+    "link": "https://app.t3.codes/threads/fixture-env/thread-w1",
     "createdBy": "agent",
     "status": "running",
     "settled": false,
