@@ -16,24 +16,21 @@ Installed without this line, the skill runs only when the owner asks for Adiutor
 
 ## Connecting to Adiutor
 
-Each way of connecting gets an agent key of its own from the owner's approval in the browser (`/connect/device`). A key ends after its days (default 90) or when the owner disconnects it in Settings, Agent access.
+The skill and the MCP clients connect by agent access by approval: each asks once, the owner approves it in the browser and chooses its areas, and Adiutor keeps the connection until the owner disconnects it in Settings, Agent access, or it goes unused for the idle days ([api.md](api.md), "Agent access by approval"). The clients on `main` work against the agent access release only: an Adiutor before it has no authorization server, and they cannot connect to it.
 
-**The skill's command.** `adiutor connect` (in the skill's `scripts/` folder) prints a link and a code; the owner approves, and `adiutor connect --wait --url <address>` saves one key, named `skill:<computer>:<8 hex digits>`, in `~/.adiutor/`, readable by the computer user only and shared by every agent install of that user. SKILL.md, "Connecting (once)", has the steps an agent follows.
+**The skill's command.** `adiutor connect` (in the skill's `scripts/` folder) prints a link and a code; the owner approves, and `adiutor connect --wait --url "<address>"` keeps the connection in `~/.adiutor/`, one file per Adiutor address, readable by the computer user only and shared by every agent install of that user. It is named `Agents on <computer>` (or `ADIUTOR_AGENT_NAME`) and reads and writes as the owner chose. SKILL.md, "Connecting (once)", has the steps an agent follows. Adiutor also serves the skill at `<address>/agents/skill/` with its address filled in; a copy from Git, as the shared agent configuration installs it, connects with `--url` once and keeps the address.
 
-**The MCP server**, when a client should have the tools itself. Both clients use the MCP Streamable HTTP transport with a key of their own, from `adiutor connect` of the sync bundle ([sync.md](sync.md)). Replace the example URL with the owner's Adiutor address.
+**The MCP server**, when a client should have the tools itself. Claude Code and Codex use the MCP Streamable HTTP transport at `<address>/mcp` and sign in with OAuth themselves; the owner approves each once. `setup-mcp` of the sync bundle sets them up and replaces a setup with a key that the old `connect --for claude|codex` wrote ([sync.md](sync.md), "Setting up Claude Code and Codex"). Replace the example URL with the owner's Adiutor address.
 
-Claude Code: run `node dist/sync/adiutor-sync.js connect --url https://adiutor.example.com --name claude --for claude` in the Adiutor checkout. After the approval it runs this itself, replacing an older `adiutor` entry at user scope:
+Claude Code: `node dist/sync/adiutor-sync.js setup-mcp --for claude --url https://adiutor.example.com` in the Adiutor checkout replaces the `adiutor` entry of the user scope with this one, and Claude Code signs in the first time it uses Adiutor (or through `/mcp` in Claude Code):
 
 ```
-claude mcp add --transport http --scope user adiutor https://adiutor.example.com/mcp --header "Authorization: Bearer <key>"
+claude mcp add --transport http --scope user adiutor "https://adiutor.example.com/mcp"
 ```
 
-Codex: run `... connect --url https://adiutor.example.com --name codex --for codex`. It sets `ADIUTOR_AGENT_KEY` for the Windows user with `setx` (elsewhere in `~/.config/adiutor/codex.env`, with the line to add to the shell profile), then runs `codex mcp add adiutor --url https://adiutor.example.com/mcp --bearer-token-env-var ADIUTOR_AGENT_KEY`, which writes these lines to `~/.codex/config.toml`. Restart Codex from a new terminal afterwards.
+Codex: `... setup-mcp --for codex --url https://adiutor.example.com` reads `codex mcp list --json` and replaces an old entry with `codex mcp add adiutor --url "https://adiutor.example.com/mcp"`, which signs in at once, or signs in an entry whose sign-in was cancelled with `codex mcp login adiutor`. `~/.codex/config.toml` then holds no key:
 
 ```toml
 [mcp_servers.adiutor]
 url = "https://adiutor.example.com/mcp"
-bearer_token_env_var = "ADIUTOR_AGENT_KEY"
 ```
-
-When `claude` or `codex` is missing or fails, the command prints the same setup once instead. Each agent gets its own key, which ends after `--days` (default 90) or when the owner disconnects it in Settings, Agent access. A printed command can stay in the shell history.
