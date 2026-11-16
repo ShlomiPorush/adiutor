@@ -39,10 +39,13 @@ describe("loadConfig", () => {
     expect(config.warnings).toEqual([])
   })
 
-  it.each(["DATABASE_URL", "ADIUTOR_PUBLIC_URL", "ADIUTOR_AUTH_SECRETS", "ADIUTOR_SETTINGS_KEYS"])("refuses without %s", (name) => {
-    expect(refusal({ ...valid, [name]: undefined })).toContain(`${name} is required`)
-    expect(refusal({ ...valid, [name]: "" })).toContain(`${name} is required`)
-  })
+  it.each(["DATABASE_URL", "ADIUTOR_PUBLIC_URL", "ADIUTOR_AUTH_SECRETS", "ADIUTOR_SETTINGS_KEYS"])(
+    "refuses without %s",
+    (name) => {
+      expect(refusal({ ...valid, [name]: undefined })).toContain(`${name} is required`)
+      expect(refusal({ ...valid, [name]: "" })).toContain(`${name} is required`)
+    },
+  )
 
   it("reads versioned keys, newest first, and refuses a bad entry, a repeated version or a short key unprinted", () => {
     const older = testSecret()
@@ -89,7 +92,10 @@ describe("loadConfig", () => {
         for (const secret of [authSecret, older, settingsKey]) expect(key).not.toContain(secret)
       }
       // Rotation: the key derived from a secret stays the same when a newer secret is listed before it.
-      expect(keys).toEqual([...loadConfig(valid).agentCookieKeys, ...loadConfig({ ...valid, ADIUTOR_AUTH_SECRETS: `1:${older}` }).agentCookieKeys])
+      expect(keys).toEqual([
+        ...loadConfig(valid).agentCookieKeys,
+        ...loadConfig({ ...valid, ADIUTOR_AUTH_SECRETS: `1:${older}` }).agentCookieKeys,
+      ])
       expect(deriveAgentCookieKeys(config.authSecrets)).toEqual(keys)
     })
 
