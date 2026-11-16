@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import type { Server } from "node:http"
 import type { AddressInfo } from "node:net"
+import { fileURLToPath } from "node:url"
 import { serve } from "@hono/node-server"
 import type { Context } from "hono"
 import type { ChannelLimits } from "../agents/channel.ts"
@@ -23,6 +24,9 @@ import { testSecret } from "./secrets.ts"
 // signed-in browser with two-factor. Every key and secret is new per harness.
 
 export const ownerBy: By = { actor: { kind: "owner", label: "owner" }, source: "ui" }
+
+/** The repository's agent skill (skill/adiutor), which the harness serves at /agents/skill/. */
+export const SKILL_DIR = fileURLToPath(new URL("../../../skill/adiutor", import.meta.url))
 
 type Fetch = (request: Request, env?: unknown) => Response | Promise<Response>
 
@@ -90,6 +94,8 @@ export async function oauthHarness(
     channel?: ChannelLimits
     /** The client's address for the limits (the socket's address otherwise). */
     clientIp?: (c: Context) => string
+    /** The agent skill served at /agents/skill/ (the repository's skill/adiutor otherwise). */
+    skillDir?: string
   } = {},
 ): Promise<OAuthHarness> {
   const { server, origin, handle } = await listen()
@@ -109,7 +115,7 @@ export async function oauthHarness(
     ...(options.clientIp ? { clientIp: options.clientIp } : {}),
   })
   const limits = options.limits ?? wideLimits()
-  const mount = agentOAuthMount(access, limits, options.caps, options.channel)
+  const mount = agentOAuthMount(access, limits, options.caps, options.channel, options.skillDir ?? SKILL_DIR)
   const app = createApp({
     checkDatabase: async () => true,
     core,
