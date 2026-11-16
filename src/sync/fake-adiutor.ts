@@ -32,6 +32,8 @@ export async function startFakeAdiutor() {
     dropNextRefresh: false,
     dropNextPoll: false,
     listingStatus: 0,
+    /** What happens to the next listings, in order: "drop" (no answer) or "busy" (429 busy). */
+    beforeListing: [] as Array<"drop" | "busy">,
     approve() {
       const d = [...s.devices.values()].at(-1)
       if (d) d.state = "approved"
@@ -156,6 +158,9 @@ export async function startFakeAdiutor() {
         )
       if (req.method === "GET" && url.pathname === "/api/v1/agent/endpoints") {
         s.counts.listing++
+        const next = s.beforeListing.shift()
+        if (next === "drop") return drop()
+        if (next === "busy") return send(429, { error: "busy", message: "Busy." })
         if (s.listingStatus) return send(s.listingStatus, { error: "server_error" })
         const endpoints = grant.scope.split(" ").includes("sync")
           ? SYNC_ROUTES.map((path) => ({ method: "POST", path, kind: "act", area: "sync", description: "" }))

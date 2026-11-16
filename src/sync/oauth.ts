@@ -602,17 +602,34 @@ export function syncClient(issuer: string, deps: ClientDeps) {
   async function fetchListing(): Promise<Listing> {
     const unavailable = () =>
       new ClientError("endpoints_unavailable", "The list of allowed calls could not be read, so nothing was sent.")
-    const read = async (token: string) => {
+    // A read, as the skill sends it: once more after a lost or broken answer, after 429 busy (a short wait), and after
+    // the token refusal (a refresh); each at most once.
+    let token = await accessToken()
+    let refreshed = false
+    let busyRetried = false
+    let netRetried = false
+    let a: Answer
+    for (;;) {
       try {
-        return await request("GET", `${issuer}${ENDPOINTS_PATH}`, { bearer: token })
+        a = await request("GET", `${issuer}${ENDPOINTS_PATH}`, { bearer: token })
       } catch (error) {
-        if (error instanceof ClientError && error.code === "unreachable") throw unavailable()
-        throw error
+        if (!(error instanceof ClientError) || error.code !== "unreachable") throw error
+        if (netRetried) throw unavailable()
+        netRetried = true
+        continue
       }
+      if (!refreshed && a.status === 401 && a.challenge.includes('error="invalid_token"')) {
+        refreshed = true
+        token = await accessToken(token)
+        continue
+      }
+      if (!busyRetried && a.status === 429 && topText(a, "error") === "busy") {
+        busyRetried = true
+        await deps.sleep(BUSY_WAIT_MS)
+        continue
+      }
+      break
     }
-    const token = await accessToken()
-    let a = await read(token)
-    if (a.status === 401 && a.challenge.includes('error="invalid_token"')) a = await read(await accessToken(token))
     const endpoints = field(a, "endpoints")
     const revision = field(a, "revision")
     if (a.status !== 200 || !Array.isArray(endpoints) || typeof revision !== "string" || !REVISION.test(revision))
@@ -750,8 +767,9 @@ export function syncClient(issuer: string, deps: ClientDeps) {
 
   /**
    * Polls until the owner approves or denies, the code ends, or a poll's answer is lost (the code is never presented
-   * again then: it may have been spent). Stores the connection under the lock; a replaced one is revoked once the new
-   * one is stored.
+   * again then: it may have been spent). Each poll spends a one-time secret, so it runs under the lock, sent only while
+   * the lock is still this command's, and the lock is held until the connection is stored; a replaced one is revoked
+   * once the new one is stored.
    */
   async function waitForApproval(device: Awaited<ReturnType<typeof deviceCode>>, label: string) {
     let interval = device.interval
@@ -759,19 +777,20 @@ export function syncClient(issuer: string, deps: ClientDeps) {
       await deps.sleep(interval * 1000)
       if (deps.now() >= device.expiresAt + 60_000)
         throw new ClientError("expired", "The code expired before it was approved.")
-      let r: Answer
-      try {
-        r = await oauth(PATHS.token, { grant_type: DEVICE_GRANT, device_code: device.code })
-      } catch (error) {
-        if (error instanceof ClientError && error.extra.sent === false) continue
-        throw new ClientError(
-          "unreachable",
-          "The answer to the approval was lost, so the code is not used again. Run connect again.",
-        )
-      }
-      if (r.status === 200) {
-        const tokens = tokensFrom(r)
-        return withLock(async () => {
+      const step = await withLock(async (lock) => {
+        assertMine(lock)
+        let r: Answer
+        try {
+          r = await oauth(PATHS.token, { grant_type: DEVICE_GRANT, device_code: device.code })
+        } catch (error) {
+          if (error instanceof ClientError && error.extra.sent === false) return { kind: "again" as const }
+          throw new ClientError(
+            "unreachable",
+            "The answer to the approval was lost, so the code is not used again. Run connect again.",
+          )
+        }
+        if (r.status === 200) {
+          const tokens = tokensFrom(r)
           let rec = (await readRecord()) ?? emptyRecord(label)
           const old = rec.refreshToken && rec.refreshToken !== tokens.refreshToken ? rec.refreshToken : ""
           rec = {
@@ -784,19 +803,21 @@ export function syncClient(issuer: string, deps: ClientDeps) {
           }
           await writeRecord(rec)
           rec = await revokeLeft(rec)
-          return { scope: rec.scope, notRevoked: rec.toRevoke !== "" }
-        })
-      }
-      const error = field(r, "error")
-      if (error === "authorization_pending") continue
-      if (error === "slow_down") {
+          return { kind: "done" as const, scope: rec.scope, notRevoked: rec.toRevoke !== "" }
+        }
+        return { kind: "answer" as const, error: field(r, "error"), status: r.status }
+      })
+      if (step.kind === "done") return { scope: step.scope, notRevoked: step.notRevoked }
+      if (step.kind === "again") continue
+      if (step.error === "authorization_pending") continue
+      if (step.error === "slow_down") {
         interval += 5
         continue
       }
-      if (error === "access_denied") throw new ClientError("denied", "The owner did not approve the connection.")
-      if (error === "expired_token" || error === "invalid_grant")
+      if (step.error === "access_denied") throw new ClientError("denied", "The owner did not approve the connection.")
+      if (step.error === "expired_token" || step.error === "invalid_grant")
         throw new ClientError("expired", "The code is no longer valid.")
-      throw new ClientError(`http_${r.status}`, `Waiting for the approval failed (${r.status}).`)
+      throw new ClientError(`http_${step.status}`, `Waiting for the approval failed (${step.status}).`)
     }
   }
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -16,7 +17,14 @@ beforeAll(async () => {
 afterAll(() => fake.close())
 afterEach(() => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true })
-  Object.assign(fake, { beforePush: [], afterPush: [], dropNextRefresh: false, dropNextPoll: false, listingStatus: 0 })
+  Object.assign(fake, {
+    beforePush: [],
+    afterPush: [],
+    beforeListing: [],
+    dropNextRefresh: false,
+    dropNextPoll: false,
+    listingStatus: 0,
+  })
   fake.grantScope = "sync"
   fake.pushes.length = 0
 })
@@ -93,6 +101,35 @@ describe("connecting", () => {
     expect(await client.status()).toEqual({ connected: false })
   })
 
+  it("polls only under the connection's lock: while another command holds it, the code is not spent", async () => {
+    const u = user()
+    const client = u.client()
+    await client.prepare()
+    const device = await client.deviceCode("Sync")
+    fake.approve()
+    const lock = join(
+      credentialsDir("linux", u.deps.env),
+      `${createHash("sha256").update(fake.issuer).digest("hex").slice(0, 32)}.lock`,
+    )
+    // A live holder: this very process, under another token.
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, host: hostname(), token: "another", startedAt: 1 }))
+    const polls = fake.counts.poll
+    // The lock's wait runs on this client's clock: each wait moves it on, so the 20 seconds pass at once.
+    const waiting = syncClient(fake.issuer, {
+      ...u.deps,
+      sleep: async (ms) => {
+        u.clock.offset += ms / 1000
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      },
+    })
+    await expect(waiting.waitForApproval(device, "Sync")).rejects.toMatchObject({ code: "busy" })
+    expect(fake.counts.poll).toBe(polls)
+    // Once the lock is free, the same code is collected and the connection kept.
+    rmSync(lock)
+    expect(await waiting.waitForApproval(device, "Sync")).toMatchObject({ scope: "sync" })
+    expect(await client.status()).toMatchObject({ connected: true })
+  })
+
   it("stops when the owner denies", async () => {
     const u = user()
     const client = u.client()
@@ -154,6 +191,20 @@ describe("pushing", () => {
     fake.beforePush.push("invalid_token", "invalid_token")
     expect(await client.push("/api/v1/sync/t3", {})).toMatchObject({ kind: "answer", status: 401 })
     expect(fake.pushes).toHaveLength(1)
+  })
+
+  it("reads the list once more after a lost answer or busy, as the skill reads it, and no more", async () => {
+    const u = user()
+    const { client } = await connected(u)
+    fake.beforeListing.push("drop")
+    expect(await client.push("/api/v1/sync/t3", {})).toMatchObject({ kind: "answer", status: 200 })
+    const busy = (await connected(user())).client
+    fake.beforeListing.push("busy")
+    expect(await busy.push("/api/v1/sync/t3", {})).toMatchObject({ kind: "answer", status: 200 })
+    const twice = (await connected(user())).client
+    fake.beforeListing.push("drop", "drop")
+    expect(await twice.push("/api/v1/sync/t3", {})).toMatchObject({ kind: "failed", code: "endpoints_unavailable" })
+    expect(fake.pushes).toHaveLength(2)
   })
 
   it("sends nothing when the list of calls cannot be read, or does not hold the push", async () => {
