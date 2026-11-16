@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { build } from "esbuild"
 import { afterAll, describe, expect, it } from "vitest"
-import { fileLock, type Holder } from "./lock.ts"
+import { fileLock, type Holder, takeoverGuard } from "./lock.ts"
 
 // The lock file every sync command shares (the run lock, the connection's refresh lock, the T3 lock): one holder at a
 // time, also when several takers find a dead holder at once. Real processes race here, since the steps of a takeover
@@ -53,6 +53,32 @@ describe("the lock", () => {
     })
     await expect(late.acquire(options)).rejects.toThrow("busy")
     expect(fileLock(file, deps).holder()).toEqual(newHolder)
+  })
+
+  it("recovers from a chain of guards that takers left when they died one after another", async () => {
+    const work = mkdtempSync(join(dir, "chain-"))
+    const file = join(work, "run.lock")
+    const deadHolder = (): Holder => ({
+      pid: DEAD_PID,
+      host: hostname(),
+      token: randomBytes(16).toString("hex"),
+      startedAt: 1,
+    })
+    // A dead holder's lock, its takeover guard of a taker that died, that guard's guard of another, and so on.
+    let below = file
+    let held = deadHolder()
+    writeFileSync(file, JSON.stringify(held))
+    for (let level = 0; level < 8; level++) {
+      const guard = takeoverGuard(file, below, held)
+      held = deadHolder()
+      writeFileSync(guard, JSON.stringify(held))
+      below = guard
+    }
+    const lock = fileLock(file, deps)
+    const token = await lock.acquire(options)
+    expect(lock.mine(token)).toBe(true)
+    lock.release(token)
+    expect(readdirSync(work)).toEqual([])
   })
 
   it("keeps one holder at a time while several processes take a dead holder's lock over at once", async () => {

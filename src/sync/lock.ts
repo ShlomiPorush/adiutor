@@ -5,7 +5,7 @@
 // names the dead holder. Of several takers only one holds the guard, and none can remove a lock another one created. Used for the Adiutor connection's refresh, the T3 session and
 // the run lock. The folder it lives in is the caller's to prepare.
 
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { closeSync, lstatSync, openSync, readFileSync, rmSync, writeSync } from "node:fs"
 import { hostname } from "node:os"
 import { ClientError } from "./errors.ts"
@@ -60,6 +60,20 @@ export type AcquireOptions = {
   cannotCreate: () => Error
 }
 
+/**
+ * The takeover guard of a file (the lock, or a guard whose own taker died) for the dead holder found in it. Its name
+ * has a fixed length at every level, next to the lock, so a chain of guards left by takers that died cannot outgrow a
+ * file name.
+ */
+export function takeoverGuard(lockFile: string, file: string, held: Holder): string {
+  const id = held.empty ? `empty-${Math.floor(held.mtime ?? 0)}` : String(held.token)
+  return `${lockFile}.${createHash("sha256")
+    .update(`${file}
+${id}`)
+    .digest("hex")
+    .slice(0, 32)}.takeover`
+}
+
 export function fileLock(lockFile: string, deps: LockDeps) {
   const win = deps.platform === "win32"
   const nowS = () => Math.floor(deps.now() / 1000)
@@ -112,13 +126,12 @@ export function fileLock(lockFile: string, deps: LockDeps) {
    * Removes a lock file whose holder was found dead, under a guard file named after that holder, created exclusively:
    * of several takers only one holds it, and while it does, the dead holder's lock cannot change (nobody else may
    * remove it, and nobody can create one in its place), so the lock is read again and removed only when it still names
-   * that holder. A guard whose own holder died is removed the same way, one level up. Returns whether to try creating
-   * the lock again; false while another taker is at it.
+   * that holder. A guard whose own holder died is removed the same way, one level up: the recursion follows the chain
+   * that takers which died left on disk, however long, and never gives up at a fixed level. Returns whether to try
+   * creating the lock again; false while another taker is at it.
    */
-  function breakDead(file: string, held: Holder, depth = 0): boolean {
-    if (depth > 3) return false
-    const id = held.empty ? `empty-${Math.floor(held.mtime ?? 0)}` : String(held.token).replace(/[^A-Za-z0-9]/g, "")
-    const guard = `${file}.${id}.takeover`
+  function breakDead(file: string, held: Holder): boolean {
+    const guard = takeoverGuard(lockFile, file, held)
     const token = randomBytes(16).toString("hex")
     let fd: number | undefined
     try {
@@ -127,7 +140,7 @@ export function fileLock(lockFile: string, deps: LockDeps) {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false
       const other = readHolder(guard)
-      return other !== null && dead(other) && breakDead(guard, other, depth + 1) && breakDead(file, held, depth)
+      return other !== null && dead(other) && breakDead(guard, other) && breakDead(file, held)
     } finally {
       if (fd !== undefined) closeSync(fd)
     }
