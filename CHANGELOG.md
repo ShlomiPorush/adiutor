@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **The sync reads T3 itself**: `node dist/sync/adiutor-sync.js t3-connect` gives the sync a read-only T3 session of its own for 30 days, kept with its Adiutor connection and readable by you only; it shows in T3 under Authorized clients. The sync reads T3's project list with it, renews it on its own before it ends, and keeps the last good list for when T3 does not answer (the run then says how old the list is). When T3 refuses the session, or its address or CLI answer as another T3, the sync stops reading T3 until you run `t3-connect` again. `t3-disconnect` ends the session.
+- **`status` and `disconnect`**: `status` shows both connections, the last run per part and the last good sync (both parts accepted in the same run). `disconnect` ends the sync's connection in Adiutor, then forgets it; when Adiutor's answer is lost, it tries again on the next command.
+- **One run at a time**: a second `run` answers that a run is going, with its start time, and runs nothing.
+- **`--json`** on `run`, `status`, `connect`, `disconnect`, `t3-connect` and `t3-disconnect`: one JSON object per line, ending in one result, for the tray app to come (`docs/sync.md`, "Machine-readable output"). Each run's result is kept in `status.json` in the sync's data folder.
+- **A settings file**: the sync also reads `settings.json` in its data folder (`%LOCALAPPDATA%\adiutor`), below the env file and the environment. T3's address is a setting (`ADIUTOR_T3_URL`, default `http://127.0.0.1:3773`), and the T3 CLI defaults to where T3 installs it.
+
+### Removed
+
+- **`run --projects` and `prompts/reconcile.md`**: the sync no longer needs an agent to list T3's projects. Run `t3-connect` once on the PC that runs the sync, then `run` without `--projects`.
+
 ## [0.2.1] - 2026-11-16
 
 ### Changed

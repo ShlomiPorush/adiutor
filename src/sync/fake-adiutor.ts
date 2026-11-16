@@ -31,6 +31,10 @@ export async function startFakeAdiutor() {
     afterPush: [] as Array<"drop" | number>,
     dropNextRefresh: false,
     dropNextPoll: false,
+    /** The next revocation runs, and its answer is lost. */
+    dropNextRevoke: false,
+    /** The outcome the next pushes that run answer with, in order (succeeded when empty), as Adiutor's sync does. */
+    pushOutcome: [] as Array<"succeeded" | "partial" | "failed">,
     listingStatus: 0,
     /** What happens to the next listings, in order: "drop" (no answer) or "busy" (429 busy). */
     beforeListing: [] as Array<"drop" | "busy">,
@@ -142,6 +146,10 @@ export async function startFakeAdiutor() {
       const t = s.refresh.get(form.token ?? "")
       const g = t ? s.grants.get(t.grant) : undefined
       if (g) g.alive = false
+      if (s.dropNextRevoke) {
+        s.dropNextRevoke = false
+        return drop()
+      }
       return send(200, {})
     }
     if (url.pathname.startsWith("/api/v1/")) {
@@ -192,7 +200,7 @@ export async function startFakeAdiutor() {
         const after = s.afterPush.shift()
         if (after === "drop") return drop()
         if (typeof after === "number") return send(after, { error: "internal_error", message: "Something went wrong." })
-        return send(200, { data: { outcome: "succeeded", counts: {} } })
+        return send(200, { data: { outcome: s.pushOutcome.shift() ?? "succeeded", counts: {} } })
       }
       return send(403, { error: "forbidden", message: "Agents cannot make this call." })
     }

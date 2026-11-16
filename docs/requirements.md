@@ -90,9 +90,9 @@ The inbox count is visible on the home screen and links to the inbox.
 
 - **Primary mechanism: an agent instruction** in the owner's shared agent configuration. At thread start: find or create the item, link the T3 thread, set `in_progress`. At the end: a summary comment and the right status.
 - Agents use Adiutor through the `adiutor` skill, which holds that instruction and works through the MCP tools when a session has them, or otherwise through its own command with a connection the owner approved in the browser. The shared agent configuration installs the skill for Claude Code and Codex, and one always-on line tells agents to load it at the start of every top-level T3 thread.
-- **Safety net: a daily reconciler.** A T3 scheduled task on the owner's PC runs before the morning message. It first runs the `overview` collector, then reads T3 threads, creates items for top-level threads that have none, and fixes status mismatches: running → `in_progress`, waiting for the owner → `waiting_on_you`, settled → `done`.
+- **Safety net: a daily reconciler.** The sync on the owner's PC ([sync.md](sync.md)) runs before the morning message. It first runs the `overview` collector, then reads T3 threads, creates items for top-level threads that have none, and fixes status mismatches: running → `in_progress`, waiting for the owner → `waiting_on_you`, settled → `done`.
 - The reconciler never overrides the owner: it does not change an item whose status the owner set after the thread's last activity, never recreates an item or project the owner deleted, and decides from all threads linked to an item together.
-- The schedule is bound to one dedicated thread in a T3 project whose default thread mode is `local`, because fresh scheduled threads in a git project try to create worktrees.
+- It runs on a schedule of the sync tray app on the PC (coming), or from the command line; no T3 thread or T3 scheduled task is involved.
 - The reconciler also carries the security and Issues counts from the `overview` collector to Adiutor, with how fresh each source is.
 - The server keeps serving when the PC is off; only the sync stops, and the board and the morning message say since when.
 
@@ -111,7 +111,7 @@ There is one launch and no partial use.
 1. Everything in this document is built and verified, except section 10 (Notes), which the launch does not wait for.
 2. The owner deploys production with a new, empty database (owner's decision, 2026-11-12; it replaces a dry run on the development stack and the move of its data). The launch checks run there on real data: every project is seeded with drafts (a stage proposal, goal, "where we are") written by an agent from T3 threads and the repositories; one real Telegram morning message is sent; the overview is shown at desktop and phone sizes.
 3. The owner reviews and approves or corrects.
-4. Only after approval: the always-on line that loads the `adiutor` skill goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.
+4. Only after approval: the always-on line that loads the `adiutor` skill goes into the shared agent configuration (proposed to the owner, who adds it), the sync's schedule in the tray app is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the sync.
 
 ## 10. Notes
 

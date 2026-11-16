@@ -1,32 +1,43 @@
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
-import { tmpdir } from "node:os"
+import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import type { MainDeps } from "./cli.ts"
 import { main } from "./cli.ts"
+import type { Result, RunReport } from "./contract.ts"
 import type { Runner } from "./exec.ts"
 import { type FakeAdiutor, startFakeAdiutor } from "./fake-adiutor.ts"
+import { type FakeT3, startFakeT3 } from "./fake-t3.ts"
 import { syncClient } from "./oauth.ts"
-import { type Deps, runSync } from "./run.ts"
+import { partOf } from "./run.ts"
+import { t3Session } from "./t3-session.ts"
+
+// One run end to end: a stand-in Adiutor (src/sync/fake-adiutor.ts) and a stand-in T3 (src/sync/fake-t3.ts), the sync
+// connected to both in a home folder of its own before each test. Every token is new on every run.
 
 const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url))
 const overviewDir = join(fixtures, "overview")
-const projectsFile = join(fixtures, "t3-projects.json")
+const allProjects = JSON.parse(readFileSync(join(fixtures, "t3-projects.json"), "utf8"))
 const NODE = "/fake/node"
+const CLI = "/fake/t3"
 
-// A stand-in Adiutor with the agent REST channel (src/sync/fake-adiutor.ts); the sync is connected to it in a home
-// folder of its own before each test. Every token is new on every run.
 let fake: FakeAdiutor
+let t3: FakeT3
 let home: string
 const temps: string[] = []
 
 beforeAll(async () => {
   fake = await startFakeAdiutor()
+  t3 = await startFakeT3({ cliPath: CLI, projects: allProjects, threadsDir: join(fixtures, "threads") })
 })
-afterAll(() => fake.close())
+afterAll(async () => {
+  await fake.close()
+  await t3.close()
+})
 beforeEach(async () => {
   home = tempDir()
   const env = { HOME: home, XDG_CONFIG_HOME: join(home, ".config") }
@@ -45,10 +56,28 @@ beforeEach(async () => {
   const client = syncClient(fake.issuer, clientDeps)
   await client.prepare()
   await client.waitForApproval(await client.deviceCode("Test sync"), "Test sync")
+  await t3Session({
+    ...clientDeps,
+    runner: t3.runner,
+    sleep: async () => {},
+    cliPath: CLI,
+    origin: t3.origin,
+    processCreation: t3.processCreation,
+  }).connect()
+  t3.calls.length = 0
 })
 afterEach(() => {
   fake.pushes.length = 0
-  Object.assign(fake, { beforePush: [], afterPush: [], dropNextRefresh: false, listingStatus: 0 })
+  Object.assign(fake, { beforePush: [], afterPush: [], pushOutcome: [], dropNextRefresh: false, listingStatus: 0 })
+  Object.assign(t3, {
+    projects: allProjects,
+    projectsAnswer: [],
+    descriptorAnswer: [],
+    cliEnvironmentId: "",
+    issue: [],
+  })
+  t3.sessions.length = 0
+  t3.calls.length = 0
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -58,154 +87,352 @@ function tempDir(): string {
   return dir
 }
 
-/** A fake runner: the collector fails or succeeds; the T3 CLI answers from the recorded fixtures. */
-function fakeRunner(options: { collectorFails?: boolean } = {}) {
-  const calls: Array<{ command: string; args: string[]; cwd?: string }> = []
-  const runner: Runner = async (command, args, opts) => {
-    calls.push({ command, args, cwd: opts.cwd })
+const data = () => join(home, ".config", "adiutor")
+
+/** The collector fails or succeeds (or waits for a gate); the T3 CLI is the stand-in T3's. */
+function runner(options: { collectorFails?: boolean; gate?: Promise<void> } = {}) {
+  const calls: Array<{ command: string; args: string[] }> = []
+  const run: Runner = async (command, args, opts) => {
+    calls.push({ command, args })
     if (command === NODE) {
+      await options.gate
       return options.collectorFails
         ? { code: 1, stdout: "", stderr: "Error: Another run is in progress (data/run.lock).\n", error: "exit code 1" }
         : { code: 0, stdout: '{"runId":"20261101T060000Z"}\n', stderr: "" }
     }
-    const projectId = args[3] ?? ""
-    if (projectId === "p-notes")
-      return { code: 1, stdout: "", stderr: `No T3 Code project matches '${projectId}'.\n`, error: "exit code 1" }
-    if (projectId === "p-missing") return { code: 0, stdout: "[]", stderr: "" }
-    return {
-      code: 0,
-      stdout: readFileSync(join(fixtures, "threads", `${projectId.replace(":", "_")}.json`), "utf8"),
-      stderr: "",
-    }
+    return t3.runner(command, args, opts)
   }
-  return { runner, calls }
+  return { run, calls }
 }
 
-function deps(overrides: Partial<Deps> = {}, env: Record<string, string> = {}) {
+function deps(overrides: Partial<MainDeps> = {}, env: Record<string, string> = {}) {
   const lines: string[] = []
-  const value: Deps = {
+  const value: MainDeps = {
     env: {
       ADIUTOR_URL: fake.issuer,
-      T3CODE_CLI_PATH: "C:\\t3\\t3.cmd",
+      T3CODE_CLI_PATH: CLI,
+      ADIUTOR_T3_URL: t3.origin,
+      ADIUTOR_OVERVIEW_DIR: overviewDir,
       HOME: home,
       XDG_CONFIG_HOME: join(home, ".config"),
       ...env,
     },
     platform: "linux",
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
-    runner: fakeRunner().runner,
+    runner: runner().run,
     fetch: (input, init) => fetch(input, init),
     out: (line) => lines.push(line),
-    now: () => new Date("2026-11-01T05:31:00.000Z"),
+    now: () => new Date(),
     nodePath: NODE,
+    processCreation: t3.processCreation,
     ...overrides,
   }
   return { deps: value, lines, output: () => lines.join("\n") }
 }
 
-const run = { projectsFile, overviewDir, collect: true, dryRun: false }
+/** Runs a command with --json: every line must be JSON, events first, exactly one result last. */
+async function json(argv: string[], d: MainDeps, lines: string[]) {
+  const start = lines.length
+  const exit = await main([...argv, "--json"], d)
+  const parsed = lines.slice(start).map((line) => JSON.parse(line) as { type: string })
+  const results = parsed.filter((p) => p.type === "result")
+  expect(results).toHaveLength(1)
+  expect(parsed.at(-1)?.type).toBe("result")
+  for (const p of parsed.slice(0, -1)) expect(p.type).toBe("event")
+  // A result that is not ok always says why.
+  const last = parsed.at(-1) as { ok?: boolean; error?: { code?: string; message?: string } }
+  if (last.ok === false) expect(last.error).toEqual({ code: expect.any(String), message: expect.any(String) })
+  return { exit, events: parsed.slice(0, -1), result: parsed.at(-1) as Result & Record<string, unknown> }
+}
 
-describe("runSync", () => {
-  it("runs the collector, reads every project and sends T3 first, then security", async () => {
-    const cli = fakeRunner({ collectorFails: true })
-    const { deps: d, output } = deps({ runner: cli.runner })
-    expect(await runSync(run, d)).toBe(0)
+const reportOf = (result: Result) => (result as { report?: RunReport }).report as RunReport
 
-    expect(cli.calls[0]).toEqual({ command: NODE, args: ["src/cli.mjs", "collect"], cwd: overviewDir })
-    expect(
-      cli.calls
-        .slice(1)
-        .map((c) => c.args[3])
-        .sort(),
-    ).toEqual(["mcp:p-gadget", "p-gizmo", "p-missing", "p-notes", "p-widget"])
+/** Every secret of both stand-ins: none may show up in output or in a file outside the connection folder. */
+const secrets = () => [...fake.secrets(), ...t3.tokens()]
 
+function filesOutsideConnection(): string[] {
+  const texts: string[] = []
+  for (const name of readdirSync(data())) {
+    if (name === "connection") continue
+    texts.push(readFileSync(join(data(), name), "utf8"))
+  }
+  return texts
+}
+
+const two = { projects: allProjects.projects.slice(0, 2) }
+
+describe("run", () => {
+  it("runs the collector, reads T3's projects with the session and every project's threads, and sends both", async () => {
+    const cli = runner({ collectorFails: true })
+    const { deps: d, output } = deps({ runner: cli.run })
+    expect(await main(["run"], d)).toBe(0)
+
+    expect(cli.calls[0]).toEqual({ command: NODE, args: ["src/cli.mjs", "collect"] })
+    const threadCalls = cli.calls.filter((c) => c.args[0] === "thread")
+    expect(threadCalls.map((c) => c.args[3]).sort()).toEqual([
+      "mcp:p-gadget",
+      "p-gizmo",
+      "p-missing",
+      "p-notes",
+      "p-widget",
+    ])
     expect(fake.pushes.map((p) => [p.path, p.policy, p.kind])).toEqual([
       ["/api/v1/sync/t3", fake.revision, "act"],
       ["/api/v1/sync/security", fake.revision, "act"],
     ])
-
-    const t3 = fake.pushes[0]?.body as {
-      collectedAt: string
+    const body = fake.pushes[0]?.body as {
       projects: unknown[]
       threads: Array<{ threadId: string }>
       failedProjects: string[]
     }
-    expect(t3.collectedAt).toBe("2026-11-01T05:31:00.000Z")
-    expect(t3.projects).toEqual([
+    expect(body.projects).toEqual([
       { t3ProjectId: "p-widget", title: "Widget", repo: "acme/widget" },
       { t3ProjectId: "mcp:p-gadget", title: "Gadget", repo: "acme/gadget" },
       { t3ProjectId: "p-gizmo", title: "Gizmo", repo: "acme/gizmo" },
       { t3ProjectId: "p-notes", title: "Notes" },
       { t3ProjectId: "p-missing", title: "Missing", repo: "acme/missing" },
     ])
-    expect(t3.threads.map((t) => t.threadId)).toEqual(["thread-w1", "thread-w2", "thread-w3", "thread-g1", "thread-z1"])
-    // The server must not take the missing threads of an unread project, or of one with invalid thread
-    // records (p-gizmo), as a complete picture.
-    expect(t3.failedProjects).toEqual(["p-gizmo", "p-notes"])
-
-    const security = fake.pushes[1]?.body as { collectedAt: string; repos: Array<{ repo: string }> }
-    expect(security.collectedAt).toBe("2026-11-01T05:31:00.000Z")
+    expect(body.threads.map((t) => t.threadId)).toEqual([
+      "thread-w1",
+      "thread-w2",
+      "thread-w3",
+      "thread-g1",
+      "thread-z1",
+    ])
+    // The server must not take the missing threads of an unread or partly read project as a complete picture.
+    expect(body.failedProjects).toEqual(["p-gizmo", "p-notes"])
+    const security = fake.pushes[1]?.body as { repos: Array<{ repo: string }> }
     expect(security.repos.map((r) => r.repo)).toEqual(["acme/widget", "acme/gadget", "acme/gizmo"])
 
     const text = output()
     expect(text).toContain(
       "overview: the collector failed (exit code 1: Error: Another run is in progress (data/run.lock).)",
     )
-    expect(text).toContain("overview: snapshot 20261101T060000Z finished 2026-11-01T06:05:00.000Z")
-    expect(text).toContain("t3: 5 projects in the projects file (3 records skipped)")
+    expect(text).toContain("t3: 5 projects (3 skipped: deleted or unusable ids)")
     expect(text).toContain(
       "t3: threads of project p-notes not read: exit code 1: No T3 Code project matches 'p-notes'.",
     )
-    expect(text).toContain("t3: project p-gizmo has 1 invalid thread records; sent as not fully read")
     expect(text).toContain("t3: 5 threads (1 child threads), 1 records skipped, 1 of 5 projects not read")
-    expect(text).toContain("security: 3 repositories, 1 project repositories not in the snapshot")
     expect(text).toContain('t3 sync: sent (HTTP 200) {"data":{"outcome":"succeeded","counts":{}}}')
-    expect(text).toContain("security sync: sent (HTTP 200)")
-    for (const secret of fake.secrets()) expect(text).not.toContain(secret)
+    for (const secret of secrets()) expect(text).not.toContain(secret)
+
+    // The status file keeps the report; projects that were not read make the T3 part partial.
+    const status = JSON.parse(readFileSync(join(data(), "status.json"), "utf8"))
+    expect(status.lastRun.t3).toMatchObject({
+      result: "partial",
+      reason: "projects_missing",
+      projectsFrom: "t3",
+      projects: 5,
+      threads: 5,
+      failedProjects: 2,
+    })
+    // A project repository missing from the snapshot (acme/missing) makes security partial: Adiutor got a subset.
+    expect(status.lastRun.security).toMatchObject({
+      result: "partial",
+      reason: "repos_missing",
+      repos: 3,
+      snapshotRunId: "20261101T060000Z",
+    })
+    expect(status.lastGoodSyncAt).toBeNull()
+    for (const text of filesOutsideConnection()) for (const secret of secrets()) expect(text).not.toContain(secret)
   })
 
-  it("skips the collector with --no-collect", async () => {
-    const t3 = fakeRunner()
-    const { deps: d, output } = deps({ runner: t3.runner })
-    expect(await runSync({ ...run, collect: false }, d)).toBe(0)
-    expect(t3.calls.some((c) => c.command === NODE)).toBe(false)
-    expect(output()).toContain("collector skipped (--no-collect)")
+  it("a good sync is both parts accepted in the same run; a later bad run keeps its time", async () => {
+    t3.projects = two
+    const { deps: d, lines } = deps()
+    const good = await json(["run"], d, lines)
+    const report = reportOf(good.result)
+    expect([report.t3.result, report.security.result]).toEqual(["accepted", "accepted"])
+    expect(report.lastGoodSyncAt).toBe(report.finishedAt)
+    fake.pushOutcome.push("partial")
+    const next = reportOf((await json(["run"], d, lines)).result)
+    expect(next.t3).toMatchObject({ result: "partial", reason: "server_partial" })
+    expect(next.lastGoodSyncAt).toBe(report.finishedAt)
+    const status = await json(["status"], d, lines)
+    expect(status.result).toMatchObject({ lastGoodSyncAt: report.finishedAt, lastRun: { t3: { result: "partial" } } })
   })
 
-  it("sends nothing in a dry run and needs no server settings", async () => {
-    const { deps: d, output } = deps({}, { ADIUTOR_URL: "" })
-    expect(await runSync({ ...run, collect: false, dryRun: true }, d)).toBe(0)
-    expect(fake.pushes).toHaveLength(0)
-    const text = output()
-    expect(text).toMatch(/dry run: t3 payload \d+ bytes/)
-    expect(text).toMatch(/dry run: security payload \d+ bytes/)
-    expect(text).toContain('"threadId":"thread-w1"')
+  it("maps a refused push and a run the server failed to failed", async () => {
+    t3.projects = two
+    fake.beforePush.push("policy_changed", "policy_changed")
+    fake.pushOutcome.push("failed")
+    const { deps: d, lines } = deps()
+    const { exit, result } = await json(["run"], d, lines)
+    expect(exit).toBe(1)
+    const report = reportOf(result)
+    expect(report.t3).toMatchObject({ result: "failed", reason: "policy_changed" })
+    expect(report.security).toMatchObject({ result: "failed", reason: "server_failed", httpStatus: 200 })
   })
 
-  it("a lost answer or a server failure after a push is outcome_unknown, never sent again; the next run sends again", async () => {
+  it("a lost answer is outcome_unknown and never sent again; the next run sends again", async () => {
     fake.afterPush.push("drop", 500)
-    const first = deps()
-    expect(await runSync(run, first.deps)).toBe(1)
-    expect(first.output()).toContain("t3 sync: outcome unknown: it may have reached Adiutor")
-    expect(first.output()).toContain("security sync: outcome unknown (HTTP 500)")
+    const { deps: d, lines } = deps()
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3.result).toBe("outcome_unknown")
+    expect(report.security).toMatchObject({ result: "outcome_unknown", httpStatus: 500 })
     expect(fake.pushes.map((p) => p.path)).toEqual(["/api/v1/sync/t3", "/api/v1/sync/security"])
-    const next = deps()
-    expect(await runSync(run, next.deps)).toBe(0)
+    await json(["run"], d, lines)
     expect(fake.pushes).toHaveLength(4)
   })
 
-  it("exits zero when one push succeeds and prints Adiutor's refusal", async () => {
-    fake.beforePush.push("policy_changed", "policy_changed")
-    const { deps: d, output } = deps()
-    expect(await runSync(run, d)).toBe(0)
-    expect(output()).toContain("t3 sync: not sent: policy_changed")
-    expect(output()).toContain("security sync: sent (HTTP 200)")
+  it("uses the last good project list only when T3 cannot be reached, and says from when", async () => {
+    t3.projects = two
+    const first = deps()
+    const saved = reportOf((await json(["run"], first.deps, first.lines)).result)
+    t3.projectsAnswer.push("drop")
+    const { deps: d, lines, output } = deps()
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3).toMatchObject({ result: "accepted", projectsFrom: "last_good", projectsAt: saved.t3.projectsAt })
+    expect(output()).toContain(`T3 projects from ${saved.t3.projectsAt}`)
+    expect((fake.pushes.at(-2)?.body as { projects?: unknown[] } | undefined)?.projects).toHaveLength(2)
+  })
+
+  it("without a last good list, T3 is not read when it does not answer, and security has no repositories", async () => {
+    t3.descriptorAnswer.push("drop")
+    const { deps: d, lines } = deps()
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_unavailable", projectsFrom: null })
+    expect(report.security).toMatchObject({ result: "not_run", reason: "no_projects" })
+    expect(fake.pushes).toHaveLength(0)
+  })
+
+  it("a refused session (401) stops the T3 part, without the last good list or the CLI, until t3-connect", async () => {
+    t3.projects = two
+    const first = deps()
+    await json(["run"], first.deps, first.lines)
+    for (const s of t3.sessions) s.revoked = true
+    t3.calls.length = 0
+    const { deps: d, lines } = deps()
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_rejected", projectsFrom: null })
+    expect(t3.calls.filter((c) => c.args[0] === "thread")).toHaveLength(0)
+    // Security reads nothing from T3: the last good list (a local file) still maps the projects to repositories.
+    expect(report.security).toMatchObject({ result: "accepted", projectsFrom: "last_good" })
+    expect(fake.pushes.at(-1)?.path).toBe("/api/v1/sync/security")
+    const status = await json(["status"], d, lines)
+    expect(status.result).toMatchObject({ t3: { state: "ended", reason: "rejected" } })
+    // Never issued again on its own.
+    await json(["run"], d, lines)
+    expect(t3.calls.filter((c) => c.args[2] === "issue")).toHaveLength(0)
+    const connected = await json(["t3-connect"], d, lines)
+    expect(connected.result).toMatchObject({ ok: true, environmentId: t3.environmentId })
+    expect(reportOf((await json(["run"], d, lines)).result).t3.result).toBe("accepted")
+  })
+
+  it("threads whose links name another environment are an identity failure: nothing of T3 is sent", async () => {
+    t3.projects = two
+    const first = deps()
+    await json(["run"], first.deps, first.lines)
+    fake.pushes.length = 0
+    t3.cliEnvironmentId = "another-environment"
+    const { deps: d, lines } = deps()
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_other_environment" })
+    // Nothing of T3 is sent; security, which reads nothing from T3, still goes with the last good list.
+    expect(fake.pushes.map((p) => p.path)).toEqual(["/api/v1/sync/security"])
+    expect(report.security).toMatchObject({ projectsFrom: "last_good" })
+    const status = await json(["status"], d, lines)
+    expect(status.result).toMatchObject({ t3: { state: "ended", reason: "other_environment" } })
+  })
+
+  it("an identity failure ends only the session the run read with, not one t3-connect saved meanwhile", async () => {
+    t3.projects = two
+    let reconnected = false
+    const run: Runner = async (command, args, opts) => {
+      if (args[0] === "thread" && !reconnected) {
+        reconnected = true
+        // The owner connects T3 again while this run reads threads; then the CLI names another environment.
+        await t3Session({
+          runner: t3.runner,
+          fetch: (input, init) => fetch(input, init),
+          platform: "linux",
+          env: { HOME: home, XDG_CONFIG_HOME: join(home, ".config") },
+          now: () => Date.now(),
+          sleep: async () => {},
+          systemCommand: async () => undefined,
+          cliPath: CLI,
+          origin: t3.origin,
+          processCreation: t3.processCreation,
+        }).connect()
+        t3.cliEnvironmentId = "another-environment"
+      }
+      return runner().run(command, args, opts)
+    }
+    const { deps: d, lines } = deps({ runner: run })
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_other_environment" })
+    t3.cliEnvironmentId = ""
+    const status = await json(["status"], d, lines)
+    expect(status.result).toMatchObject({ t3: { state: "connected" } })
+  })
+
+  it("a project whose threads' environment cannot be checked is not read, and none of its threads is sent", async () => {
+    t3.projects = two
+    // p-widget's threads come without a link.
+    const run: Runner = async (command, args, opts) => {
+      const result = await runner().run(command, args, opts)
+      const noLinks = result.stdout.replace(/^\s*"link": "[^"]*",\r?\n/gm, "")
+      return args[3] === "p-widget" ? { ...result, stdout: noLinks } : result
+    }
+    const { deps: d, lines } = deps({ runner: run })
+    const report = reportOf((await json(["run"], d, lines)).result)
+    const body = fake.pushes[0]?.body as { threads: Array<{ threadId: string }>; failedProjects: string[] }
+    expect(body.threads.map((t) => t.threadId)).toEqual(["thread-g1"])
+    expect(body.failedProjects).toEqual(["p-widget"])
+    expect(report.t3).toMatchObject({ result: "partial", reason: "projects_missing", failedProjects: 1 })
+  })
+
+  it("a 401 whose body broke off stops the T3 part, without the last good list or the CLI", async () => {
+    t3.projects = two
+    const first = deps()
+    await json(["run"], first.deps, first.lines)
+    t3.calls.length = 0
+    t3.projectsAnswer.push({ status: 401, cut: true })
+    const { deps: d, lines } = deps()
+    const report = reportOf((await json(["run"], d, lines)).result)
+    expect(report.t3).toMatchObject({ result: "not_run", reason: "t3_rejected", projectsFrom: null })
+    expect(t3.calls.filter((c) => c.args[0] === "thread")).toHaveLength(0)
+  })
+
+  it("one run at a time: a second run answers busy with the first one's start time", async () => {
+    let open: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    const first = deps({ runner: runner({ gate }).run })
+    const running = main(["run", "--json"], first.deps)
+    while (!existsSync(join(data(), "run.lock"))) await new Promise((resolve) => setTimeout(resolve, 2))
+    const second = deps()
+    const busy = await json(["run"], second.deps, second.lines)
+    expect(busy.exit).toBe(1)
+    expect(busy.result).toMatchObject({
+      command: "run",
+      ok: false,
+      busy: { startedAt: expect.any(String) },
+      error: { code: "busy" },
+    })
+    const status = await json(["status"], second.deps, second.lines)
+    expect(status.result).toMatchObject({ running: { startedAt: expect.any(String) } })
+    open()
+    expect(await running).toBe(0)
+    expect(existsSync(join(data(), "run.lock"))).toBe(false)
+    expect(fake.pushes).toHaveLength(2)
+  })
+
+  it("takes the run lock over from a run that died", async () => {
+    mkdirSync(data(), { recursive: true })
+    writeFileSync(
+      join(data(), "run.lock"),
+      JSON.stringify({ pid: 2 ** 22 + 12345, host: hostname(), token: randomBytes(16).toString("hex"), startedAt: 1 }),
+    )
+    const { deps: d, lines } = deps()
+    expect((await json(["run"], d, lines)).exit).toBe(0)
   })
 
   it("says the sync is disconnected, and how to reconnect, when Adiutor ended the connection", async () => {
     fake.endAllGrants()
     const { deps: d, output } = deps()
-    expect(await runSync({ ...run, envFile: undefined }, d)).toBe(1)
+    expect(await main(["run"], d)).toBe(1)
     const text = output()
     expect(text).toContain("t3 sync: not sent: connection_ended")
     expect(text).toContain(
@@ -215,36 +442,142 @@ describe("runSync", () => {
     expect(fake.pushes).toHaveLength(0)
   })
 
-  it("sends nothing after a lost refresh answer, and says so (oauth.test.ts: the next try ends or continues it)", async () => {
-    // The access token runs out during a long collection; the refresh's answer is lost.
-    fake.expireAccessTokens()
-    fake.dropNextRefresh = true
-    const lost = deps()
-    expect(await runSync(run, lost.deps)).toBe(1)
-    expect(lost.output()).toContain("t3 sync: not sent: unreachable")
+  it("sends nothing in a dry run, needs no Adiutor settings, keeps no status, and prints ids only", async () => {
+    const { deps: d, lines, output } = deps({}, { ADIUTOR_URL: "" })
+    const { exit, result } = await json(["run", "--no-collect", "--dry-run"], d, lines)
+    expect(exit).toBe(0)
+    expect(reportOf(result)).toMatchObject({ dryRun: true, t3: { reason: "dry_run" }, security: { reason: "dry_run" } })
     expect(fake.pushes).toHaveLength(0)
+    expect(existsSync(join(data(), "status.json"))).toBe(false)
+    expect(output()).toContain("thread-w1")
+    expect(output()).not.toContain("Add an export button")
   })
 
-  it("still sends security when the T3 CLI is not configured", async () => {
-    const { deps: d, output } = deps({}, { T3CODE_CLI_PATH: "" })
-    expect(await runSync(run, d)).toBe(0)
-    expect(fake.pushes.map((p) => p.path)).toEqual(["/api/v1/sync/security"])
-    expect(output()).toContain("t3 sync: not sent (no threads could be read)")
-  })
-
-  it("exits non-zero without a readable projects file", async () => {
-    const { deps: d, output } = deps()
-    expect(await runSync({ ...run, projectsFile: join(tempDir(), "missing.json") }, d)).toBe(1)
-    expect(output()).toContain("t3: cannot read the projects file: ENOENT")
-    expect(fake.pushes).toHaveLength(0)
+  it("reads the settings file in the data folder when nothing else sets a value", async () => {
+    mkdirSync(data(), { recursive: true })
+    writeFileSync(
+      join(data(), "settings.json"),
+      JSON.stringify({ adiutorUrl: fake.issuer, t3CliPath: CLI, t3Url: t3.origin, overviewDir }),
+    )
+    const { deps: d, lines } = deps(
+      {},
+      { ADIUTOR_URL: "", T3CODE_CLI_PATH: "", ADIUTOR_T3_URL: "", ADIUTOR_OVERVIEW_DIR: "" },
+    )
+    expect((await json(["run"], d, lines)).exit).toBe(0)
+    expect(fake.pushes).toHaveLength(2)
   })
 
   it("refuses to run without Adiutor's address, or with one that is not a plain origin", async () => {
     for (const url of ["", "https://adiutor.example.com/app", "http://adiutor.example.com"]) {
-      const { deps: d, output } = deps({}, { ADIUTOR_URL: url })
-      expect(await runSync(run, d)).toBe(2)
-      expect(output()).toContain("ADIUTOR_URL")
+      const { deps: d, lines } = deps({}, { ADIUTOR_URL: url })
+      const { exit, result } = await json(["run"], d, lines)
+      expect(exit).toBe(2)
+      expect(result).toMatchObject({ ok: false, error: { code: "usage" } })
     }
+  })
+
+  it("no longer takes a projects file", async () => {
+    const { deps: d, lines } = deps()
+    const { exit, result } = await json(["run", "--projects", "x.json"], d, lines)
+    expect(exit).toBe(2)
+    expect(result).toMatchObject({ command: null, ok: false, error: { code: "usage" } })
+  })
+})
+
+describe("partOf", () => {
+  it("maps each answer of a push to a part's result", () => {
+    const answer = (status: number, body: unknown) => ({ kind: "answer" as const, status, body })
+    expect(partOf(answer(200, { data: { outcome: "succeeded" } }), undefined).result).toBe("accepted")
+    expect(partOf(answer(200, { data: { outcome: "succeeded" } }), "projects_missing")).toMatchObject({
+      result: "partial",
+    })
+    expect(partOf(answer(200, { data: { outcome: "partial" } }), undefined).result).toBe("partial")
+    expect(partOf(answer(200, { data: { outcome: "failed" } }), undefined).result).toBe("failed")
+    expect(partOf(answer(200, "not json"), undefined).result).toBe("outcome_unknown")
+    expect(partOf(answer(400, { error: "validation_failed" }), undefined)).toMatchObject({
+      result: "failed",
+      reason: "validation_failed",
+    })
+    expect(partOf({ kind: "outcome_unknown" }, undefined).result).toBe("outcome_unknown")
+    expect(partOf({ kind: "failed", code: "not_connected", message: "m" }, undefined)).toMatchObject({
+      result: "failed",
+      reason: "not_connected",
+    })
+  })
+})
+
+describe("the machine-readable output", () => {
+  it("answers every command with JSON lines and one result, and never a token", async () => {
+    const { deps: d, lines } = deps()
+    const status = await json(["status"], d, lines)
+    expect(status.result).toMatchObject({
+      command: "status",
+      ok: true,
+      v: 1,
+      adiutor: { state: "connected", url: fake.issuer, label: "Test sync", scope: "sync", revocationPending: false },
+      t3: { state: "connected", environmentId: t3.environmentId, revocationPending: false },
+      lastRun: null,
+      running: null,
+      paused: null,
+      settings: { problems: [] },
+    })
+    expect((await json(["run"], d, lines)).result).toMatchObject({ command: "run", ok: true })
+    expect((await json(["t3-disconnect"], d, lines)).result).toMatchObject({
+      command: "t3-disconnect",
+      ok: true,
+      wasConnected: true,
+      revocationPending: false,
+    })
+    expect((await json(["t3-connect"], d, lines)).result).toMatchObject({ command: "t3-connect", ok: true })
+    expect((await json(["disconnect"], d, lines)).result).toMatchObject({
+      command: "disconnect",
+      ok: true,
+      wasConnected: true,
+      revocationPending: false,
+    })
+    expect((await json(["status"], d, lines)).result).toMatchObject({ adiutor: { state: "not_connected" } })
+    expect((await json(["nonsense"], d, lines)).result).toMatchObject({ command: null, ok: false })
+    expect((await json(["run", "--bogus"], d, lines)).result).toMatchObject({ command: null, ok: false })
+    expect((await json(["setup-mcp", "--for", "claude"], d, lines)).result).toMatchObject({ ok: false })
+    const all = lines.join("\n")
+    for (const secret of secrets()) expect(all).not.toContain(secret)
+  })
+
+  it("connect --json gives the link and the code as an event, then the result", async () => {
+    const { deps: d, lines } = deps({
+      sleep: async () => {
+        fake.approve()
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      },
+    })
+    const envFile = join(tempDir(), "sync.env")
+    const { exit, events, result } = await json(
+      ["connect", "--name", "Tray sync", "--env", envFile, "--replace", "--no-open"],
+      d,
+      lines,
+    )
+    expect(exit).toBe(0)
+    const approval = events.find((e) => (e as { event?: string }).event === "approval") as unknown as {
+      link: string
+      userCode: string
+    }
+    expect(approval.link.startsWith(`${fake.issuer}/`)).toBe(true)
+    expect(approval.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/)
+    expect(result).toMatchObject({ command: "connect", ok: true, state: "connected", scope: "sync" })
+    for (const secret of secrets()) expect(lines.join("\n")).not.toContain(secret)
+  })
+
+  it("an unexpected failure still ends in one result", async () => {
+    const { deps: d, lines } = deps({
+      fetch: () => {
+        throw new TypeError("boom")
+      },
+      runner: async () => {
+        throw new Error("boom")
+      },
+    })
+    const { result } = await json(["t3-connect"], d, lines)
+    expect(result).toMatchObject({ command: "t3-connect", ok: false })
   })
 })
 
@@ -254,7 +587,7 @@ describe("the old agent key", () => {
     const envFile = join(tempDir(), "sync.env")
     writeFileSync(envFile, `ADIUTOR_URL=${fake.issuer}\nADIUTOR_AGENT_TOKEN=${old}\n`)
     const { deps: d, output } = deps({}, { ADIUTOR_URL: "" })
-    expect(await runSync({ ...run, envFile }, d)).toBe(0)
+    expect(await main(["run", "--env", envFile], d)).toBe(0)
     expect(output()).toContain("ADIUTOR_AGENT_TOKEN, the sync's old agent key, is set but no longer used")
     expect(output()).not.toContain(old)
     expect(fake.pushes.every((p) => !p.auth?.includes(old))).toBe(true)
@@ -265,11 +598,11 @@ describe("the old agent key", () => {
     const envFile = join(tempDir(), "sync.env")
     writeFileSync(envFile, `ADIUTOR_URL=${fake.issuer}\n${old}\n`)
     const bad = deps()
-    expect(await runSync({ ...run, envFile }, bad.deps)).toBe(2)
+    expect(await main(["run", "--env", envFile], bad.deps)).toBe(2)
     expect(bad.output()).toContain("env file line 2 is not KEY=VALUE")
     expect(bad.output()).not.toContain(old)
     const { deps: d, output } = deps()
-    expect(await main(["run", "--projects", projectsFile, "--token", old], d)).toBe(2)
+    expect(await main(["run", "--token", old], d)).toBe(2)
     expect(output()).toContain("unknown or incomplete option")
     expect(output()).not.toContain(old)
   })
@@ -280,7 +613,7 @@ describe("the old agent key", () => {
     const port = (closed.address() as AddressInfo).port
     await new Promise<void>((resolve) => closed.close(() => resolve()))
     const { deps: d, output } = deps({}, { ADIUTOR_URL: `http://127.0.0.1:${port}` })
-    expect(await runSync(run, d)).toBe(1)
+    expect(await main(["run"], d)).toBe(1)
     // No connection is kept for that address.
     expect(output()).toContain("t3 sync: not sent: not_connected")
   })
@@ -290,17 +623,8 @@ describe("main", () => {
   it("prints the usage for help and refuses an incomplete command", async () => {
     const help = deps()
     expect(await main(["--help"], help.deps)).toBe(0)
-    expect(help.output()).toContain("Usage: node adiutor-sync.js run --projects <file>")
-    expect(await main(["run"], deps().deps)).toBe(2)
-    expect(await main(["push", "--projects", projectsFile], deps().deps)).toBe(2)
-  })
-
-  it("runs a dry run from the command line", async () => {
-    const { deps: d, output } = deps()
-    expect(
-      await main(["run", "--projects", projectsFile, "--overview", overviewDir, "--no-collect", "--dry-run"], d),
-    ).toBe(0)
-    expect(output()).toContain("dry run: nothing is sent")
-    expect(fake.pushes).toHaveLength(0)
+    expect(help.output()).toContain("Usage: node adiutor-sync.js run [--env <file>]")
+    expect(await main(["push"], deps().deps)).toBe(2)
+    expect(await main(["run", "extra"], deps().deps)).toBe(2)
   })
 })

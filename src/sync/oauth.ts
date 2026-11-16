@@ -7,22 +7,17 @@
 // scripts implement the same contract for agents (skill/adiutor/scripts); this is its port for the bundle.
 
 import { createHash, randomBytes } from "node:crypto"
-import {
-  closeSync,
-  fsyncSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeSync,
-} from "node:fs"
-import { homedir, hostname } from "node:os"
+import { closeSync, openSync, rmSync } from "node:fs"
+import { homedir } from "node:os"
 import { join, resolve, win32 } from "node:path"
+import { ClientError } from "./errors.ts"
 import type { Runner } from "./exec.ts"
 import type { FetchLike } from "./http.ts"
+import { connectionLockOptions, fileLock } from "./lock.ts"
+import { ownerOnlyFolder } from "./owner-folder.ts"
+
+export { ClientError } from "./errors.ts"
+export { othersAllowed } from "./owner-folder.ts"
 
 /** Adiutor's built-in client of the skill and the sync, and the area the sync asks for (D3). */
 export const CLIENT_ID = "adiutor-agent"
@@ -43,7 +38,6 @@ const LOOPBACK = ["127.0.0.1", "[::1]", "localhost"]
 const ACCESS_MARGIN_S = 60
 /** A refresh that started less than this ago may still be on its way: never send it again. */
 const REFRESH_GRACE_S = 30
-const LOCK_WAIT_MS = 20_000
 const OAUTH_TIMEOUT_MS = 15_000
 /** Adiutor answers a call within 60 s or says the outcome is unknown. */
 const API_TIMEOUT_MS = 75_000
@@ -76,18 +70,6 @@ export type ClientDeps = {
   now: () => number
   sleep: (ms: number) => Promise<void>
   httpTimeoutMs?: number
-}
-
-/** A failure with a stable code; the message holds no token, code or secret. */
-export class ClientError extends Error {
-  override name = "ClientError"
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly extra: { sent?: boolean; status?: number } = {},
-  ) {
-    super(message)
-  }
 }
 
 /** Adiutor's address as an issuer: https (http only on this computer), a plain origin with nothing after it. */
@@ -133,10 +115,12 @@ type Record_ = {
   scope: string
   refreshStartedAt: number
   refreshRetried: number
-  /** Refresh tokens of a replaced connection, still to be revoked. */
+  /** When Adiutor ended the connection (seconds); the tokens are gone or unusable then. 0 while it lives. */
+  endedAt: number
+  /** Refresh tokens of a replaced or disconnected connection, still to be revoked. */
   toRevoke: string
 }
-const NUMBERS = ["v", "accessExpiresAt", "refreshStartedAt", "refreshRetried"] as const
+const NUMBERS = ["v", "accessExpiresAt", "refreshStartedAt", "refreshRetried", "endedAt"] as const
 const TEXTS = ["issuer", "label", "refreshToken", "accessToken", "scope", "toRevoke"] as const
 
 type Answer = { status: number; text: string; json: unknown; isJson: boolean; challenge: string }
@@ -154,111 +138,20 @@ export function syncClient(issuer: string, deps: ClientDeps) {
   const key = createHash("sha256").update(issuer).digest("hex").slice(0, 32)
   const file = join(dir, `${key}.json`)
   const lockFile = join(dir, `${key}.lock`)
-  const win = deps.platform === "win32"
   const nowS = () => Math.floor(deps.now() / 1000)
   const hex = (n: number) => randomBytes(n).toString("hex")
-  const host = () => (win ? deps.env.COMPUTERNAME || hostname() : hostname())
 
-  // --- The folder: owner-only, checked, never loosened ---
+  // --- The folder: owner-only, checked, never loosened (src/sync/owner-folder.ts) ---
 
-  let secured = false
-  let checked = false
-
-  async function icacls(args: string[]): Promise<void> {
-    const exe = await deps.systemCommand("icacls")
-    if (!exe) throw new ClientError("insecure_credentials", "icacls was not found in %SystemRoot%\\System32.")
-    for (let i = 0; ; i++) {
-      const result = await deps.runner(exe, args, { timeoutMs: 30_000 })
-      if (result.code === 0) return
-      if (i >= 4) throw new ClientError("insecure_credentials", `Could not limit ${dir} to your user (icacls failed).`)
-      await deps.sleep(100 + Math.random() * 200)
-    }
-  }
-
-  async function userSid(): Promise<string> {
-    const whoami = await deps.systemCommand("whoami")
-    if (!whoami) throw new ClientError("insecure_credentials", "whoami was not found in %SystemRoot%\\System32.")
-    const result = await deps.runner(whoami, ["/user", "/fo", "csv", "/nh"], { timeoutMs: 30_000 })
-    const sid = /"(S-1-[0-9-]+)"\s*$/.exec(result.stdout.trim())?.[1]
-    if (result.code !== 0 || !sid) throw new ClientError("insecure_credentials", "Could not tell the current user.")
-    return sid
-  }
-
-  /** Reads the folder's and its files' ACLs back and allows no one but this user, SYSTEM and Administrators. */
-  async function assertOnlyUser(sid: string): Promise<void> {
-    const saved = join(dir, `.acl-${hex(4)}`)
-    try {
-      await icacls([dir, "/save", saved, "/T", "/Q"])
-      const other = othersAllowed(readFileSync(saved).toString("utf16le"), sid)
-      if (other)
-        throw new ClientError("insecure_credentials", `Others can open ${dir} (${other}). Remove their access.`)
-    } finally {
-      rmSync(saved, { force: true })
-    }
-  }
-
-  function assertOwnMode(path: string, mode: number, uid: number): void {
-    if (uid !== process.getuid?.())
-      throw new ClientError("insecure_credentials", `${path} belongs to another user. Use a folder of your own.`)
-    if (mode & 0o077) throw new ClientError("insecure_credentials", `Others can open ${path}. Run: chmod 700 '${path}'`)
-  }
-
-  /** Creates the folder if needed and limits it to this user; refuses one that is open to others. */
-  async function secureDir(): Promise<void> {
-    if (secured) return
-    try {
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
-    } catch {
-      throw new ClientError("cannot_save", `Cannot create ${dir}. Allow the sync to write there.`)
-    }
-    const st = lstatSync(dir)
-    if (st.isSymbolicLink() || !st.isDirectory())
-      throw new ClientError("insecure_credentials", `${dir} must be a plain folder, not a link.`)
-    if (win) {
-      const sid = await userSid()
-      await icacls([
-        dir,
-        "/inheritance:r",
-        "/grant:r",
-        `*${sid}:(OI)(CI)F`,
-        "*S-1-5-18:(OI)(CI)F",
-        "*S-1-5-32-544:(OI)(CI)F",
-        "/Q",
-      ])
-      // The owner may always change an ACL, so the folder and its files must be this user's.
-      await icacls([dir, "/setowner", `*${sid}`, "/T", "/Q"])
-      await assertOnlyUser(sid)
-    } else assertOwnMode(dir, st.mode, st.uid)
-    secured = true
-  }
-
-  /** Before the connection's file is read: the folder must still be one only this user can open. Checks only. */
-  async function checkDir(): Promise<void> {
-    if (secured || checked) return
-    const st = lstatSync(dir)
-    if (st.isSymbolicLink() || !st.isDirectory())
-      throw new ClientError("insecure_credentials", `${dir} must be a plain folder, not a link.`)
-    if (win) await assertOnlyUser(await userSid())
-    else assertOwnMode(dir, st.mode, st.uid)
-    checked = true
-  }
+  const folder = ownerOnlyFolder(dir, deps)
+  const secureDir = () => folder.secure()
+  const name = `${key}.json`
 
   // --- The record: flat JSON with plain values, written in one step ---
 
   async function readRecord(): Promise<Record_ | null> {
-    let text: string
-    try {
-      const st = lstatSync(file)
-      if (st.isSymbolicLink() || !st.isFile())
-        throw new ClientError("insecure_credentials", `${file} must be a plain file.`)
-      if (!win && (st.uid !== process.getuid?.() || st.mode & 0o077))
-        throw new ClientError("insecure_credentials", `Others can read ${file}. Run: chmod 600 '${file}'`)
-      await checkDir()
-      text = readFileSync(file, "utf8")
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null
-      throw error
-    }
+    const text = await folder.read(name)
+    if (text === null) return null
     let parsed: Record<string, unknown>
     try {
       parsed = JSON.parse(text)
@@ -282,32 +175,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
         return `"${k}":"${value}"`
       }),
     ]
-    const tmp = `${file}.${hex(6)}.tmp`
-    let fd: number | undefined
-    try {
-      fd = openSync(tmp, "wx", 0o600)
-      writeSync(fd, `{${parts.join(",")}}\n`)
-      fsyncSync(fd)
-    } catch {
-      throw new ClientError("cannot_save", `Cannot write in ${dir}. Allow the sync to write there.`)
-    } finally {
-      if (fd !== undefined) closeSync(fd)
-    }
-    // On Windows an open handle (an antivirus scan) can refuse the rename for a moment.
-    const until = deps.now() + 5_000
-    for (;;) {
-      try {
-        renameSync(tmp, file)
-        return
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code ?? ""
-        if (!win || !["EPERM", "EBUSY", "EACCES"].includes(code) || deps.now() > until) {
-          rmSync(tmp, { force: true })
-          throw new ClientError("cannot_save", `Cannot replace ${file}.`)
-        }
-        await deps.sleep(100)
-      }
-    }
+    await folder.write(name, `{${parts.join(",")}}\n`)
   }
 
   const emptyRecord = (label: string): Record_ => ({
@@ -320,104 +188,23 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     scope: "",
     refreshStartedAt: 0,
     refreshRetried: 0,
+    endedAt: 0,
     toRevoke: "",
   })
 
-  // --- The lock: a file created exclusively, naming its holder; never taken from a live holder ---
+  // --- The lock: a file created exclusively, naming its holder; never taken from a live holder (src/sync/lock.ts) ---
 
-  type Held = { token?: string; pid?: number; host?: string; startedAt?: number; empty?: true; mtime?: number }
-  function readLock(path: string): Held | null {
-    try {
-      const held = JSON.parse(readFileSync(path, "utf8")) as Held
-      return typeof held?.token === "string" ? held : { empty: true, mtime: lstatSync(path).mtimeMs }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null
-      try {
-        return { empty: true, mtime: lstatSync(path).mtimeMs }
-      } catch {
-        return null
-      }
-    }
-  }
-  const alive = (pid: number) => {
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch (error) {
-      return win && (error as NodeJS.ErrnoException).code === "EPERM"
-    }
-  }
-
-  async function acquire(own?: string): Promise<string> {
-    await secureDir()
-    const token = hex(16)
-    const line = JSON.stringify({ pid: process.pid, host: host(), token, startedAt: nowS() })
-    const deadline = deps.now() + LOCK_WAIT_MS
-    for (;;) {
-      let fd: number | undefined
-      try {
-        fd = openSync(lockFile, "wx", 0o600)
-        writeSync(fd, line)
-        closeSync(fd)
-        return token
-      } catch (error) {
-        if (fd !== undefined) closeSync(fd)
-        const code = (error as NodeJS.ErrnoException).code
-        // Windows refuses for a moment to create a file whose name is still being deleted.
-        if (win && (code === "EPERM" || code === "EACCES") && deps.now() < deadline) {
-          await deps.sleep(50 + Math.random() * 100)
-          continue
-        }
-        if (code !== "EEXIST") throw new ClientError("cannot_save", `Cannot create a lock in ${dir}.`)
-      }
-      const held = readLock(lockFile)
-      if (own && held && !held.empty && held.token === own) return own
-      const dead = held?.empty
-        ? deps.now() - (held.mtime ?? 0) > 60_000
-        : held && String(held.host).toLowerCase() === host().toLowerCase() && !alive(Number(held.pid))
-      if (dead && held && breakLock(held)) continue
-      if (deps.now() > deadline) {
-        const old = held && !held.empty && nowS() - Number(held.startedAt) > 600
-        throw new ClientError(
-          "busy",
-          old
-            ? `Another sync command has held ${lockFile} for over 10 minutes. If none is running, delete that file.`
-            : "Another sync command is using this connection. Nothing was sent; run it again.",
-        )
-      }
-      await deps.sleep(100 + Math.random() * 200)
-    }
-  }
-
-  /** Moves a dead holder's lock away atomically; puts it back when what was moved is not the dead lock. */
-  function breakLock(held: Held): boolean {
-    const moved = `${lockFile}.${hex(6)}.dead`
-    try {
-      renameSync(lockFile, moved)
-    } catch {
-      return true
-    }
-    const got = readLock(moved)
-    if (got && (held.empty ? got.empty : got.token === held.token)) {
-      rmSync(moved, { force: true })
-      return true
-    }
-    try {
-      // A link, not a rename: a newer lock already in its place wins.
-      linkSync(moved, lockFile)
-    } catch {}
-    rmSync(moved, { force: true })
-    return false
-  }
-
-  const mine = (token: string) => readLock(lockFile)?.token === token
+  const lock = fileLock(lockFile, deps)
+  const lockOptions = connectionLockOptions(
+    lockFile,
+    dir,
+    deps,
+    "Another sync command is using this connection. Nothing was sent; run it again.",
+  )
+  const mine = (token: string) => lock.mine(token)
   async function withLock<T>(fn: (token: string) => Promise<T>, own?: string): Promise<T> {
-    const token = await acquire(own)
-    try {
-      return await fn(token)
-    } finally {
-      if (mine(token)) rmSync(lockFile, { force: true })
-    }
+    await secureDir()
+    return lock.withLock({ ...lockOptions, ...(own ? { own } : {}) }, fn)
   }
   /** Before spending a one-time secret: the lock must still be this command's, or nothing is sent. */
   const assertMine = (token: string) => {
@@ -512,14 +299,22 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     }
   }
 
-  async function revokeLeft(rec: Record_): Promise<Record_> {
-    if (!rec.toRevoke) return rec
+  /**
+   * Revokes refresh tokens at Adiutor's revocation endpoint (the library's own /oauth/revoke, which ends the whole
+   * grant). Returns the ones whose outcome is not known to be done, to keep and retry.
+   */
+  async function revokeAll(tokens: string): Promise<string> {
     const left: string[] = []
-    for (const token of rec.toRevoke.split(" ").filter(Boolean)) {
+    for (const token of tokens.split(" ").filter(Boolean)) {
       const r = await oauth(PATHS.revoke, { token, token_type_hint: "refresh_token" }).catch(() => null)
       if (r?.status !== 200) left.push(token)
     }
-    const next = { ...rec, toRevoke: left.join(" ") }
+    return left.join(" ")
+  }
+
+  async function revokeLeft(rec: Record_): Promise<Record_> {
+    if (!rec.toRevoke) return rec
+    const next = { ...rec, toRevoke: await revokeAll(rec.toRevoke) }
     if (next.toRevoke !== rec.toRevoke) await writeRecord(next)
     return next
   }
@@ -553,11 +348,13 @@ export function syncClient(issuer: string, deps: ClientDeps) {
         )
       if (rec.refreshStartedAt) {
         // The last refresh got no answer. Trying once more either continues the connection or ends it on the server.
-        if (rec.refreshRetried)
+        if (rec.refreshRetried) {
+          if (!rec.endedAt) await writeRecord({ ...rec, endedAt: nowS() })
           throw new ClientError(
             "connection_ended",
             "Two refreshes got no answer, so this connection cannot be trusted. Connect the sync again with --replace.",
           )
+        }
         rec.refreshRetried = 1
       }
       rec.refreshStartedAt = nowS()
@@ -583,8 +380,8 @@ export function syncClient(issuer: string, deps: ClientDeps) {
         return next.accessToken
       }
       if (field(r, "error") === "invalid_grant") {
-        if (rec.toRevoke) await writeRecord({ ...emptyRecord(rec.label), toRevoke: rec.toRevoke })
-        else rmSync(file, { force: true })
+        // Kept as ended (no token), so the state shows that Adiutor ended it.
+        await writeRecord({ ...emptyRecord(rec.label), toRevoke: rec.toRevoke, endedAt: nowS() })
         throw ended()
       }
       // Refused before the token was spent (a 4xx); a 5xx may have come after.
@@ -719,12 +516,53 @@ export function syncClient(issuer: string, deps: ClientDeps) {
 
   // --- Connecting: the device grant, approved in the browser ---
 
-  /** Whether a connection is kept for this address, and its name and areas. */
+  /** Whether a connection is kept for this address (its name and areas), or ended; and whether a revoke is pending. */
   async function status() {
     const rec = await readRecord()
-    return rec?.refreshToken
-      ? { connected: true as const, label: rec.label, scope: rec.scope }
-      : { connected: false as const }
+    const revocationPending = Boolean(rec?.toRevoke)
+    return rec?.refreshToken && !rec.endedAt
+      ? { connected: true as const, state: "connected" as const, label: rec.label, scope: rec.scope, revocationPending }
+      : {
+          connected: false as const,
+          state: rec?.endedAt ? ("ended" as const) : ("not_connected" as const),
+          revocationPending,
+        }
+  }
+
+  /** Every command retries the revocations a disconnect or a replaced connection left (outcome unknown). */
+  async function retryRevocations(): Promise<boolean> {
+    const first = await readRecord()
+    if (!first?.toRevoke) return false
+    return withLock(async (lock) => {
+      let rec = await readRecord()
+      if (!rec?.toRevoke) return false
+      assertMine(lock)
+      rec = await revokeLeft(rec)
+      // Nothing left in it: a disconnected connection is gone.
+      if (!rec.refreshToken && !rec.toRevoke && !rec.endedAt) folder.remove(name)
+      return rec.toRevoke !== ""
+    })
+  }
+
+  /**
+   * disconnect: revokes the connection at Adiutor (which ends the whole grant), then deletes it. When the revocation's
+   * outcome is unknown, the token is kept, with no connection, and the next command retries it.
+   */
+  async function disconnect(): Promise<{ wasConnected: boolean; revocationPending: boolean }> {
+    return withLock(async (lock) => {
+      const rec = await readRecord()
+      if (!rec) return { wasConnected: false, revocationPending: false }
+      const wasConnected = Boolean(rec.refreshToken) && !rec.endedAt
+      const tokens = [rec.toRevoke, rec.refreshToken].filter(Boolean).join(" ")
+      // The intent first, in one step: no usable token is left, and every token to revoke is kept. A crash or a lost
+      // answer from here on leaves the connection disconnected with its revocation pending, never active.
+      await writeRecord({ ...emptyRecord(rec.label), toRevoke: tokens })
+      assertMine(lock)
+      const left = await revokeAll(tokens)
+      if (!left) folder.remove(name)
+      else if (left !== tokens) await writeRecord({ ...emptyRecord(rec.label), toRevoke: left })
+      return { wasConnected, revocationPending: left !== "" }
+    })
   }
 
   /** Checks that the folder can keep a connection and that the address answers as Adiutor, before any code exists. */
@@ -799,6 +637,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
             label,
             refreshStartedAt: 0,
             refreshRetried: 0,
+            endedAt: 0,
             toRevoke: [rec.toRevoke, old].filter(Boolean).join(" "),
           }
           await writeRecord(rec)
@@ -821,39 +660,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     }
   }
 
-  return { dir, file, status, prepare, deviceCode, waitForApproval, push }
+  return { dir, file, status, prepare, deviceCode, waitForApproval, push, disconnect, retryRevocations }
 }
 
 export type SyncClient = ReturnType<typeof syncClient>
-
-/**
- * What in saved ACLs (icacls /save: one SDDL line per object) lets anyone but this user, SYSTEM and Administrators
- * in. Anything but plain allow and deny entries counts too: refused, not guessed.
- */
-export function othersAllowed(saved: string, userSid: string): string | null {
-  const allowed = new Set([userSid, "SY", "BA", "S-1-5-18", "S-1-5-32-544"])
-  // SDDL writes the built-in Administrator account (RID 500) as LA.
-  if (/^S-1-5-21-[0-9-]+-500$/.test(userSid)) allowed.add("LA")
-  for (const line of saved.split(/\r?\n/)) {
-    const at = line.indexOf("D:")
-    if (at < 0) continue
-    const dacl = line.slice(at + 2).split(/S:/)[0] ?? ""
-    let depth = 0
-    let ace = ""
-    for (const ch of dacl) {
-      if (ch === "(") {
-        depth++
-        if (depth > 1) return "a conditional entry"
-        ace = ""
-      } else if (ch === ")") {
-        depth--
-        const parts = ace.split(";")
-        const type = parts[0] ?? ""
-        const sid = parts[5] ?? ""
-        if (!["A", "D", "OA", "OD"].includes(type)) return `an entry of type ${type}`
-        if ((type === "A" || type === "OA") && !allowed.has(sid)) return sid
-      } else if (depth === 1) ace += ch
-    }
-  }
-  return null
-}

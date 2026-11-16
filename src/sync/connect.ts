@@ -39,6 +39,8 @@ export type ConnectDeps = {
   sleep: (ms: number) => Promise<void>
   now: () => number
   httpTimeoutMs?: number
+  /** The approval link and code, as an event of the JSON output (src/sync/contract.ts). */
+  approval?: (link: string, userCode: string) => void
 }
 
 export const EXIT_CONNECTED = 0
@@ -187,28 +189,44 @@ async function openBrowser(
 
 // --- The flow ---
 
+export type ConnectOutcome = {
+  exit: number
+  state: "connected" | "already_connected" | "not_connected"
+  scope?: string
+  error?: { code: string; message: string }
+}
+
 /** One connection: the env file checked, the device code, the approval in the browser, the connection kept. */
-export async function connect(options: ConnectOptions, deps: ConnectDeps): Promise<number> {
+export async function connect(options: ConnectOptions, deps: ConnectDeps): Promise<ConnectOutcome> {
   const say = deps.out
+  const failed = (code: string, message: string): ConnectOutcome => ({
+    exit: EXIT_NOT_CONNECTED,
+    state: "not_connected",
+    error: { code, message },
+  })
   try {
     await prepareEnvFile(options.envFile, deps)
   } catch (error) {
-    say(`connect: cannot prepare the env file ${options.envFile}: ${messageOf(error)}`)
-    return EXIT_NOT_CONNECTED
+    const message = `cannot prepare the env file ${options.envFile}: ${messageOf(error)}`
+    say(`connect: ${message}`)
+    return failed("env_file", message)
   }
   try {
     const client = syncClient(options.url, { ...deps, now: deps.now })
     await client.prepare()
+    if (await client.retryRevocations())
+      say("A disconnected connection could not be revoked yet; the next command tries again.")
     const kept = await client.status()
     if (kept.connected && !options.replace) {
       await saveSyncUrl(options.envFile, options.url)
       say(`The sync is connected to ${options.url} already, as "${kept.label}" (${kept.scope}).`)
       say("To connect it again, for example after you disconnected it in Settings, Agent access, add --replace.")
-      return EXIT_CONNECTED
+      return { exit: EXIT_CONNECTED, state: "already_connected", scope: kept.scope }
     }
     const device = await client.deviceCode(options.name)
     say(`Approve the sync in Adiutor: ${device.link}`)
     say(`Check that the page shows the code ${groupedCode(device.userCode)}, keep the sync area ticked, then approve.`)
+    deps.approval?.(device.link, groupedCode(device.userCode))
     if (options.open && !(await openBrowser(device.link, deps)))
       say("Could not open the browser; open the link yourself.")
     say("Waiting for the approval...")
@@ -221,10 +239,10 @@ export async function connect(options: ConnectOptions, deps: ConnectDeps): Promi
       )
     if (!done.scope.split(" ").includes("sync"))
       say("The sync area was not approved, so the sync cannot push. Connect again with --replace and keep it ticked.")
-    return EXIT_CONNECTED
+    return { exit: EXIT_CONNECTED, state: "connected", scope: done.scope }
   } catch (error) {
     say(`connect: ${messageOf(error)}`)
-    return EXIT_NOT_CONNECTED
+    return failed(error instanceof ClientError ? error.code : "failed", messageOf(error))
   }
 }
 

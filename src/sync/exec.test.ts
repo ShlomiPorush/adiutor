@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -9,6 +10,7 @@ import {
   lastLine,
   runProcess,
   systemCommand,
+  t3Env,
   UnsafeArgumentError,
   WINDOWS_DRIVE_ROOT,
 } from "./exec.ts"
@@ -135,8 +137,23 @@ describe("systemCommand", () => {
 
 describe("childEnv", () => {
   it("never passes the agent token to a child process", () => {
-    const env = childEnv({ PATH: "/bin", ADIUTOR_AGENT_TOKEN: "x".repeat(40) })
+    const env = childEnv({ PATH: "/bin", ADIUTOR_AGENT_TOKEN: randomBytes(20).toString("hex") })
     expect(env).toEqual({ PATH: "/bin" })
+  })
+})
+
+describe("t3Env", () => {
+  it("removes T3's data folder overrides in any case, and the agent token", () => {
+    const env = t3Env({
+      PATH: "/bin",
+      T3CODE_HOME: "/elsewhere",
+      T3Code_Home: "/elsewhere-too",
+      VITE_DEV_SERVER_URL: "http://localhost:5173",
+      T3CODE_BOOTSTRAP_FD: "3",
+      T3CODE_PORT: "3773",
+      ADIUTOR_AGENT_TOKEN: randomBytes(20).toString("hex"),
+    })
+    expect(env).toEqual({ PATH: "/bin", T3CODE_PORT: "3773" })
   })
 })
 
@@ -163,14 +180,24 @@ describe("runProcess", () => {
     const cli = join(dir, "t3")
     writeFileSync(cli, `#!/bin/sh\nexec "${process.execPath}" "${echo}" "$@"\n`)
     chmodSync(cli, 0o755)
-    process.env.ADIUTOR_AGENT_TOKEN = "z".repeat(40)
+    process.env.ADIUTOR_AGENT_TOKEN = randomBytes(20).toString("hex")
     try {
-      const result = await runProcess(cli, tricky, { timeoutMs: 10_000 })
+      const pids: number[] = []
+      const result = await runProcess(cli, tricky, { timeoutMs: 10_000, onSpawn: (pid) => pids.push(pid) })
       expect(result.error).toBeUndefined()
       expect(JSON.parse(result.stdout)).toEqual({ args: tricky, token: null })
+      // The child's process id, for the T3 session's pending record.
+      expect(pids).toHaveLength(1)
+      expect(pids[0]).toBeGreaterThan(0)
     } finally {
       delete process.env.ADIUTOR_AGENT_TOKEN
     }
+    // A given environment replaces the process's own, still without the token.
+    const given = await runProcess(cli, ["x"], {
+      timeoutMs: 10_000,
+      env: { PATH: process.env.PATH, ADIUTOR_AGENT_TOKEN: randomBytes(20).toString("hex") },
+    })
+    expect(JSON.parse(given.stdout)).toEqual({ args: ["x"], token: null })
     const failed = await runProcess(cli, ["fail"], { timeoutMs: 10_000 })
     expect(failed.error).toBe("exit code 3")
     expect(lastLine(failed.stderr)).toBe("No T3 Code project matches")

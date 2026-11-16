@@ -3,7 +3,7 @@
     "threadId": "thread-w1",
     "projectId": "p-widget",
     "title": "Add an export button",
-    "link": "http://127.0.0.1:3773/env/thread-w1",
+    "link": "https://app.t3.codes/threads/fixture-env/thread-w1",
     "createdBy": "agent",
     "status": "running",
     "settled": false,
@@ -16,6 +16,7 @@
   },
   {
     "threadId": "thread-w2",
+    "link": "https://app.t3.codes/threads/fixture-env/thread-w2",
     "projectId": "p-widget",
     "title": "Review: export button",
     "status": "completed",
@@ -28,6 +29,7 @@
   },
   {
     "threadId": "thread-w3",
+    "link": "https://app.t3.codes/threads/fixture-env/thread-w3",
     "projectId": "p-widget",
     "title": "Fix the date format; $(echo not a command)",
     "status": "completed",
