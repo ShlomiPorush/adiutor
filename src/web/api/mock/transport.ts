@@ -228,7 +228,13 @@ function morning(): Morning {
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),
     inboxCount: open.filter((item) => item.projectId === null).length,
-    sync: { lastSuccessAt: ago(27), stale: true, lastPartialAt: ago(3), securityLastSuccessAt: ago(9) },
+    sync: {
+      connected: true,
+      lastSuccessAt: ago(27),
+      stale: true,
+      lastPartialAt: ago(3),
+      securityLastSuccessAt: ago(9),
+    },
   }
 }
 

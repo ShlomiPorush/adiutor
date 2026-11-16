@@ -8,6 +8,7 @@ import type { Ctx } from "../services/context.ts"
 import { createItem } from "../services/items.ts"
 import { createProject } from "../services/projects.ts"
 import { BotApi } from "../telegram/api.ts"
+import { addSyncConnection } from "../testing/agents.ts"
 import { StandInBotApi } from "../testing/bot-api.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { testBotToken } from "../testing/secrets.ts"
@@ -41,8 +42,9 @@ function job() {
 
 const runs = () => t.ctx.db.select().from(jobRuns)
 
-/** A successful T3 sync an hour ago, so the sync is not stale. */
+/** A successful T3 sync an hour ago and the sync's live connection, so the message says nothing of the sync. */
 async function freshSync() {
+  await addSyncConnection(t.ctx)
   await t.ctx.db.insert(syncRuns).values({
     kind: "t3",
     startedAt: new Date(now.getTime() - HOUR),

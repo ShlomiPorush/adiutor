@@ -165,7 +165,8 @@
     "twoFactorOn": "Two-factor on",
     "syncCard": "T3 sync",
     "syncStale": "Out of date",
-    "syncUnknown": "Could not be read"
+    "syncUnknown": "Could not be read",
+    "syncDisconnected": "Disconnected: connect it again"
   },
   "theme": {
     "light": "Light",
@@ -282,7 +283,10 @@
     "neverTitle": "T3 has not been synced yet",
     "neverBody": "Items appear once the sync tool on your PC runs for the first time.",
     "partial": "Partial sync",
-    "partialBody": "A later sync could not read every project, at"
+    "partialBody": "A later sync could not read every project, at",
+    "disconnectedTitle": "The sync is disconnected",
+    "disconnectedBody": "Connect it again on the computer that runs it: Settings, Agent access shows the command.",
+    "disconnectedLast": "The last successful sync was at"
   },
   "bell": {
     "title": "Needs you",
@@ -922,6 +926,7 @@
       "more": "+{count} more",
       "syncStale": "Last T3 sync: {time}",
       "syncNever": "No T3 sync yet",
+      "syncDisconnected": "The sync is disconnected: connect it again on the computer that runs it (Settings, Agent access).",
       "openBoard": "Open the board"
     }
   },

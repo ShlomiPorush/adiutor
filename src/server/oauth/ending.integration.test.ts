@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import he from "../../shared/locales/he.json"
 import { resetOwnerPassword } from "../auth/recovery.ts"
 import { agentConnections, agentConsent, agentIdentityChanges, audit, oauthStore } from "../db/schema.ts"
+import { morning } from "../services/reads.ts"
 import { TEST_AUTH_SECRET } from "../testing/app.ts"
 import { TEST_PASSWORD } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
@@ -63,6 +64,19 @@ async function connectionOfToken(token: string, resource: "mcp" | "rest" = "rest
 }
 const rowOf = async (id: string) =>
   (await t.ctx.db.select().from(agentConnections).where(eq(agentConnections.id, id)))[0]
+
+describe("the sync shown as disconnected", () => {
+  it("after a reused refresh token ends its connection, the morning read says the sync is disconnected", async () => {
+    const sync = await connectWithCode(h, { scope: "sync", label: "Laptop sync", areas: ["sync"] })
+    expect((await morning(t.ctx)).sync.connected).toBe(true)
+    // A refresh whose answer was lost, sent again: the spent token is reuse, and the whole connection ends.
+    const first = await refresh(h.issuer, CLI_CLIENT_ID, sync.tokens.body.refresh_token)
+    expect(first.status).toBe(200)
+    expect((await refresh(h.issuer, CLI_CLIENT_ID, sync.tokens.body.refresh_token)).status).toBe(400)
+    expect((await h.access.checkToken(first.body.access_token, "rest")).ok).toBe(false)
+    expect((await morning(t.ctx)).sync.connected).toBe(false)
+  })
+})
 
 describe("disconnecting", () => {
   it("ends one connection at once, and its tokens fail", async () => {
