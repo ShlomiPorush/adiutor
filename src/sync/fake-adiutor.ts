@@ -43,6 +43,8 @@ export async function startFakeAdiutor() {
     checkins: [] as unknown[],
     /** The claim the next check-ins answer (a request id), or null. */
     claim: null as string | null,
+    /** The next check-ins' answers wait for these, in order: an answer that arrives late. */
+    checkinGates: [] as Promise<void>[],
     /** What happens after the next check-ins ran, in order: "drop" (no answer), or a status to answer with. */
     afterCheckin: [] as Array<"drop" | number>,
     /** What happens to the next listings, in order: "drop" (no answer) or "busy" (429 busy). */
@@ -218,15 +220,19 @@ export async function startFakeAdiutor() {
         if (!grant.scope.split(" ").includes("sync"))
           return send(403, { error: "area_not_granted", message: "Not granted." })
         s.checkins.push(JSON.parse(raw))
+        // The answer is decided when the check-in arrives, as Adiutor's is, and may be held back.
+        const claim = s.claim
+        const gate = s.checkinGates.shift()
+        if (gate) await gate
         const after = s.afterCheckin.shift()
         if (after === "drop") return drop()
         if (typeof after === "number") return send(after, { error: "validation_failed", message: "Not valid." })
         const now = Date.now()
         return send(200, {
           data: {
-            claim: s.claim
+            claim: claim
               ? {
-                  requestId: s.claim,
+                  requestId: claim,
                   claimedAt: new Date(now).toISOString(),
                   leaseUntil: new Date(now + 600_000).toISOString(),
                 }

@@ -120,9 +120,11 @@ type Record_ = {
   endedAt: number
   /** Refresh tokens of a replaced or disconnected connection, still to be revoked. */
   toRevoke: string
+  /** A random id given to each approved connection on this computer (empty before it existed): what a kept claim names. */
+  connection: string
 }
 const NUMBERS = ["v", "accessExpiresAt", "refreshStartedAt", "refreshRetried", "endedAt"] as const
-const TEXTS = ["issuer", "label", "refreshToken", "accessToken", "scope", "toRevoke"] as const
+const TEXTS = ["issuer", "label", "refreshToken", "accessToken", "scope", "toRevoke", "connection"] as const
 
 type Answer = { status: number; text: string; json: unknown; isJson: boolean; challenge: string }
 type Listing = { revision: string; entries: { method: string; path: string; kind: "read" | "act" }[] }
@@ -203,6 +205,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     refreshRetried: 0,
     endedAt: 0,
     toRevoke: "",
+    connection: "",
   })
 
   // --- The lock: a file created exclusively, naming its holder; never taken from a live holder (src/sync/lock.ts) ---
@@ -609,6 +612,15 @@ export function syncClient(issuer: string, deps: ClientDeps) {
         }
   }
 
+  /**
+   * The connection kept for this address, as the address and the connection's own id: a claim Adiutor handed one
+   * connection is never run by another (connect --replace) or for another address. Null when none is connected.
+   */
+  async function identity(): Promise<string | null> {
+    const rec = await readRecord()
+    return rec?.refreshToken && !rec.endedAt ? `${issuer}#${rec.connection}` : null
+  }
+
   /** Every command retries the revocations a disconnect or a replaced connection left (outcome unknown). */
   async function retryRevocations(): Promise<boolean> {
     const first = await readRecord()
@@ -720,6 +732,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
             refreshRetried: 0,
             endedAt: 0,
             toRevoke: [rec.toRevoke, old].filter(Boolean).join(" "),
+            connection: hex(8),
           }
           await writeRecord(rec)
           forgetListing()
@@ -742,7 +755,19 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     }
   }
 
-  return { dir, file, status, prepare, deviceCode, waitForApproval, route, push, disconnect, retryRevocations }
+  return {
+    dir,
+    file,
+    status,
+    identity,
+    prepare,
+    deviceCode,
+    waitForApproval,
+    route,
+    push,
+    disconnect,
+    retryRevocations,
+  }
 }
 
 export type SyncClient = ReturnType<typeof syncClient>

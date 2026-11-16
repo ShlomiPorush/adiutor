@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises"
 import { parseArgs } from "node:util"
-import { isRequestId, keepClaim, parseReport, readClaim, sendCheckin } from "./checkin.ts"
+import { checkinRound, isRequestId, parseReport, readClaim } from "./checkin.ts"
 import { type ConnectDeps, connect, defaultEnvFile, NAME_MAX } from "./connect.ts"
 import {
   type AdiutorState,
+  type CheckinClaim,
   type CheckinReport,
   type Command,
   type Failure,
@@ -284,11 +285,13 @@ async function statusCommand(settings: Resolved, deps: MainDeps, out: Output): P
   const all = connectDeps(deps)
   let adiutor: AdiutorState = { state: "not_connected", url: settings.url ?? null, revocationPending: false }
   const problems = [...settings.problems]
+  let identity: string | null = null
   if (settings.url) {
     try {
       const client = syncClient(settings.url, all)
       const pending = await client.retryRevocations().catch(() => true)
       const kept = await client.status()
+      identity = await client.identity()
       adiutor = {
         state: kept.state,
         url: settings.url,
@@ -314,7 +317,7 @@ async function statusCommand(settings: Resolved, deps: MainDeps, out: Output): P
     lastGoodSyncAt: kept.lastGoodSyncAt,
     running: runningSince(data, { platform: all.platform, env: deps.env }),
     paused: settings.pause,
-    claim: readClaim(data),
+    claim: readClaim(data, identity),
     settings: { problems },
   }
   const said: Record<AdiutorState["state"], string> = {
@@ -471,27 +474,33 @@ async function t3DisconnectCommand(settings: Resolved, deps: MainDeps, out: Outp
 async function checkinCommand(settings: Resolved, deps: MainDeps, out: Output): Promise<number> {
   const all = connectDeps(deps)
   const data = dataDir(all.platform, deps.env)
-  const fail = (error: Failure, exit: number) => {
+  const fail = (error: Failure, exit: number, claim: CheckinClaim | null = null) => {
     out.say(`checkin: ${error.message}`)
-    out.result({ command: "checkin", ok: false, claim: readClaim(data), error })
+    out.result({ command: "checkin", ok: false, claim, error })
     return exit
   }
   if (!settings.url) return fail({ code: "usage", message: URL_PROBLEM }, EXIT_USAGE)
+  const client = syncClient(settings.url, all)
   let report: CheckinReport
   try {
     report = parseReport(await (deps.stdin ?? readStdin)())
   } catch (error) {
-    return fail(failure(error), EXIT_USAGE)
+    return fail(failure(error), EXIT_USAGE, readClaim(data, await client.identity().catch(() => null)))
   }
-  const client = syncClient(settings.url, all)
   await client.retryRevocations().catch(() => true)
-  const sent = await sendCheckin(client, report)
-  if (!sent.ok) return fail({ code: sent.code, message: sent.message }, EXIT_NOTHING_PUSHED)
-  const claim = await keepClaim(data, report, sent.claim, {
-    platform: all.platform,
-    now: all.now,
-    sleep: all.sleep,
-  })
+  let round: Awaited<ReturnType<typeof checkinRound>>
+  try {
+    round = await checkinRound(data, client, report, {
+      platform: all.platform,
+      env: deps.env,
+      now: all.now,
+      sleep: all.sleep,
+    })
+  } catch (error) {
+    return fail(failure(error), EXIT_NOTHING_PUSHED, readClaim(data, await client.identity().catch(() => null)))
+  }
+  const { sent, claim } = round
+  if (!sent.ok) return fail({ code: sent.code, message: sent.message }, EXIT_NOTHING_PUSHED, claim)
   out.say(sent.claim ? `Adiutor asks for a sync: request ${sent.claim}` : "Checked in; no sync request waits.")
   out.result({ command: "checkin", ok: true, claim: sent.claim ? claim : null })
   return EXIT_OK

@@ -5,12 +5,12 @@
 // check-in that listed it in `finished` was answered. A check-in is a state report: one whose answer was lost is safe
 // to send again, and the next one does. See docs/sync.md, "Requests from Adiutor".
 
-import { readFileSync, rmSync } from "node:fs"
+import { mkdirSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { CheckinClaim, CheckinReport, PartResult } from "./contract.ts"
 import { ClientError } from "./errors.ts"
 import { asArray, asObject, asString, asTime, parseJson } from "./json.ts"
-import type { LockDeps } from "./lock.ts"
+import { connectionLockOptions, fileLock, type LockDeps } from "./lock.ts"
 import type { SyncClient } from "./oauth.ts"
 import { writeAtomic } from "./state.ts"
 
@@ -78,12 +78,17 @@ export function parseReport(text: string): CheckinReport {
 
 // --- The claim the engine keeps (request.json, no secret) ---
 
-/** The claim kept in the data folder, or null when there is none or it cannot be read. */
-export function readClaim(dir: string): CheckinClaim | null {
+/**
+ * The claim kept in the data folder for the connection `identity` (oauth.ts identity(): the address and the
+ * connection), or null when there is none, it cannot be read, or another connection or address received it: such a
+ * claim is never run (Adiutor gives its result to the connection that claimed it only).
+ */
+export function readClaim(dir: string, identity: string | null): CheckinClaim | null {
   try {
     const root = asObject(parseJson(readFileSync(join(dir, CLAIM_FILE), "utf8"), "the claim"))
     const receivedAt = asTime(root?.receivedAt)
     if (!root || !isRequestId(root.requestId) || !receivedAt) return null
+    if (identity === null || root.connection !== identity) return null
     return { requestId: root.requestId, receivedAt }
   } catch {
     return null
@@ -96,23 +101,50 @@ export function readClaim(dir: string): CheckinClaim | null {
  */
 export async function keepClaim(
   dir: string,
+  identity: string,
   sent: CheckinReport,
   answered: string | null,
   deps: Pick<LockDeps, "platform" | "now" | "sleep">,
 ): Promise<CheckinClaim | null> {
-  const kept = readClaim(dir)
+  const kept = readClaim(dir, identity)
   const reported = kept !== null && sent.finished.some((f) => f.requestId === kept.requestId)
   if (answered) {
     if (kept?.requestId === answered && !reported) return kept
     const claim = { requestId: answered, receivedAt: new Date(deps.now()).toISOString() }
-    await writeAtomic(join(dir, CLAIM_FILE), `${JSON.stringify(claim)}\n`, deps)
+    await writeAtomic(join(dir, CLAIM_FILE), `${JSON.stringify({ ...claim, connection: identity })}\n`, deps)
     return claim
   }
-  if (reported) {
+  // Reported finished, or a claim of another connection or address: dropped, never run.
+  if (reported || kept === null) {
     rmSync(join(dir, CLAIM_FILE), { force: true })
     return null
   }
   return kept
+}
+
+export const CHECKIN_LOCK = "checkin.lock"
+
+/**
+ * One check-in round, from sending the report to keeping the claim, under the check-in lock (src/sync/lock.ts): two
+ * check-ins at once take turns, so an answer that arrives late never writes back a claim another check-in already
+ * reported finished. The second waits up to 20 seconds, then answers busy and sends nothing.
+ */
+export async function checkinRound(
+  dir: string,
+  client: SyncClient,
+  report: CheckinReport,
+  deps: LockDeps,
+): Promise<{ sent: CheckinOutcome; claim: CheckinClaim | null; identity: string | null }> {
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const file = join(dir, CHECKIN_LOCK)
+  const lock = fileLock(file, deps)
+  const options = connectionLockOptions(file, dir, deps, "Another check-in is going. Nothing was sent; run it again.")
+  return lock.withLock(options, async () => {
+    const identity = await client.identity()
+    const sent = await sendCheckin(client, report)
+    if (!sent.ok || identity === null) return { sent, claim: readClaim(dir, identity), identity }
+    return { sent, claim: await keepClaim(dir, identity, report, sent.claim, deps), identity }
+  })
 }
 
 // --- Sending ---

@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { CLAIM_FILE, parseReport } from "./checkin.ts"
 import { type MainDeps, main } from "./cli.ts"
 import type { CheckinReport, Result, RunReport } from "./contract.ts"
@@ -26,6 +26,11 @@ afterAll(async () => {
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "adiutor-checkin-"))
   fake.grantScope = "sync"
+  await connectSync()
+})
+
+/** Connects the sync in this home folder, the owner approving at once; again: connect --replace. */
+async function connectSync() {
   const client = syncClient(fake.issuer, {
     fetch: (input: string, init: RequestInit) => fetch(input, init),
     runner: (async () => ({ code: 1, stdout: "", stderr: "" })) as Runner,
@@ -40,9 +45,16 @@ beforeEach(async () => {
   })
   await client.prepare()
   await client.waitForApproval(await client.deviceCode("Test sync"), "Test sync")
-})
+}
 afterEach(() => {
-  Object.assign(fake, { checkins: [], claim: null, afterCheckin: [], offersCheckin: true, pushes: [] })
+  Object.assign(fake, {
+    checkins: [],
+    claim: null,
+    afterCheckin: [],
+    checkinGates: [],
+    offersCheckin: true,
+    pushes: [],
+  })
   rmSync(home, { recursive: true, force: true })
 })
 
@@ -86,8 +98,12 @@ async function json(argv: string[], stdin = "") {
 }
 
 const checkin = (report: unknown = REPORT) => json(["checkin"], JSON.stringify(report))
-const kept = () =>
-  existsSync(join(data(), CLAIM_FILE)) ? JSON.parse(readFileSync(join(data(), CLAIM_FILE), "utf8")) : null
+/** The claim kept on disk, as the result shows it (the file also names its connection). */
+const kept = () => {
+  if (!existsSync(join(data(), CLAIM_FILE))) return null
+  const { requestId, receivedAt } = JSON.parse(readFileSync(join(data(), CLAIM_FILE), "utf8"))
+  return { requestId, receivedAt }
+}
 
 describe("checkin --json", () => {
   it("sends the tray's report with the policy headers and answers that nothing waits", async () => {
@@ -123,6 +139,52 @@ describe("checkin --json", () => {
     const answered = await checkin(done)
     expect([answered.result.ok, answered.result.claim, kept()]).toEqual([true, null, null])
     expect(fake.checkins.at(-1)).toEqual(done)
+  })
+
+  it("takes turns with another check-in, so a late answer never writes back a claim reported finished", async () => {
+    const requestId = randomUUID()
+    fake.claim = requestId
+    await checkin()
+    // The first check-in's answer (holding the claim) is held back; the second reports the request finished.
+    let open = () => {}
+    fake.checkinGates.push(
+      new Promise<void>((resolve) => {
+        open = resolve
+      }),
+    )
+    const first = checkin({ ...REPORT, running: { kind: "request", requestId } })
+    await vi.waitFor(() => expect(fake.checkins).toHaveLength(2))
+    fake.claim = null
+    const done = { ...REPORT, finished: [{ requestId, result: { t3: "accepted", security: "accepted" } }] }
+    const second = checkin(done)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    open()
+    expect((await first).result.ok).toBe(true)
+    expect((await second).result).toMatchObject({ ok: true, claim: null })
+    expect(kept()).toBeNull()
+    expect((await json(["status"])).result.claim).toBeNull()
+  })
+
+  it("never runs a claim kept for another connection or address: dropped after connect --replace", async () => {
+    fake.claim = randomUUID()
+    await checkin()
+    expect(kept()).not.toBeNull()
+    // Another address's claim is not this connection's.
+    const file = join(data(), CLAIM_FILE)
+    const stored = JSON.parse(readFileSync(file, "utf8"))
+    writeFileSync(
+      file,
+      JSON.stringify({ ...stored, connection: stored.connection.replace(fake.issuer, "https://other.example.com") }),
+    )
+    expect((await json(["status"])).result.claim).toBeNull()
+    writeFileSync(file, JSON.stringify(stored))
+    expect((await json(["status"])).result.claim).not.toBeNull()
+    // The sync connects again: the old connection's claim is never shown or run, and the next check-in drops it.
+    await connectSync()
+    fake.claim = null
+    expect((await json(["status"])).result.claim).toBeNull()
+    expect((await checkin()).result).toMatchObject({ ok: true, claim: null })
+    expect(kept()).toBeNull()
   })
 
   it("keeps the next claim when the answer to a finished report hands one", async () => {
