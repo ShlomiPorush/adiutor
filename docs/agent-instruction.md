@@ -16,7 +16,7 @@ Installed without this line, the skill runs only when the owner asks for Adiutor
 
 ## Connecting to Adiutor
 
-The skill and the MCP clients connect by agent access by approval: each asks once, the owner approves it in the browser and chooses its areas, and Adiutor keeps the connection until the owner disconnects it in Settings, Agent access, or it goes unused for the idle days ([api.md](api.md), "Agent access by approval"). The clients on `main` work against the agent access release only: an Adiutor before it has no authorization server, and they cannot connect to it.
+The skill and the MCP clients connect by agent access by approval: each asks once, the owner approves it in the browser and chooses its areas, and Adiutor keeps the connection until the owner disconnects it in Settings, Agent access, or it goes unused for the idle days ([api.md](api.md), "Agent access by approval"). They work against the agent access release and later only: an Adiutor before it has no authorization server, and they cannot connect to it.
 
 **The skill's command.** `adiutor connect` (in the skill's `scripts/` folder) prints a link and a code; the owner approves, and `adiutor connect --wait --url "<address>"` keeps the connection in `~/.adiutor/`, one file per Adiutor address, readable by the computer user only and shared by every agent install of that user. It is named `Agents on <computer>` (or `ADIUTOR_AGENT_NAME`) and reads and writes as the owner chose. SKILL.md, "Connecting (once)", has the steps an agent follows. Adiutor also serves the skill at `<address>/agents/skill/` with its address filled in; a copy from Git, as the shared agent configuration installs it, connects with `--url` once and keeps the address.
 
