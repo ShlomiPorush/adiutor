@@ -475,7 +475,7 @@ export const CLOSED: Record<string, string> = {
   "GET /api/v1/notes/:id/versions": "a note's earlier versions are for the owner, who alone restores them",
   "GET /api/v1/notes/:id/versions/:version": "a note's earlier versions are for the owner, who alone restores them",
   "POST /api/v1/notes/:id/restore": "only the owner restores a note's version",
-  "GET /api/v1/sync/runs": "the sync's runs, for the owner reading Settings; the sync only pushes",
+  "GET /api/v1/sync/runs": "the sync's runs, for the owner reading Settings; the sync pushes them and checks in",
   "ALL /api/v1/sync/requests": MIDDLEWARE,
   "GET /api/v1/sync/requests": "the owner's sync requests and the computer's state, for Settings and the sync card",
   "POST /api/v1/sync/requests": "only the owner asks for a sync; the sync takes requests at its check-in",
