@@ -1,0 +1,116 @@
+# An example workflow for the product that ships the adiutor skill. It checks the sh scripts with shellcheck and shfmt,
+# and runs the client scripts' contract tests on the systems where agents run them: Windows (Node, Windows
+# PowerShell 5.1, PowerShell 7) and macOS (Node, POSIX sh). Run the same tests on Linux (ADIUTOR_IMPLS=node,sh) in the
+# product's main checks, or add ubuntu-latest to the matrix.
+#
+# To adopt it:
+# - Set SKILL_SCRIPTS to the folder the product serves its skill's scripts from, and SUITE_DIR to the folder that holds
+#   the contract tests. Keep the tests outside the skill folder: installers copy that folder from Git as it is, and
+#   the tests do not belong in an agent's copy. The suite finds the scripts through ADIUTOR_SCRIPTS_DIR.
+# - Which systems run the suite, and how often, is Shlomi's decision for each product. macOS minutes cost more in a
+#   private repository. The "changes" job runs the suite only when the scripts, the suite or this workflow change.
+#   The checks are skipped only when the detection succeeded and found no such change. When the detection fails or
+#   gives no answer, they run. A skipped job counts as passed for a required check. Remove the gate to run the suite
+#   on every change.
+#
+# The workflow uses no secret: the fake server makes every token and code at run time.
+name: Skill contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  SKILL_SCRIPTS: skill/adiutor/scripts
+  SUITE_DIR: tests/skill-contract
+
+jobs:
+  changes:
+    name: Skill changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Detect changes
+        id: detect
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKFLOW: ${{ github.workflow_ref }}
+        shell: bash
+        run: |
+          # Fails closed: any doubt runs the suite. --no-renames counts a moved file at its old and its new path.
+          run=true
+          wf=${WORKFLOW#*/*/}; wf=${wf%@*}
+          # -z keeps paths as they are: without it, Git quotes unusual names and they would not match.
+          changed="$RUNNER_TEMP/changed"
+          if [ -n "$BASE" ] && [ "$BASE" != 0000000000000000000000000000000000000000 ] \
+            && git diff -z --no-renames --name-only "$BASE" "$HEAD" -- >"$changed"; then
+            run=false
+            while IFS= read -r -d '' f; do
+              case "$f" in
+                "$SKILL_SCRIPTS"/* | "$SUITE_DIR"/* | "$wf") run=true ;;
+              esac
+            done <"$changed"
+          fi
+          echo "run=$run" >>"$GITHUB_OUTPUT"
+          echo "Run the skill checks: $run"
+
+  lint:
+    name: Skill lint
+    needs: changes
+    # Runs unless the detection succeeded and found no change: a failed detection runs the checks.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: >
+          docker run --rm -v "$PWD/$SKILL_SCRIPTS:/w:ro"
+          koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+          -s sh /w/adiutor.sh /w/adiutor
+      - name: shfmt
+        run: >
+          docker run --rm -v "$PWD/$SKILL_SCRIPTS:/w:ro"
+          mvdan/shfmt@sha256:d19cc37644449fe9a488f234d2c0cf0b770eaf6a5a40e30103e8099013ef8f9e
+          -d -p -i 2 -ci /w/adiutor.sh /w/adiutor
+
+  skill:
+    name: Skill (${{ matrix.os }})
+    needs: changes
+    # Runs unless the detection succeeded and found no change: a failed detection runs the checks.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            impls: node,ps,pwsh
+          - os: macos-latest
+            impls: node,sh
+    runs-on: ${{ matrix.os }}
+    # The Windows run takes about 15 to 20 minutes with three versions and a product's own cases.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Contract tests
+        working-directory: ${{ env.SUITE_DIR }}
+        env:
+          ADIUTOR_IMPLS: ${{ matrix.impls }}
+          ADIUTOR_TEST_TMP: ${{ runner.temp }}
+          ADIUTOR_SCRIPTS_DIR: ${{ github.workspace }}/${{ env.SKILL_SCRIPTS }}
+        run: node --test --test-concurrency=1 contract.test.mjs

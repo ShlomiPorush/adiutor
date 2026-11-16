@@ -1,0 +1,10 @@
+{
+  "name": "adiutor-skill-contract",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Contract tests for the adiutor skill's three client scripts, against a strict fake server",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 contract.test.mjs"
+  }
+}

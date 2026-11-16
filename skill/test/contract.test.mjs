@@ -1,84 +1,108 @@
-// The command's contract, run against every version this computer can run (ADIUTOR_IMPLS picks them; a version whose
-// file does not exist yet is skipped): the same answers, the same files, and the same care with what a lost answer or
-// a stopped run may leave on Adiutor. Every secret comes from fake-server.mjs, new for every run.
+// The command's contract, run against every version this computer can run (ADIUTOR_IMPLS picks them): the same
+// answers, the same care with the refresh token, which the server cuts off the moment it is used twice, and the same
+// care with act calls, which are never sent twice once they may have reached the server.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { randomBytes } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { after, before, beforeEach, describe, it } from "node:test"
+import { after, before, describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
 import { startFakeServer } from "./fake-server.mjs"
 
-const win = process.platform === "win32"
-const scripts = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "adiutor", "scripts")
-const FILES = { node: "adiutor.mjs", sh: "adiutor.sh", ps: "adiutor.ps1", pwsh: "adiutor.ps1" }
-// ps is Windows PowerShell 5.1, pwsh PowerShell 7: the same adiutor.ps1 runs on both.
-const requested = (process.env.ADIUTOR_IMPLS ?? (win ? "node,ps,pwsh" : "node,sh")).split(",").filter(Boolean)
-for (const impl of requested) if (!FILES[impl]) throw new Error(`unknown implementation ${impl}`)
-const present = (impl) => fs.existsSync(path.join(scripts, FILES[impl]))
-const impls = requested.filter(present)
-const tmpBase = process.env.ADIUTOR_TEST_TMP ?? (win ? "T:\\adiutor\\skill-tests" : os.tmpdir())
-fs.mkdirSync(tmpBase, { recursive: true })
-const root = fs.mkdtempSync(path.join(tmpBase, "run-"))
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const DAY = 86_400
-const uuid = () => randomUUID()
-const host = () => (win ? process.env.COMPUTERNAME || os.hostname() : os.hostname())
+/* ---- Product constants: the same values as in the scripts' constant block. ---- */
+const NAME = "adiutor"
+const ENV = "ADIUTOR_"
+const URL_PLACEHOLDER = "__ADIUTOR_URL__"
+const VERSION_PLACEHOLDER = "__ADIUTOR_SKILL_VERSION__"
+const SKILL_REVISION = 1
+const SCOPE = "read act"
+const KINDS_MAGIC = "adiutor-kinds"
+const CLIENT_ID = "adiutor-cli"
+const POLICY_HEADER = "x-adiutor-policy"
+const KIND_HEADER = "x-adiutor-kind"
+/* ---- End of product constants. ---- */
 
-// A stand-in node first on PATH for the versions that must not hand over to Node: it records a call and fails.
-const standin = path.join(root, "standin")
-fs.mkdirSync(standin)
-const nodeCalled = path.join(root, "node-called")
-fs.writeFileSync(path.join(standin, "node"), `#!/bin/sh\necho called >> "$ADIUTOR_TEST_NODE_CALLED"\nexit 1\n`, {
-  mode: 0o755,
-})
-fs.writeFileSync(path.join(standin, "node.cmd"), `@echo called>>"%ADIUTOR_TEST_NODE_CALLED%"\r\n@exit /b 1\r\n`)
-// The sh version's curl, wrapped to record its arguments (no secret may be in them).
-const curlWrap = path.join(root, "curlwrap")
-const curlArgs = path.join(root, "curl-args")
-if (!win) {
-  let realCurl = ""
-  try {
-    realCurl = execFileSync("sh", ["-c", "command -v curl"], { encoding: "utf8" }).trim()
-  } catch {}
-  if (realCurl) {
-    fs.mkdirSync(curlWrap)
-    fs.writeFileSync(
-      path.join(curlWrap, "curl"),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${curlArgs}"\nexec "${realCurl}" "$@"\n`,
-      { mode: 0o755 },
-    )
+const win = process.platform === "win32"
+// The skill's scripts: ADIUTOR_SCRIPTS_DIR, or ../scripts from this file. Keep the suite outside the skill folder
+// that installers copy from Git, and point ADIUTOR_SCRIPTS_DIR at the scripts.
+const scripts = path.resolve(
+  process.env[`${ENV}SCRIPTS_DIR`] || path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts"),
+)
+if (!fs.existsSync(path.join(scripts, `${NAME}.mjs`))) throw new Error(`No ${NAME} scripts in ${scripts}. Set ${ENV}SCRIPTS_DIR.`)
+// ps is Windows PowerShell 5.1, pwsh PowerShell 7: the same adiutor.ps1 runs on both.
+const impls = (process.env[`${ENV}IMPLS`] ?? (win ? "node,ps,pwsh" : "node,sh")).split(",").filter(Boolean)
+const tmpBase = process.env[`${ENV}TEST_TMP`] || os.tmpdir()
+fs.mkdirSync(tmpBase, { recursive: true })
+const root = fs.mkdtempSync(path.join(tmpBase, `${NAME}-skill-`))
+// A byte order mark, which no JSON starts with.
+const BOM = String.fromCharCode(0xfeff)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const connectNext = (issuer) =>
+  `End your turn with a reply that shows the person the link and the code and asks them to reply once they approve. When they reply, run: ${NAME} connect --wait --url "${issuer}"`
+const waitNext = (issuer) => `Not approved yet. Run again: ${NAME} connect --wait --url "${issuer}"`
+
+/**
+ * A fresh install of the skill and a credentials folder of its own (a computer user of its own). Pass `creds` for
+ * another install of the same user. `url` and `version` fill in the values the server fills in when it serves it.
+ */
+function install({ creds, url, version } = {}) {
+  const base = fs.mkdtempSync(path.join(root, "agent-"))
+  const dir = path.join(base, ".claude-test", "skills", NAME, "scripts")
+  fs.mkdirSync(dir, { recursive: true })
+  for (const f of fs.readdirSync(scripts)) {
+    let text = fs.readFileSync(path.join(scripts, f), "utf8")
+    if (url) text = text.replaceAll(URL_PLACEHOLDER, url)
+    if (version) text = text.replaceAll(VERSION_PLACEHOLDER, version)
+    fs.writeFileSync(path.join(dir, f), text, { mode: fs.statSync(path.join(scripts, f)).mode })
+  }
+  return { dir, creds: creds ?? path.join(base, "creds"), base }
+}
+
+/** Every file under a folder, with its content, to show that nothing in it changed. */
+function snapshot(dir) {
+  return fs
+    .readdirSync(dir, { recursive: true })
+    .sort()
+    .map((f) => [f, fs.statSync(path.join(dir, f)).isFile() ? fs.readFileSync(path.join(dir, f), "utf8") : "/"])
+}
+
+function command(impl, dir) {
+  const ps1 = path.join(dir, `${NAME}.ps1`)
+  const psArgs = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ps1]
+  if (impl === "node") return [process.execPath, [path.join(dir, `${NAME}.mjs`)]]
+  if (impl === "sh") return ["sh", [path.join(dir, `${NAME}.sh`)]]
+  if (impl === "pwsh") return ["pwsh", psArgs]
+  if (impl === "ps") return ["powershell.exe", psArgs]
+  // The entry points agents run, which pick a version themselves.
+  if (impl === "entry-sh") return ["sh", [path.join(dir, NAME)]]
+  if (impl === "entry-ps") return ["powershell.exe", psArgs]
+  throw new Error(`unknown impl ${impl}`)
+}
+
+function baseEnv(impl, inst) {
+  return {
+    ...process.env,
+    [`${ENV}URL`]: "",
+    [`${ENV}CREDENTIALS`]: inst.creds,
+    [`${ENV}NO_NODE`]: impl === "node" ? "" : "1",
+    [`${ENV}TEST_POLL_SECONDS`]: "1",
+    [`${ENV}TEST_BUSY_WAIT_MS`]: "100",
+    [`${ENV}WAIT_SECONDS`]: "8",
+    ...(win ? { USERPROFILE: root } : {}),
   }
 }
 
-function command(impl) {
-  if (impl === "node") return [process.execPath, [path.join(scripts, "adiutor.mjs")]]
-  if (impl === "sh") return ["sh", [path.join(scripts, "adiutor.sh")]]
-  const ps = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(scripts, "adiutor.ps1")]
-  if (impl === "ps") return ["powershell.exe", ps]
-  if (impl === "pwsh") return ["pwsh", ps]
-  throw new Error(`unknown implementation ${impl}`)
+/** Runs one command; resolves with its exit code, its parsed answer and its raw output. No server: no --url. */
+function run(impl, inst, server, args, env = {}) {
+  const [cmd, base] = command(impl, inst.dir)
+  return start(impl, inst, cmd, [...base, ...args, ...(server ? ["--url", server.issuer] : [])], env)
 }
 
-/** The environment every run gets: its own folder, no Adiutor settings from the host. */
-function baseEnv(home, extra) {
-  const env = { ...process.env }
-  for (const k of Object.keys(env)) if (k.startsWith("ADIUTOR_")) delete env[k]
-  return { ...env, ADIUTOR_SKILL_HOME: home, ADIUTOR_WAIT_SECONDS: "8", ADIUTOR_TEST_NODE_CALLED: nodeCalled, ...extra }
-}
-
-/** Runs one command; resolves with its exit code, its parsed answer and its raw output. `first`: folders first on PATH. */
-function run(impl, home, args, env = {}, first = []) {
-  const [cmd, base] = command(impl)
-  const extra = { ...env }
-  if (impl !== "node") {
-    extra.ADIUTOR_NO_NODE = "1"
-    const dirs = [...first, standin, ...(impl === "sh" && fs.existsSync(curlWrap) ? [curlWrap] : [])]
-    extra.PATH = [...dirs, process.env.PATH].join(path.delimiter)
-  } else if (first.length) extra.PATH = [...first, process.env.PATH].join(path.delimiter)
-  const child = spawn(cmd, [...base, ...args], { env: baseEnv(home, extra), stdio: ["ignore", "pipe", "pipe"] })
+/** Starts a process (the command, or a shell that runs it) with the environment of `impl` and `inst`. */
+function start(impl, inst, cmd, args, env = {}) {
+  const child = spawn(cmd, args, { env: { ...baseEnv(impl, inst), ...env }, stdio: ["ignore", "pipe", "pipe"] })
   let out = ""
   let err = ""
   child.stdout.on("data", (d) => {
@@ -93,1436 +117,1518 @@ function run(impl, home, args, env = {}, first = []) {
       try {
         json = JSON.parse(out.trim().split("\n").at(-1))
       } catch {}
-      // A pass proves that the version itself ran: the stand-in node was never called.
-      if (impl !== "node") assert.equal(fs.existsSync(nodeCalled), false, `${impl} handed over to node`)
-      resolve({ code, json, out, err, all: `${out}\n${err}` })
+      resolve({ code, json, out, err })
     })
   })
   done.child = child
   return done
 }
 
-/** Waits until a held run reached a test hook. */
+/**
+ * The shells an agent may run a printed hint in, here: each defines the command under test and runs the hint's
+ * command as it is. bash with failglob and zsh refuse an unquoted file pattern, such as the brackets of an IPv6
+ * address. Returns the shells found and the ones missing.
+ */
+function hintShells() {
+  const works = (cmd, args) => {
+    try {
+      execFileSync(cmd, args, { stdio: "ignore" })
+      return true
+    } catch {
+      return false
+    }
+  }
+  const posix = (name, bin, opts) => ({
+    name,
+    bin,
+    args: (line, prefix) => [...opts, "-c", `pre=("$@"); ${NAME}() { "\${pre[@]}" "$@"; }; ${line}`, name, ...prefix],
+  })
+  const shells = []
+  const missing = []
+  // On Windows, Git's bash: the bash.exe in System32 is WSL's.
+  let bash = "bash"
+  if (win) {
+    try {
+      const exec = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim()
+      bash = path.resolve(exec, "../../../bin/bash.exe")
+    } catch {
+      bash = ""
+    }
+  }
+  if (bash && works(bash, ["-O", "failglob", "-c", ":"])) shells.push(posix("bash", bash, ["-O", "failglob"]))
+  else missing.push("bash")
+  if (!win) {
+    if (works("zsh", ["-f", "-c", ":"])) shells.push(posix("zsh", "zsh", ["-f"]))
+    else missing.push("zsh")
+  }
+  if (win)
+    shells.push({
+      name: "powershell",
+      bin: "powershell.exe",
+      args: (line) => [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$pre = $env:${ENV}HINT_PREFIX -split "\`n"; function ${NAME} { & $pre[0] $pre[1..($pre.Length - 1)] @args }; ${line}`,
+      ],
+      env: (prefix) => ({ [`${ENV}HINT_PREFIX`]: prefix.join("\n") }),
+    })
+  return { shells, missing }
+}
+
+/** Runs the command a hint names (what follows `before` in it) in a shell, as an agent would. */
+function runHint(shell, impl, inst, text, before) {
+  const line = text.split(before)[1]
+  assert.ok(line?.startsWith(`${NAME} `), text)
+  const [cmd, base] = command(impl, inst.dir)
+  const prefix = [win && shell.name === "bash" ? cmd.replaceAll("\\", "/") : cmd, ...base]
+  return start(impl, inst, shell.bin, shell.args(line, prefix), {
+    // Git's bash would otherwise rewrite arguments that look like paths.
+    MSYS_NO_PATHCONV: "1",
+    MSYS2_ARG_CONV_EXCL: "*",
+    [`${ENV}WAIT_SECONDS`]: "2",
+    ...shell.env?.(prefix),
+  })
+}
+
+/**
+ * Replaces a file by renaming another onto it, in one step, so the name is never free. On Windows another process
+ * may still have the file open for a moment (the PowerShell version reads with delete sharing, and a virus scanner
+ * may open a new file), so it tries again for about a second on EPERM or EBUSY.
+ */
+async function replaceWith(from, to) {
+  for (let i = 0; ; i++) {
+    try {
+      return fs.renameSync(from, to)
+    } catch (e) {
+      if (!win || !["EPERM", "EBUSY"].includes(e.code) || i >= 50) throw e
+      await sleep(20)
+    }
+  }
+}
+
+/** Waits until a test hook was reached by a held process. */
 async function reached(file) {
-  for (let i = 0; i < 600; i++) {
+  for (let i = 0; i < 400; i++) {
     if (fs.existsSync(`${file}.reached`)) return
     await sleep(50)
   }
   throw new Error(`hook ${file} not reached`)
 }
 
-const go = (file) => fs.writeFileSync(`${file}.go`, "")
+async function connected(impl, inst, server, opts) {
+  const c = await run(impl, inst, server, ["connect"])
+  assert.equal(c.json?.status, "pending", c.out + c.err)
+  server.approve(opts)
+  const w = await run(impl, inst, server, ["connect", "--wait"])
+  assert.equal(w.json?.status, "connected", w.out + w.err)
+  return w
+}
 
-async function kill(p) {
-  p.child.kill("SIGKILL")
-  await new Promise((resolve) => p.child.on("close", resolve))
+/** Connected, with the list of allowed calls kept, so the calls after reach the server directly. */
+async function listed(impl, inst, server) {
+  await connected(impl, inst, server)
+  const e = await run(impl, inst, server, ["endpoints"])
+  assert.equal(e.code, 0, e.out + e.err)
 }
 
 function noSecrets(server, ...results) {
-  const { deviceCodes, sessions, keys } = server.secrets()
   for (const r of results)
-    for (const secret of [...deviceCodes, ...sessions, ...keys])
-      assert.ok(!r.all.includes(secret), `a secret appeared in the output: ${r.out}`)
+    for (const s of server.secrets()) assert.ok(!r.out.includes(s), "a token appeared in the output")
 }
-
-/** Every file under a folder, with its content. */
-function filesUnder(dir) {
-  if (!fs.existsSync(dir)) return []
-  return fs
-    .readdirSync(dir, { recursive: true })
-    .map((f) => path.join(dir, String(f)))
-    .filter((f) => fs.lstatSync(f).isFile())
-    .map((f) => [path.relative(dir, f), fs.readFileSync(f, "utf8")])
-}
-
-const leftReasons = (answer) => (answer.left ?? []).map((e) => e.reason).sort()
 
 after(() => fs.rmSync(root, { recursive: true, force: true }))
 
-for (const impl of requested.filter((i) => !present(i)))
-  describe.skip(`adiutor (${impl}): ${FILES[impl]} does not exist yet`, () => {})
-
 for (const impl of impls) {
-  describe(`adiutor (${impl})`, () => {
+  describe(`${NAME} (${impl})`, () => {
     let server
-    let other
-    let n = 0
     before(async () => {
       server = await startFakeServer()
-      other = await startFakeServer()
     })
-    after(async () => {
-      await server.close()
-      await other.close()
-    })
-    beforeEach(() => {
+    after(() => server.close())
+    const fresh = () => {
       server.reset()
-      other.reset()
-      fs.rmSync(nodeCalled, { force: true })
-      fs.rmSync(curlArgs, { force: true })
-    })
-    const fresh = () => path.join(root, `${impl}-${++n}`, "home")
-    const r = (home, args, env, first) => run(impl, home, args, env, first)
-
-    async function connected(home, srv = server, args = []) {
-      const c = await r(home, ["connect", "--url", srv.origin, ...args])
-      assert.equal(c.json?.status, "pending", c.all)
-      srv.approve()
-      const w = await r(home, ["connect", "--wait", "--url", srv.origin])
-      assert.equal(w.json?.status, "connected", w.all)
-      return w
+      return install()
     }
 
-    // --- Connecting ---
-
-    it("connects end to end: one key, its session ended, nothing left, no secret anywhere but its files", async () => {
-      const home = fresh()
-      const c = await r(home, ["connect", "--url", server.origin])
-      assert.equal(c.code, 0, c.all)
+    it("connects with a code the person approves, named after the computer", async () => {
+      const inst = fresh()
+      const c = await run(impl, inst, server, ["connect"])
+      assert.equal(c.code, 0, c.out + c.err)
       assert.equal(c.json.status, "pending")
-      assert.equal(c.json.origin, server.origin)
-      assert.match(c.json.link, new RegExp(`^${server.origin}/connect/device\\?user_code=[A-Z0-9]{8}$`))
+      assert.match(c.json.link, new RegExp(`^${server.issuer}/connect/device\\?user_code=`))
       assert.match(c.json.code, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/)
-      assert.equal(c.json.next, `adiutor connect --wait --url ${server.origin}`)
-      assert.deepEqual(c.json.left, [])
-      const s1 = await r(home, ["status"])
-      assert.equal(s1.json.status, "not_connected", s1.all)
-      assert.equal(s1.json.pending.code, c.json.code)
-      // The same attempt again, without --url: nothing new is requested.
-      const again = await r(home, ["connect"])
-      assert.equal(again.json.code, c.json.code, again.all)
-      assert.equal(server.counts.deviceCode, 1)
+      // The same hint from every version: the link and the code go in the reply that ends the agent's turn.
+      assert.equal(c.json.next, connectNext(server.issuer))
+      assert.match(server.last.label, /^Agents on .+/)
+      assert.equal(server.last.deviceScope, SCOPE)
+      assert.equal(server.last.resource, `${server.issuer}/api`)
+      assert.equal((await run(impl, inst, server, ["status"])).json.status, "pending")
+      // Asking again while the code is open shows the same code, without a new one.
+      const again = await run(impl, inst, server, ["connect"])
+      assert.equal(again.json.code, c.json.code)
+      // Unless the person needs a new one.
+      const renewed = await run(impl, inst, server, ["connect", "--replace"])
+      assert.notEqual(renewed.json.code, c.json.code)
       server.approve()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.code, 0, w.all)
-      assert.equal(w.json.status, "connected")
-      assert.match(w.json.keyName, /^skill:[A-Za-z0-9._-]{1,15}:[0-9a-f]{8}$/)
-      assert.ok(w.json.keyName.length <= 32)
-      assert.equal(w.json.warning, undefined)
-      assert.deepEqual(w.json.left, [], "a normal connect leaves no left entry")
-      const keys = server.aliveKeys()
-      assert.equal(keys.length, 1)
-      assert.equal(keys[0][1].name, w.json.keyName)
-      assert.equal(keys[0][1].expiresIn, 90 * DAY)
-      assert.equal(w.json.expiresAt, keys[0][1].expiresAt)
-      assert.equal(server.aliveSessions(), 0, "the approval's session was ended")
-      assert.equal(server.counts.revoke, 1)
-      for (const req of server.authRequests()) assert.equal(req.userAgent, "adiutor-connect", req.path)
-      const s2 = await r(home, ["status"])
-      assert.deepEqual(
-        { ...s2.json },
-        {
-          status: "connected",
-          origin: server.origin,
-          keyName: w.json.keyName,
-          expiresAt: w.json.expiresAt,
-          left: [],
-        },
-      )
-      const g = await r(home, ["get", "items?q=login"])
-      assert.equal(g.code, 0, g.all)
-      assert.equal(g.json.status, 200)
-      assert.equal(g.json.data.path, "/api/v1/items")
-      assert.equal(g.json.data.query, "?q=login")
-      assert.equal(server.requests.at(-1).authorization, `Bearer ${keys[0][0]}`)
-      assert.notEqual(server.requests.at(-1).userAgent, "adiutor-connect")
-      noSecrets(server, c, s1, again, w, s2, g)
-      // Files: the key only in `connection`, nothing else left behind (no lock, no temporary file).
-      const files = filesUnder(home)
-      assert.deepEqual(
-        files.map(([f]) => f),
-        ["connection"],
-      )
-      const { deviceCodes, sessions } = server.secrets()
-      for (const [, text] of files)
-        for (const secret of [...deviceCodes, ...sessions]) assert.ok(!text.includes(secret))
-      if (impl === "sh" && fs.existsSync(curlArgs)) {
-        const argv = fs.readFileSync(curlArgs, "utf8")
-        for (const secret of [...deviceCodes, ...sessions, keys[0][0]])
-          assert.ok(!argv.includes(secret), "a secret in curl's argv")
-      }
-      const already = await r(home, ["connect"])
-      assert.equal(already.json.error, "already_connected", already.all)
-      assert.equal(already.code, 1)
-    })
-
-    // Started from PowerShell 7, a child Windows PowerShell inherits PS7's module path and cannot load Get-Acl.
-    it("connects when started from PowerShell 7 (its PSModulePath inherited)", {
-      skip: !win && "Windows only",
-    }, async () => {
-      const pwshModules = [
-        path.join(os.homedir(), "Documents", "PowerShell", "Modules"),
-        "C:\\Program Files\\PowerShell\\Modules",
-        "C:\\Program Files\\PowerShell\\7\\Modules",
-      ].join(";")
-      const home = fresh()
-      const c = await r(home, ["connect", "--url", server.origin], { PSModulePath: pwshModules })
-      assert.equal(c.json?.status, "pending", c.all)
-      server.approve()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin], { PSModulePath: pwshModules })
-      assert.equal(w.json?.status, "connected", w.all)
-      const s = await r(home, ["status"], { PSModulePath: pwshModules })
-      assert.equal(s.json?.status, "connected", s.all)
-    })
-
-    it("names the key after ADIUTOR_AGENT_NAME, cut to 32 characters, and keeps --days", async () => {
-      const home = fresh()
-      const c = await r(home, ["connect", "--url", server.origin, "--days", "7"], {
-        ADIUTOR_AGENT_NAME: "Build box (east) with a long name",
-      })
-      assert.equal(c.json?.status, "pending", c.all)
-      server.approve()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_AGENT_NAME: "ignored" })
-      assert.equal(w.json?.status, "connected", w.all)
-      assert.match(w.json.keyName, /^skill:Build-box-east:[0-9a-f]{8}$/)
-      assert.equal(server.aliveKeys()[0][1].expiresIn, 7 * DAY)
-      for (const bad of ["0", "366", "x", "1.5"]) {
-        const b = await r(fresh(), ["connect", "--url", server.origin, "--days", bad])
-        assert.equal(b.json?.error, "bad_option", `${bad}: ${b.all}`)
-      }
-    })
-
-    it("keeps waiting, slows down when asked, and says when the owner denied", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.slowDownOnce = true
-      const w = await r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_WAIT_SECONDS: "3" })
-      assert.equal(w.code, 0, w.all)
-      assert.equal(w.json.status, "still_waiting")
-      assert.equal(w.json.next, `adiutor connect --wait --url ${server.origin}`)
-      server.deny()
-      const d = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(d.json.error, "denied", d.all)
-      assert.equal(d.code, 1)
-      assert.equal((await r(home, ["status"])).json.pending, undefined)
-    })
-
-    it("says when the code expired", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.expire()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json.error, "expired", w.all)
-      assert.deepEqual((await r(home, ["status"])).json.left, [])
-    })
-
-    it("--replace keeps the old connection until the new one is saved, then reports the old key", async () => {
-      const home = fresh()
-      const first = await connected(home)
-      const oldKey = server.aliveKeys()[0][0]
-      const c = await r(home, ["connect", "--replace"])
-      assert.equal(c.json?.status, "pending", c.all)
-      const s = await r(home, ["status"])
+      const w = await run(impl, inst, server, ["connect", "--wait"])
+      assert.equal(w.json.status, "connected", w.out + w.err)
+      assert.equal(w.json.scope, SCOPE)
+      const s = await run(impl, inst, server, ["status"])
       assert.equal(s.json.status, "connected")
-      assert.equal(s.json.keyName, first.json.keyName, "the old connection stays while the new one waits")
-      assert.equal((await r(home, ["get", "projects"])).code, 0)
-      assert.equal(server.requests.at(-1).authorization, `Bearer ${oldKey}`)
-      // Showing the attempt again does not need --replace.
-      assert.equal((await r(home, ["connect"])).json.code, c.json.code)
+      assert.ok(s.json.accessExpiresIn > 800)
+      noSecrets(server, c, w, s)
+      // Connected already: no new code unless asked to replace.
+      assert.equal((await run(impl, inst, server, ["connect"])).json.status, "already_connected")
+    })
+
+    it("keeps waiting while the code is not approved, then says so", async () => {
+      const inst = fresh()
+      await run(impl, inst, server, ["connect"])
+      server.slowDownOnce = true
+      const w = await run(impl, inst, server, ["connect", "--wait"], { [`${ENV}WAIT_SECONDS`]: "3" })
+      assert.equal(w.code, 0, w.out + w.err)
+      assert.equal(w.json.status, "still_waiting")
+      assert.equal(w.json.next, waitNext(server.issuer))
+      server.deny()
+      const d = await run(impl, inst, server, ["connect", "--wait"])
+      assert.equal(d.json.error, "denied")
+      assert.equal(d.code, 1)
+    })
+
+    it("never collects an approved code twice after its answer was lost", async () => {
+      const inst = fresh()
+      await run(impl, inst, server, ["connect"])
       server.approve()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.status, "connected", w.all)
-      assert.notEqual(w.json.keyName, first.json.keyName)
-      assert.deepEqual(
-        w.json.left.map(({ origin, keyName, expiresAt, reason }) => ({ origin, keyName, expiresAt, reason })),
-        [{ origin: server.origin, keyName: first.json.keyName, expiresAt: first.json.expiresAt, reason: "replaced" }],
-      )
-      assert.match(w.json.left[0].message, /Settings, Agent access/)
-      assert.equal(server.keys.get(oldKey).alive, true, "the command cannot delete a key")
-      await r(home, ["get", "projects"])
-      assert.notEqual(server.requests.at(-1).authorization, `Bearer ${oldKey}`)
+      server.dropNextDeviceToken = true
+      const lost = await run(impl, inst, server, ["connect", "--wait"])
+      assert.equal(lost.json.error, "unreachable", lost.out + lost.err)
+      const orphan = server.orphan
+      // The code was spent: presenting it again is a reuse, which ends the grant made for the lost answer.
+      const again = await run(impl, inst, server, ["connect", "--wait"])
+      assert.equal(again.json.error, "expired", again.out + again.err)
+      assert.equal(server.grants.get(server.refresh.get(orphan).grant).alive, false, "the lost answer's grant ended")
+      assert.equal((await run(impl, inst, server, ["status"])).json.status, "not_connected")
+      noSecrets(server, lost, again)
     })
 
-    it("--replace on a pending attempt starts a new one", async () => {
-      const home = fresh()
-      const a = await r(home, ["connect", "--url", server.origin])
-      const b = await r(home, ["connect", "--replace"])
-      assert.equal(b.json?.status, "pending", b.all)
-      assert.notEqual(b.json.code, a.json.code)
-      server.approve()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.status, "connected", w.all)
-      assert.deepEqual(w.json.left, [])
+    it("reads the API with the stored access token, refreshing only when it runs out", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      const before = server.counts.refresh
+      const r = await run(impl, inst, server, ["get", "/api/items?status=open"])
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(r.json.data.path, "/api/items")
+      assert.equal(r.json.data.query, "?status=open")
+      assert.equal(server.counts.refresh, before, "no refresh while the token lasts")
+      server.expireAccessTokens()
+      const again = await run(impl, inst, server, ["get", "/api/items/12"])
+      assert.equal(again.code, 0, again.out + again.err)
+      assert.equal(server.counts.refresh, before + 1, "one refresh after the token refusal")
+      assert.equal(server.counts.reuse, 0)
+      noSecrets(server, r, again)
     })
 
-    it("disconnect forgets the connection and reports the key left on Adiutor", async () => {
-      const home = fresh()
-      const w = await connected(home)
-      const d = await r(home, ["disconnect"])
-      assert.equal(d.json?.status, "disconnected", d.all)
-      assert.equal(d.json.keyName, w.json.keyName)
-      assert.deepEqual(leftReasons(d.json), ["disconnected"])
-      assert.equal(d.json.left[0].origin, server.origin)
-      const s = await r(home, ["status"])
-      assert.equal(s.json.status, "not_connected")
-      assert.deepEqual(leftReasons(s.json), ["disconnected"])
-      assert.equal((await r(home, ["get", "items"])).json.error, "not_connected")
-      assert.equal(server.aliveKeys().length, 1)
-      const cleared = await r(home, ["status", "--clear-left"])
-      assert.deepEqual(cleared.json.left, [], cleared.all)
-      assert.equal((await r(fresh(), ["disconnect"])).json.status, "not_connected")
+    it("refreshes once when ten commands find the token about to run out at the same time", async () => {
+      const inst = fresh()
+      server.accessTtl = 30
+      server.refreshAccessTtl = 900
+      await connected(impl, inst, server)
+      const before = server.counts.refresh
+      const all = await Promise.all(Array.from({ length: 10 }, () => run(impl, inst, server, ["get", "/api/items"])))
+      for (const r of all) assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(server.counts.refresh, before + 1)
+      assert.equal(server.counts.reuse, 0)
     })
 
-    it("asks for an address when none is known", async () => {
-      const home = fresh()
-      const c = await r(home, ["connect"])
-      assert.equal(c.json?.error, "no_url", c.all)
-      assert.equal((await r(home, ["status"])).json.status, "not_connected")
+    it("posts a JSON body, and passes on the server's own refusals and failures", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      const body = path.join(inst.base, "body.json")
+      fs.writeFileSync(body, JSON.stringify({ name: "Quarterly report", tags: ["finance"] }))
+      const r = await run(impl, inst, server, ["post", "/api/items", "--json-file", body])
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.deepEqual(r.json.data.body, { name: "Quarterly report", tags: ["finance"] })
+      const empty = await run(impl, inst, server, ["post", "/api/items/4/archive"])
+      assert.equal(empty.json?.data?.method, "POST", empty.out + empty.err)
+      assert.deepEqual(empty.json.data.body, {})
+      server.afterRun.push({ status: 403, body: { error: "not_allowed", message: "This item is locked." } })
+      const refused = await run(impl, inst, server, ["post", "/api/items/4/archive"])
+      assert.equal(refused.json?.error, "not_allowed", refused.out + refused.err)
+      assert.equal(refused.json.message, "This item is locked.")
+      assert.equal(refused.json.status, 403)
+      server.afterRun.push({ status: 200, body: { success: false, reason: "duplicate" } })
+      const failed = await run(impl, inst, server, ["post", "/api/items", "--json", "{}"])
+      assert.equal(failed.json?.error, "failed", failed.out + failed.err)
+      assert.equal(failed.code, 1)
+      const notJson = await run(impl, inst, server, ["post", "/api/items", "--json", "name=x"])
+      assert.equal(notJson.json?.error, "bad_body", notJson.out + notJson.err)
     })
 
-    // --- Lost answers ---
-
-    it("a /device/token answer lost, then the code used: session_unknown, never a plain expired", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      server.lose.token = true
-      const lost = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(lost.json?.error, "unreachable", lost.all)
-      assert.deepEqual((await r(home, ["status"])).json.pending.warnings, ["session_unknown"])
-      const next = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(next.json?.error, "session_unknown", next.all)
-      assert.deepEqual(leftReasons(next.json), ["session_unknown"])
-      const s = await r(home, ["status"])
-      assert.equal(s.json.pending, undefined)
-      assert.deepEqual(leftReasons(s.json), ["session_unknown"])
-      assert.equal(server.aliveKeys().length, 0)
-    })
-
-    it("an /api-key/create answer lost: key_unknown with the name, and the session still ended", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      server.lose.key = true
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.error, "key_unknown", w.all)
-      const name = server.aliveKeys()[0][1].name
-      assert.ok(w.json.message.includes(name))
-      assert.equal(server.counts.revoke, 1)
-      assert.equal(server.aliveSessions(), 0)
-      const s = await r(home, ["status"])
-      assert.equal(s.json.status, "not_connected")
-      assert.deepEqual(
-        s.json.left.map((e) => [e.reason, e.keyName, e.expiresAt]),
-        [["key_unknown", name, ""]],
-      )
-    })
-
-    it("a revoke answer lost: connected, with the Account page warning, and session_unknown recorded", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      server.lose.revoke = true
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.status, "connected", w.all)
-      assert.match(w.json.warning, /adiutor connect \(agent approval\)/)
-      assert.deepEqual(leftReasons(w.json), ["session_unknown"])
-    })
-
-    it("a save that fails: the session is still ended and the key is reported", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      const hold = path.join(root, `${impl}-save-${n}`)
-      const p = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_KEY: hold })
-      await reached(hold)
-      // The connection's place is taken by a folder: the save cannot happen.
-      fs.mkdirSync(path.join(home, "connection"))
-      go(hold)
-      const w = await p
-      assert.equal(w.code, 1, w.all)
-      assert.ok(["cannot_save", "insecure_credentials"].includes(w.json?.error), w.all)
-      assert.equal(server.aliveSessions(), 0, "the session was ended")
-      const [[, key]] = server.aliveKeys()
-      assert.ok(
-        w.json.left.some((e) => e.reason === "not_saved" && e.keyName === key.name && e.expiresAt === key.expiresAt),
-      )
-      fs.rmdirSync(path.join(home, "connection"))
-    })
-
-    it("a pending file that cannot be read after the key was made: the key is still recorded and reported", async () => {
-      for (const leftBlocked of [false, true]) {
-        server.reset()
-        const home = fresh()
-        await r(home, ["connect", "--url", server.origin])
-        server.approve()
-        const hold = path.join(root, `${impl}-damaged-${n}`)
-        const p = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_KEY: hold })
-        await reached(hold)
-        fs.writeFileSync(path.join(home, "pending"), "{damaged")
-        // The left record cannot be written either: then the answer itself names the key.
-        if (leftBlocked) fs.mkdirSync(path.join(home, "left"))
-        go(hold)
-        const w = await p
-        assert.equal(w.json?.error, "insecure_credentials", w.all)
-        assert.match(w.json.message, /pending is damaged/, "the first failure is the answer")
-        assert.equal(server.aliveSessions(), 0, "the session was ended")
-        const [[, key]] = server.aliveKeys()
-        if (leftBlocked) {
-          assert.ok(w.json.message.includes(key.name) && w.json.message.includes(key.expiresAt), w.all)
-        } else {
-          assert.deepEqual(
-            w.json.left.map((e) => [e.reason, e.origin, e.keyName, e.expiresAt]),
-            [["not_saved", server.origin, key.name, key.expiresAt]],
-          )
-        }
-        noSecrets(server, w)
+    it("sends a body that is JSON, any JSON, and refuses anything else before sending", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      // From a file, so that no shell or argument quoting changes them on the way.
+      const file = path.join(inst.base, "body.json")
+      let sent = 0
+      for (const [text, value] of [
+        ["null", null],
+        ["12", 12],
+        ['"text"', "text"],
+        ["[1,2]", [1, 2]],
+        ['{"a":{"b":[true,false,null,-0.5e+2]}}', { a: { b: [true, false, null, -50] } }],
+        [' \t{"x":"\\u00e9\\n"}\r\n', { x: "\xe9\n" }],
+      ]) {
+        fs.writeFileSync(file, text)
+        const r = await run(impl, inst, server, ["post", "/api/items", "--json-file", file])
+        assert.deepEqual(r.json?.data?.body, value, `${JSON.stringify(text)}: ${r.out}${r.err}`)
+        sent++
       }
-    })
-
-    it("a create Adiutor refused: no key_unknown, and the session ended", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      server.keyError = { status: 400, code: "INVALID_NAME_LENGTH" }
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.error, "http_400", w.all)
-      assert.equal(server.keys.size, 0)
-      assert.equal(server.aliveSessions(), 0)
-      assert.deepEqual(w.json.left ?? [], [])
-      const s = await r(home, ["status"])
-      assert.equal(s.json.pending, undefined, s.all)
-      assert.deepEqual(s.json.left, [])
-    })
-
-    it("a create that never left: no key_unknown, only the session that could not be ended", async () => {
-      const lone = await startFakeServer()
-      try {
-        const home = fresh()
-        await r(home, ["connect", "--url", lone.origin])
-        lone.approve()
-        const hold = path.join(root, `${impl}-unsent-${n}`)
-        const p = r(home, ["connect", "--wait", "--url", lone.origin], { ADIUTOR_TEST_HOLD_TOKEN: hold })
-        await reached(hold)
-        // Adiutor stops listening: the create and the revoke never reach it.
-        await lone.close()
-        go(hold)
-        const w = await p
-        assert.equal(w.json?.error, "unreachable", w.all)
-        assert.equal(lone.counts.keyCreate, 0)
-        assert.deepEqual(leftReasons(w.json), ["session_unknown"], w.all)
-      } finally {
-        await lone.close()
+      for (const text of [
+        "",
+        " ",
+        '{"name":',
+        '{"name":"a"',
+        "{'a':1}",
+        "{a:1}",
+        "01",
+        "NaN",
+        "[1,]",
+        '{"a":1,}',
+        '{"a":1} x',
+        '{"a":1}{"b":2}',
+        '"\\x"',
+        '"a\tb"',
+        "/*c*/{}",
+        "tru",
+        `${BOM}{}`,
+      ]) {
+        fs.writeFileSync(file, text)
+        const r = await run(impl, inst, server, ["post", "/api/items", "--json-file", file])
+        assert.equal(r.json?.error, "bad_body", `${JSON.stringify(text)}: ${r.out}${r.err}`)
       }
+      assert.equal(server.arrivals("POST", "/api/items"), sent, "nothing else was sent")
     })
 
-    it("an interim 103 answer before the real one: connects normally", async () => {
-      const home = fresh()
-      server.earlyHints = true
-      const w = await connected(home)
-      assert.equal(w.json.warning, undefined, w.all)
-      assert.deepEqual(w.json.left, [])
-      assert.equal(server.aliveKeys().length, 1)
-      assert.equal(server.aliveSessions(), 0)
+    it("sends put, patch and delete, with or without a body", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      const put = await run(impl, inst, server, ["put", "/api/items/5", "--json", '{"name":"b"}'])
+      assert.equal(put.json?.data?.method, "PUT", put.out + put.err)
+      assert.deepEqual(put.json.data.body, { name: "b" })
+      const patch = await run(impl, inst, server, ["patch", "/api/items/5", "--json", '{"name":"c"}'])
+      assert.equal(patch.json?.data?.method, "PATCH", patch.out + patch.err)
+      const del = await run(impl, inst, server, ["delete", "/api/items/5"])
+      assert.equal(del.json?.data?.method, "DELETE", del.out + del.err)
+      assert.equal(del.json.data.body, null)
+      const delBody = await run(impl, inst, server, ["delete", "/api/items/6", "--json", '{"reason":"old"}'])
+      assert.deepEqual(delBody.json?.data?.body, { reason: "old" }, delBody.out + delBody.err)
+      assert.equal(server.runs("PUT", "/api/items/{id}"), 1)
+      assert.equal(server.runs("PATCH", "/api/items/{id}"), 1)
+      assert.equal(server.runs("DELETE", "/api/items/{id}"), 2)
     })
 
-    // --- Concurrency ---
-
-    it("two --wait at once: one key, one revoke", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      const [a, b] = await Promise.all([
-        r(home, ["connect", "--wait", "--url", server.origin]),
-        r(home, ["connect", "--wait", "--url", server.origin]),
-      ])
-      assert.equal(a.json?.status, "connected", a.all)
-      assert.equal(b.json?.status, "connected", b.all)
-      assert.equal(a.json.keyName, b.json.keyName)
-      assert.equal(server.keys.size, 1)
-      assert.equal(server.sessions.size, 1)
-      assert.equal(server.counts.revoke, 1)
-    })
-
-    it("disconnect during --wait cancels the attempt", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      const p = r(home, ["connect", "--wait", "--url", server.origin])
-      for (let i = 0; i < 200 && server.counts.deviceToken === 0; i++) await sleep(50)
-      const d = await r(home, ["disconnect"])
-      assert.equal(d.json?.status, "not_connected", d.all)
-      server.approve()
-      const w = await p
-      assert.equal(w.json?.error, "not_connected", w.all)
-      assert.equal(server.sessions.size, 0, "the code was never redeemed")
-    })
-
-    it("never breaks the lock of a live holder: others answer busy and send nothing", async () => {
-      const home = fresh()
-      const hold = path.join(root, `${impl}-live-${n}`)
-      const holder = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: hold })
-      await reached(hold)
-      const busy = await r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_LOCK_WAIT_MS: "1500" })
-      assert.equal(busy.json?.error, "busy", busy.all)
-      assert.equal(server.counts.deviceCode, 0)
-      go(hold)
-      assert.equal((await holder).json?.status, "pending")
-    })
-
-    it("breaks the lock of a holder that died", async () => {
-      const home = fresh()
-      const hold = path.join(root, `${impl}-dead-${n}`)
-      const holder = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: hold })
-      await reached(hold)
-      await kill(holder)
-      const next = await r(home, ["connect", "--url", server.origin])
-      assert.equal(next.json?.status, "pending", next.all)
-    })
-
-    it("breaks a lock whose process id now belongs to another process", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      const lock = path.join(home, "lock")
-      // This test's own process is alive, but it started at another time than the lock says.
-      const owner = { token: "reused", host: host(), pid: process.pid, start: "not-its-start-time" }
-      fs.writeFileSync(lock, `${JSON.stringify(owner)}\n`)
-      const s = await r(home, ["connect"])
-      assert.equal(s.json?.status, "pending", s.all)
-      assert.equal(fs.existsSync(lock), false)
-    })
-
-    it("never breaks a lock it cannot decide about, and names the file to remove by hand", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      const lock = path.join(home, "lock")
-      const owner = { token: "elsewhere", host: "another-host.invalid", pid: 1, start: "1" }
-      fs.writeFileSync(lock, `${JSON.stringify(owner)}\n`)
-      const a = await r(home, ["connect"], { ADIUTOR_TEST_LOCK_WAIT_MS: "1000" })
-      assert.equal(a.json?.error, "busy", a.all)
-      assert.ok(a.json.message.includes(lock), a.json.message)
-      assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).token, "elsewhere")
-      // A lock that names no holder (its holder stopped before writing it) is undecidable too.
-      fs.writeFileSync(lock, "")
-      const b = await r(home, ["connect"], { ADIUTOR_TEST_LOCK_WAIT_MS: "1000" })
-      assert.equal(b.json?.error, "busy", b.all)
-      assert.equal(fs.existsSync(lock), true)
-      fs.rmSync(lock)
-      assert.equal((await r(home, ["connect"])).json?.status, "pending")
-    })
-
-    it("releases the lock by its token only, and changes nothing once the lock is not its own", async () => {
-      const home = fresh()
-      const hold = path.join(root, `${impl}-token-${n}`)
-      const holder = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: hold })
-      await reached(hold)
-      // As if another command had wrongly broken it and taken a lock of its own.
-      const lock = path.join(home, "lock")
-      const theirs = { token: "theirs", host: host(), pid: process.pid, start: "x" }
-      fs.writeFileSync(lock, `${JSON.stringify(theirs)}\n`)
-      go(hold)
-      const x = await holder
-      assert.equal(x.json?.error, "busy", x.all)
-      assert.equal(server.counts.deviceCode, 0, "nothing was sent")
-      assert.equal(fs.existsSync(path.join(home, "pending")), false)
-      assert.equal(JSON.parse(fs.readFileSync(lock, "utf8")).token, "theirs")
-      fs.rmSync(lock)
-    })
-
-    it("of two that saw the same dead lock, the second never removes the fresh lock the first took", async () => {
-      const home = fresh()
-      const lock = path.join(home, "lock")
-      const h = (name) => path.join(root, `${impl}-race-${name}-${n}`)
-      // A holder that died: its lock stays behind.
-      const dead = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: h("dead") })
-      await reached(h("dead"))
-      await kill(dead)
-      // B and C both see that dead lock. (BREAK_MOVED: the same point in the break of 1de3555, which moved the lock
-      // aside; this test shows that break's failure.)
-      const b = r(home, ["connect", "--url", server.origin], {
-        ADIUTOR_TEST_HOLD_BREAK_OBSERVED: h("b-seen"),
-        ADIUTOR_TEST_HOLD_TEMP: h("b-temp"),
-      })
-      const c = r(home, ["connect", "--url", server.origin], {
-        ADIUTOR_TEST_HOLD_BREAK_OBSERVED: h("c-seen"),
-        ADIUTOR_TEST_HOLD_BREAK_HELD: h("c-held"),
-        ADIUTOR_TEST_HOLD_BREAK_MOVED: h("c-held"),
-      })
-      await Promise.all([reached(h("b-seen")), reached(h("c-seen"))])
-      // B breaks it, takes a fresh lock, asks for a code and stops right before it saves the attempt.
-      go(h("b-seen"))
-      await reached(h("b-temp"))
-      const freshLock = fs.readFileSync(lock, "utf8")
-      // C now breaks what it saw, and stops there; D comes meanwhile and must find the lock taken.
-      go(h("c-seen"))
-      await reached(h("c-held"))
-      const d = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: h("d-locked") })
-      const dLocked = `${h("d-locked")}.reached`
-      for (let i = 0; i < 60 && !fs.existsSync(dLocked); i++) await sleep(50)
-      assert.equal(fs.existsSync(dLocked), false, "D took the lock while B held it")
-      go(h("c-held"))
-      await sleep(1000)
-      assert.equal(fs.existsSync(dLocked), false, "D took the lock while B held it")
-      assert.equal(fs.readFileSync(lock, "utf8"), freshLock, "B's fresh lock was removed")
-      go(h("b-temp"))
-      const bx = await b
-      assert.equal(bx.json?.status, "pending", bx.all)
-      await reached(h("d-locked"))
-      go(h("d-locked"))
-      const [cx, dx] = await Promise.all([c, d])
-      // Nothing was written from a stale look: one code, the one B saved, and no lock or lock.break left.
-      assert.equal(cx.json?.code, bx.json.code, cx.all)
-      assert.equal(dx.json?.code, bx.json.code, dx.all)
-      assert.equal(server.counts.deviceCode, 1)
-      assert.deepEqual(
-        filesUnder(home).map(([f]) => f),
-        ["pending"],
-      )
-    })
-
-    it("a lock.break left behind: busy names it after the wait, and no command removes it", async () => {
-      const home = fresh()
-      const lock = path.join(home, "lock")
-      const breaker = path.join(home, "lock.break")
-      const hold = path.join(root, `${impl}-breaker-${n}`)
-      const dead = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: hold })
-      await reached(hold)
-      await kill(dead)
-      // A command that stopped while it broke that lock.
-      fs.copyFileSync(lock, breaker)
-      const deadLock = fs.readFileSync(lock, "utf8")
-      const a = await r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_LOCK_WAIT_MS: "1000" })
-      assert.equal(a.json?.error, "busy", a.all)
-      assert.ok(a.json.message.includes(breaker), a.json.message)
-      assert.equal(server.counts.deviceCode, 0)
-      assert.equal(fs.readFileSync(breaker, "utf8"), deadLock)
-      assert.equal(fs.readFileSync(lock, "utf8"), deadLock)
-      // Removed by hand: the dead lock is broken again.
-      fs.rmSync(breaker)
-      const b = await r(home, ["connect", "--url", server.origin])
-      assert.equal(b.json?.status, "pending", b.all)
-      assert.deepEqual(
-        filesUnder(home).map(([f]) => f),
-        ["pending"],
-      )
-    })
-
-    it("a dead lock that cannot be removed: busy within the wait, naming it", {
-      skip: !win && process.getuid?.() === 0 && "root removes files in a read-only folder",
-    }, async () => {
-      const home = fresh()
-      const lock = path.join(home, "lock")
-      const h = (name) => path.join(root, `${impl}-stuck-${name}-${n}`)
-      const dead = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_LOCKED: h("dead") })
-      await reached(h("dead"))
-      await kill(dead)
-      let p
-      let holder
-      if (win) {
-        // Another program (a backup, an antivirus) holds the dead lock open without delete sharing.
-        const script = `$f = [IO.File]::Open('${lock}', 'Open', 'Read', 'Read'); [IO.File]::WriteAllText('${h("open")}.reached', 'x'); while (-not [IO.File]::Exists('${h("open")}.go')) { Start-Sleep -Milliseconds 50 }; $f.Dispose()`
-        holder = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: "ignore" })
-        await reached(h("open"))
-        p = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_LOCK_WAIT_MS: "1500" })
-      } else {
-        // The folder made read-only once the command checked it: the dead lock can be neither removed nor broken.
-        p = r(home, ["connect", "--url", server.origin], {
-          ADIUTOR_TEST_LOCK_WAIT_MS: "1500",
-          ADIUTOR_TEST_HOLD_BREAK_OBSERVED: h("seen"),
+    it("refuses an address without https, and a path outside the API", async () => {
+      const inst = fresh()
+      const [cmd, base] = command(impl, inst.dir)
+      const res = await new Promise((resolve) => {
+        const child = spawn(cmd, [...base, "status", "--url", "http://example.com"], { env: baseEnv(impl, inst) })
+        let out = ""
+        child.stdout.on("data", (d) => {
+          out += d
         })
-        await reached(h("seen"))
-        fs.chmodSync(home, 0o500)
-        go(h("seen"))
-      }
-      const started = Date.now()
-      const a = await Promise.race([p, sleep(30_000).then(() => null)])
-      if (win) {
-        go(h("open"))
-        await new Promise((resolve) => (holder.exitCode === null ? holder.on("close", resolve) : resolve()))
-      } else fs.chmodSync(home, 0o700)
-      if (!a) {
-        await kill(p)
-        assert.fail("the command kept trying to remove the lock past its wait")
-      }
-      assert.ok(Date.now() - started < 20_000, "busy came long after the wait")
-      assert.equal(a.json?.error, "busy", a.all)
-      assert.ok(a.json.message.includes(lock), a.json.message)
-      assert.equal(server.counts.deviceCode, 0)
-      assert.equal(fs.existsSync(lock), true)
-      assert.equal(fs.existsSync(path.join(home, "lock.break")), false)
-    })
-
-    it("a run whose lock was lost saves nothing, still ends the session, and names the key it made", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      const hold = path.join(root, `${impl}-broken-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_KEY: hold })
-      await reached(hold)
-      // The lock removed by hand, and another command replaces the attempt meanwhile.
-      fs.rmSync(path.join(home, "lock"))
-      const b = await r(home, ["connect", "--replace"])
-      assert.equal(b.json?.status, "pending", b.all)
-      go(hold)
-      const w = await a
-      assert.equal(w.json?.error, "cannot_save", w.all)
-      const [[, key]] = server.aliveKeys()
-      assert.ok(w.json.message.includes(key.name) && w.json.message.includes(key.expiresAt), w.all)
-      assert.equal(server.aliveSessions(), 0, "the session was still ended")
-      const s = await r(home, ["status"])
-      assert.equal(s.json.status, "not_connected")
-      assert.equal(s.json.pending.code, b.json.code)
-      // The command that took over found the attempt half done and recorded what it may have left.
-      assert.deepEqual(leftReasons(s.json), ["key_unknown", "session_unknown"], s.all)
-    })
-
-    // --- Interrupted runs ---
-
-    it("a run killed with a poll in flight, then the code expires: session_unknown, not expired", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      const held = server.hold("token")
-      const a = r(home, ["connect", "--wait", "--url", server.origin])
-      await held.reached
-      await kill(a)
-      server.expire()
-      held.open()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.error, "session_unknown", w.all)
-      assert.deepEqual(leftReasons(await r(home, ["status"]).then((x) => x.json)), ["session_unknown"])
-    })
-
-    it("a run killed right after the token answer: key_unknown and session_unknown later", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      const hold = path.join(root, `${impl}-token-kill-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_TOKEN: hold })
-      await reached(hold)
-      await kill(a)
-      const s = await r(home, ["status"])
-      assert.deepEqual(s.json.pending.warnings, ["key_unknown", "session_unknown"], s.all)
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.error, "key_unknown", w.all)
-      assert.deepEqual(leftReasons(w.json), ["key_unknown", "session_unknown"])
-    })
-
-    it("a run killed while creating the key: key_unknown with its name", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      const held = server.hold("key")
-      const a = r(home, ["connect", "--wait", "--url", server.origin])
-      await held.reached
-      await kill(a)
-      held.open()
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.error, "key_unknown", w.all)
-      const entry = w.json.left.find((e) => e.reason === "key_unknown")
-      assert.equal(entry.keyName, server.aliveKeys()[0][1].name)
-    })
-
-    it("a revoke not confirmed and the run killed before its answer: status still reports the session", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      server.revokeStatus = 500
-      const hold = path.join(root, `${impl}-done-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_DONE: hold })
-      await reached(hold)
-      await kill(a)
-      const s = await r(home, ["status"])
-      assert.equal(s.json.status, "connected", s.all)
-      assert.deepEqual(leftReasons(s.json), ["session_unknown"])
-    })
-
-    it("a run killed after it replaced the connection: status reports the old key from the left record", async () => {
-      const home = fresh()
-      const first = await connected(home)
-      await r(home, ["connect", "--replace"])
-      server.approve()
-      const hold = path.join(root, `${impl}-replaced-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_DONE: hold })
-      await reached(hold)
-      await kill(a)
-      const s = await r(home, ["status"])
-      assert.notEqual(s.json.keyName, first.json.keyName)
-      assert.deepEqual(
-        s.json.left.map((e) => [e.reason, e.origin, e.keyName]),
-        [["replaced", server.origin, first.json.keyName]],
-      )
-    })
-
-    it("a run stopped after the revoke and before the attempt was removed: nothing to warn of", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      server.approve()
-      const hold = path.join(root, `${impl}-revoked-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_REVOKED: hold })
-      await reached(hold)
-      await kill(a)
-      const s = await r(home, ["status"])
-      assert.equal(s.json.status, "connected", s.all)
-      assert.equal(s.json.pending, undefined)
-      assert.deepEqual(s.json.left, [])
-      const d = await r(home, ["disconnect"])
-      assert.deepEqual(leftReasons(d.json), ["disconnected"])
-    })
-
-    it("keeps session_unknown and key_unknown past any end date until --clear-left", async () => {
-      const home = fresh()
-      await connected(home, server, ["--days", "1"])
-      await r(home, ["connect", "--replace", "--days", "1"])
-      server.approve()
-      server.lose.key = true
-      server.lose.revoke = false
-      server.revokeStatus = 500
-      const w = await r(home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.error, "key_unknown", w.all)
-      const later = { ADIUTOR_TEST_CLOCK_OFFSET: String(100 * DAY) }
-      const s = await r(home, ["status"], later)
-      // The connection's key ended, so a dated entry would have dropped; these have no date the command knows.
-      assert.deepEqual(leftReasons(s.json), ["key_unknown", "session_unknown"], s.all)
-      const cleared = await r(home, ["status", "--clear-left"], later)
-      assert.deepEqual(cleared.json.left, [])
-    })
-
-    it("drops a dated entry once its key has ended", async () => {
-      const home = fresh()
-      await connected(home, server, ["--days", "1"])
-      const d = await r(home, ["disconnect"])
-      assert.deepEqual(leftReasons(d.json), ["disconnected"])
-      const s = await r(home, ["status"], { ADIUTOR_TEST_CLOCK_OFFSET: String(2 * DAY) })
-      assert.deepEqual(s.json.left, [], s.all)
-    })
-
-    it("replacing a connection to another Adiutor keeps the old address in the entry", async () => {
-      const home = fresh()
-      const first = await connected(home)
-      const c = await r(home, ["connect", "--replace", "--url", other.origin])
-      assert.equal(c.json?.origin, other.origin, c.all)
-      other.approve()
-      const w = await r(home, ["connect", "--wait", "--url", other.origin])
-      assert.equal(w.json?.status, "connected", w.all)
-      assert.equal(w.json.origin, other.origin)
-      assert.deepEqual(
-        w.json.left.map((e) => [e.reason, e.origin, e.keyName]),
-        [["replaced", server.origin, first.json.keyName]],
-      )
-    })
-
-    for (const then of [["disconnect"], ["connect", "--replace"]]) {
-      it(`a run killed during a poll, then ${then.join(" ")}: session_unknown kept`, async () => {
-        const home = fresh()
-        await r(home, ["connect", "--url", server.origin])
-        server.approve()
-        const held = server.hold("token")
-        const a = r(home, ["connect", "--wait", "--url", server.origin])
-        await held.reached
-        await kill(a)
-        held.open()
-        const x = await r(home, then)
-        assert.equal(x.code, 0, x.all)
-        assert.deepEqual(leftReasons(x.json), ["session_unknown"])
+        child.on("close", (code) => resolve({ code, json: JSON.parse(out.trim()) }))
       })
+      assert.equal(res.json.error, "insecure_url")
+      await connected(impl, inst, server)
+      for (const p of [
+        "/api/../oauth/token",
+        "/api/%2e%2e/oauth/token",
+        "/api/%2E%2e/%2e%2E/oauth/token",
+        "/api/./items",
+        "https://evil.example/api/items",
+        "//evil.example/api/items",
+        "/api/a b",
+        "/oauth/token",
+        "/api/",
+        "items",
+      ]) {
+        const r = await run(impl, inst, server, ["get", p])
+        assert.equal(r.json?.error, "bad_path", `${p}: ${r.out}`)
+      }
+      assert.equal([...server.arrivalCounts.values()].reduce((a, b) => a + b, 0), 0, "nothing reached the API")
+    })
+
+    it("refuses an escape in the path that a server would decode into another call, and sends nothing", async () => {
+      const inst = fresh()
+      // Act routes next to the read route /api/items/{id}, which the encoded paths below match as they are. The fake
+      // server decodes the path before it routes, as many real servers do.
+      server.policy.unshift(
+        { method: "GET", path: "/api/items/{id}/send", kind: "act", area: "items", description: "Send an item." },
+        { method: "GET", path: "/api/items/export", kind: "act", area: "items", description: "Export the items." },
+      )
+      await listed(impl, inst, server)
+      const arrived = () => [...server.arrivalCounts.values()].reduce((a, b) => a + b, 0)
+      const listedArrivals = arrived()
+      for (const p of [
+        "/api/items/7%2Fsend",
+        "/api/items/7%2fsend",
+        "/api/items/7%5Csend",
+        "/api/items/7%5csend",
+        "/api/items/7%252Fsend",
+        "/api/items/%65xport",
+        "/api/items/expor%74",
+        "/api/items/%45%58",
+        "/api/items/7%3Asend",
+        "/api/items/7%7E",
+        "/api/items/7%",
+        "/api/items/7%2",
+        "/api/items/7%zz",
+      ]) {
+        const r = await run(impl, inst, server, ["get", p])
+        assert.equal(r.json?.error, "bad_path", `${p}: ${r.out}${r.err}`)
+      }
+      assert.equal(arrived(), listedArrivals, "nothing reached the API")
+      // Other escapes in the path, and any escape in the query, are sent as they are.
+      const spaced = await run(impl, inst, server, ["get", "/api/items/a%20b"])
+      assert.equal(spaced.json?.data?.path, "/api/items/a%20b", spaced.out + spaced.err)
+      const q = await run(impl, inst, server, ["get", "/api/items?q=a%2Fb%5Cc%25d"])
+      assert.equal(q.json?.data?.query, "?q=a%2Fb%5Cc%25d", q.out + q.err)
+      assert.equal(server.runs("GET", "/api/items/{id}/send"), 0)
+      assert.equal(server.runs("GET", "/api/items/export"), 0)
+    })
+
+    it("never runs an act that a case-insensitive router picked for a path the list holds as a read", async () => {
+      const inst = fresh()
+      // /api/items/EXPORT matches the read /api/items/{id} in the client; the server, like ASP.NET Core by default,
+      // routes it to the act /api/items/export. Its answer is lost, which would make the client send a read again.
+      server.policy.unshift({ method: "GET", path: "/api/items/export", kind: "act", area: "items", description: "" })
+      server.caseInsensitiveRoutes = true
+      await listed(impl, inst, server)
+      server.afterRun = ["drop", "drop"]
+      const r = await run(impl, inst, server, ["get", "/api/items/EXPORT"])
+      server.afterRun = []
+      assert.equal(server.runs("GET", "/api/items/export"), 0, "the act never ran")
+      assert.equal(r.json?.error, "policy_changed", r.out + r.err)
+      assert.equal(server.arrivals("GET", "/api/items/EXPORT"), 2, "sent again once, after the list was read again")
+      // The path the list holds as an act goes as an act, and runs.
+      const act = await run(impl, inst, server, ["get", "/api/items/export"])
+      assert.equal(act.code, 0, act.out + act.err)
+      assert.equal(server.runs("GET", "/api/items/export"), 1)
+    })
+
+    it("never runs an act that a router which drops ;parameters picked for a path the list holds as a read", async () => {
+      const inst = fresh()
+      server.policy.unshift({ method: "GET", path: "/api/items/export", kind: "act", area: "items", description: "" })
+      server.stripPathParameters = true
+      await listed(impl, inst, server)
+      const arrived = () => [...server.arrivalCounts.values()].reduce((a, b) => a + b, 0)
+      const listedArrivals = arrived()
+      // A ; in the path is refused before anything is sent.
+      server.afterRun = ["drop", "drop"]
+      for (const p of ["/api/items/export;x", "/api/items/export;", "/api/items/7;v=1"]) {
+        const r = await run(impl, inst, server, ["get", p])
+        assert.equal(r.json?.error, "bad_path", `${p}: ${r.out}${r.err}`)
+      }
+      assert.equal(arrived(), listedArrivals, "nothing reached the API")
+      assert.equal(server.runs("GET", "/api/items/export"), 0)
+      // An escaped ; passes the client as the read /api/items/{id}; the server decodes it, drops the parameter and
+      // picks the act. Its check of the declared kind stops it before the route runs.
+      const r = await run(impl, inst, server, ["get", "/api/items/export%3Bx"])
+      server.afterRun = []
+      assert.equal(server.runs("GET", "/api/items/export"), 0, "the act never ran")
+      assert.equal(r.json?.error, "policy_changed", r.out + r.err)
+      assert.equal(server.arrivals("GET", "/api/items/export%3Bx"), 2)
+      // The query keeps a ;.
+      const q = await run(impl, inst, server, ["get", "/api/items?q=a;b"])
+      assert.equal(q.json?.data?.query, "?q=a;b", q.out + q.err)
+    })
+
+    it("declares the kind it found with every call but access and the listing", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      const g = await run(impl, inst, server, ["get", "/api/items/7"])
+      assert.equal(g.code, 0, g.out + g.err)
+      assert.equal(server.last.kind, "read")
+      assert.equal(server.last.policy, server.revision())
+      const search = await run(impl, inst, server, ["post", "/api/items/search", "--json", "{}"])
+      assert.equal(search.code, 0, search.out + search.err)
+      assert.equal(server.last.kind, "read", "a read sent as POST")
+      const p = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      assert.equal(p.code, 0, p.out + p.err)
+      assert.equal(server.last.kind, "act")
+      assert.equal(server.runs("POST", "/api/items"), 1)
+      assert.equal((await run(impl, inst, server, ["access"])).code, 0)
+      assert.equal(server.last.kind, undefined, "not on access")
+      assert.equal((await run(impl, inst, server, ["endpoints"])).code, 0)
+      assert.equal(server.last.kind, undefined, "not on the listing")
+    })
+
+    it("takes an IPv6 address in brackets, written as a browser writes it", async () => {
+      const inst = fresh()
+      for (const [given, origin] of [
+        ["https://[2001:db8::1]", "https://[2001:db8::1]"],
+        ["https://[2001:0DB8:0:0::1]:8443/", "https://[2001:db8::1]:8443"],
+        ["https://[2001:db8::1]:443", "https://[2001:db8::1]"],
+        ["https://[1:0:0:2:0:0:0:3]", "https://[1:0:0:2::3]"],
+        ["https://[1:0:0:2:0:0:3:4]", "https://[1::2:0:0:3:4]"],
+        ["https://[0:0:0:0:0:0:0:0]", "https://[::]"],
+        ["https://[::1:2:3:4:5:6:7]", "https://[0:1:2:3:4:5:6:7]"],
+        ["https://[1:2:3:4:5:6:7::]", "https://[1:2:3:4:5:6:7:0]"],
+        ["https://[::ffff:1.2.3.4]", "https://[::ffff:102:304]"],
+        ["https://[1:2:3:4:5:6:1.2.3.4]", "https://[1:2:3:4:5:6:102:304]"],
+        ["http://[0:0:0:0:0:0:0:1]:8080", "http://[::1]:8080"],
+      ]) {
+        const r = await run(impl, inst, null, ["status", "--url", given])
+        assert.equal(r.json?.url, origin, `${given}: ${r.out}${r.err}`)
+      }
+      for (const bad of [
+        "http://[2001:db8::1]",
+        "https://[2001:db8::1::2]",
+        "https://[12345::1]",
+        "https://[g::1]",
+        "https://[:1::2]",
+        "https://[1:2:3:4:5:6:7]",
+        "https://[1:2:3:4:5:6:7:8:9]",
+        "https://[1::2:3:4:5:6:7:8]",
+        "https://[::ffff:01.2.3.4]",
+        "https://[::ffff:1.2.3]",
+        "https://[::ffff:1.2.3.256]",
+        "https://[1:2:3:4:5:6:7:1.2.3.4]",
+        "https://[::1%25eth0]",
+        "https://[]",
+      ]) {
+        const r = await run(impl, inst, null, ["status", "--url", bad])
+        assert.equal(r.json?.error, "insecure_url", `${bad}: ${r.out}${r.err}`)
+      }
+    })
+
+    it("sends nothing when the list of allowed calls cannot be read", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      server.listingStatus = 500
+      const r = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      assert.equal(r.json?.error, "endpoints_unavailable", r.out + r.err)
+      assert.equal(r.code, 1)
+      assert.equal(server.arrivals("POST", "/api/items"), 0, "the call was not sent")
+      // Access and the listing do not need the list.
+      const a = await run(impl, inst, server, ["access"])
+      assert.equal(a.code, 0, a.out + a.err)
+      server.listingStatus = 0
+      for (const garbage of [
+        "<html>Sign in</html>",
+        "[]",
+        '{"endpoints":"all","revision":"abc"}',
+        '{"endpoints":[]}',
+        '{"endpoints":[],"revision":"not valid!"}',
+        '{"items":[{"method":"GET","path":"/api/items","kind":"read"}],"revision":"abc"}',
+        // A whole listing wrapped in a top array is not a listing (PowerShell 7 unwraps it if read loosely).
+        '[{"endpoints":[{"method":"GET","path":"/api/items","kind":"read"}],"revision":"abc"}]',
+        // Keys in another letter case are other keys.
+        '{"Endpoints":[{"method":"GET","path":"/api/items","kind":"read"}],"Revision":"abc"}',
+      ]) {
+        server.listingBody = garbage
+        const g = await run(impl, inst, server, ["get", "/api/items"])
+        assert.equal(g.json?.error, "endpoints_unavailable", `${garbage}: ${g.out}${g.err}`)
+      }
+      assert.equal(server.arrivals("GET", "/api/items"), 0, "the call was not sent")
+      // An empty list is a list: the call is not in it.
+      server.listingBody = '{"endpoints":[],"revision":"abc"}'
+      const empty = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(empty.json?.error, "bad_path", empty.out + empty.err)
+      server.listingBody = null
+      const ok = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(ok.code, 0, ok.out + ok.err)
+      assert.equal(server.runs("GET", "/api/items"), 1)
+    })
+
+    it("refuses a call the list does not hold, after reading the list again, without sending it", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      const r = await run(impl, inst, server, ["get", "/api/nothing"])
+      assert.equal(r.json?.error, "bad_path", r.out + r.err)
+      assert.equal(server.arrivals("GET", "/api/nothing"), 0)
+      // A listed path with a method the list does not hold for it.
+      const d = await run(impl, inst, server, ["delete", "/api/items"])
+      assert.equal(d.json?.error, "bad_path", d.out + d.err)
+      assert.equal(server.arrivals("DELETE", "/api/items"), 0)
+      // A call added after the list was kept: the list is read again, and the call goes.
+      server.policy.push({ method: "GET", path: "/api/reports/{id}", kind: "read", area: "reports", description: "" })
+      const added = await run(impl, inst, server, ["get", "/api/reports/9"])
+      assert.equal(added.code, 0, added.out + added.err)
+      assert.equal(server.runs("GET", "/api/reports/{id}"), 1)
+      assert.equal(server.arrivals("GET", "/api/reports/9"), 1, "sent with the new revision at once")
+    })
+
+    it("sends the stored revision with every call but access and the listing", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      const e = await run(impl, inst, server, ["endpoints"])
+      assert.equal(e.code, 0, e.out + e.err)
+      assert.equal(e.json.data.revision, server.revision())
+      assert.equal(server.last.policy, undefined, "not on the listing")
+      const kinds = fs.readdirSync(inst.creds).filter((f) => f.endsWith(".kinds"))
+      assert.equal(kinds.length, 1)
+      const head = fs.readFileSync(path.join(inst.creds, kinds[0]), "utf8").split("\n")[0].split(" ")
+      assert.equal(head[0], KINDS_MAGIC)
+      assert.equal(head[1], "2")
+      assert.equal(head[4], server.revision())
+      const listing = server.counts.listing
+      const g = await run(impl, inst, server, ["get", "/api/items/3"])
+      assert.equal(g.code, 0, g.out + g.err)
+      assert.equal(server.last.policy, server.revision())
+      assert.equal(server.counts.listing, listing, "the kept list was used")
+      assert.equal((await run(impl, inst, server, ["access"])).code, 0)
+      assert.equal(server.last.policy, undefined, "not on access")
+      const area = await run(impl, inst, server, ["endpoints", "files"])
+      assert.equal(area.json?.data?.count, 1, area.out + area.err)
+      assert.equal(server.last.policy, undefined, "not on the listing of one area")
+      // A listing of one area is not kept as the list.
+      assert.equal(fs.readFileSync(path.join(inst.creds, kinds[0]), "utf8").split("\n")[0].split(" ")[4], head[4])
+      assert.equal((await run(impl, inst, server, ["endpoints", "Bad-Area"])).json?.error, "bad_path")
+    })
+
+    it("sends the skill's version, or r<revision> from a copy that was not served", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      assert.equal((await run(impl, inst, server, ["access"])).code, 0)
+      assert.equal(server.last.skill, `r${SKILL_REVISION}`)
+      const served = install({ creds: inst.creds, version: "2026.11.12-a1b2c3" })
+      const a = await run(impl, served, server, ["access"])
+      assert.equal(a.code, 0, a.out + a.err)
+      assert.equal(server.last.skill, "2026.11.12-a1b2c3")
+    })
+
+    it("passes back a 401 or 429 that is not a refusal before the route, sending the call once", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      const refreshes = server.counts.refresh
+      server.afterRun.push({ status: 401, body: { error: "upstream_denied", message: "The mail service refused." } })
+      const u = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      assert.equal(u.json?.error, "upstream_denied", u.out + u.err)
+      assert.equal(u.json.status, 401)
+      assert.equal(server.arrivals("POST", "/api/items/7/archive"), 1)
+      assert.equal(server.runs("POST", "/api/items/{id}/archive"), 1)
+      assert.equal(server.counts.refresh, refreshes, "no refresh without the token challenge")
+      server.afterRun.push({ status: 429, body: { error: "rate_limited", message: "The mail service is busy." } })
+      const l = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      assert.equal(l.json?.error, "rate_limited", l.out + l.err)
+      assert.equal(server.runs("POST", "/api/items/{id}/archive"), 2)
+      server.afterRun.push({ status: 429, body: "" })
+      const bare = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      assert.equal(bare.json?.error, "http_429", bare.out + bare.err)
+      assert.equal(server.runs("POST", "/api/items/{id}/archive"), 3)
+      assert.equal(server.arrivals("POST", "/api/items/7/archive"), 3, "each sent once")
+      // A marker nested in a route's own answer is not one of the refusals before the route.
+      server.afterRun.push({ status: 429, body: { error: "rate_limited", message: "Later.", detail: { error: "busy" } } })
+      const nestedBusy = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      assert.equal(nestedBusy.json?.error, "rate_limited", nestedBusy.out + nestedBusy.err)
+      server.afterRun.push({
+        status: 409,
+        body: { error: "conflict", message: "Changed meanwhile.", detail: { error: "policy_changed" } },
+      })
+      const nestedPolicy = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+      assert.equal(nestedPolicy.json?.error, "conflict", nestedPolicy.out + nestedPolicy.err)
+      assert.equal(server.arrivals("POST", "/api/items/7/archive"), 5, "each sent once")
+      assert.equal(server.runs("POST", "/api/items/{id}/archive"), 5)
+      // A read is not sent again for them either.
+      server.afterRun.push({ status: 401, body: { error: "upstream_denied", message: "No." } })
+      await run(impl, inst, server, ["get", "/api/items/7"])
+      assert.equal(server.arrivals("GET", "/api/items/7"), 1)
+    })
+
+    it("reads a refusal or a list only from a complete, strict JSON answer", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      // After an act ran: an answer that is not strict JSON holds no refusal marker, so the act is not sent again.
+      let runs = 0
+      for (const [status, body] of [
+        [429, '{"error":"busy"'],
+        [429, '{"error":"busy",'],
+        [429, "{'error':'busy'}"],
+        [429, '{error:"busy"}'],
+        [429, '{"error":"busy",}'],
+        [429, '/*x*/{"error":"busy"}'],
+        [429, '{"error":"busy"} x'],
+        [429, '{"error":"busy","error":null}'],
+        [429, `${BOM}{"error":"busy"}`],
+        [409, '{"error":"policy_changed"'],
+        [409, "{'error':'policy_changed'}"],
+      ]) {
+        server.afterRun.push({ status, body })
+        const r = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+        runs++
+        assert.equal(r.json?.error, `http_${status}`, `${body}: ${r.out}${r.err}`)
+        assert.equal(server.runs("POST", "/api/items/{id}/archive"), runs, `${body}: ran once`)
+        assert.equal(server.arrivals("POST", "/api/items/7/archive"), runs, `${body}: sent once`)
+      }
+      // A duplicated key counts as JSON.parse reads it: the last value wins.
+      server.beforeRun.push({ status: 429, body: '{"error":"busy","error":null}' })
+      const notBusy = await run(impl, inst, server, ["post", "/api/items/8/archive"])
+      assert.equal(notBusy.json?.error, "http_429", notBusy.out + notBusy.err)
+      assert.equal(server.arrivals("POST", "/api/items/8/archive"), 1, "not sent again")
+      server.beforeRun.push({ status: 429, body: '{"error":null,"error":"busy"}' })
+      const busy = await run(impl, inst, server, ["post", "/api/items/9/archive"])
+      assert.equal(busy.code, 0, busy.out + busy.err)
+      assert.equal(server.arrivals("POST", "/api/items/9/archive"), 2, "sent again once")
+      // A listing that is not a complete, strict JSON list is no list: nothing is sent. (Without the kept list, so
+      // that the call needs a listing; a listing that is no list is not kept.)
+      for (const f of fs.readdirSync(inst.creds)) if (f.endsWith(".kinds")) fs.rmSync(path.join(inst.creds, f))
+      const entry = '{"method":"GET","path":"/api/items","kind":"read"}'
+      for (const body of [
+        `{"endpoints":[${entry}],"revision":"abc"`,
+        `{"endpoints":[${entry}`,
+        `{"endpoints":[${entry}],"revision":"abc"}}`,
+        `{'endpoints':[{'method':'GET','path':'/api/items','kind':'read'}],'revision':'abc'}`,
+        `{"endpoints":[${entry},],"revision":"abc"}`,
+        `{"endpoints":[${entry}],"revision":"abc","endpoints":"all"}`,
+        `{"endpoints":[${entry}],"revision":"abc","revision":null}`,
+      ]) {
+        server.listingBody = body
+        const r = await run(impl, inst, server, ["get", "/api/items"])
+        assert.equal(r.json?.error, "endpoints_unavailable", `${body}: ${r.out}${r.err}`)
+      }
+      assert.equal(server.arrivals("GET", "/api/items"), 0, "the call was not sent")
+      // The last of two kinds wins too (the server's table says act as well, so its check of the kind agrees).
+      server.setKind("GET", "/api/items", "act")
+      server.listingBody = `{"endpoints":[{"method":"GET","path":"/api/items","kind":"read","kind":"act"}],"revision":"${server.revision()}"}`
+      server.afterRun.push("drop")
+      const act = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(act.json?.error, "outcome_unknown", act.out + act.err)
+      assert.equal(server.arrivals("GET", "/api/items"), 1, "an act is not sent again")
+    })
+
+    it("reads busy and policy_changed only as a string under the exact key error of a top object", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      // After an act ran: another key case, a value that is not a string, or a top array is no refusal marker.
+      let runs = 0
+      for (const [status, body] of [
+        [429, '{"Error":"busy"}'],
+        [429, '{"ERROR":"busy"}'],
+        [429, '{"error":["busy"]}'],
+        [429, '{"error":{"busy":true}}'],
+        [429, '[{"error":"busy"}]'],
+        [429, '{"error":"busy","error":["busy"]}'],
+        [409, '{"ERROR":"policy_changed"}'],
+        [409, '{"Error":"policy_changed"}'],
+        [409, '{"error":["policy_changed"]}'],
+        [409, '[{"error":"policy_changed"}]'],
+      ]) {
+        server.afterRun.push({ status, body })
+        const r = await run(impl, inst, server, ["post", "/api/items/7/archive"])
+        runs++
+        assert.equal(r.json?.error, `http_${status}`, `${body}: ${r.out}${r.err}`)
+        assert.equal(r.code, 1, `${body}: ${r.out}${r.err}`)
+        assert.equal(server.runs("POST", "/api/items/{id}/archive"), runs, `${body}: ran once`)
+        assert.equal(server.arrivals("POST", "/api/items/7/archive"), runs, `${body}: sent once`)
+      }
+      // Before the route: the marker counts as JSON.parse reads it, escapes and all, beside keys of any shape.
+      let sent = 0
+      for (const body of ['{"error":"busy","":"x"}', '{"error":"busy","Error":"x"}', '{"\\u0065rror":"bus\\u0079"}']) {
+        server.beforeRun.push({ status: 429, body })
+        const r = await run(impl, inst, server, ["post", "/api/items/9/archive"])
+        runs++
+        sent += 2
+        assert.equal(r.code, 0, `${body}: ${r.out}${r.err}`)
+        assert.equal(server.runs("POST", "/api/items/{id}/archive"), runs, `${body}: ran once`)
+        assert.equal(server.arrivals("POST", "/api/items/9/archive"), sent, `${body}: sent again once`)
+      }
+    })
+
+    it("reads an application failure from any valid JSON answer, and prints the answer as data", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      for (const body of [
+        '{"success":false,"":"note"}',
+        '{"status":"error","data":{"a":1,"A":2}}',
+        '{"success":false,"size":1e400}',
+      ]) {
+        server.afterRun.push({ status: 200, body })
+        const r = await run(impl, inst, server, ["get", "/api/items/7"])
+        assert.equal(r.json?.error, "failed", `${body}: ${r.out}${r.err}`)
+        assert.equal(r.code, 1, `${body}: ${r.out}${r.err}`)
+        assert.equal(r.json.status, 200, body)
+        assert.deepEqual(r.json.data, JSON.parse(body), body)
+      }
+      // Only a top object's own success false or status "error" says so.
+      for (const body of [
+        '{"data":{"success":false}}',
+        '{"success":"false"}',
+        '{"Success":false}',
+        '{"Status":"error"}',
+        '[{"success":false}]',
+        '{"status":"error","status":"ok"}',
+      ]) {
+        server.afterRun.push({ status: 200, body })
+        const r = await run(impl, inst, server, ["get", "/api/items/7"])
+        assert.equal(r.code, 0, `${body}: ${r.out}${r.err}`)
+        assert.deepEqual(r.json?.data, JSON.parse(body), body)
+      }
+      // Any JSON value keeps its type in data: a null, a boolean, a number or a string is not turned into text.
+      for (const body of ["null", "false", "12", '"x"', "[]"]) {
+        server.afterRun.push({ status: 200, body })
+        const r = await run(impl, inst, server, ["get", "/api/items/7"])
+        assert.equal(r.code, 0, `${body}: ${r.out}${r.err}`)
+        assert.ok(r.json && "data" in r.json, `${body}: ${r.out}${r.err}`)
+        assert.deepEqual(r.json.data, JSON.parse(body), body)
+      }
+    })
+
+    // A read and an act that both match one path: the static read /api/items/export and the act /api/items/{id}.
+    const overlapping = () => {
+      server.setKind("GET", "/api/items/{id}", "act")
+      server.policy.unshift({ method: "GET", path: "/api/items/export", kind: "read", area: "items", description: "" })
     }
 
-    it("a disconnect stopped between its record and the change: the live key is never reported as left", async () => {
-      const home = fresh()
-      const w = await connected(home)
-      const hold = path.join(root, `${impl}-recorded-${n}`)
-      const d = r(home, ["disconnect"], { ADIUTOR_TEST_HOLD_RECORDED: hold })
-      await reached(hold)
-      await kill(d)
-      const s = await r(home, ["status"])
-      assert.equal(s.json.status, "connected", s.all)
-      assert.equal(s.json.keyName, w.json.keyName)
-      assert.deepEqual(s.json.left, [])
-      // Removed from the record too, under the lock.
-      const left = path.join(home, "left")
-      assert.ok(!fs.existsSync(left) || !fs.readFileSync(left, "utf8").includes(w.json.keyName))
-      const again = await r(home, ["disconnect"])
-      assert.deepEqual(leftReasons(again.json), ["disconnected"], again.all)
+    it("sends a path that a read and an act both match as a read after the act was refused, when the router picks the read", async () => {
+      const inst = fresh()
+      overlapping()
+      server.routePreference = "static"
+      await listed(impl, inst, server)
+      const r = await run(impl, inst, server, ["get", "/api/items/export"])
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(r.json?.data?.kind, "read")
+      assert.equal(server.runs("GET", "/api/items/export"), 1, "the read ran once")
+      assert.equal(server.runs("GET", "/api/items/{id}"), 0, "the act never ran")
+      assert.equal(server.arrivals("GET", "/api/items/export"), 2, "the refused act and the read")
+      // A further policy_changed ends the command, and nothing runs.
+      server.beforeRun.push("policy_changed", "policy_changed")
+      const twice = await run(impl, inst, server, ["get", "/api/items/export"])
+      assert.equal(twice.json?.error, "policy_changed", twice.out + twice.err)
+      assert.equal(server.arrivals("GET", "/api/items/export"), 4)
+      assert.equal(server.runs("GET", "/api/items/export"), 1)
+      // From a list read for the call (none kept) too.
+      for (const f of fs.readdirSync(inst.creds)) if (f.endsWith(".kinds")) fs.rmSync(path.join(inst.creds, f))
+      const fetched = await run(impl, inst, server, ["get", "/api/items/export"])
+      assert.equal(fetched.code, 0, fetched.out + fetched.err)
+      assert.equal(server.runs("GET", "/api/items/export"), 2)
+      assert.equal(server.runs("GET", "/api/items/{id}"), 0, "the act never ran")
     })
 
-    it("a replace stopped between its record and the change: the live key is never reported as left", async () => {
-      const home = fresh()
-      const first = await connected(home)
-      await r(home, ["connect", "--replace"])
+    it("sends a path that a read and an act both match as an act, once, when the router picks the act", async () => {
+      const inst = fresh()
+      overlapping()
+      server.routePreference = "dynamic"
+      await listed(impl, inst, server)
+      const r = await run(impl, inst, server, ["get", "/api/items/export"])
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(r.json?.data?.kind, "act")
+      assert.equal(server.runs("GET", "/api/items/{id}"), 1, "the act ran once")
+      assert.equal(server.arrivals("GET", "/api/items/export"), 1, "sent once")
+      // Its answer is lost: the outcome is unknown, and it is not sent again.
+      server.afterRun.push("drop")
+      const lost = await run(impl, inst, server, ["get", "/api/items/export"])
+      assert.equal(lost.json?.error, "outcome_unknown", lost.out + lost.err)
+      assert.equal(server.runs("GET", "/api/items/{id}"), 2, "the act ran once more, for the second command only")
+      assert.equal(server.arrivals("GET", "/api/items/export"), 2, "sent once")
+      assert.equal(server.runs("GET", "/api/items/export"), 0, "the read never ran")
+    })
+
+    it("refreshes and sends again once after the token refusal", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      const refreshes = server.counts.refresh
+      server.beforeRun.push("invalid_token")
+      const r = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(server.arrivals("POST", "/api/items"), 2)
+      assert.equal(server.runs("POST", "/api/items"), 1)
+      assert.equal(server.counts.refresh, refreshes + 1)
+      server.beforeRun.push("invalid_token", "invalid_token")
+      const twice = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      assert.equal(twice.code, 1, twice.out + twice.err)
+      assert.equal(twice.json?.error, "http_401")
+      assert.equal(server.arrivals("POST", "/api/items"), 4, "sent again only once")
+      assert.equal(server.runs("POST", "/api/items"), 1)
+      assert.equal(server.counts.reuse, 0)
+    })
+
+    it("waits and sends again once after the busy refusal", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      server.beforeRun.push("busy")
+      const r = await run(impl, inst, server, ["patch", "/api/items/2", "--json", '{"name":"a"}'])
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(server.arrivals("PATCH", "/api/items/2"), 2)
+      assert.equal(server.runs("PATCH", "/api/items/{id}"), 1)
+      server.beforeRun.push("busy", "busy")
+      const twice = await run(impl, inst, server, ["patch", "/api/items/2", "--json", '{"name":"a"}'])
+      assert.equal(twice.json?.error, "busy", twice.out + twice.err)
+      assert.equal(server.arrivals("PATCH", "/api/items/2"), 4, "sent again only once")
+      assert.equal(server.runs("PATCH", "/api/items/{id}"), 1)
+    })
+
+    it("reads the list again after policy_changed and sends the call once more", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      // The policy changes after the list was kept.
+      server.setKind("GET", "/api/files/{name:path}", "act")
+      const listing = server.counts.listing
+      const r = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(server.arrivals("GET", "/api/items"), 2)
+      assert.equal(server.runs("GET", "/api/items"), 1)
+      assert.equal(server.counts.listing, listing + 1)
+      assert.equal(server.last.policy, server.revision())
+      // A second policy_changed in a row ends the command; nothing more is sent.
+      server.beforeRun.push("policy_changed", "policy_changed")
+      const twice = await run(impl, inst, server, ["post", "/api/items", "--json", "{}"])
+      assert.equal(twice.json?.error, "policy_changed", twice.out + twice.err)
+      assert.equal(server.arrivals("POST", "/api/items"), 2)
+      assert.equal(server.runs("POST", "/api/items"), 0)
+      // A call the new list no longer holds is not sent again.
+      server.policy = server.policy.filter((e) => !(e.method === "GET" && e.path === "/api/items/{id}"))
+      const gone = await run(impl, inst, server, ["get", "/api/items/4"])
+      assert.equal(gone.json?.error, "bad_path", gone.out + gone.err)
+      assert.equal(server.arrivals("GET", "/api/items/4"), 1)
+    })
+
+    it("sends a call under its new kind after policy_changed: a read become an act is not sent twice", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      // The list says read; the server changes it to act before the call arrives, then loses the call's answer.
+      server.reclassifyAfterListing = { method: "GET", path: "/api/items/{id}", kind: "act" }
+      server.afterRun.push("drop")
+      const r = await run(impl, inst, server, ["get", "/api/items/8"])
+      assert.equal(r.json?.error, "outcome_unknown", r.out + r.err)
+      assert.equal(server.runs("GET", "/api/items/{id}"), 1, "ran exactly once")
+      assert.equal(server.arrivals("GET", "/api/items/8"), 2, "the refused send and the one that ran")
+    })
+
+    it("never sends an act twice: a lost or broken answer, or a server failure, is outcome_unknown", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      server.afterRun.push("drop")
+      const lost = await run(impl, inst, server, ["post", "/api/items", "--json", '{"name":"a"}'])
+      assert.equal(lost.json?.error, "outcome_unknown", lost.out + lost.err)
+      assert.equal(server.runs("POST", "/api/items"), 1)
+      server.afterRun.push("truncate")
+      const broken = await run(impl, inst, server, ["patch", "/api/items/3", "--json", '{"name":"b"}'])
+      assert.equal(broken.json?.error, "outcome_unknown", broken.out + broken.err)
+      assert.equal(server.runs("PATCH", "/api/items/{id}"), 1)
+      server.afterRun.push({ status: 500, body: { error: "server_error" } })
+      const failed = await run(impl, inst, server, ["delete", "/api/items/3"])
+      assert.equal(failed.json?.error, "outcome_unknown", failed.out + failed.err)
+      assert.equal(failed.json.status, 500)
+      assert.equal(server.runs("DELETE", "/api/items/{id}"), 1)
+    })
+
+    it("sends a read once more when its answer was lost, whatever its method", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      server.afterRun.push("drop")
+      const r = await run(impl, inst, server, ["get", "/api/items/3"])
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(server.runs("GET", "/api/items/{id}"), 2)
+      // A search sent as POST is a read in the list.
+      server.afterRun.push("truncate")
+      const s = await run(impl, inst, server, ["post", "/api/items/search", "--json", '{"q":"x"}'])
+      assert.equal(s.code, 0, s.out + s.err)
+      assert.equal(server.runs("POST", "/api/items/search"), 2)
+      server.afterRun.push("drop", "drop")
+      const twice = await run(impl, inst, server, ["get", "/api/items/3"])
+      assert.equal(twice.json?.error, "unreachable", twice.out + twice.err)
+      assert.equal(server.runs("GET", "/api/items/{id}"), 4)
+    })
+
+    it("ends when the server ended the connection, and forgets it", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      server.endAllGrants()
+      server.expireAccessTokens()
+      const r = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(r.json.error, "connection_ended", r.out + r.err)
+      assert.equal((await run(impl, inst, server, ["status"])).json.status, "not_connected")
+    })
+
+    it("retries a refresh whose answer was lost once, which ends the connection and the token nobody got", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      server.expireAccessTokens()
+      server.dropNextRefresh = true
+      const lost = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(lost.json.error, "unreachable", lost.out + lost.err)
+      const orphan = server.orphan
+      const refreshes = server.counts.refresh
+      // Right after, the lost refresh might still be on its way: nothing is sent.
+      const soon = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(soon.json.error, "busy", soon.out + soon.err)
+      assert.equal(server.counts.refresh, refreshes)
+      const next = await run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_REFRESH_GRACE`]: "0" })
+      assert.equal(next.json.error, "connection_ended", next.out + next.err)
+      assert.equal(server.grants.get(server.refresh.get(orphan).grant).alive, false, "the orphaned token's grant ended")
+    })
+
+    it("treats an answer that broke off like a lost one", async () => {
+      const inst = fresh()
+      await connected(impl, inst, server)
+      server.expireAccessTokens()
+      server.truncateNextRefresh = true
+      const broken = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(broken.json.error, "unreachable", broken.out + broken.err)
+      assert.equal((await run(impl, inst, server, ["status"])).json.status, "connected", "the connection is kept")
+      const orphan = server.orphan
+      const next = await run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_REFRESH_GRACE`]: "0" })
+      assert.equal(next.json.error, "connection_ended", next.out + next.err)
+      assert.equal(server.grants.get(server.refresh.get(orphan).grant).alive, false)
+    })
+
+    it("keeps the token when the refresh never left the computer", async () => {
+      const inst = fresh()
+      // The stored access token runs out within a minute, so the next command refreshes before calling.
+      server.accessTtl = 30
+      server.refreshAccessTtl = 900
+      await connected(impl, inst, server)
+      await server.stop()
+      const down = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(down.json.error, "unreachable", down.out + down.err)
+      await server.start()
+      const up = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(up.code, 0, up.out + up.err)
+      assert.equal(server.counts.refresh, 1, "only the refresh that reached the server")
+      assert.equal(server.counts.reuse, 0)
+    })
+
+    it("keeps an old connection it could not end yet, even when the new one ends", async () => {
+      const inst = fresh()
+      const alive = () => [...server.grants.entries()].filter(([, g]) => g.alive).map(([id]) => id)
+      const others = new Set(alive())
+      await connected(impl, inst, server)
+      const [old] = alive().filter((g) => !others.has(g))
+      server.revokeStatus = 500
+      await run(impl, inst, server, ["connect", "--replace"])
       server.approve()
-      const hold = path.join(root, `${impl}-replace-recorded-${n}`)
-      const a = r(home, ["connect", "--wait", "--url", server.origin], { ADIUTOR_TEST_HOLD_RECORDED: hold })
-      await reached(hold)
-      await kill(a)
-      const s = await r(home, ["status"])
-      assert.equal(s.json.keyName, first.json.keyName, s.all)
-      assert.deepEqual(s.json.left, [])
-      assert.deepEqual(s.json.pending.warnings, ["key_unknown", "session_unknown"])
+      const w = await run(impl, inst, server, ["connect", "--wait"])
+      assert.equal(w.json.status, "connected", w.out + w.err)
+      assert.equal(server.grants.get(old).alive, true, "the server did not confirm, so it is still to be ended")
+      // The new connection ends; the old one must still be ended.
+      for (const id of alive()) if (id !== old && !others.has(id)) server.grants.get(id).alive = false
+      server.expireAccessTokens()
+      const ended = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(ended.json.error, "connection_ended", ended.out + ended.err)
+      server.revokeStatus = 200
+      const again = await run(impl, inst, server, ["connect"])
+      assert.equal(again.json.status, "pending", again.out + again.err)
+      assert.equal(server.grants.get(old).alive, false, "ended once the server answered")
     })
 
-    it("a run stopped after writing a temporary file: the next holder of the lock removes it", async () => {
-      const home = fresh()
-      const hold = path.join(root, `${impl}-written-${n}`)
-      const a = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_WRITTEN: hold })
-      await reached(hold)
-      await kill(a)
-      const [first] = server.secrets().deviceCodes
-      const tmp = fs.readdirSync(home).filter((f) => f.endsWith(".tmp"))
-      assert.equal(tmp.length, 1)
-      assert.ok(fs.readFileSync(path.join(home, tmp[0]), "utf8").includes(first), "the scenario: a secret left behind")
-      const c = await r(home, ["connect", "--url", server.origin])
-      assert.equal(c.json?.status, "pending", c.all)
-      assert.deepEqual(
-        filesUnder(home).map(([f]) => f),
-        ["pending"],
-      )
-      assert.ok(!fs.readFileSync(path.join(home, "pending"), "utf8").includes(first))
+    it("works in a folder whose path has spaces, and leaves no temp files", async () => {
+      const inst = fresh()
+      inst.creds = path.join(inst.base, "my creds")
+      // A file named like the path's first word, which a split path would hit.
+      fs.writeFileSync(path.join(inst.base, "my"), "keep")
+      server.accessTtl = 30
+      server.refreshAccessTtl = 900
+      await connected(impl, inst, server)
+      assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+      assert.equal((await run(impl, inst, server, ["post", "/api/items", "--json", "{}"])).code, 0)
+      assert.equal(fs.readFileSync(path.join(inst.base, "my"), "utf8"), "keep")
+      const left = fs.readdirSync(inst.creds).filter((f) => !/^[0-9a-f]{32}\.(json|kinds)$/.test(f) && f !== "address")
+      assert.deepEqual(left, [])
     })
 
-    // --- Writes whose answer was lost ---
-
-    it("a POST whose write lands after the timeout: outcome_unknown, and nothing is sent again", async () => {
-      const home = fresh()
-      await connected(home)
-      server.apiDelayMs = 1500
-      const id = uuid()
-      const p = await r(home, ["post", `items/${id}/comments`, "--json", '{"text":"Done."}'], {
-        ADIUTOR_TEST_TIMEOUT_MS: "300",
-      })
-      assert.equal(p.json?.error, "outcome_unknown", p.all)
-      assert.equal(p.code, 1)
-      server.apiDelayMs = 0
-      // A read right after shows nothing; the write lands later.
-      assert.equal((await r(home, ["get", `items/${id}`])).json.data.writes, 0)
-      await sleep(1800)
-      assert.equal((await r(home, ["get", `items/${id}`])).json.data.writes, 1)
-      assert.equal(server.counts.apiWrites, 1)
+    it("shares one connection between the agent installs of one computer user", async () => {
+      const inst = fresh()
+      const other = install({ creds: inst.creds })
+      await connected(impl, inst, server)
+      const devices = server.counts.device
+      const s = await run(impl, other, server, ["status"])
+      assert.equal(s.json.status, "connected", s.out + s.err)
+      assert.equal((await run(impl, other, server, ["connect"])).json.status, "already_connected")
+      assert.equal((await run(impl, other, server, ["get", "/api/items"])).code, 0)
+      assert.equal(server.counts.device, devices, "no second connection")
+      // Another user (another credentials folder) has a connection of its own.
+      assert.equal((await run(impl, fresh(), server, ["status"])).json.status, "not_connected")
     })
 
-    it("502, 503, 504 and a cut answer on a write: outcome_unknown, sent once", async () => {
-      const home = fresh()
-      await connected(home)
-      for (const status of [502, 503, 504]) {
-        server.apiStatus = status
-        const before = server.counts.apiWrites
-        const p = await r(home, ["patch", `notes/${uuid()}`, "--json", '{"version":3,"body":"x"}'])
-        assert.equal(p.json?.error, "outcome_unknown", p.all)
-        assert.equal(p.json.status, status)
-        assert.equal(server.counts.apiWrites, before + 1)
-      }
-      server.lose.api = true
-      const before = server.counts.apiWrites
-      const cut = await r(home, ["post", "capture", "--json", '{"text":"An idea"}'])
-      assert.equal(cut.json?.error, "outcome_unknown", cut.all)
-      assert.equal(server.counts.apiWrites, before + 1)
-      // A read that fails is only unreachable or its status.
-      server.apiStatus = 503
-      assert.equal((await r(home, ["get", "items"])).json?.error, "http_503")
-    })
-
-    it("passes Adiutor's refusal on with its code", async () => {
-      const home = fresh()
-      await connected(home)
-      server.apiError = { status: 409, code: "version_conflict", message: "Someone changed it." }
-      const p = await r(home, ["patch", `items/${uuid()}`, "--json", '{"version":1,"status":"done"}'])
-      assert.equal(p.json?.error, "http_409", p.all)
-      assert.equal(p.json.body.error.code, "version_conflict")
-      assert.match(p.json.message, /Someone changed it/)
-    })
-
-    it("a key Adiutor no longer accepts ends the connection", async () => {
-      const home = fresh()
-      await connected(home)
-      for (const k of server.keys.values()) k.alive = false
-      const g = await r(home, ["get", "items"])
-      assert.equal(g.json?.error, "connection_ended", g.all)
-      assert.match(g.json.message, new RegExp(`adiutor connect --url ${server.origin}$`))
-      assert.equal((await r(home, ["status"])).json.status, "not_connected")
-      assert.equal((await r(home, ["connect", "--url", server.origin])).json?.status, "pending")
-    })
-
-    // --- Calls ---
-
-    it("sends only the listed calls, matched as typed", async () => {
-      const home = fresh()
-      const id = uuid()
-      const bad = [
-        ["get", "../auth/api-key/list"],
-        ["get", "items/../settings"],
-        ["get", `items/${id}/../../settings`],
-        ["get", "items%2F..%2Fsettings"],
-        ["get", "%252e%252e/settings"],
-        ["get", "items\\settings"],
-        ["get", `items/${id.toUpperCase()}`],
-        ["get", "items/123"],
-        ["get", `items/${id}/`],
-        ["get", "//evil.example/x"],
-        ["get", "https://evil.example/api/v1/items"],
-        ["get", "items#x"],
-        ["get", "items?q=a b"],
-        ["get", "items?q=it's"],
-        ["get", "items?q=%zz"],
-        ["get", "settings"],
-        ["get", "audit"],
-        ["get", "sync/runs"],
-        ["post", "sync/t3"],
-        ["post", "sync/security"],
-        ["post", "projects"],
-        ["post", "items?x=1"],
-        ["post", "items/%3F"],
-        ["patch", "items"],
-        ["post", `items/${id}`],
-        ["post", "Items"],
-      ]
-      for (const [cmd, p] of bad) {
-        const x = await r(home, [cmd, p, ...(cmd === "get" ? [] : ["--json", "{}"])])
-        assert.equal(x.json?.error, "bad_path", `${cmd} ${p}: ${x.all}`)
-      }
-      assert.equal(server.requests.length, 0)
-      await connected(home)
-      const good = [
-        [
-          "get",
-          "items?q=login&status=todo,in_progress&limit=20",
-          "/api/v1/items",
-          "?q=login&status=todo,in_progress&limit=20",
-        ],
-        ["get", `/notes?projectId=${id}&cursor=abc%3D%3D`, "/api/v1/notes", `?projectId=${id}&cursor=abc%3D%3D`],
-        ["get", `projects`, "/api/v1/projects", ""],
-      ]
-      for (const [cmd, p, pathname, query] of good) {
-        const x = await r(home, [cmd, p])
-        assert.equal(x.json?.status, 200, `${p}: ${x.all}`)
-        assert.equal(x.json.data.path, pathname)
-        assert.equal(x.json.data.query, query)
-        assert.equal(x.json.nextCursor, pathname === "/api/v1/notes" ? "page-2" : undefined)
-      }
-      for (const [cmd, p] of [
-        ["post", "threads/start"],
-        ["post", "items"],
-        ["patch", `items/${id}`],
-        ["post", `items/${id}/comments`],
-        ["post", "capture"],
-        ["post", `items/${id}/threads`],
-        ["patch", `projects/${id}`],
-        ["post", `projects/${id}/stage-proposals`],
-        ["post", "notes"],
-        ["patch", `notes/${id}`],
-      ]) {
-        const x = await r(home, [cmd, p, "--json", '{"a":1}'])
-        assert.equal(x.json?.status, 201, `${cmd} ${p}: ${x.all}`)
-        assert.deepEqual(x.json.data.body, { a: 1 })
-      }
-    })
-
-    it("checks the body and the agent label", async () => {
-      const home = fresh()
-      await connected(home)
-      const file = path.join(root, `${impl}-body-${n}.json`)
-      fs.writeFileSync(file, JSON.stringify({ text: "From a file, with 'quotes' and \"more\"." }))
-      const f = await r(home, ["post", "capture", "--json-file", file, "--as", "codex:review 2"])
-      assert.equal(f.json?.status, 201, f.all)
-      assert.equal(f.json.data.body.text, "From a file, with 'quotes' and \"more\".")
-      assert.equal(f.json.data.agent, "codex:review 2")
-      const e = await r(home, ["get", "items"], { ADIUTOR_AGENT_LABEL: "claude" })
-      assert.equal(e.json.data.agent, "claude")
-      const none = await r(home, ["get", "items"])
-      assert.equal(none.json.data.agent, null)
-      for (const label of ["bad/label", "", "x".repeat(61), "tab\there"]) {
-        const x = await r(home, ["get", "items", "--as", label])
-        assert.equal(x.json?.error, "bad_label", `${label}: ${x.all}`)
-      }
-      assert.equal((await r(home, ["get", "items"], { ADIUTOR_AGENT_LABEL: "no/slash" })).json?.error, "bad_label")
-      assert.equal((await r(home, ["post", "capture", "--json", "{nope"])).json?.error, "bad_json")
-      assert.equal((await r(home, ["post", "capture"])).json?.error, "bad_json")
-      assert.equal((await r(home, ["get", "items", "--json", "{}"])).json?.error, "bad_json")
-      assert.equal(
-        (await r(home, ["post", "capture", "--json-file", path.join(root, "missing.json")])).json?.error,
-        "bad_json",
-      )
-    })
-
-    // --- Where requests go ---
-
-    it("never follows a redirect", async () => {
-      const home = fresh()
-      server.redirect["/api/auth/device/code"] = `${other.origin}/api/auth/device/code`
-      const c = await r(home, ["connect", "--url", server.origin])
-      assert.equal(c.json?.error, "unreachable", c.all)
-      assert.ok(!c.json.message.includes(other.origin), "the location is left out")
-      assert.equal(other.requests.length, 0)
-      server.redirect = {}
-      await connected(home)
-      server.redirect["/api/v1/items"] = `${other.origin}/api/v1/items`
-      const g = await r(home, ["get", "items"])
-      assert.equal(g.json?.error, "unreachable", g.all)
-      assert.equal(other.requests.length, 0)
-    })
-
-    it("waits only at the address the attempt began with", async () => {
-      const home = fresh()
-      await r(home, ["connect", "--url", server.origin])
-      const w = await r(home, ["connect", "--wait", "--url", other.origin])
-      assert.equal(w.json?.error, "not_connected", w.all)
-      assert.equal(other.requests.length, 0)
-      assert.equal(server.counts.deviceToken, 0)
-    })
-
-    it("refuses an approval link on another address", async () => {
-      const home = fresh()
-      server.linkOrigin = other.origin
-      const c = await r(home, ["connect", "--url", server.origin])
-      assert.equal(c.json?.error, "unexpected_answer", c.all)
-      assert.equal((await r(home, ["status"])).json.pending, undefined)
-    })
-
-    it("refuses an address that is not https, or not an address alone", async () => {
-      for (const url of [
-        "http://example.com",
-        "http://192.0.2.10:8090",
-        "ftp://example.com",
-        "https://example.com/adiutor",
-        "https://user:pw@example.com",
-        "https://example.com/?a=1",
-        "not an address",
-      ]) {
-        const c = await r(fresh(), ["connect", "--url", url])
-        assert.equal(c.json?.error, "no_url", `${url}: ${c.all}`)
-      }
-      const g = await r(fresh(), ["status"])
-      assert.equal(g.code, 0)
-    })
-
-    // --- Files ---
-
-    it("makes the temporary file private before anything secret is written", async () => {
-      const home = fresh()
-      const hold = path.join(root, `${impl}-temp-${n}`)
-      const p = r(home, ["connect", "--url", server.origin], { ADIUTOR_TEST_HOLD_TEMP: hold })
-      await reached(hold)
-      const tmp = fs.readdirSync(home).filter((f) => f.endsWith(".tmp"))
-      assert.equal(tmp.length, 1)
-      const file = path.join(home, tmp[0])
-      assert.equal(fs.statSync(file).size, 0)
-      if (win) {
-        const acl = execFileSync("icacls", [file], { encoding: "utf8" })
-        const entries = acl
-          .replace(file, "")
-          .split(/\r?\n/)
-          .map((l) => l.trim())
-          .filter((l) => l.includes(":("))
-        assert.equal(entries.length, 1, acl)
-        assert.ok(!entries[0].includes("(I)"), acl)
-      } else assert.equal(fs.statSync(file).mode & 0o777, 0o600)
-      go(hold)
-      assert.equal((await p).json?.status, "pending")
-      if (!win) {
-        assert.equal(fs.statSync(home).mode & 0o777, 0o700)
-        assert.equal(fs.statSync(path.join(home, "pending")).mode & 0o777, 0o600)
-      }
-    })
-
-    it("refuses a folder or a file that is a link", async (t) => {
-      const target = path.join(root, `${impl}-target-${++n}`)
-      fs.mkdirSync(target, { recursive: true, mode: 0o700 })
-      const home = fresh()
-      fs.mkdirSync(path.dirname(home), { recursive: true })
-      fs.symlinkSync(target, home, win ? "junction" : "dir")
-      const c = await r(home, ["connect", "--url", server.origin])
-      assert.equal(c.json?.error, "insecure_credentials", c.all)
-      assert.equal(fs.readdirSync(target).length, 0)
-      const home2 = fresh()
-      await connected(home2)
-      const real = path.join(home2, "connection")
-      const moved = path.join(root, `${impl}-moved-${n}`)
-      fs.renameSync(real, moved)
+    it("never writes in the skill's folder, which may be read only", async () => {
+      const inst = fresh()
+      const skillDir = path.dirname(inst.dir)
+      const before = snapshot(skillDir)
+      if (!win) fs.chmodSync(skillDir, 0o555)
       try {
-        fs.symlinkSync(moved, real, "file")
-      } catch (e) {
-        if (win && e.code === "EPERM") return t.skip("this Windows user may not create file links")
-        throw e
+        await connected(impl, inst, server)
+        assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+        assert.equal((await run(impl, inst, server, ["disconnect"])).json.status, "disconnected")
+      } finally {
+        if (!win) fs.chmodSync(skillDir, 0o755)
       }
-      const s = await r(home2, ["status"])
-      assert.equal(s.json?.error, "insecure_credentials", s.all)
+      assert.deepEqual(snapshot(skillDir), before)
     })
 
-    if (!win) {
-      it("refuses loose modes and never changes them", async () => {
-        const home = fresh()
-        fs.mkdirSync(home, { recursive: true, mode: 0o755 })
-        fs.chmodSync(home, 0o755)
-        const c = await r(home, ["connect", "--url", server.origin])
-        assert.equal(c.json?.error, "insecure_credentials", c.all)
-        assert.equal(fs.statSync(home).mode & 0o777, 0o755, "not changed silently")
-        const home2 = fresh()
-        await connected(home2)
-        fs.chmodSync(path.join(home2, "connection"), 0o644)
-        const s = await r(home2, ["status"])
-        assert.equal(s.json?.error, "insecure_credentials", s.all)
-        assert.ok(!s.all.includes(server.aliveKeys()[0][0]))
-      })
+    it("keeps the address once connected, for the commands after", async () => {
+      const inst = fresh()
+      const kept = path.join(inst.creds, "address")
+      const none = await run(impl, inst, null, ["status"])
+      assert.equal(none.json?.error, "no_url", none.out + none.err)
+      assert.match(none.json.message, /--url "<address>"/)
+      // Not while the code waits, nor when the person says no.
+      await run(impl, inst, server, ["connect"])
+      assert.equal(fs.existsSync(kept), false)
+      server.deny()
+      assert.equal((await run(impl, inst, server, ["connect", "--wait"])).json.error, "denied")
+      assert.equal(fs.existsSync(kept), false)
+      await connected(impl, inst, server)
+      assert.equal(fs.readFileSync(kept, "utf8"), `${server.issuer}\n`)
+      const s = await run(impl, inst, null, ["status"])
+      assert.equal(s.json.status, "connected", s.out + s.err)
+      assert.equal(s.json.url, server.issuer)
+      assert.equal((await run(impl, inst, null, ["get", "/api/items"])).code, 0)
+      // An address given, or the one a copy served by the server carries, comes before the kept one.
+      const other = "https://other.example"
+      assert.equal((await run(impl, inst, null, ["status", "--url", other])).json.url, other)
+      assert.equal((await run(impl, inst, null, ["status"], { [`${ENV}URL`]: other })).json.url, other)
+      const served = install({ creds: inst.creds, url: other })
+      assert.equal((await run(impl, served, null, ["status"])).json.url, other)
+      // A damaged one is refused, not guessed at.
+      fs.writeFileSync(kept, "app.example\n")
+      const bad = await run(impl, inst, null, ["status"])
+      assert.equal(bad.json?.error, "no_url", bad.out + bad.err)
+      assert.match(bad.json.message, /kept/)
+      assert.match(bad.json.message, /--url "<address>"/)
+      // Line breaks at its end are fine, a second line is not, and a folder in its place is refused.
+      fs.writeFileSync(kept, `${server.issuer}\r\n`)
+      const crlf = await run(impl, inst, null, ["status"])
+      assert.equal(crlf.json?.url, server.issuer, crlf.out + crlf.err)
+      // (Joined, the two lines would make another valid address.)
+      fs.writeFileSync(kept, "https://app.example\ngarbage\n")
+      const two = await run(impl, inst, null, ["status"])
+      assert.equal(two.json?.error, "no_url", two.out + two.err)
+      fs.rmSync(kept)
+      fs.mkdirSync(kept)
+      const folder = await run(impl, inst, null, ["status"])
+      assert.equal(folder.json?.error, "insecure_credentials", folder.out + folder.err)
+    })
 
-      it("refuses a file owned by another user", {
-        skip: process.getuid?.() !== 0 && "needs root to chown",
-      }, async () => {
-        const home = fresh()
-        await connected(home)
-        fs.chownSync(path.join(home, "connection"), 4242, 4242)
-        const s = await r(home, ["status"])
-        assert.equal(s.json?.error, "insecure_credentials", s.all)
+    it("takes only an address that a shell reads as it is, given or kept", async () => {
+      const inst = fresh()
+      fs.mkdirSync(inst.creds, { recursive: true, mode: 0o700 })
+      const keep = (address) => fs.writeFileSync(path.join(inst.creds, "address"), `${address}\n`, { mode: 0o600 })
+      for (const [given, origin] of [
+        ["https://app.example.com/", "https://app.example.com"],
+        ["https://APP.Example.com", "https://app.example.com"],
+        ["https://app.example.com:443", "https://app.example.com"],
+        ["https://app.example.com:8443", "https://app.example.com:8443"],
+        ["https://app.example.com:65535", "https://app.example.com:65535"],
+        ["http://127.0.0.1:8080/", "http://127.0.0.1:8080"],
+        ["http://localhost:8080", "http://localhost:8080"],
+        ["http://[::1]:8080", "http://[::1]:8080"],
+      ]) {
+        const r = await run(impl, inst, null, ["status", "--url", given])
+        assert.equal(r.json?.url, origin, `${given}: ${r.out}${r.err}`)
+        keep(given)
+        const k = await run(impl, inst, null, ["status"])
+        assert.equal(k.json?.url, origin, `kept ${given}: ${k.out}${k.err}`)
+      }
+      // Anything a shell could take as more than an address, and ports that are not 1 to 65535, are refused.
+      for (const bad of [
+        "https://$(id).example.com",
+        "https://a;b.example.com",
+        "https://a_b.example.com",
+        "https://x%60y.example.com",
+        "https://app.example.com:12bad",
+        "https://app.example.com:70000",
+        "https://app.example.com:65536",
+        "https://app.example.com:0",
+        "http://[::1]:12bad",
+        "http://[::1]:0",
+      ]) {
+        const r = await run(impl, inst, null, ["status", "--url", bad])
+        assert.equal(r.json?.error, "insecure_url", `${bad}: ${r.out}${r.err}`)
+        keep(bad)
+        const k = await run(impl, inst, null, ["status"])
+        assert.equal(k.json?.error, "no_url", `kept ${bad}: ${k.out}${k.err}`)
+        assert.match(k.json.message, /is not valid/)
+      }
+    })
+
+    it("prints hints that run in a shell as they are, even with an IPv6 address", async (t) => {
+      let v6
+      try {
+        v6 = await startFakeServer(0, "::1")
+      } catch (e) {
+        t.skip(`this computer has no IPv6 loopback (${e.code ?? e.message})`)
+        return
+      }
+      try {
+        const { shells, missing } = hintShells()
+        t.diagnostic(
+          `shells: ${shells.map((s) => s.name).join(", ") || "none"}; missing: ${missing.join(", ") || "none"}`,
+        )
+        const inst = fresh()
+        const p = await run(impl, inst, v6, ["connect"])
+        assert.equal(p.json?.next, connectNext(v6.issuer), p.out + p.err)
+        assert.ok(shells.length, "no shell to run the hints in")
+        for (const shell of shells) {
+          const w = await runHint(shell, impl, inst, p.json.next, "run: ")
+          assert.equal(w.json?.status, "still_waiting", `${shell.name}: ${w.out}${w.err}`)
+          assert.equal(w.json.next, waitNext(v6.issuer))
+          const again = await runHint(shell, impl, inst, w.json.next, "Run again: ")
+          assert.equal(again.json?.status, "still_waiting", `${shell.name}: ${again.out}${again.err}`)
+        }
+        // Once approved, the address works for the API too.
+        v6.approve()
+        const w = await run(impl, inst, v6, ["connect", "--wait"])
+        assert.equal(w.json?.status, "connected", w.out + w.err)
+        const g = await run(impl, inst, v6, ["get", "/api/items"])
+        assert.equal(g.json?.data?.path, "/api/items", g.out + g.err)
+        const r = await run(impl, inst, v6, ["post", "/api/items/1/archive"])
+        assert.equal(r.json?.data?.method, "POST", r.out + r.err)
+      } finally {
+        await v6.close()
+      }
+    })
+
+    it("finishes a connection at the address it began with, even when another one is kept meanwhile", async () => {
+      const second = await startFakeServer()
+      try {
+        const inst = fresh()
+        await connected(impl, inst, server)
+        // A new code for the kept address, then another agent of this user connects to a second server.
+        const c = await run(impl, inst, null, ["connect", "--replace"])
+        assert.equal(c.json?.status, "pending", c.out + c.err)
+        assert.equal(c.json.next, connectNext(server.issuer))
+        await connected(impl, install({ creds: inst.creds }), second)
+        assert.equal(fs.readFileSync(path.join(inst.creds, "address"), "utf8"), `${second.issuer}\n`)
+        // The hint's command finishes the first one.
+        server.approve()
+        const w = await run(impl, inst, null, ["connect", "--wait", "--url", server.issuer])
+        assert.equal(w.json?.status, "connected", w.out + w.err)
+        assert.equal(server.counts.reuse, 0)
+        assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+      } finally {
+        await second.close()
+      }
+    })
+
+    it("disconnects, and keeps what the server did not confirm to try again", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      server.revokeStatus = 500
+      const failed = await run(impl, inst, server, ["disconnect"])
+      assert.equal(failed.json.error, "disconnect_failed", failed.out + failed.err)
+      assert.equal(server.aliveGrants() > 0, true)
+      server.revokeStatus = 200
+      const ok = await run(impl, inst, server, ["disconnect"])
+      assert.equal(ok.json.status, "disconnected", ok.out + ok.err)
+      assert.equal((await run(impl, inst, server, ["status"])).json.status, "not_connected")
+      assert.deepEqual(
+        fs.readdirSync(inst.creds).filter((f) => /\.(json|kinds)$/.test(f)),
+        [],
+        "the connection and its list are gone",
+      )
+    })
+
+    it("replaces a connection and ends the old one only once the new one is stored", async () => {
+      const inst = fresh()
+      const alive = () => [...server.grants.entries()].filter(([, g]) => g.alive).map(([id]) => id)
+      const others = new Set(alive())
+      await listed(impl, inst, server)
+      const oldGrants = alive().filter((g) => !others.has(g))
+      assert.equal(oldGrants.length, 1)
+      const c = await run(impl, inst, server, ["connect", "--replace"])
+      assert.equal(c.json.status, "pending")
+      assert.ok(
+        oldGrants.every((g) => server.grants.get(g).alive),
+        "the old one works while the new one waits",
+      )
+      server.approve()
+      const w = await run(impl, inst, server, ["connect", "--wait"])
+      assert.equal(w.json.status, "connected", w.out + w.err)
+      assert.ok(
+        oldGrants.every((g) => !server.grants.get(g).alive),
+        "the old one ended",
+      )
+      // The old connection's list is not used for the new one.
+      const listing = server.counts.listing
+      assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+      assert.equal(server.counts.listing, listing + 1)
+    })
+
+    it("never takes the lock from a live holder: others answer busy and send nothing", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      server.expireAccessTokens()
+      const hold = path.join(inst.base, "hold-live")
+      const holder = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
+      await reached(hold)
+      const before = server.counts.refresh
+      const other = await run(impl, inst, server, ["get", "/api/items"], { [`${ENV}LOCK_WAIT_MS`]: "1500" })
+      assert.equal(other.json.error, "busy", other.out + other.err)
+      assert.equal(server.counts.refresh, before)
+      fs.writeFileSync(`${hold}.go`, "")
+      assert.equal((await holder).code, 0)
+      assert.equal(server.counts.reuse, 0)
+    })
+
+    it("takes over the lock of a holder that died", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      server.expireAccessTokens()
+      const hold = path.join(inst.base, "hold-dead")
+      const holder = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
+      await reached(hold)
+      holder.child.kill("SIGKILL")
+      await holder
+      const next = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(next.code, 0, next.out + next.err)
+      assert.equal(server.counts.reuse, 0)
+    })
+
+    it("lets only one of two processes take a dead holder's lock", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      server.expireAccessTokens()
+      // A dead lock, as a killed holder leaves it.
+      const hold = path.join(inst.base, "hold-dead2")
+      const holder = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_LOCKED`]: hold })
+      await reached(hold)
+      holder.child.kill("SIGKILL")
+      await holder
+      // B sees the dead lock and stops just before moving it; C breaks it, takes a fresh lock, and holds it.
+      const b = path.join(inst.base, "b")
+      const cHold = path.join(inst.base, "c")
+      const pb = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_BREAK_OBSERVED`]: b })
+      await reached(b)
+      const pc = run(impl, inst, server, ["get", "/api/items"], { [`${ENV}TEST_HOLD_LOCKED`]: cHold })
+      await reached(cHold)
+      // B now moves C's fresh lock, sees it is not the dead one, and puts it back.
+      fs.writeFileSync(`${b}.go`, "")
+      await sleep(1500)
+      fs.writeFileSync(`${cHold}.go`, "")
+      const [rb, rc] = await Promise.all([pb, pc])
+      assert.equal(rc.code, 0, rc.out + rc.err)
+      assert.equal(rb.code, 0, rb.out + rb.err)
+      assert.equal(server.counts.reuse, 0, "the refresh token was never used twice")
+    })
+
+    it("keeps new tokens when its lock was moved away and put back while it refreshed", async () => {
+      const inst = fresh()
+      server.accessTtl = 30
+      server.refreshAccessTtl = 900
+      await connected(impl, inst, server)
+      const hold = path.join(inst.base, "hold-write")
+      const p = run(impl, inst, server, ["get", "/api/items"], {
+        [`${ENV}TEST_HOLD_BEFORE_WRITE`]: hold,
+        [`${ENV}LOCK_WAIT_MS`]: "8000",
+      })
+      await reached(hold)
+      const lock = path.join(inst.creds, fs.readdirSync(inst.creds).find((f) => f.endsWith(".lock")) ?? "")
+      // As a mistaken breaker would: it moves the lock away, and a live third process takes the place...
+      fs.renameSync(lock, `${lock}.moved`)
+      const host = win ? process.env.COMPUTERNAME : os.hostname()
+      const third = randomBytes(8).toString("hex")
+      fs.writeFileSync(
+        lock,
+        JSON.stringify({ pid: process.pid, host, token: third, startedAt: Math.floor(Date.now() / 1000) }),
+      )
+      fs.writeFileSync(`${hold}.go`, "")
+      await sleep(1000)
+      // ...then the first lock is put back in the third's place, with no moment without a lock.
+      await replaceWith(`${lock}.moved`, lock)
+      const r = await p
+      assert.equal(r.code, 0, r.out + r.err)
+      const refreshes = server.counts.refresh
+      assert.equal((await run(impl, inst, server, ["get", "/api/items"])).code, 0)
+      assert.equal(server.counts.refresh, refreshes, "the new tokens were kept")
+      assert.equal(server.counts.reuse, 0)
+    })
+
+    const gitBin = "C:\\Program Files\\Git\\usr\\bin"
+    if (win && fs.existsSync(path.join(gitBin, "whoami.exe"))) {
+      it("works when another whoami comes first on the PATH, as in Git Bash", async () => {
+        const inst = fresh()
+        const r = await run(impl, inst, server, ["connect"], { PATH: `${gitBin};${process.env.PATH}` })
+        assert.equal(r.json?.status, "pending", r.out + r.err)
       })
     }
 
     if (win) {
-      it("refuses a folder whose access list lets others in", async () => {
-        const home = fresh()
-        await connected(home)
-        execFileSync("icacls", [home, "/grant", "*S-1-1-0:(OI)(CI)R", "/Q"], { stdio: "ignore" })
-        const s = await r(home, ["status"])
-        assert.equal(s.json?.error, "insecure_credentials", s.all)
-        assert.match(s.json.message, /S-1-1-0|WD|access entries/)
+      it("refuses a credentials folder that grants others access", async () => {
+        const inst = fresh()
+        fs.mkdirSync(inst.creds, { recursive: true })
+        // Everyone may read, inherited by every file in it.
+        execFileSync("icacls", [inst.creds, "/grant", "*S-1-1-0:(OI)(CI)R", "/Q"], { stdio: "ignore" })
+        const r = await run(impl, inst, server, ["connect"])
+        assert.equal(r.json.error, "insecure_credentials", r.out + r.err)
+        assert.match(r.json.message, /S-1-1-0|WD/)
       })
     }
 
-    it("never hands a secret to another program's environment, even under names the caller exported", async () => {
-      // Names the versions use for a secret; an exported one would keep its export when assigned.
-      const names = [
-        "TOKEN",
-        "BODY",
-        "QQ",
-        "qq_s",
-        "JF",
-        "JV",
-        "jg_line",
-        "jg_rest",
-        "rc_k",
-        "rp_d",
-        "RP_TEXT",
-        "rr_row",
-        "rv_rest",
-        "rv_v",
-        "sz_v",
-        "SER",
-        "cl_dc",
-        "cs_key",
-        "ca_set",
-        "rq_out",
-        "C_key",
-        "K_key",
-        "V_key",
-        "W_key",
-        "LN_key",
-        "P_deviceCode",
-        "R_deviceCode",
-        "SN_deviceCode",
-        "token",
-        "sessionToken",
-      ]
-      const exported = Object.fromEntries(names.map((k) => [k, ""]))
-      // The sh version's programs, wrapped to record their environment.
-      const rec = path.join(root, `${impl}-env-${n}`)
-      const wrap = path.join(root, `${impl}-envwrap-${n}`)
-      const wrapped = []
-      if (!win) {
-        fs.mkdirSync(wrap)
-        for (const prog of ["curl", "awk", "cat", "od"]) {
-          let real = ""
-          try {
-            real = execFileSync("sh", ["-c", `command -v ${prog}`], { encoding: "utf8" }).trim()
-          } catch {}
-          if (!real) continue
-          fs.writeFileSync(path.join(wrap, prog), `#!/bin/sh\nenv >> "${rec}"\nexec "${real}" "$@"\n`, { mode: 0o755 })
-          wrapped.push(prog)
-        }
-      }
-      const home = fresh()
-      const run2 = (args) => r(home, args, exported, wrapped.length ? [wrap] : [])
-      const c = await run2(["connect", "--url", server.origin])
-      assert.equal(c.json?.status, "pending", c.all)
-      server.approve()
-      const w = await run2(["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.status, "connected", w.all)
-      const g = await run2(["get", "items"])
-      assert.equal(g.json?.status, 200, g.all)
-      noSecrets(server, c, w, g)
-      if (impl === "sh" && wrapped.includes("curl")) {
-        const envs = fs.readFileSync(rec, "utf8")
-        assert.ok(envs.includes("PATH="), "the wrappers recorded the environment")
-        const { deviceCodes, sessions, keys } = server.secrets()
-        for (const secret of [...deviceCodes, ...sessions, ...keys])
-          assert.ok(!envs.includes(secret), "a secret in a child's environment")
-      }
+    it("stops using a connection once others can open its folder, even with a live access token", async () => {
+      const inst = fresh()
+      await listed(impl, inst, server)
+      const refreshes = server.counts.refresh
+      // As a restore or a change of the folder's permissions would leave it.
+      if (win) execFileSync("icacls", [inst.creds, "/grant", "*S-1-1-0:(OI)(CI)R", "/Q"], { stdio: "ignore" })
+      else fs.chmodSync(inst.creds, 0o755)
+      const r = await run(impl, inst, server, ["get", "/api/items"])
+      assert.equal(r.json?.error, "insecure_credentials", r.out + r.err)
+      assert.equal(server.arrivals("GET", "/api/items"), 0, "nothing was sent")
+      assert.equal(server.counts.refresh, refreshes)
+      if (!win) assert.equal(fs.statSync(inst.creds).mode & 0o777, 0o755, "not changed silently")
     })
 
-    it("never writes in the skill's folder", async () => {
-      const before = filesUnder(scripts)
-      const home = fresh()
-      await connected(home)
-      await r(home, ["get", "items"])
-      await r(home, ["disconnect"])
-      assert.deepEqual(filesUnder(scripts), before)
-    })
+    if (!win) {
+      it("refuses a credentials folder others can open", async () => {
+        const inst = fresh()
+        fs.mkdirSync(inst.creds, { mode: 0o755 })
+        fs.chmodSync(inst.creds, 0o755)
+        const r = await run(impl, inst, server, ["connect"])
+        assert.equal(r.json.error, "insecure_credentials", r.out + r.err)
+        assert.equal(fs.statSync(inst.creds).mode & 0o777, 0o755, "not changed silently")
+      })
+    }
   })
 }
 
-// The sh version unsets every name it assigns before anything else runs: a name the caller exported keeps its export
-// when assigned, and would hand its value (a key, a device code) to curl, awk and every other program the script
-// starts. Read from the script itself, so a name added later cannot be forgotten.
-describe("adiutor.sh unsets every name it assigns", () => {
-  const file = path.join(scripts, "adiutor.sh")
-  // Assigned and never unset, each only as a prefix of one command, with a constant value.
-  const SAFE = new Map([
-    ["IFS", /^\s*IFS= read /],
-    ["LC_ALL", /^\s*LC_ALL=C awk /],
-  ])
+// The server's half of the kind contract, pinned on the fake server with requests made by hand: the policy check
+// refuses a call before its route runs unless it carries the current revision and the kind of the route the router
+// picked.
+describe(`${NAME} fake server policy check`, () => {
+  let server
+  let token
+  before(async () => {
+    server = await startFakeServer()
+    const form = (o) => ({
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: CLIENT_ID, ...o }).toString(),
+    })
+    const d = await (await fetch(`${server.issuer}/oauth/device`, form({ scope: SCOPE }))).json()
+    server.approve()
+    const t = await fetch(
+      `${server.issuer}/oauth/token`,
+      form({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: d.device_code }),
+    )
+    token = (await t.json()).access_token
+  })
+  after(() => server.close())
+  const call = async (method, p, headers) => {
+    const r = await fetch(`${server.issuer}${p}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, ...headers },
+      ...(method === "GET" ? {} : { body: "{}" }),
+    })
+    return { status: r.status, json: await r.json().catch(() => null) }
+  }
+  const refused = (r, what) => {
+    assert.equal(r.status, 409, what)
+    assert.equal(r.json?.error, "policy_changed", what)
+  }
 
-  it("every plain, read, for and eval assignment, and every secret field of a prefix", {
-    skip: !fs.existsSync(file),
-  }, () => {
-    const text = fs.readFileSync(file, "utf8")
-    const end = text.indexOf("\nunset _p\n") + "\nunset _p\n".length
-    assert.ok(end > 20, "the start-up unset ends with: unset _p")
-    const head = text.slice(0, end)
-    const unset = new Set()
-    for (const m of head.matchAll(/^unset ([^\n]+)$/gm)) for (const w of m[1].split(" ")) unset.add(w)
-    for (const m of head.matchAll(/^for _p in ([^;\n]+); do unset ((?:"\$\{_p\}\w+" ?)+); done$/gm))
-      for (const prefix of m[1].trim().split(" "))
-        for (const s of m[2].matchAll(/\$\{_p\}(\w+)/g)) unset.add(prefix + s[1])
+  it("refuses a missing, unknown or wrong kind, or a missing revision, before the route runs", async () => {
+    server.reset()
+    const rev = server.revision()
+    refused(await call("GET", "/api/items/7", { [POLICY_HEADER]: rev }), "no kind")
+    for (const kind of ["", "READ", "Act", "write", "read,act"])
+      refused(await call("GET", "/api/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: kind }), `kind ${kind}`)
+    refused(await call("GET", "/api/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" }), "act for a read")
+    refused(await call("POST", "/api/items", { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" }), "read for an act")
+    refused(await call("GET", "/api/items/7", { [KIND_HEADER]: "read" }), "no revision")
+    assert.equal(server.runs("GET", "/api/items/{id}"), 0)
+    assert.equal(server.runs("POST", "/api/items"), 0)
+    assert.equal((await call("GET", "/api/items/7", { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" })).status, 200)
+    assert.equal((await call("POST", "/api/items", { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" })).status, 200)
+    assert.equal(server.runs("GET", "/api/items/{id}"), 1)
+    assert.equal(server.runs("POST", "/api/items"), 1)
+  })
 
-    // The code: no awk program (a multi-line single-quoted value), no comment.
-    const lines = text
-      .replace(/^[A-Za-z_]\w*='\n[\s\S]*?\n\}'$/gm, "")
-      .split("\n")
-      .filter((l) => !/^\s*#/.test(l))
-      .map((l) => l.replace(/\s#\s.*$/, "").replace(/\s-[ov] \w+=/g, " "))
-    const assigned = new Set()
-    const prefixes = new Set()
-    const slots = new Set()
-    for (const l of lines) {
-      for (const m of l.matchAll(/(?:^|[\s;&|()!{`"])([A-Za-z_]\w*)=/g)) assigned.add(m[1])
-      for (const m of l.matchAll(/\bread\s+(?:-\w+\s+)*((?:[A-Za-z_]\w*\s*)+)/g))
-        for (const name of m[1].trim().split(/\s+/)) assigned.add(name)
-      for (const m of l.matchAll(/\bfor\s+([A-Za-z_]\w*)\s+in\b/g)) assigned.add(m[1])
-      // Record prefixes (read_record, rec_copy and the like assign <PREFIX><field> through eval) and failure slots.
-      for (const m of l.matchAll(/(?<=\s)([A-Z]{1,3}_)(?=[\s;)]|$)/g)) prefixes.add(m[1])
-      for (const m of l.matchAll(/\berr_(?:save|restore) (\w+)/g)) slots.add(m[1])
-    }
-    // The reader sees assignments inside eval and plain ones alike.
-    for (const name of ["rc_k", "rp_d", "TOKEN", "BODY", "aq_owner"]) assert.ok(assigned.has(name), name)
-    assert.ok(prefixes.has("C_") && prefixes.has("P_") && slots.size > 0)
+  it("checks the kind of the route its router picked, not of the path as it was sent", async () => {
+    server.reset()
+    server.policy.unshift({ method: "GET", path: "/api/items/export", kind: "act", area: "items", description: "" })
+    const rev = server.revision()
+    const read = { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" }
+    const act = { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" }
+    server.caseInsensitiveRoutes = true
+    refused(await call("GET", "/api/items/EXPORT", read), "a case change")
+    assert.equal(server.runs("GET", "/api/items/export"), 0)
+    assert.equal((await call("GET", "/api/items/EXPORT", act)).status, 200)
+    assert.equal(server.runs("GET", "/api/items/export"), 1)
+    server.caseInsensitiveRoutes = false
+    server.stripPathParameters = true
+    for (const p of ["/api/items/export;x", "/api/items/export%3Bx", "/api/items/export;"])
+      refused(await call("GET", p, read), p)
+    assert.equal(server.runs("GET", "/api/items/export"), 1)
+    assert.equal((await call("GET", "/api/items/7;v=1", read)).status, 200)
+    assert.equal(server.runs("GET", "/api/items/{id}"), 1)
+  })
 
-    const missing = [...assigned].filter((name) => !unset.has(name) && !SAFE.has(name)).sort()
-    assert.deepEqual(missing, [], "assigned in adiutor.sh but not unset at start-up")
-    for (const p of prefixes)
-      for (const field of ["key", "deviceCode"])
-        assert.ok(unset.has(p + field), `${p + field} is not unset at start-up`)
-    for (const s of slots)
-      for (const part of ["code", "msg", "status", "body", "sent"])
-        assert.ok(unset.has(`${s}_${part}`), `${s}_${part} is not unset at start-up`)
-    for (const [name, use] of SAFE)
-      for (const l of lines.filter((x) => x.includes(`${name}=`)))
-        assert.match(l, use, `${name} is assigned other than as the safe prefix`)
+  it("picks the first, the static or the dynamic one of two routes that match a path, as set", async () => {
+    server.reset()
+    server.setKind("GET", "/api/items/{id}", "act")
+    server.policy.push({ method: "GET", path: "/api/items/export", kind: "read", area: "items", description: "" })
+    const rev = server.revision()
+    const read = { [POLICY_HEADER]: rev, [KIND_HEADER]: "read" }
+    const act = { [POLICY_HEADER]: rev, [KIND_HEADER]: "act" }
+    // The table holds /api/items/{id} first.
+    refused(await call("GET", "/api/items/export", read), "first: the act")
+    assert.equal((await call("GET", "/api/items/export", act)).json?.kind, "act")
+    server.routePreference = "static"
+    refused(await call("GET", "/api/items/export", act), "static: the read")
+    assert.equal((await call("GET", "/api/items/export", read)).json?.kind, "read")
+    server.routePreference = "dynamic"
+    refused(await call("GET", "/api/items/export", read), "dynamic: the act")
+    assert.equal((await call("GET", "/api/items/export", act)).json?.kind, "act")
+    assert.equal(server.runs("GET", "/api/items/export"), 1)
+    assert.equal(server.runs("GET", "/api/items/{id}"), 2)
   })
 })
 
-// Two versions on one computer share one connection, one attempt and one lock: every ordered pair of them.
-const pairs = impls.flatMap((a) => impls.filter((b) => b !== a).map((b) => [a, b]))
-if (!pairs.length) describe.skip("adiutor (two versions together): only one version runs here", () => {})
-for (const [first, second] of pairs) {
-  describe(`adiutor (${first} and ${second} together)`, () => {
+// Two versions on one computer share one connection, one list and one lock.
+const [first, second] = impls
+if (first && second) {
+  describe(`${NAME} (${first} and ${second} together)`, () => {
     let server
     before(async () => {
       server = await startFakeServer()
     })
-    after(() => server?.close())
+    after(() => server.close())
 
-    it("finish each other's attempt, with its days and key name", async () => {
-      const home = path.join(root, `together-${first}-${second}`, "home")
-      const c = await run(first, home, ["connect", "--url", server.origin, "--days", "7"], {
-        ADIUTOR_AGENT_NAME: "first-version",
-      })
-      assert.equal(c.json?.status, "pending", c.all)
-      assert.equal((await run(second, home, ["connect"])).json.code, c.json.code)
-      server.approve()
-      const w = await run(second, home, ["connect", "--wait", "--url", server.origin])
-      assert.equal(w.json?.status, "connected", w.all)
-      assert.match(w.json.keyName, /^skill:first-version:[0-9a-f]{8}$/)
-      assert.equal(server.aliveKeys()[0][1].expiresIn, 7 * DAY)
-      assert.equal((await run(first, home, ["get", "items"])).json?.status, 200)
+    it("use the same connection and refresh it once between them", async () => {
+      const inst = install()
+      server.accessTtl = 30
+      server.refreshAccessTtl = 900
+      await connected(first, inst, server)
+      const devices = server.counts.device
+      const s = await run(second, inst, server, ["status"])
+      assert.equal(s.json.status, "connected", s.out + s.err)
+      const before = server.counts.refresh
       const all = await Promise.all(
-        Array.from({ length: 4 }, (_, i) => run(i % 2 ? second : first, home, ["connect", "--replace"])),
+        Array.from({ length: 8 }, (_, i) => run(i % 2 ? second : first, inst, server, ["get", "/api/items"])),
       )
-      for (const x of all) assert.ok(x.json?.status === "pending" || x.json?.error === "busy", x.all)
+      for (const r of all) assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(server.counts.refresh, before + 1)
+      assert.equal(server.counts.reuse, 0)
+      assert.equal(server.counts.device, devices, "no second connection")
+      // The list one version kept is the one the other uses.
+      const listing = server.counts.listing
+      assert.equal((await run(second, inst, server, ["post", "/api/items", "--json", "{}"])).code, 0)
+      assert.equal((await run(first, inst, server, ["delete", "/api/items/1"])).code, 0)
+      assert.equal(server.counts.listing, listing)
     })
   })
 }
 
-// The launcher picks a version (Node 20+ when there is one) and passes the arguments on as they are.
-const shell = win
-  ? ["C:\\Program Files\\Git\\bin\\sh.exe", "C:\\Program Files\\Git\\usr\\bin\\sh.exe"].find((f) => fs.existsSync(f))
-  : "sh"
-const launcher = shell ? describe : describe.skip
-launcher("adiutor launcher", () => {
+// The entry points pick a version (Node when there is one) and pass the arguments on as they are.
+describe(`${NAME} entry points`, () => {
   let server
   before(async () => {
     server = await startFakeServer()
   })
-  after(() => server?.close())
-  const launch = (home, args, env) =>
-    new Promise((resolve) => {
-      const child = spawn(shell, [path.join(scripts, "adiutor"), ...args], { env: baseEnv(home, env) })
-      let out = ""
-      let err = ""
-      child.stdout.on("data", (d) => {
-        out += d
-      })
-      child.stderr.on("data", (d) => {
-        err += d
-      })
-      child.on("close", (code) => {
-        let json = null
-        try {
-          json = JSON.parse(out.trim().split("\n").at(-1))
-        } catch {}
-        resolve({ code, json, all: `${out}\n${err}` })
-      })
+  after(() => server.close())
+  const entry = win ? "entry-ps" : "entry-sh"
+  for (const [name, env] of [
+    ["with Node", { [`${ENV}NO_NODE`]: "" }],
+    ["without Node", { [`${ENV}NO_NODE`]: "1" }],
+  ]) {
+    it(`${entry} ${name} keeps a query with & as it is`, async () => {
+      const inst = install()
+      await connected("node", inst, server)
+      const r = await run(entry, inst, server, ["get", "/api/items?status=open&owner=x"], env)
+      assert.equal(r.code, 0, r.out + r.err)
+      assert.equal(r.json.data.query, "?status=open&owner=x")
     })
-
-  // A node first on PATH that records its call, then runs the real one.
-  const recorder = path.join(root, "recorder")
-  const recorded = path.join(root, "node-recorded")
-  fs.mkdirSync(recorder, { recursive: true })
-  const realNode = process.execPath.replace(/\\/g, "/")
-  fs.writeFileSync(
-    path.join(recorder, "node"),
-    `#!/bin/sh\necho "$*" >> "${recorded.replace(/\\/g, "/")}"\nexec "${realNode}" "$@"\n`,
-    {
-      mode: 0o755,
-    },
-  )
-  const withRecorder = (extra = {}) => ({ PATH: [recorder, process.env.PATH].join(path.delimiter), ...extra })
-
-  it("runs adiutor.mjs with Node 20+, and keeps a query with & as it is", async () => {
-    const home = path.join(root, "launcher", "home")
-    const c = await run("node", home, ["connect", "--url", server.origin])
-    assert.equal(c.json?.status, "pending", c.all)
-    server.approve()
-    assert.equal((await run("node", home, ["connect", "--wait", "--url", server.origin])).json?.status, "connected")
-    fs.rmSync(recorded, { force: true })
-    const g = await launch(home, ["get", "items?q=a&status=todo"], withRecorder())
-    assert.equal(g.json?.status, 200, g.all)
-    assert.equal(g.json.data.query, "?q=a&status=todo")
-    assert.match(fs.readFileSync(recorded, "utf8"), /adiutor\.mjs/)
-  })
-
-  it("hands over to adiutor.sh with ADIUTOR_NO_NODE=1, never to node", {
-    skip: !present("sh") && "adiutor.sh does not exist yet",
-  }, async () => {
-    fs.rmSync(nodeCalled, { force: true })
-    const s = await launch(path.join(root, "launcher-sh", "home"), ["status"], {
-      ADIUTOR_NO_NODE: "1",
-      PATH: [standin, process.env.PATH].join(path.delimiter),
-    })
-    assert.equal(s.json?.status, "not_connected", s.all)
-    assert.equal(fs.existsSync(nodeCalled), false)
-  })
-
-  it("hands over to adiutor.sh when Node is older than 20", {
-    skip: !present("sh") && "adiutor.sh does not exist yet",
-  }, async () => {
-    fs.rmSync(nodeCalled, { force: true })
-    const s = await launch(path.join(root, "launcher-old", "home"), ["status"], {
-      PATH: [standin, process.env.PATH].join(path.delimiter),
-    })
-    assert.equal(s.json?.status, "not_connected", s.all)
-  })
+  }
 })

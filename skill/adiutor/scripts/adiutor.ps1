@@ -1,12 +1,8 @@
-# adiutor for agents: connect to Adiutor with a code the owner approves in the browser (Better Auth's device
-# authorization), then keep the owner's board current through Adiutor's /api/v1 routes.
+# adiutor for agents on Windows: runs the Node version when Node 20+ is installed, and otherwise does the same
+# itself with Windows PowerShell 5.1 (built into Windows 10 and 11) or PowerShell 7.
 #
-# One of three versions with one contract: adiutor.mjs (Node 20+), adiutor.ps1 (Windows PowerShell 5.1 and PowerShell 7)
-# and adiutor.sh (POSIX sh and curl). Same commands, same one-line JSON answers and error codes, the same files and the
-# same lock, so they can run side by side on one computer. No secret ever appears in the output. See adiutor.mjs for
-# the design; this file follows it function by function.
-#
-# It hands over to adiutor.mjs when Node 20+ is installed, unless ADIUTOR_NO_NODE is set.
+# One of three versions with one contract (see adiutor.mjs): same commands, same JSON output and error codes,
+# same files and the same lock, so they can run side by side. Tokens never appear in the output.
 #
 # Run it as: powershell -NoProfile -ExecutionPolicy Bypass -File adiutor.ps1 <command> ...
 # (the policy is bypassed for this one process only; nothing on the computer changes).
@@ -14,1080 +10,610 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
-$IsWin = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+# ==== Product constants: set these for the product (see README.md). ====
+$Product = 'Adiutor'
+$Cmd = 'adiutor'
+# Environment variables are this prefix plus URL, CREDENTIALS, AGENT_NAME, NO_NODE, WAIT_SECONDS, LOCK_WAIT_MS.
+$EnvPrefix = 'ADIUTOR_'
+# The credentials folder, in the user's profile.
+$CredentialsFolder = '.adiutor'
+$ClientId = 'adiutor-cli'
+$Scope = 'read act'
+# The REST API as a resource (RFC 8707): the audience its access tokens are bound to.
+$Resource = '/api'
+# Every API call is under one of these prefixes, so the token goes only to the API.
+$Prefixes = @('/api/')
+# A path template in the endpoints list: under $Prefixes, with {name} and {name:path} parts.
+$TemplatePattern = '^/api/[A-Za-z0-9._~{}:/-]*\z'
+$AccessPath = '/api/agent/access'
+$EndpointsPath = '/api/agent/endpoints'
+# The authorization server's device, token and revocation endpoints, after the address.
+$DevicePath = '/oauth/device'
+$TokenPath = '/oauth/token'
+$RevokePath = '/oauth/revoke'
+$SkillHeaderName = 'x-adiutor-skill'
+$PolicyHeaderName = 'x-adiutor-policy'
+# The header that carries the kind (read or act) the client found for a call, with the policy revision.
+$KindHeaderName = 'x-adiutor-kind'
+$KindsMagic = 'adiutor-kinds'
+# Filled in with the address when the server serves this file.
+$DefaultUrl = '__ADIUTOR_URL__'
+# Filled in with the skill's version when the server serves this file; access then says when a newer one is out.
+$SkillVersion = '__ADIUTOR_SKILL_VERSION__'
+# A copy that was not served (installed from Git) sends r<SkillRevision> instead; raise it with the server's copy.
+$SkillRevision = 1
+# ==== End of product constants. ====
 
-# One argument on a Windows command line, quoted the way programs built on the C runtime (Node) read it back.
-function ConvertTo-WindowsArgument([string]$a) {
-  if ($a.Length -and $a -notmatch '[\s"]') { return $a }
-  '"' + (($a -replace '(\\*)"', '$1$1\"') -replace '(\\+)\z', '$1$1') + '"'
-}
+function Get-Env([string]$name) { [Environment]::GetEnvironmentVariable("$EnvPrefix$name") }
 
-# Node 20+ runs adiutor.mjs. Started directly (no shell, no PowerShell argument rewriting), with this process's
-# standard input and output, so the arguments and the answer pass through unchanged.
-if (-not $env:ADIUTOR_NO_NODE) {
+if (-not (Get-Env 'NO_NODE')) {
   $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-  # On Windows only a real node.exe: a .cmd stand-in would hand the arguments to cmd.exe.
-  if ($node -and (-not $IsWin -or $node.Source -match '\.exe\z')) {
-    $version = ''
-    try { $version = [string](& $node.Source --version 2>$null | Select-Object -First 1) } catch {}
-    if ($version -cmatch '^v([0-9]+)\.' -and [int]$Matches[1] -ge 20) {
-      $psi = New-Object System.Diagnostics.ProcessStartInfo
-      $psi.FileName = $node.Source
-      $psi.UseShellExecute = $false
-      $all = @((Join-Path $PSScriptRoot 'adiutor.mjs')) + @($args | ForEach-Object { [string]$_ })
-      if ($IsWin) { $psi.Arguments = @($all | ForEach-Object { ConvertTo-WindowsArgument $_ }) -join ' ' }
-      else { foreach ($a in $all) { $psi.ArgumentList.Add($a) } }
-      $child = [Diagnostics.Process]::Start($psi)
-      $child.WaitForExit()
-      exit $child.ExitCode
+  if ($node) {
+    & $node.Source -e "process.exit(Number(process.versions.node.split('.')[0])>=20?0:1)" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      & $node.Source (Join-Path $PSScriptRoot "$Cmd.mjs") @args
+      exit $LASTEXITCODE
     }
   }
 }
 
-$OnLinux = (-not $IsWin) -and [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Linux)
-$Core = $PSVersionTable.PSVersion.Major -ge 6
-$Invariant = [Globalization.CultureInfo]::InvariantCulture
-$Utf8 = New-Object System.Text.UTF8Encoding($false)
-
-$ClientId = 'adiutor-connect'
-$DeviceGrant = 'urn:ietf:params:oauth:grant-type:device_code'
-$DaysDefault = 90
-$DaysMin = 1
-$DaysMax = 365
-function Get-Whole($value, [double]$fallback) {
-  if ([string]$value -cmatch '^[1-9][0-9]*\z') { return [double]::Parse([string]$value, $Invariant) }
-  $fallback
-}
-$WaitSeconds = Get-Whole $env:ADIUTOR_WAIT_SECONDS 90
-# Test seams: the tests shorten the lock wait and the request timeout, and move the clock forward.
-$LockWaitMs = Get-Whole $env:ADIUTOR_TEST_LOCK_WAIT_MS 20000
-$TimeoutMs = Get-Whole $env:ADIUTOR_TEST_TIMEOUT_MS 15000
-$ClockOffset = [long](Get-Whole $env:ADIUTOR_TEST_CLOCK_OFFSET 0)
-# Every pattern is matched case-sensitively (-cmatch) and ends with \z: in .NET, $ also matches before a last newline.
-# Device codes and keys as Adiutor sends them; anything else is refused before it is stored.
-$Secret = '^[A-Za-z0-9._~+/=-]{8,512}\z'
-# Every value in a file: no quote, backslash or control character, so the shell version reads it too.
+$SkillHeader = $SkillVersion
+if ($SkillVersion.StartsWith('__')) { $SkillHeader = "r$SkillRevision" }
+$WaitSeconds = 90
+if (Get-Env 'WAIT_SECONDS') { $WaitSeconds = [int](Get-Env 'WAIT_SECONDS') }
+# A pending code is dropped locally only this long after its expiry: until then the server decides.
+$StaleCodeSeconds = 600
+# A refresh is retried only once it cannot be in flight any more: twice the request timeout (tests shorten it).
+$RefreshGrace = 30
+if ($null -ne (Get-Env 'TEST_REFRESH_GRACE')) { $RefreshGrace = [long](Get-Env 'TEST_REFRESH_GRACE') }
+$PollSeconds = 5
+if (Get-Env 'TEST_POLL_SECONDS') { $PollSeconds = [long](Get-Env 'TEST_POLL_SECONDS') }
+$LockWaitMs = 20000
+if (Get-Env 'LOCK_WAIT_MS') { $LockWaitMs = [int](Get-Env 'LOCK_WAIT_MS') }
+# The server answers an API call within 60 s (or says the outcome is unknown); tests shorten it.
+$ApiTimeoutMs = 75000
+if (Get-Env 'TEST_API_TIMEOUT_MS') { $ApiTimeoutMs = [int](Get-Env 'TEST_API_TIMEOUT_MS') }
+# Wait before the one retry of a call the server refused as busy (tests shorten it).
+$BusyWaitMs = 2000
+if ($null -ne (Get-Env 'TEST_BUSY_WAIT_MS')) { $BusyWaitMs = [int](Get-Env 'TEST_BUSY_WAIT_MS') }
+$KindsMaxAge = 3600
+$KindsFormat = '2'
+# \z, not $: in .NET a $ also matches before a final line break, which would let one into a stored value.
+$Secret = '^[A-Za-z0-9._~+/=-]{1,4096}\z'
+# The policy revision the server gives with its list: a short token, safe in a header and in the kinds file.
+$RevisionPattern = '^[A-Za-z0-9._-]{1,128}\z'
 $Plain = '^[^"\\\x00-\x1f\x7f]*\z'
-$LabelPattern = '^[A-Za-z0-9 ._:-]{1,60}\z'
-# The path part: lower-case letters, digits, slash and hyphen only, matched as typed, never decoded.
-$PathPart = '^[a-z0-9/-]+\z'
-# RFC 3986's query characters, without the apostrophe and with every % followed by two hex digits. Passed on as typed.
-$Query = '^(?:[A-Za-z0-9\-._~!$&()*+,;=:@/?]|%[0-9A-Fa-f]{2})*\z'
-$Uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-# The only calls the command makes on /api/v1: one per MCP tool.
-$Routes = @(
-  @('POST', 'threads/start'), @('GET', 'items'), @('GET', 'items/{id}'), @('POST', 'items'), @('PATCH', 'items/{id}'),
-  @('POST', 'items/{id}/comments'), @('POST', 'capture'), @('POST', 'items/{id}/threads'), @('GET', 'projects'),
-  @('PATCH', 'projects/{id}'), @('POST', 'projects/{id}/stage-proposals'), @('GET', 'notes'), @('GET', 'notes/{id}'),
-  @('POST', 'notes'), @('PATCH', 'notes/{id}')
-) | ForEach-Object { , @($_[0], ('^' + $_[1].Replace('{id}', $Uuid) + '\z')) }
-
-$ConnectionFields = @(@('v', 'n'), @('origin', 's'), @('key', 's'), @('keyName', 's'), @('expiresAt', 's'))
-$PendingFields = @(
-  @('v', 'n'), @('attemptId', 's'), @('origin', 's'), @('deviceCode', 's'), @('userCode', 's'), @('link', 's'),
-  @('interval', 'n'), @('nextPollAt', 'n'), @('codeExpiresAt', 'n'), @('days', 'n'), @('keyName', 's'), @('phase', 's'),
-  @('pollInFlight', 'n'), @('uncertain', 'n'), @('sessionOpen', 'n'), @('keySaved', 'n'), @('noKey', 'n')
+# The only address shape kept (the server serves its own address in this shape too): no character an agent's
+# shell would treat specially can reach the commands this one prints.
+$SafeOrigin = '^https?://(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(:[1-9][0-9]{0,4})?\z'
+# The file that keeps the address of the last working connection, so a copy of the skill without one finds it.
+$AddressFile = 'address'
+$PathChars = "^[A-Za-z0-9._~!$&'()*+,;=:@/?%-]+\z"
+$UnknownOutcome = 'The action may have run. Read its state before trying again.'
+$NotListed = "This connection has no such call. Take the path from ``$Cmd endpoints``, with its {...} parts filled in; never guess it."
+$Unavailable = "The list of allowed calls could not be read from $Product, so nothing was sent. Try again in a moment."
+$PolicyChanged = "$Product's calls changed, or this path names a different call than the list says. Nothing ran. Run ``$Cmd endpoints`` and take the path from it."
+$Fields = @(
+  @('v', 'n'), @('issuer', 's'), @('label', 's'), @('generation', 's'), @('refreshToken', 's'), @('accessToken', 's'),
+  @('accessExpiresAt', 'n'), @('scope', 's'), @('refreshStartedAt', 'n'), @('refreshRetried', 'n'), @('deviceCode', 's'),
+  @('userCode', 's'), @('link', 's'), @('deviceExpiresAt', 'n'), @('interval', 'n'), @('nextPollAt', 'n'), @('toRevoke', 's')
 )
-$LeftFields = @(@('origin', 's'), @('keyName', 's'), @('expiresAt', 's'), @('reason', 's'), @('at', 's'))
-# Reasons whose key end date came from Adiutor: the entry drops by itself once that date has passed.
-$Dated = @('replaced', 'disconnected', 'not_saved')
-$Reasons = $Dated + @('key_unknown', 'session_unknown')
+$Utf8 = New-Object System.Text.UTF8Encoding($false)
+# Windows tools by their full path: started from Git Bash, for one, whoami.exe may be a different program.
+$Icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+$Whoami = Join-Path $env:SystemRoot 'System32\whoami.exe'
 
-class AdiutorFail : System.Exception {
+class ClientFail : System.Exception {
   [string]$Code
-  [string]$Text
-  [hashtable]$Extra
-  AdiutorFail([string]$code, [string]$text) : base($text) { $this.Code = $code; $this.Text = $text; $this.Extra = @{} }
+  [object]$Body
+  [bool]$Sent
+  # Set when the API request itself failed (not the token or the lock on the way to it).
+  [bool]$Api
+  [int]$Status
+  ClientFail([string]$code, [string]$message) : base($message) { $this.Code = $code; $this.Sent = $true; $this.Api = $false; $this.Status = 0 }
 }
 
-# The attempt changed under this run (another command, after a wrongly broken lock): answer from the new state.
-class AdiutorChanged : System.Exception {
-  AdiutorChanged() : base('The attempt changed.') {}
-}
-
-# A JSON number, kept as the text it came in.
-class JsonNumber {
-  [string]$Raw
-  JsonNumber([string]$raw) { $this.Raw = $raw }
-}
-
-function New-Fail([string]$code, [string]$text, [hashtable]$extra) {
-  $f = [AdiutorFail]::new($code, $text)
-  if ($extra) { $f.Extra = $extra }
-  $f
-}
-function Fail([string]$code, [string]$text) { throw (New-Fail $code $text $null) }
-
-$Rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-function Now { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + $ClockOffset }
-function Iso([double]$seconds) {
-  $ms = [long][Math]::Floor($seconds * 1000)
-  [DateTimeOffset]::FromUnixTimeMilliseconds($ms).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", $Invariant)
-}
+function Fail([string]$code, [string]$message) { throw [ClientFail]::new($code, $message) }
+function Now { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
 function Hex([int]$n) {
   $b = New-Object byte[] $n
-  $Rng.GetBytes($b)
-  [BitConverter]::ToString($b).Replace('-', '').ToLowerInvariant()
+  [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+  -join ($b | ForEach-Object { $_.ToString('x2') })
 }
-function Get-HostName {
-  if ($IsWin) { if ($env:COMPUTERNAME) { return $env:COMPUTERNAME }; return [Environment]::MachineName }
-  [Net.Dns]::GetHostName()
-}
-function Test-SameHost($name) { ([string]$name).ToLowerInvariant() -ceq (Get-HostName).ToLowerInvariant() }
-function Get-GroupedCode([string]$code) { if ($code.Length -eq 8) { return $code.Substring(0, 4) + '-' + $code.Substring(4) }; $code }
-function Get-WaitCommand([string]$origin) { "adiutor connect --wait --url $origin" }
-$SessionText = "Adiutor may have opened a 'adiutor connect (agent approval)' session that was not ended: end it on the Account page."
-
-# Windows tools by their full path: started from Git Bash, for one, whoami.exe may be a different program.
-$Icacls = ''
-if ($IsWin) {
-  $root = $env:SystemRoot
-  if (-not $root) { $root = 'C:\Windows' }
-  $Icacls = Join-Path $root 'System32\icacls.exe'
-}
-
-# Removes a file or folder (a link itself, never what it points to), ignoring failures.
-function Remove-Path([string]$target) {
-  try {
-    $attr = [IO.File]::GetAttributes($target)
-    $isDir = ($attr -band [IO.FileAttributes]::Directory) -ne 0
-    $isLink = ($attr -band [IO.FileAttributes]::ReparsePoint) -ne 0
-    if ($isDir -and -not $isLink) { [IO.Directory]::Delete($target, $true) }
-    elseif ($isDir) { [IO.Directory]::Delete($target) }
-    else { [IO.File]::Delete($target) }
-  } catch {}
-}
-
-# Whether a path exists, a link included.
-function Test-Exists([string]$target) {
-  try { [void][IO.File]::GetAttributes($target); return $true }
-  catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return $false }
-  catch { return $true }
-}
-
-# JSON without PowerShell's converters: PowerShell 7 turns date strings into dates and 5.1 writes some values in its
-# own way. Objects keep their order (ordinal keys), numbers keep their text.
-
-$JsonToken = New-Object regex ('\G(?:(?<w>[ \t\r\n]+)|(?<p>[{}\[\],:])|(?<s>"(?:(?>[^"\\\x00-\x1f]+)|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*")|(?<n>-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)|(?<k>true|false|null))')
-$JsonUnescape = New-Object regex '\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))'
-$JsonEscape = New-Object regex '[\x00-\x1f"\\]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]'
-
-function ConvertFrom-JsonString([string]$token) {
-  $inner = $token.Substring(1, $token.Length - 2)
-  if ($inner.IndexOf([char]92) -lt 0) { return $inner }
-  $JsonUnescape.Replace($inner, [Text.RegularExpressions.MatchEvaluator] {
-      param($m)
-      if ($m.Groups[1].Success) { return [string][char][Convert]::ToInt32($m.Groups[1].Value, 16) }
-      $c = $m.Groups[2].Value
-      if ($c -ceq 'b') { return [string][char]8 }
-      if ($c -ceq 'f') { return [string][char]12 }
-      if ($c -ceq 'n') { return [string][char]10 }
-      if ($c -ceq 'r') { return [string][char]13 }
-      if ($c -ceq 't') { return [string][char]9 }
-      $c
-    })
-}
-
-# Parses JSON text strictly (as JSON.parse does); throws when it is not JSON. Answers @{ value = ... }.
-function ConvertFrom-JsonText([string]$text) {
-  $pos = 0
-  $stack = New-Object System.Collections.Generic.List[object]
-  $keys = New-Object System.Collections.Generic.List[object]
-  # value | first-key | key | colon | first-value | next | end
-  $expect = 'value'
-  $root = $null
-  while ($pos -lt $text.Length) {
-    $m = $JsonToken.Match($text, $pos)
-    if (-not $m.Success -or $m.Length -eq 0) { throw 'not JSON' }
-    $pos += $m.Length
-    if ($m.Groups['w'].Success) { continue }
-    $token = $m.Value
-    $open = $null
-    if ($m.Groups['p'].Success) {
-      if ($token -ceq '{') { $open = New-Object System.Collections.Specialized.OrderedDictionary }
-      elseif ($token -ceq '[') { $open = New-Object System.Collections.Generic.List[object] }
-      elseif ($token -ceq '}' -or $token -ceq ']') {
-        if ($stack.Count -eq 0) { throw 'not JSON' }
-        $isObject = $stack[$stack.Count - 1] -is [Collections.IDictionary]
-        if ($isObject -ne ($token -ceq '}')) { throw 'not JSON' }
-        if ($expect -cne 'next' -and $expect -cne $(if ($isObject) { 'first-key' } else { 'first-value' })) { throw 'not JSON' }
-        $stack.RemoveAt($stack.Count - 1)
-        $keys.RemoveAt($keys.Count - 1)
-        if ($stack.Count) { $expect = 'next' } else { $expect = 'end' }
-        continue
-      } elseif ($token -ceq ',') {
-        if ($expect -cne 'next') { throw 'not JSON' }
-        if ($stack[$stack.Count - 1] -is [Collections.IDictionary]) { $expect = 'key' } else { $expect = 'value' }
-        continue
-      } else {
-        if ($expect -cne 'colon') { throw 'not JSON' }
-        $expect = 'value'
-        continue
-      }
-      $value = $open
-    } elseif ($m.Groups['s'].Success) {
-      $value = ConvertFrom-JsonString $token
-      if ($expect -ceq 'first-key' -or $expect -ceq 'key') {
-        $keys[$keys.Count - 1] = $value
-        $expect = 'colon'
-        continue
-      }
-    } elseif ($m.Groups['n'].Success) { $value = [JsonNumber]::new($token) }
-    elseif ($token -ceq 'true') { $value = $true }
-    elseif ($token -ceq 'false') { $value = $false }
-    else { $value = $null }
-    if ($expect -cne 'value' -and $expect -cne 'first-value') { throw 'not JSON' }
-    if ($stack.Count -eq 0) { $root = $value }
-    else {
-      $top = $stack[$stack.Count - 1]
-      if ($top -is [Collections.IDictionary]) { $top[[string]$keys[$keys.Count - 1]] = $value } else { $top.Add($value) }
-    }
-    if ($null -ne $open) {
-      $stack.Add($open)
-      $keys.Add($null)
-      if ($open -is [Collections.IDictionary]) { $expect = 'first-key' } else { $expect = 'first-value' }
-    } elseif ($stack.Count) { $expect = 'next' } else { $expect = 'end' }
-  }
-  if ($expect -cne 'end') { throw 'not JSON' }
-  @{ value = $root }
-}
-
-function Format-JsonString([string]$s) {
-  if (-not $JsonEscape.IsMatch($s)) { return '"' + $s + '"' }
-  '"' + $JsonEscape.Replace($s, [Text.RegularExpressions.MatchEvaluator] {
-      param($m)
-      $c = [int]$m.Value[0]
-      if ($c -eq 34) { return '\"' }
-      if ($c -eq 92) { return '\\' }
-      if ($c -eq 8) { return '\b' }
-      if ($c -eq 9) { return '\t' }
-      if ($c -eq 10) { return '\n' }
-      if ($c -eq 12) { return '\f' }
-      if ($c -eq 13) { return '\r' }
-      '\u' + $c.ToString('x4')
-    }) + '"'
-}
-
-function Add-Json([Text.StringBuilder]$sb, $v) {
-  if ($null -eq $v) { [void]$sb.Append('null') }
-  elseif ($v -is [string]) { [void]$sb.Append((Format-JsonString $v)) }
-  elseif ($v -is [bool]) { [void]$sb.Append($(if ($v) { 'true' } else { 'false' })) }
-  elseif ($v -is [JsonNumber]) { [void]$sb.Append($v.Raw) }
-  elseif ($v -is [int] -or $v -is [long]) { [void]$sb.Append(([long]$v).ToString($Invariant)) }
-  elseif ($v -is [double]) { [void]$sb.Append($v.ToString('R', $Invariant)) }
-  elseif ($v -is [Collections.IDictionary]) {
-    [void]$sb.Append('{')
-    $first = $true
-    foreach ($k in $v.get_Keys()) {
-      if (-not $first) { [void]$sb.Append(',') }
-      $first = $false
-      [void]$sb.Append((Format-JsonString ([string]$k))).Append(':')
-      Add-Json $sb $v[$k]
-    }
-    [void]$sb.Append('}')
-  } elseif ($v -is [Collections.IEnumerable]) {
-    [void]$sb.Append('[')
-    $first = $true
-    foreach ($item in $v) {
-      if (-not $first) { [void]$sb.Append(',') }
-      $first = $false
-      Add-Json $sb $item
-    }
-    [void]$sb.Append(']')
-  } else { [void]$sb.Append((Format-JsonString ([string]$v))) }
-}
-
-function ConvertTo-JsonText($value) {
-  $sb = New-Object System.Text.StringBuilder
-  Add-Json $sb $value
-  $sb.ToString()
-}
-
-function New-Object-Ordered { New-Object System.Collections.Specialized.OrderedDictionary }
-
-# A string field of a parsed object, or '' (like str() in adiutor.mjs).
-function Get-Str($obj, [string]$key) {
-  if ($obj -is [Collections.IDictionary] -and $obj.Contains($key) -and $obj[$key] -is [string]) { return $obj[$key] }
-  ''
-}
-
-# JavaScript's Number(value): NaN when it is not a number.
-function ConvertTo-Number($value) {
-  if ($null -eq $value) { return [double]0 }
-  if ($value -is [JsonNumber]) { return [double]::Parse($value.Raw, $Invariant) }
-  if ($value -is [bool]) { if ($value) { return [double]1 }; return [double]0 }
-  if ($value -is [int] -or $value -is [long] -or $value -is [double]) { return [double]$value }
-  if ($value -is [string]) {
-    $t = $value.Trim()
-    if ($t -eq '') { return [double]0 }
-    $d = [double]0
-    if ($t -cmatch '^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\z' -and [double]::TryParse($t, [Globalization.NumberStyles]::Float, $Invariant, [ref]$d)) { return $d }
-    return [double]::NaN
-  }
-  [double]::NaN
-}
-# Number(value) || 0
-function Get-NumberOrZero($value) {
-  $d = ConvertTo-Number $value
-  if ([double]::IsNaN($d)) { return [double]0 }
-  $d
-}
-function Get-Num($obj, [string]$key) {
-  if ($obj -is [Collections.IDictionary] -and $obj.Contains($key)) { return Get-NumberOrZero $obj[$key] }
-  [double]0
-}
-
-# Date.parse: the time in milliseconds, or $null when it is not a date.
-function Get-DateMs([string]$text) {
-  if (-not $text) { return $null }
-  $d = [DateTimeOffset]::MinValue
-  $styles = [Globalization.DateTimeStyles]::AssumeUniversal
-  if (-not [DateTimeOffset]::TryParse($text, $Invariant, $styles, [ref]$d)) { return $null }
-  $d.ToUnixTimeMilliseconds()
-}
-
+function HostName { if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName } }
 function Write-Raw([byte[]]$bytes) {
   $out = [Console]::OpenStandardOutput()
   $out.Write($bytes, 0, $bytes.Length)
   $out.Flush()
 }
 function Write-Line([string]$text) { Write-Raw $Utf8.GetBytes("$text`n") }
-function Write-Answer($value) { Write-Line (ConvertTo-JsonText $value) }
+function Write-Json($value) { Write-Line (ConvertTo-Json -InputObject $value -Compress -Depth 20) }
+function ConvertTo-JsonString([string]$text) { ConvertTo-Json -InputObject $text -Compress }
 
 $Help = @"
-adiutor: keep the owner's Adiutor board current, after the owner approves this computer user once.
+${Cmd}: use $Product after a person approves it.
 
-  connect [--url <address>] [--days <1-365>] [--replace]
-                          Ask to connect; prints a link and a code to show the owner.
-  connect --wait --url <address>
-                          Wait up to $WaitSeconds s for the approval; run again while it answers still_waiting.
-  status [--clear-left]   Whether this computer user is connected, and what the command left on Adiutor (no secrets).
-  disconnect              Forget the connection on this computer (the key stays on Adiutor until it ends).
-  get '<path>'            GET /api/v1/<path>, for example: get 'items?q=login'
-  post '<path>' --json '<body>' | --json-file <file>
-  patch '<path>' --json '<body>' | --json-file <file>
-                          --as <label> (or ADIUTOR_AGENT_LABEL) names the agent in Adiutor's activity log.
-"@ -replace "`r`n", "`n"
+  connect [--replace]   Ask to connect; prints a link and a code to show the person.
+  connect --wait        Wait up to $WaitSeconds s for the approval; run again while it answers still_waiting.
+  access                What this connection may read or act on, and until when.
+  endpoints [area]      The calls this connection may make, with their kind (read or act).
+  get <path>            GET a path, for example: get '/api/items?q=report'
+  post|put|patch <path> [--json <body> | --json-file <file>]
+  delete <path> [--json <body> | --json-file <file>]
+  status                Whether this computer user is connected (no secrets).
+  disconnect            End this computer user's connection.
 
-# Arguments
+  --url <address>       The $Product address (or ${EnvPrefix}URL). Kept once connected, for the commands after.
+"@
 
-function Read-Options([string[]]$list) {
-  $opts = @{
-    positional = (New-Object System.Collections.Generic.List[string])
-    url = $null; days = $null; json = $null; jsonFile = $null; as = $null
-    replace = $false; wait = $false; clearLeft = $false
-  }
-  $i = 0
-  while ($i -lt $list.Count) {
-    $a = $list[$i]
-    $i++
-    $valued = @{ '--url' = 'url'; '--days' = 'days'; '--json' = 'json'; '--json-file' = 'jsonFile'; '--as' = 'as' }
-    $name = $null
-    foreach ($k in $valued.Keys) { if ($a -ceq $k) { $name = $valued[$k] } }
-    if ($name) {
-      if ($i -ge $list.Count) { Fail 'bad_option' "$a needs a value." }
-      $opts[$name] = $list[$i]
-      $i++
-    } elseif ($a -ceq '--replace') { $opts.replace = $true }
-    elseif ($a -ceq '--wait') { $opts.wait = $true }
-    elseif ($a -ceq '--clear-left') { $opts.clearLeft = $true }
-    elseif ($a.StartsWith('--', [StringComparison]::Ordinal)) { Fail 'bad_option' "Unknown option $a. Run: adiutor help" }
-    else { $opts.positional.Add($a) }
-  }
-  $opts
-}
-
-function Get-Days($raw) {
-  if ($null -eq $raw) { return $DaysDefault }
-  $days = 0
-  if ([string]$raw -cmatch '^[0-9]{1,3}\z') { $days = [int]$raw }
-  if ($days -lt $DaysMin -or $days -gt $DaysMax) { Fail 'bad_option' "--days takes $DaysMin to $DaysMax." }
-  $days
-}
-
-# The canonical origin of an address: https, or http on this computer only; no path, query or credentials.
-function Get-Origin([string]$raw) {
-  $u = $null
-  if (-not [Uri]::TryCreate($raw, [UriKind]::Absolute, [ref]$u)) {
-    Fail 'no_url' "That is not an address. Ask the owner for Adiutor's address, for example https://adiutor.example.com."
-  }
-  $loopback = $u.Host -ceq 'localhost' -or $u.Host -ceq '127.0.0.1'
-  if (-not ($u.Scheme -ceq 'https' -or ($u.Scheme -ceq 'http' -and $loopback))) {
-    Fail 'no_url' "Adiutor's address must start with https:// (http only for localhost or 127.0.0.1)."
-  }
-  if ($u.UserInfo -or $u.Query -or $u.Fragment -or ($u.AbsolutePath -cne '/' -and $u.AbsolutePath -cne '')) {
-    Fail 'no_url' "Give Adiutor's address alone, for example https://adiutor.example.com."
-  }
-  "$($u.Scheme)://$($u.Authority)"
-}
-
-# Where the connection is kept: one folder per computer user, shared by every agent install of that user.
-
-function Get-Ctx {
-  if ($IsWin -and $env:USERPROFILE) { $base = $env:USERPROFILE } else { $base = [Environment]::GetFolderPath('UserProfile') }
-  if ($env:ADIUTOR_SKILL_HOME) { $dir = $env:ADIUTOR_SKILL_HOME } else { $dir = Join-Path $base '.adiutor' }
-  $dir = [IO.Path]::GetFullPath($dir)
-  $rootOf = [IO.Path]::GetPathRoot($dir)
-  while ($dir.Length -gt $rootOf.Length -and ($dir.EndsWith('\') -or $dir.EndsWith('/'))) { $dir = $dir.Substring(0, $dir.Length - 1) }
-  @{
-    dir = $dir
-    connection = [IO.Path]::Combine($dir, 'connection')
-    pending = [IO.Path]::Combine($dir, 'pending')
-    left = [IO.Path]::Combine($dir, 'left')
-    lock = [IO.Path]::Combine($dir, 'lock')
-    breaker = [IO.Path]::Combine($dir, 'lock.break')
-  }
-}
-
-function Fail-Insecure([string]$text) { Fail 'insecure_credentials' $text }
-
-$script:HomeChecked = $false
-$script:UserSid = ''
-$script:Uid = $null
-$script:AclChecked = New-Object 'System.Collections.Generic.HashSet[string]'
-
-# POSIX: the owner's user id and the permission bits, as lstat reports them.
-function Get-CurrentUid {
-  if ($null -eq $script:Uid) {
-    $out = ''
-    try { $out = [string](& id -u 2>$null | Select-Object -First 1) } catch {}
-    if ($out.Trim() -cnotmatch '^[0-9]+\z') { Fail-Insecure 'Could not tell the current user (id -u failed).' }
-    $script:Uid = [long]$out.Trim()
-  }
-  $script:Uid
-}
-function Get-UnixOwner([string]$target) {
-  $item = Get-Item -LiteralPath $target -Force
-  $stat = $item.PSObject.Properties['UnixStat']
-  if ($stat -and $null -ne $stat.Value) { return [long]$stat.Value.UserId }
-  $out = ''
-  try { $out = [string](& stat -c '%u' -- $target 2>$null | Select-Object -First 1) } catch {}
-  if ($out.Trim() -cnotmatch '^[0-9]+\z') { try { $out = [string](& stat -f '%u' $target 2>$null | Select-Object -First 1) } catch {} }
-  if ($out.Trim() -cnotmatch '^[0-9]+\z') { Fail-Insecure "Could not tell who owns $target." }
-  [long]$out.Trim()
-}
-function Get-UnixMode([string]$target) { [int][IO.File]::GetUnixFileMode($target) -band 511 }
-
-# Attributes of a path itself, without following a link; $null when it does not exist.
-function Get-LinkAttributes([string]$target) {
-  try { return [IO.File]::GetAttributes($target) }
-  catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return $null }
-}
-
-# Checks the folder (and creates it when asked): a plain folder of this user that only this user can open.
-function Protect-Home($ctx, [bool]$create) {
-  try { $attr = Get-LinkAttributes $ctx.dir } catch { Fail 'cannot_save' "Cannot read $($ctx.dir). Allow this agent to use it." }
-  if ($null -eq $attr) {
-    if (-not $create) { return $false }
-    try {
-      if ($IsWin) {
-        [void][IO.Directory]::CreateDirectory($ctx.dir)
-        Set-WindowsPrivate $ctx.dir $true
-      } else {
-        [void][IO.Directory]::CreateDirectory($ctx.dir, [IO.UnixFileMode]'UserRead, UserWrite, UserExecute')
-      }
-    } catch {
-      if ($_.Exception -is [AdiutorFail]) { throw }
-      Fail 'cannot_save' "Cannot create $($ctx.dir). Allow this agent to write there."
-    }
-    $attr = Get-LinkAttributes $ctx.dir
-  }
-  if ($null -eq $attr -or ($attr -band [IO.FileAttributes]::ReparsePoint) -or -not ($attr -band [IO.FileAttributes]::Directory)) {
-    Fail-Insecure "$($ctx.dir) must be a plain folder, not a link."
-  }
-  if ($IsWin) {
-    if (-not $script:HomeChecked) {
-      $present = @(@($ctx.connection, $ctx.pending, $ctx.left) | Where-Object { Test-Exists $_ })
-      foreach ($f in $present) { [void](Test-PlainFile $f) }
-      Test-WindowsAcl $ctx (@($ctx.dir) + $present)
-    }
-  } else {
-    if ((Get-UnixOwner $ctx.dir) -ne (Get-CurrentUid)) {
-      Fail-Insecure "$($ctx.dir) belongs to another user. Remove it, or set ADIUTOR_SKILL_HOME to a folder of your own."
-    }
-    if ((Get-UnixMode $ctx.dir) -ne 448) { Fail-Insecure "Others can open $($ctx.dir). Run: chmod 700 '$($ctx.dir)'" }
-  }
-  $script:HomeChecked = $true
-  $true
-}
-
-# A plain file (not a link, not a folder); $false when it does not exist.
-function Test-PlainFile([string]$file) {
-  $attr = Get-LinkAttributes $file
-  if ($null -eq $attr) { return $false }
-  if (($attr -band [IO.FileAttributes]::ReparsePoint) -or ($attr -band [IO.FileAttributes]::Directory)) {
-    Fail-Insecure "$file must be a plain file, not a link."
-  }
-  $true
-}
-
-# Checks one file before it is read; $false when it does not exist.
-function Test-PrivateFile($ctx, [string]$file) {
-  if (-not (Test-PlainFile $file)) { return $false }
-  if ($IsWin) { Test-WindowsAcl $ctx @($file) }
-  else {
-    if ((Get-UnixOwner $file) -ne (Get-CurrentUid)) { Fail-Insecure "$file belongs to another user. Remove it and connect again." }
-    if ((Get-UnixMode $file) -ne 384) { Fail-Insecure "Others can read $file. Run: chmod 600 '$file'" }
-  }
-  $true
-}
-
-# Reads a file the other commands may replace or delete meanwhile (shared like Node's reads), as UTF-8.
-function Read-SharedText([string]$file) {
+# Reads a file the other commands may replace or delete meanwhile. ReadAllText shares it for reading only, so on
+# Windows a concurrent replace or delete of that file would fail while it is open.
+function Read-Shared([string]$file) {
   $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
   $fs = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share)
+  try { (New-Object IO.StreamReader($fs, $Utf8)).ReadToEnd() } finally { $fs.Dispose() }
+}
+
+# Context: the server's address and where its connection is kept, one per address for this computer user. The
+# connection belongs to the computer user, not to the skill's folder, which is never written.
+# The address: --url, the environment, the one filled in when the server served this file, or the one kept on
+# connecting.
+
+function Get-Context([string]$urlOption) {
+  $dir = Get-CredentialsDir
+  $raw = $urlOption
+  if (-not $raw) { $raw = Get-Env 'URL' }
+  if (-not $raw -and -not $DefaultUrl.StartsWith('__')) { $raw = $DefaultUrl }
+  $kept = ''
+  if (-not $raw) { $kept = Get-KeptAddress $dir; $raw = $kept }
+  if (-not $raw) { Fail 'no_url' "No $Product address. Ask the person for it, then run: $Cmd connect --url `"<address>`"" }
   try {
-    $ms = New-Object IO.MemoryStream
-    $fs.CopyTo($ms)
-    $Utf8.GetString($ms.ToArray())
-  } finally { $fs.Dispose() }
-}
-
-function Read-Private($ctx, [string]$file) {
-  if (-not (Protect-Home $ctx $false)) { return $null }
-  if (-not (Test-PrivateFile $ctx $file)) { return $null }
-  try { return Read-SharedText $file }
-  catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return $null }
-  catch { Fail 'cannot_save' "Cannot read $file. Allow this agent to use $($ctx.dir)." }
-}
-
-# Windows: access lists instead of mode bits. One entry, for the current user; inheritance removed.
-
-function Get-UserSid {
-  if (-not $script:UserSid) {
-    try { $script:UserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch {}
-    if (-not $script:UserSid) { Fail-Insecure 'Could not tell the current Windows user (whoami failed).' }
+    # A kept address is one line: anything else in the file makes it invalid, not a different address.
+    if ($kept -and $kept -match '\s') { Fail 'insecure_url' '' }
+    $issuer = Get-Issuer $raw
+  } catch [ClientFail] {
+    if (-not $kept) { throw }
+    Fail 'no_url' "The address kept in $(Join-Path $dir $AddressFile) is not valid. Pass --url `"<address>`"."
   }
-  $script:UserSid
+  $sha = [Security.Cryptography.SHA256]::Create().ComputeHash($Utf8.GetBytes($issuer))
+  $key = (-join ($sha | ForEach-Object { $_.ToString('x2') })).Substring(0, 32)
+  @{
+    issuer = $issuer; dir = $dir
+    file = Join-Path $dir "$key.json"; lock = Join-Path $dir "$key.lock"; kinds = Join-Path $dir "$key.kinds"
+    label = Get-Label
+  }
 }
 
-# icacls: inheritance removed and full control for the current user only.
-function Set-WindowsPrivate([string]$target, [bool]$folder) {
-  $sid = Get-UserSid
-  $grant = "*${sid}:F"
-  if ($folder) { $grant = "*${sid}:(OI)(CI)F" }
-  $code = 1
+# An IPv6 address (without its brackets) as a browser writes it, or $null when it is not one: the WHATWG URL
+# standard's parser and serializer, as Node and the sh version have them. Lower case without leading zeros, the
+# first longest run of two or more zero groups as ::, and a dotted IPv4 end in hex. .NET writes some addresses
+# otherwise (Windows PowerShell in full and upper case) and reads some wrongly (Windows PowerShell takes
+# [::1:2:3:4:5:6:7] for all zeros, and drops a %25 zone), so the address is read from the text.
+function ConvertTo-Ipv6Text([string]$text) {
+  $s = $text.ToLowerInvariant(); $n = $s.Length
+  $hex = '0123456789abcdef'
+  $a = New-Object int[] 8
+  $p = 0; $piece = 0; $compress = -1
+  if ($n -gt 0 -and $s[0] -eq ':') {
+    if ($n -lt 2 -or $s[1] -ne ':') { return $null }
+    $p = 2; $piece = 1; $compress = 1
+  }
+  while ($p -lt $n) {
+    if ($piece -eq 8) { return $null }
+    if ($s[$p] -eq ':') {
+      if ($compress -ge 0) { return $null }
+      $p++; $piece++; $compress = $piece; continue
+    }
+    $value = 0; $length = 0
+    while ($length -lt 4 -and $p -lt $n -and $hex.IndexOf($s[$p]) -ge 0) { $value = $value * 16 + $hex.IndexOf($s[$p]); $p++; $length++ }
+    if ($p -lt $n -and $s[$p] -eq '.') {
+      # A dotted IPv4 end: four decimal numbers of 0 to 255 without leading zeros, as the last two groups.
+      if ($length -eq 0 -or $piece -gt 6) { return $null }
+      $p -= $length
+      $seen = 0
+      while ($p -lt $n) {
+        if ($seen -gt 0) { if ($s[$p] -eq '.' -and $seen -lt 4) { $p++ } else { return $null } }
+        if ($p -ge $n -or $hex.IndexOf($s[$p]) -lt 0 -or $hex.IndexOf($s[$p]) -gt 9) { return $null }
+        $v4 = -1
+        while ($p -lt $n -and $hex.IndexOf($s[$p]) -ge 0 -and $hex.IndexOf($s[$p]) -le 9) {
+          if ($v4 -eq 0) { return $null }
+          if ($v4 -lt 0) { $v4 = 0 }
+          $v4 = $v4 * 10 + $hex.IndexOf($s[$p])
+          if ($v4 -gt 255) { return $null }
+          $p++
+        }
+        $a[$piece] = $a[$piece] * 256 + $v4
+        $seen++
+        if ($seen -eq 2 -or $seen -eq 4) { $piece++ }
+      }
+      if ($seen -ne 4) { return $null }
+      break
+    }
+    if ($p -lt $n) {
+      if ($s[$p] -ne ':') { return $null }
+      $p++
+      if ($p -ge $n) { return $null }
+    }
+    $a[$piece] = $value; $piece++
+  }
+  if ($compress -ge 0) {
+    $swaps = $piece - $compress; $piece = 7
+    while ($piece -ne 0 -and $swaps -gt 0) {
+      $t = $a[$piece]; $a[$piece] = $a[$compress + $swaps - 1]; $a[$compress + $swaps - 1] = $t
+      $piece--; $swaps--
+    }
+  } elseif ($piece -ne 8) { return $null }
+  $best = -1; $bestLength = 1; $i = 0
+  while ($i -lt 8) {
+    if ($a[$i] -ne 0) { $i++; continue }
+    $j = $i
+    while ($j -lt 8 -and $a[$j] -eq 0) { $j++ }
+    if ($j - $i -gt $bestLength) { $best = $i; $bestLength = $j - $i }
+    $i = $j
+  }
+  $out = ''
+  for ($i = 0; $i -lt 8; $i++) {
+    if ($i -eq $best) {
+      if ($i -eq 0) { $out += '::' } else { $out += ':' }
+      $i += $bestLength - 1
+      continue
+    }
+    $out += $a[$i].ToString('x')
+    if ($i -ne 7) { $out += ':' }
+  }
+  $out
+}
+
+# The host of an address as a browser writes it.
+function Get-HostName([Uri]$u) {
+  if ($u.HostNameType -eq [UriHostNameType]::IPv6) { return "[$(ConvertTo-Ipv6Text $u.Host.Trim('[', ']'))]" }
+  $u.Host
+}
+function Get-Origin([Uri]$u) { "$($u.Scheme)://$(Get-HostName $u)$($u.Authority.Substring($u.Host.Length))" }
+
+# The origin of an address: https (http only on this computer), with nothing after it.
+function Get-Issuer([string]$raw) {
+  $u = $null
+  if (-not [Uri]::TryCreate($raw, [UriKind]::Absolute, [ref]$u)) { Fail 'insecure_url' "`"$raw`" is not an address." }
+  $name = Get-HostName $u
+  if ($raw -match '^[a-z][a-z0-9+.-]*://\[([^\]]*)\]') {
+    $v6 = ConvertTo-Ipv6Text $Matches[1]
+    if ($null -eq $v6) { Fail 'insecure_url' "`"$raw`" is not an address." }
+    $name = "[$v6]"
+  }
+  $loopback = @('127.0.0.1', '[::1]', 'localhost') -contains $name
+  if (-not ($u.Scheme -eq 'https' -or ($u.Scheme -eq 'http' -and $loopback))) {
+    Fail 'insecure_url' 'The address must start with https:// (http only for this computer).'
+  }
+  if ($u.UserInfo -or $u.Query -or $u.Fragment -or ($u.AbsolutePath -ne '/')) {
+    Fail 'insecure_url' 'Use the address alone, for example https://adiutor.example.com.'
+  }
+  $issuer = "$($u.Scheme)://$name$($u.Authority.Substring($u.Host.Length))"
+  if ($issuer -cnotmatch $SafeOrigin) { Fail 'insecure_url' 'Use the address alone, for example https://adiutor.example.com.' }
+  $issuer
+}
+
+function Get-KeptAddress([string]$dir) {
+  $file = Join-Path $dir $AddressFile
+  # Attributes of the path itself, without following a link: a folder or a broken link is refused, not missing.
+  try { $attr = [IO.File]::GetAttributes($file) } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return '' }
+  if (($attr -band [IO.FileAttributes]::ReparsePoint) -or ($attr -band [IO.FileAttributes]::Directory)) {
+    Fail 'insecure_credentials' "$file must be a plain file."
+  }
+  try { $text = Read-Shared $file } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return '' }
+  $text -replace '[\r\n]+\z', ''
+}
+
+# Keeps the address of a working connection, in one step. Only a convenience: a failure changes nothing.
+function Save-Address($ctx) {
   try {
+    if ((Get-KeptAddress $ctx.dir) -ceq $ctx.issuer) { return }
+    Write-Private $ctx (Join-Path $ctx.dir $AddressFile) "$($ctx.issuer)`n"
+  } catch {
+    # The connection works without it: --url, the environment or the served address still find it.
+  }
+}
+
+# icacls over the folder and its files; tried again while other commands add or replace files in it.
+function Invoke-Icacls([string[]]$arguments) {
+  for ($i = 0; ; $i++) {
     $ErrorActionPreference = 'Continue'
-    & $Icacls $target /inheritance:r /grant:r $grant /Q *> $null
+    & $Icacls @arguments *> $null
     $code = $LASTEXITCODE
-  } catch { $code = 1 } finally { $ErrorActionPreference = 'Stop' }
-  if ($code -ne 0) { Fail-Insecure "Could not limit $target to your user (icacls failed)." }
+    $ErrorActionPreference = 'Stop'
+    if ($code -eq 0) { return }
+    if ($i -ge 4) { throw "icacls $($arguments[1]) failed" }
+    Start-Sleep -Milliseconds (100 + (Get-Random -Maximum 200))
+  }
 }
 
-# The owner and access list of a folder or file in SDDL.
-function Get-Sddl([string]$target, [bool]$folder) {
-  $sections = [Security.AccessControl.AccessControlSections]'Owner, Access'
-  if ($folder) { $sec = New-Object Security.AccessControl.DirectorySecurity($target, $sections) }
-  else { $sec = New-Object Security.AccessControl.FileSecurity($target, $sections) }
-  $sec.GetSecurityDescriptorSddlForm($sections)
-}
-
-# What in an SDDL string lets anyone but this user in, or $null. Owner: this user (the built-in Administrator shows
-# as LA). Access list: protected (no inheritance) and exactly one allow entry with full control for this user, with
-# (OI)(CI) on the folder and no flags on a file.
-function Get-AclProblem([string]$sddl, [string]$sid, [bool]$folder, [bool]$checkOwner) {
-  $admin = $sid -cmatch '^S-1-5-21-[0-9-]+-500\z'
-  if ($checkOwner) {
-    $owner = ''
-    $m = [regex]::Match($sddl, '^O:(.*?)(?=G:|D:|S:|\z)')
-    if ($m.Success) { $owner = $m.Groups[1].Value }
-    if (-not ($owner -ceq $sid -or ($owner -ceq 'LA' -and $admin))) {
-      if ($owner) { return "its owner is $owner" }
-      return 'its owner is unknown'
+# What in saved ACLs (icacls /save: one SDDL line per object) lets anyone but this user, SYSTEM and Administrators
+# in. Anything but plain allow and deny entries (conditional or callback ones) counts too: refused, not guessed.
+function Find-OtherAllowed([string]$saved, [string]$userSid) {
+  $allowed = @($userSid, 'SY', 'BA', 'S-1-5-18', 'S-1-5-32-544')
+  # SDDL writes the built-in Administrator account (RID 500) as LA, so a user who is that account shows as LA.
+  if ($userSid -match '^S-1-5-21-[0-9-]+-500$') { $allowed += 'LA' }
+  foreach ($line in ($saved -split "`r?`n")) {
+    $at = $line.IndexOf('D:')
+    if ($at -lt 0) { continue }
+    $dacl = ($line.Substring($at + 2) -split 'S:')[0]
+    $depth = 0; $ace = ''
+    foreach ($ch in $dacl.ToCharArray()) {
+      if ($ch -eq '(') {
+        $depth++
+        if ($depth -gt 1) { return 'a conditional entry' }
+        $ace = ''
+      } elseif ($ch -eq ')') {
+        $depth--
+        $f = $ace -split ';'
+        if (@('A', 'D', 'OA', 'OD') -cnotcontains $f[0]) { return "an entry of type $($f[0])" }
+        if (($f[0] -ceq 'A' -or $f[0] -ceq 'OA') -and ($f.Count -lt 6 -or $allowed -notcontains $f[5])) { return $f[-1] }
+      } elseif ($depth -eq 1) { $ace += $ch }
     }
   }
-  $at = $sddl.IndexOf('D:')
-  if ($at -lt 0) { return 'its access list cannot be read' }
-  $dacl = [regex]::Match($sddl.Substring($at), 'D:([A-Z]*)((?:\([^()]*\))*)(?=S:|\z)')
-  if (-not $dacl.Success) { return 'its access list cannot be read' }
-  if (-not $dacl.Groups[1].Value.Contains('P')) { return 'it inherits access from its parent folder' }
-  $list = $dacl.Groups[2].Value
-  $aces = @()
-  if ($list.Length -ge 2) { $aces = @($list.Substring(1, $list.Length - 2).Split(@(')('), [StringSplitOptions]::None) | Where-Object { $_ }) }
-  if ($aces.Count -ne 1) { return "it has $($aces.Count) access entries" }
-  $f = $aces[0].Split(';')
-  $part = { param($i) if ($f.Count -gt $i) { $f[$i] } else { $null } }
-  $type = & $part 0
-  $flags = & $part 1
-  $rights = & $part 2
-  $who = & $part 5
-  if ($type -cne 'A' -or -not ($who -ceq $sid -or ($who -ceq 'LA' -and $admin))) {
-    if ($who) { return "$who has access" }
-    return 'someone has access'
-  }
-  if (-not ($rights -ceq 'FA' -or $rights -ceq '0x1f01ff')) { return 'your user lacks full control' }
-  $want = ''
-  if ($folder) { $want = 'OICI' }
-  if ($flags -cne $want) { return 'its access entry has unexpected flags' }
   $null
 }
 
-# Reads back the owner and access list of folders and files (once per process), and refuses any other.
-function Test-WindowsAcl($ctx, [string[]]$targets) {
-  $todo = @($targets | Where-Object { -not $script:AclChecked.Contains($_.ToLowerInvariant()) })
-  if (-not $todo.Count) { return }
-  $sddls = @()
+# What the connection is called on the approval page and in the product's list of connections.
+function Get-Label {
+  $l = "Agents on $(HostName)"
+  if (Get-Env 'AGENT_NAME') { $l = Get-Env 'AGENT_NAME' }
+  if ($l.Length -gt 60) { $l = $l.Substring(0, 60) }
+  $l
+}
+
+function Get-CredentialsDir {
+  if ([Environment]::OSVersion.Platform -ne 'Win32NT') { Fail 'failed' "On Linux and macOS, run $Cmd (or $Cmd.sh)." }
+  $dir = Get-Env 'CREDENTIALS'
+  if (-not $dir) { $dir = Join-Path $env:USERPROFILE $CredentialsFolder }
+  $dir = [IO.Path]::GetFullPath($dir).TrimEnd('\')
+  $userHome = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\').ToLowerInvariant()
+  $lower = $dir.ToLowerInvariant()
+  if ($lower -ne $userHome -and -not $lower.StartsWith("$userHome\")) {
+    Fail 'insecure_credentials' "Keep the $Cmd folder inside your user profile ($userHome), not $dir."
+  }
+  $dir
+}
+
+$script:Secured = $false
+function Protect-Dir([string]$dir) {
+  if ($script:Secured) { return }
+  try { [void][IO.Directory]::CreateDirectory($dir) } catch { Fail 'cannot_save' "Cannot create $dir. Allow this agent to write there." }
+  $item = Get-Item -LiteralPath $dir -Force
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $item.PSIsContainer) {
+    Fail 'insecure_credentials' "$dir must be a plain folder, not a link."
+  }
+  # Limited to this user, SYSTEM and Administrators (well-known SIDs, so no localized names).
   try {
-    $script:UserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    foreach ($t in $todo) { $sddls += , (Get-Sddl $t ($t -ceq $ctx.dir)) }
-  } catch { Fail-Insecure "Could not read who may open $($ctx.dir) (Get-Acl failed)." }
-  for ($i = 0; $i -lt $todo.Count; $i++) {
-    $target = $todo[$i]
-    $folder = $target -ceq $ctx.dir
-    $problem = Get-AclProblem $sddls[$i] $script:UserSid $folder $true
-    if ($problem) {
-      $grant = 'F'
-      if ($folder) { $grant = '(OI)(CI)F' }
-      Fail-Insecure "Others may open $target ($problem). Run: icacls `"$target`" /inheritance:r /grant:r `"%USERNAME%:$grant`""
-    }
-    [void]$script:AclChecked.Add($target.ToLowerInvariant())
+    $sid = Get-UserSid
+    & $Icacls $dir /inheritance:r /grant:r "*${sid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q *> $null
+    if ($LASTEXITCODE -ne 0) { throw 'icacls' }
+    # The owner may always change an ACL, so the folder and its files must be this user's. (Only now: taking
+    # ownership needs the full control just granted. No /C, which would hide a failure behind exit code 0.)
+    Invoke-Icacls @($dir, '/setowner', "*$sid", '/T', '/Q')
+    # Granting does not remove other entries: read the folder's and its files' ACLs back and allow no one else.
+    Assert-OnlyUser $dir $sid
+  } catch [ClientFail] { throw } catch {
+    Fail 'insecure_credentials' "Could not limit $dir to your user ($($_.Exception.Message))."
+  }
+  $script:Secured = $true
+}
+
+# Before the connection's file is read: the folder must still be one only this user can open, since a restore or a
+# change of its permissions may have opened it since Protect-Dir set it up. Checks only, never changes it; once per
+# command.
+$script:Checked = $false
+function Test-Dir([string]$dir) {
+  if ($script:Secured -or $script:Checked) { return }
+  $item = Get-Item -LiteralPath $dir -Force
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $item.PSIsContainer) {
+    Fail 'insecure_credentials' "$dir must be a plain folder, not a link."
+  }
+  try { Assert-OnlyUser $dir (Get-UserSid) } catch [ClientFail] { throw } catch {
+    Fail 'insecure_credentials' "Could not check who can open $dir ($($_.Exception.Message))."
+  }
+  $script:Checked = $true
+}
+
+function Get-UserSid {
+  $who = (& $Whoami /user /fo csv /nh) -join ''
+  if ($who -notmatch '"(S-1-[0-9-]+)"\s*$') { throw 'no SID' }
+  $Matches[1]
+}
+
+# Reads the folder's and its files' ACLs back and allows no one but this user, SYSTEM and Administrators. (icacls,
+# not Get-Acl: started from PowerShell 7, Windows PowerShell may fail to load the module Get-Acl is in.)
+function Assert-OnlyUser([string]$dir, [string]$sid) {
+  $saved = Join-Path $dir ".acl-$(Hex 4)"
+  try {
+    Invoke-Icacls @($dir, '/save', $saved, '/T', '/Q')
+    $other = Find-OtherAllowed ([IO.File]::ReadAllText($saved, [Text.Encoding]::Unicode)) $sid
+    if ($other) { Fail 'insecure_credentials' "Others can open $dir ($other). Remove their access." }
+  } finally { if ([IO.File]::Exists($saved)) { [IO.File]::Delete($saved) } }
+}
+
+# Attributes of the path itself, without following a link. Not Get-Item: while another command replaces the file,
+# Get-Item can report it as a folder (PowerShell 7), which would refuse a plain file.
+function Test-PlainFile([string]$file) {
+  $attr = [IO.File]::GetAttributes($file)
+  if (($attr -band [IO.FileAttributes]::ReparsePoint) -or ($attr -band [IO.FileAttributes]::Directory)) {
+    Fail 'insecure_credentials' "$file must be a plain file."
   }
 }
 
-# A temporary file's access list, read back after icacls.
-function Test-ReadBack($ctx, [string]$file) {
-  try { $sddl = Get-Sddl $file $false } catch { Fail-Insecure "Could not read back who may open $file (icacls failed)." }
-  $problem = Get-AclProblem $sddl (Get-UserSid) $false $false
-  if ($problem) { Fail-Insecure "Could not make $file private ($problem)." }
-}
+# The connection's file: flat JSON with plain values, written in one step.
 
-# Files: one line of JSON each (left: one per entry), written in one step through a private temporary file.
-
-function Format-Count($value) {
-  $d = Get-NumberOrZero $value
-  if ($d -lt 0) { $d = 0 }
-  [Math]::Floor($d).ToString('0', $Invariant)
-}
-
-function Format-Line($fields, $rec) {
-  $parts = foreach ($f in $fields) {
-    $k = $f[0]
-    if ($f[1] -ceq 'n') { '"' + $k + '":' + (Format-Count $rec[$k]) }
-    else {
-      $value = ''
-      if ($null -ne $rec[$k]) { $value = [string]$rec[$k] }
-      if ($value -cnotmatch $Plain) { Fail 'unexpected_answer' "Adiutor sent a value that cannot be stored ($k)." }
-      '"' + $k + '":"' + $value + '"'
-    }
-  }
-  '{' + ($parts -join ',') + '}'
-}
-
-function Read-Line($fields, [string]$line, [string]$file) {
-  $parsed = $null
-  $ok = $false
-  try { $parsed = (ConvertFrom-JsonText $line).value; $ok = $true } catch {}
-  if (-not $ok -or -not ($parsed -is [Collections.IDictionary] -or $parsed -is [Collections.IList])) {
-    Fail-Insecure "$file is damaged. Delete it and connect again."
-  }
+function New-Record($ctx) {
   $rec = @{}
-  foreach ($f in $fields) {
-    $k = $f[0]
-    if ($f[1] -ceq 'n') { $rec[$k] = Get-Num $parsed $k } else { $rec[$k] = Get-Str $parsed $k }
+  foreach ($f in $Fields) { if ($f[1] -eq 'n') { $rec[$f[0]] = [long]0 } else { $rec[$f[0]] = '' } }
+  $rec.v = [long]1; $rec.issuer = $ctx.issuer; $rec.label = $ctx.label
+  $rec
+}
+
+function Read-Record($ctx) {
+  if (-not [IO.File]::Exists($ctx.file)) { return $null }
+  try { Test-PlainFile $ctx.file } catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { return $null }
+  Test-Dir $ctx.dir
+  try { $text = Read-Shared $ctx.file } catch [IO.FileNotFoundException] { return $null }
+  try { $parsed = $text | ConvertFrom-Json } catch {
+    Fail 'insecure_credentials' "$($ctx.file) is damaged. Delete it and connect again."
+  }
+  if ($null -eq $parsed) { Fail 'insecure_credentials' "$($ctx.file) is damaged. Delete it and connect again." }
+  $rec = @{}
+  foreach ($f in $Fields) {
+    $value = $null
+    if ($parsed.PSObject.Properties[$f[0]]) { $value = $parsed.($f[0]) }
+    if ($f[1] -eq 'n') { $n = [long]0; if ($null -ne $value) { [void][long]::TryParse([string]$value, [ref]$n) }; $rec[$f[0]] = $n }
+    elseif ($null -eq $value) { $rec[$f[0]] = '' } else { $rec[$f[0]] = [string]$value }
   }
   $rec
 }
 
-function Invoke-Hook([string]$point) {
-  $at = [Environment]::GetEnvironmentVariable('ADIUTOR_TEST_HOLD_' + $point.ToUpperInvariant().Replace('-', '_'))
-  if (-not $at) { return }
-  [IO.File]::WriteAllText("$at.reached", [string]$PID)
-  for ($i = 0; $i -lt 1200 -and -not [IO.File]::Exists("$at.go"); $i++) { Start-Sleep -Milliseconds 50 }
+function Format-Record($rec) {
+  $parts = foreach ($f in $Fields) {
+    if ($f[1] -eq 'n') { $n = [long]0; [void][long]::TryParse([string]$rec[$f[0]], [ref]$n); if ($n -lt 0) { $n = 0 }; "`"$($f[0])`":$n" }
+    else {
+      $value = [string]$rec[$f[0]]
+      if ($value -notmatch $Plain) { Fail 'unexpected_answer' "$Product sent a value that cannot be stored ($($f[0]))." }
+      "`"$($f[0])`":`"$value`""
+    }
+  }
+  '{' + ($parts -join ',') + "}`n"
 }
 
+# Writes a file of the connection in one step: a new private file, flushed, moved over the old one.
+function Write-Private($ctx, [string]$file, [string]$text) {
+  Protect-Dir $ctx.dir
+  $tmp = "$file.$(Hex 6).tmp"
+  try {
+    $fs = [IO.File]::Open($tmp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try { $bytes = $Utf8.GetBytes($text); $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+  } catch { Fail 'cannot_save' "Cannot write in $($ctx.dir). Allow this agent to write there." }
+  Move-Over $tmp $file
+}
+
+function Write-Record($ctx, $rec) { Write-Private $ctx $ctx.file (Format-Record $rec) }
+
 function Move-Over([string]$from, [string]$to) {
-  # On Windows an open handle (an antivirus scan) can refuse the replace for a moment.
+  # An open handle (an antivirus scan) can refuse the replace for a moment.
   $until = [DateTime]::UtcNow.AddSeconds(5)
   while ($true) {
     try {
-      if ($Core) { [IO.File]::Move($from, $to, $true) }
-      elseif ([IO.File]::Exists($to)) { [IO.File]::Replace($from, $to, [NullString]::Value) }
-      else { [IO.File]::Move($from, $to) }
+      if ([IO.File]::Exists($to)) { [IO.File]::Replace($from, $to, [NullString]::Value) } else { [IO.File]::Move($from, $to) }
       return
     } catch {
-      if (-not $IsWin -or [DateTime]::UtcNow -gt $until) {
-        Remove-Path $from
-        Fail 'cannot_save' "Cannot replace $to. Allow this agent to write in its folder."
+      if ([DateTime]::UtcNow -gt $until) {
+        try { [IO.File]::Delete($from) } catch {}
+        Fail 'cannot_save' "Cannot replace $to."
       }
       Start-Sleep -Milliseconds 100
     }
   }
 }
 
-# Writes a file in one step: a temporary file made private before anything is written, then renamed over. Only by the
-# holder of the lock. A temporary file a stopped command left behind is removed by the next holder (Clear-Leftovers).
-function Write-Private($ctx, [string]$file, [string]$text) {
-  Assert-Mine $ctx
-  [void](Protect-Home $ctx $true)
-  $tmp = "$file.$(Hex 6).tmp"
-  $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
-  try {
-    $fs = $null
-    try {
-      if ($IsWin) {
-        [IO.File]::Open($tmp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, $share).Dispose()
-        Set-WindowsPrivate $tmp $false
-        Test-ReadBack $ctx $tmp
-        $fs = [IO.File]::Open($tmp, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, $share)
-      } else {
-        $o = New-Object IO.FileStreamOptions
-        $o.Mode = [IO.FileMode]::CreateNew
-        $o.Access = [IO.FileAccess]::Write
-        $o.Share = $share
-        $o.UnixCreateMode = [IO.UnixFileMode]'UserRead, UserWrite'
-        $fs = New-Object IO.FileStream($tmp, $o)
-        if ((Get-UnixOwner $tmp) -ne (Get-CurrentUid) -or (Get-UnixMode $tmp) -ne 384) {
-          Fail-Insecure "Could not make $tmp private before writing it."
-        }
-      }
-      Invoke-Hook 'temp'
-      $bytes = $Utf8.GetBytes($text)
-      $fs.Write($bytes, 0, $bytes.Length)
-      $fs.Flush($true)
-      Invoke-Hook 'written'
-    } finally { if ($fs) { $fs.Dispose() } }
-  } catch {
-    Remove-Path $tmp
-    if ($_.Exception -is [AdiutorFail]) { throw }
-    Fail 'cannot_save' "Cannot write in $($ctx.dir). Allow this agent to write there."
-  }
-  Move-Over $tmp $file
-  if ($IsWin) { [void]$script:AclChecked.Add($file.ToLowerInvariant()) }
-}
+function Remove-Kinds($ctx) { if ([IO.File]::Exists($ctx.kinds)) { [IO.File]::Delete($ctx.kinds) } }
+function Remove-Record($ctx) { if ([IO.File]::Exists($ctx.file)) { [IO.File]::Delete($ctx.file) }; Remove-Kinds $ctx }
 
-function Remove-PrivateFile($ctx, [string]$file) {
-  Assert-Mine $ctx
-  try {
-    $attr = Get-LinkAttributes $file
-    if ($null -eq $attr) { return }
-    if (($attr -band [IO.FileAttributes]::Directory) -and -not ($attr -band [IO.FileAttributes]::ReparsePoint)) { throw 'a folder' }
-    if ($attr -band [IO.FileAttributes]::Directory) { [IO.Directory]::Delete($file) } else { [IO.File]::Delete($file) }
-  } catch { Fail 'cannot_save' "Cannot remove $file. Allow this agent to write in $($ctx.dir)." }
-}
+# The lock: a file created exclusively, naming its holder. Never taken from a live holder, however old.
 
-function Read-Connection($ctx) {
-  $text = Read-Private $ctx $ctx.connection
-  if ($null -eq $text) { return $null }
-  $rec = Read-Line $ConnectionFields $text.Trim() $ctx.connection
-  if (-not $rec.origin -or -not $rec.key -or -not $rec.keyName) { Fail-Insecure "$($ctx.connection) is damaged. Delete it and connect again." }
-  $rec
-}
-
-function Read-Pending($ctx) {
-  $text = Read-Private $ctx $ctx.pending
-  if ($null -eq $text) { return $null }
-  $rec = Read-Line $PendingFields $text.Trim() $ctx.pending
-  if (-not $rec.attemptId -or -not $rec.origin -or -not $rec.deviceCode -or -not ($rec.phase -ceq 'polling' -or $rec.phase -ceq 'creating_key')) {
-    Fail-Insecure "$($ctx.pending) is damaged. Delete it and connect again."
-  }
-  $rec
-}
-
-function Write-Connection($ctx, $rec) { Write-Private $ctx $ctx.connection ((Format-Line $ConnectionFields $rec) + "`n") }
-
-function Copy-Rec($rec, [hashtable]$changes) {
-  $next = @{}
-  foreach ($k in $rec.Keys) { $next[$k] = $rec[$k] }
-  if ($changes) { foreach ($k in $changes.Keys) { $next[$k] = $changes[$k] } }
-  $next
-}
-
-# Two records (or two absent ones) are the same, field by field as they are stored.
-function Test-SameRec($fields, $a, $b) {
-  if ($null -eq $a -or $null -eq $b) { return ($null -eq $a) -and ($null -eq $b) }
-  (Format-Line $fields $a) -ceq (Format-Line $fields $b)
-}
-
-# Writes the attempt only while the file is exactly as this command last read or wrote it ($seen; $null: no attempt).
-# Answers what was written, the $seen of the next save.
-function Save-Pending($ctx, $rec, $seen) {
-  if (-not (Test-SameRec $PendingFields (Read-Pending $ctx) $seen)) { throw [AdiutorChanged]::new() }
-  Write-Private $ctx $ctx.pending ((Format-Line $PendingFields $rec) + "`n")
-  Copy-Rec $rec $null
-}
-
-# The left record: what the command left on Adiutor, with non-secret fields only.
-
-function Read-Left($ctx) {
-  $text = Read-Private $ctx $ctx.left
-  if ($null -eq $text) { return , @() }
-  $entries = @()
-  foreach ($line in ($text -split "\r?\n")) {
-    if (-not $line.Trim()) { continue }
-    $e = Read-Line $LeftFields $line $ctx.left
-    if ($Reasons -ccontains $e.reason) { $entries += , $e }
-  }
-  , $entries
-}
-
-# Entries still worth reporting: a dated entry drops by itself once its key has ended.
-function Select-Current($entries) {
-  $nowMs = (Now) * 1000
-  $kept = @()
-  foreach ($e in $entries) {
-    if (-not ($Dated -ccontains $e.reason) -or -not $e.expiresAt) { $kept += , $e; continue }
-    $ms = Get-DateMs $e.expiresAt
-    if ($null -ne $ms -and $ms -gt $nowMs) { $kept += , $e }
-  }
-  , $kept
-}
-
-function Write-Left($ctx, $entries) {
-  $entries = @($entries | Where-Object { $null -ne $_ })
-  if (-not $entries.Count) { return Remove-PrivateFile $ctx $ctx.left }
-  $text = -join @($entries | ForEach-Object { (Format-Line $LeftFields $_) + "`n" })
-  Write-Private $ctx $ctx.left $text
-}
-
-# Adds entries (under the lock), before the change that would lose what they record.
-function Add-Left($ctx, $additions) {
-  $entries = New-Object System.Collections.Generic.List[object]
-  foreach ($e in (Select-Current (Read-Left $ctx))) { $entries.Add($e) }
-  foreach ($add in $additions) {
-    $entry = @{ at = (Iso (Now)); expiresAt = '' }
-    foreach ($k in $add.Keys) { $entry[$k] = $add[$k] }
-    $same = { param($x) $x.origin -ceq $entry.origin -and $x.keyName -ceq $entry.keyName }
-    $skip = $false
-    foreach ($x in $entries) { if ((& $same $x) -and $x.reason -ceq $entry.reason) { $skip = $true } }
-    # A key whose name and end date are known says more than "a key may exist".
-    if ($entry.reason -ceq 'key_unknown') { foreach ($x in $entries) { if ((& $same $x) -and $Dated -ccontains $x.reason) { $skip = $true } } }
-    if ($skip) { continue }
-    if ($Dated -ccontains $entry.reason) {
-      for ($i = $entries.Count - 1; $i -ge 0; $i--) {
-        if ((& $same $entries[$i]) -and $entries[$i].reason -ceq 'key_unknown') { $entries.RemoveAt($i) }
-      }
-    }
-    $entries.Add($entry)
-  }
-  Write-Left $ctx $entries.ToArray()
-}
-
-function Get-LeftMessage($e) {
-  if ($e.reason -ceq 'session_unknown') { return "On $($e.origin): $SessionText" }
-  if ($e.reason -ceq 'key_unknown') { return "On $($e.origin): a key named `"$($e.keyName)`" may exist; delete it in Settings, Agent access." }
-  $why = @{ replaced = 'was replaced'; disconnected = 'was disconnected'; not_saved = 'could not be saved' }[$e.reason]
-  $until = $e.expiresAt
-  if (-not $until) { $until = 'it ends' }
-  "On $($e.origin): the key `"$($e.keyName)`" $why but still works until $until; delete it in Settings, Agent access, if nothing uses it."
-}
-
-# An entry for the key of the current connection: a run stopped after recording that key as replaced or disconnected
-# and before changing the connection. It is never reported, and the next holder of the lock removes it.
-function Test-Stale($e, $conn) {
-  $null -ne $conn -and ($e.reason -ceq 'replaced' -or $e.reason -ceq 'disconnected') -and $e.origin -ceq $conn.origin -and $e.keyName -ceq $conn.keyName
-}
-
-function Update-Left($ctx, $conn) {
-  $entries = Read-Left $ctx
-  $kept = @($entries | Where-Object { -not (Test-Stale $_ $conn) })
-  if ($kept.Count -ne $entries.Count) { Write-Left $ctx $kept }
-}
-
-function Get-PublicLeft($entries, $conn) {
-  $out = New-Object System.Collections.Generic.List[object]
-  foreach ($e in (Select-Current $entries)) {
-    if (Test-Stale $e $conn) { continue }
-    $o = New-Object-Ordered
-    foreach ($f in $LeftFields) { $o[$f[0]] = $e[$f[0]] }
-    $o['message'] = Get-LeftMessage $e
-    $out.Add($o)
-  }
-  , $out
-}
-
-function Get-LeftNow($ctx) {
-  $conn = $null
-  try { $conn = Read-Connection $ctx } catch {}
-  try { return , (Get-PublicLeft (Read-Left $ctx) $conn) } catch { return , (New-Object System.Collections.Generic.List[object]) }
-}
-
-# The lock: a file created exclusively, naming its holder (token, host, process id and that process's start time).
-# Taken from a holder only when it is certainly gone, under lock.break (Remove-DeadLock), and released by its token
-# only.
-
-# The start time of a process as the system reports it, the same in every version; '' when it cannot be read.
-function Get-StartTime([long]$id) {
-  try {
-    if ($OnLinux) {
-      $stat = [IO.File]::ReadAllText("/proc/$id/stat")
-      # Field 22; the fields after the command name, which may hold spaces, start with field 3.
-      $fields = $stat.Substring($stat.LastIndexOf(')') + 2).Split(' ')
-      if ($fields.Count -gt 19) { return $fields[19] }
-      return ''
-    }
-    if ($IsWin) { return (Get-Process -Id $id -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o') }
-    $ErrorActionPreference = 'Continue'
-    $out = @(& ps -o lstart= -p $id 2>$null)
-    if ($LASTEXITCODE -ne 0) { return '' }
-    return ($out -join "`n").Trim()
-  } catch { return '' }
-}
-
-function Test-Running([long]$id) {
-  if ($IsWin) { return [bool](Get-Process -Id $id -ErrorAction SilentlyContinue) }
-  try { return -not [Diagnostics.Process]::GetProcessById([int]$id).HasExited } catch { return $false }
-}
-
-# The holder a lock file names: $null when there is none, @{ unreadable } when it cannot be told.
 function Read-Lock([string]$file) {
-  try { $attr = Get-LinkAttributes $file } catch { return @{ unreadable = $true } }
-  if ($null -eq $attr) { return $null }
-  if ($attr -band [IO.FileAttributes]::ReparsePoint) { Fail-Insecure "$file must be a plain file, not a link." }
+  if (-not [IO.File]::Exists($file)) { return $null }
   try {
-    $held = (ConvertFrom-JsonText (Read-SharedText $file)).value
-    if ($held -is [Collections.IDictionary] -and (Get-Str $held 'token')) { return $held }
-  } catch {
-    if (-not (Test-Exists $file)) { return $null }
-  }
-  @{ unreadable = $true }
+    $text = Read-Shared $file
+    $held = $text | ConvertFrom-Json
+    if ($held -and $held.PSObject.Properties['token']) { return $held }
+  } catch {}
+  try { return [pscustomobject]@{ empty = $true; mtime = [IO.File]::GetLastWriteTimeUtc($file) } } catch { return $null }
 }
 
-function Test-Unreadable($held) { $held -is [hashtable] -and $held.ContainsKey('unreadable') }
+function Test-Alive([int]$id) { [bool](Get-Process -Id $id -ErrorAction SilentlyContinue) }
 
-# free, alive, gone (certainly: same host, and the process ended or its id now runs another start), or unknown.
-function Get-Verdict($held) {
-  if ($null -eq $held) { return 'free' }
-  if ((Test-Unreadable $held) -or -not $held.Contains('host') -or -not (Test-SameHost (ConvertTo-PlainString $held['host']))) { return 'unknown' }
-  $id = ConvertTo-Number $held['pid']
-  if ([double]::IsNaN($id) -or $id -le 0 -or $id -ne [Math]::Floor($id) -or $id -gt [int]::MaxValue) { return 'unknown' }
-  if (-not (Test-Running ([long]$id))) { return 'gone' }
-  $start = $null
-  if ($held.Contains('start')) { $start = $held['start'] }
-  $startText = ConvertTo-PlainString $start
-  if ($null -eq $start -or $startText -ceq '' -or $start -is [bool] -or ($start -is [JsonNumber] -and (ConvertTo-Number $start) -eq 0)) { return 'unknown' }
-  $now = Get-StartTime ([long]$id)
-  if (-not $now) { return 'unknown' }
-  if ($now -ceq $startText) { return 'alive' }
-  'gone'
+function Invoke-Hook([string]$point) {
+  $at = Get-Env ('TEST_HOLD_' + $point.ToUpperInvariant().Replace('-', '_'))
+  if (-not $at) { return }
+  [IO.File]::WriteAllText("$at.reached", [string]$PID)
+  for ($i = 0; $i -lt 1200 -and -not [IO.File]::Exists("$at.go"); $i++) { Start-Sleep -Milliseconds 50 }
 }
 
-# String(value) for a parsed JSON value.
-function ConvertTo-PlainString($value) {
-  if ($null -eq $value) { return '' }
-  if ($value -is [JsonNumber]) { return $value.Raw }
-  if ($value -is [bool]) { if ($value) { return 'true' }; return 'false' }
-  [string]$value
-}
+function Test-LockEmpty($held) { $held.PSObject.Properties['empty'] -and $held.empty }
 
-# The token of the lock this command holds; '' when it holds none.
-$script:LockToken = ''
-
-function Enter-Lock($ctx) {
-  [void](Protect-Home $ctx $true)
+# Takes the lock; $own is a lock this process held before, which counts as taken if it is back in place.
+function Enter-Lock($ctx, [string]$own) {
+  Protect-Dir $ctx.dir
   $token = Hex 16
-  $owner = '{"token":' + (Format-JsonString $token) + ',"host":' + (Format-JsonString (Get-HostName)) + ',"pid":' + $PID +
-    ',"start":' + (Format-JsonString (Get-StartTime $PID)) + "}`n"
+  $line = ConvertTo-Json -Compress -InputObject ([ordered]@{ pid = $PID; host = (HostName); token = $token; startedAt = (Now) })
   $deadline = [DateTime]::UtcNow.AddMilliseconds($LockWaitMs)
   while ($true) {
-    $fs = $null
+    $created = $false
     try {
-      $fs = [IO.File]::Open($ctx.lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-    } catch {
+      $fs = [IO.File]::Open($ctx.lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+      try { $bytes = $Utf8.GetBytes($line); $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
+      $created = $true
+    } catch [IO.IOException] {
+      if (-not [IO.File]::Exists($ctx.lock) -and -not [IO.Directory]::Exists($ctx.dir)) { Fail 'cannot_save' "Cannot create a lock in $($ctx.dir)." }
+    } catch [UnauthorizedAccessException] {
       # Windows refuses for a moment to create a file whose name is still being deleted (a lock just released).
-      if (-not (Test-Exists $ctx.lock) -and (-not $IsWin -or [DateTime]::UtcNow -gt $deadline)) {
-        Fail 'cannot_save' "Cannot create a lock in $($ctx.dir). Allow this agent to write there."
-      }
-    }
-    if ($fs) {
-      try { $bytes = $Utf8.GetBytes($owner); $fs.Write($bytes, 0, $bytes.Length) }
-      catch {
-        $fs.Dispose()
-        Remove-Path $ctx.lock
-        Fail 'cannot_save' "Cannot create a lock in $($ctx.dir). Allow this agent to write there."
-      }
-      $fs.Dispose()
-      $script:LockToken = $token
-      Invoke-Hook 'locked'
-      Clear-Leftovers $ctx
-      return $token
-    }
+      if ([DateTime]::UtcNow -gt $deadline) { Fail 'cannot_save' "Cannot create a lock in $($ctx.dir)." }
+      Start-Sleep -Milliseconds (50 + (Get-Random -Maximum 100))
+      continue
+    } catch { Fail 'cannot_save' "Cannot create a lock in $($ctx.dir)." }
+    if ($created) { Invoke-Hook 'locked'; return $token }
     $held = Read-Lock $ctx.lock
-    $state = Get-Verdict $held
-    if ([DateTime]::UtcNow -gt $deadline) { Fail-LockBusy $ctx $state }
-    if ($state -ceq 'gone') {
+    # Another process moved this one's lock away by mistake and has put it back.
+    if ($own -and $held -and -not (Test-LockEmpty $held) -and $held.token -eq $own) { return $own }
+    $dead = $false
+    if ($held) {
+      # A holder that died between creating the lock and writing its name leaves it empty; that takes a moment.
+      if (Test-LockEmpty $held) { $dead = ([DateTime]::UtcNow - $held.mtime).TotalSeconds -gt 60 }
+      else { $dead = ([string]$held.host).ToLowerInvariant() -eq (HostName).ToLowerInvariant() -and -not (Test-Alive ([int]$held.pid)) }
+    }
+    if ($dead) {
       Invoke-Hook 'break-observed'
-      if (Remove-DeadLock $ctx (Get-Str $held 'token') $owner) { continue }
+      if (Remove-DeadLock $ctx $held) { continue }
     }
-    if ($state -ceq 'free') { Start-Sleep -Milliseconds 50 } else { Start-Sleep -Milliseconds (100 + (Get-Random -Maximum 200)) }
-  }
-}
-
-# The answer once the wait for the lock ended; $state is the verdict on the lock as last read.
-function Fail-LockBusy($ctx, [string]$state) {
-  $byHand = 'Nothing was sent. If no adiutor command runs on this computer, remove that file by hand and run the command again.'
-  if (Test-Exists $ctx.breaker) {
-    Fail 'busy' "Another adiutor command may be removing a lock, or it stopped while doing so and left $($ctx.breaker). $byHand"
-  }
-  if ($state -ceq 'unknown') {
-    Fail 'busy' "Another adiutor command may hold the lock $($ctx.lock), and this command cannot tell whether it still runs. $byHand"
-  }
-  if ($state -ceq 'gone') {
-    Fail 'busy' "The lock $($ctx.lock) was left by an adiutor command that has ended, and this command cannot remove it. $byHand"
-  }
-  Fail 'busy' 'Another adiutor command is using the connection. Nothing was sent; run it again.'
-}
-
-# Removes a file; $true when it is gone (also when it was gone already), $false when it could not be removed.
-function Remove-Gone([string]$file) {
-  # On Windows an open handle (an antivirus scan) can refuse the delete for a moment.
-  for ($i = 0; ; $i++) {
-    try { [IO.File]::Delete($file); return $true }
-    catch {
-      if (-not (Test-Exists $file)) { return $true }
-      if (-not $IsWin -or $i -ge 20) { return $false }
-      Start-Sleep -Milliseconds 50
+    if ([DateTime]::UtcNow -gt $deadline) {
+      if ($held -and -not (Test-LockEmpty $held) -and ((Now) - [long]$held.startedAt) -gt 600) {
+        Fail 'busy' "Another $Cmd command has held $($ctx.lock) for over 10 minutes. If none is running, delete that file."
+      }
+      Fail 'busy' "Another $Cmd command is using this connection. Nothing was sent; run it again."
     }
+    Start-Sleep -Milliseconds (100 + (Get-Random -Maximum 200))
   }
 }
 
-# Removes the lock of the holder $token names, which is certainly gone. Only the holder of lock.break (created
-# exclusively, naming its holder) removes a lock it does not hold, and only while that lock still names the same dead
-# holder: a lock taken meanwhile is never touched. $true when the lock is gone or now names another holder (try again
-# at once); $false when another command is breaking it or it could not be removed. Nobody else ever removes a
-# lock.break: one left behind is named in busy for the owner to remove by hand.
-function Remove-DeadLock($ctx, [string]$token, [string]$owner) {
-  try {
-    $fs = [IO.File]::Open($ctx.breaker, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-  } catch { return $false }
-  try {
-    try { $bytes = $Utf8.GetBytes($owner); $fs.Write($bytes, 0, $bytes.Length) } catch {}
-    $fs.Dispose()
-    Invoke-Hook 'break-held'
-    $held = Read-Lock $ctx.lock
-    if ($null -eq $held -or (Test-Unreadable $held) -or (Get-Str $held 'token') -cne $token -or (Get-Verdict $held) -cne 'gone') { return $true }
-    return (Remove-Gone $ctx.lock)
-  } finally { [void](Remove-Gone $ctx.breaker) }
-}
-
-function Test-Mine($ctx) {
-  if (-not $script:LockToken) { return $false }
-  try { $held = Read-Lock $ctx.lock } catch { return $false }
-  $null -ne $held -and -not (Test-Unreadable $held) -and (Get-Str $held 'token') -ceq $script:LockToken
-}
-
-function Exit-Lock($ctx, [string]$token) {
-  if ($token -and $token -ceq $script:LockToken -and (Test-Mine $ctx)) { [void](Remove-Gone $ctx.lock) }
-  $script:LockToken = ''
-}
-
-# Before a request that spends a one-time secret, and before every change to a file: the lock must be this command's.
-function Assert-Mine($ctx) {
-  if (-not (Test-Mine $ctx)) { Fail 'busy' 'Another adiutor command took over the connection. Run it again.' }
-}
-
-# A temporary file of Write-Private. Every one is written under the lock, so the holder finds only those a stopped
-# command left behind; they may hold a secret.
-function Clear-Leftovers($ctx) {
-  Assert-Mine $ctx
-  foreach ($f in [IO.Directory]::GetFiles($ctx.dir)) {
-    if ([IO.Path]::GetFileName($f) -cmatch '^(?:connection|pending|left)\.[0-9a-f]{12}\.tmp\z') { try { [IO.File]::Delete($f) } catch {} }
+# Moving the dead lock away is atomic, so of two that try only one moves it; if what was moved is not the dead lock
+# (another process had just taken a fresh one), it goes back unless a newer one is there (Move never overwrites).
+function Remove-DeadLock($ctx, $held) {
+  $moved = "$($ctx.lock).$(Hex 6).dead"
+  try { [IO.File]::Move($ctx.lock, $moved) } catch { return $true }
+  Invoke-Hook 'break-moved'
+  $got = Read-Lock $moved
+  $same = $false
+  if ($got) {
+    if (Test-LockEmpty $held) { $same = [bool](Test-LockEmpty $got) }
+    elseif (-not (Test-LockEmpty $got)) { $same = $got.token -eq $held.token }
   }
+  if ($same) { [IO.File]::Delete($moved); return $true }
+  try { [IO.File]::Move($moved, $ctx.lock) } catch { try { [IO.File]::Delete($moved) } catch {} }
+  $false
 }
 
-# Requests: plain HTTP/1.1 over one new connection per request, never HttpClient, which may send a request again by
-# itself when its connection breaks before the answer; a one-time code or a write may never be sent twice. No
-# redirect is followed. Secrets travel only inside this process.
+function Test-Mine($ctx, [string]$token) {
+  $held = Read-Lock $ctx.lock
+  [bool]($held -and -not (Test-LockEmpty $held) -and $held.token -eq $token)
+}
+
+function Exit-Lock($ctx, [string]$token) { if (Test-Mine $ctx $token) { [IO.File]::Delete($ctx.lock) } }
+
+function Assert-Mine($ctx, [string]$token) {
+  if (-not (Test-Mine $ctx $token)) { Fail 'busy' "Another $Cmd command took over this connection. Run it again." }
+}
+
+# Requests
+
+# Plain HTTP/1.1 over one new connection per request, never HttpClient: .NET's HttpClient sends a request again by
+# itself when its connection breaks before the answer (PowerShell 7 sent a dropped request four times), and
+# neither an action nor a one-time refresh token may ever be sent twice. No redirects are followed.
 
 function Find-Bytes([byte[]]$hay, [byte[]]$needle, [int]$from) {
   for ($i = $from; $i -le $hay.Length - $needle.Length; $i++) {
@@ -1108,7 +634,7 @@ function Get-Unchunked([byte[]]$raw) {
     if ($end -lt 0) { return $null }
     $sizeText = ([Text.Encoding]::ASCII.GetString($raw, $at, $end - $at) -split ';')[0].Trim()
     $size = 0
-    if (-not [int]::TryParse($sizeText, [Globalization.NumberStyles]::HexNumber, $Invariant, [ref]$size)) { return $null }
+    if (-not [int]::TryParse($sizeText, [Globalization.NumberStyles]::HexNumber, $null, [ref]$size)) { return $null }
     if ($size -eq 0) { return , $out.ToArray() }
     $start = $end + 2
     if ($start + $size + 2 -gt $raw.Length) { return $null }
@@ -1117,114 +643,94 @@ function Get-Unchunked([byte[]]$raw) {
   }
 }
 
-# The name of a network failure, as Node reports it.
-function Get-NetCode($err) {
-  $e = $err
-  while ($e) {
-    if ($e -is [Net.Sockets.SocketException]) {
-      $names = @{
-        ConnectionRefused = 'ECONNREFUSED'; HostNotFound = 'ENOTFOUND'; NoData = 'ENOTFOUND'; TryAgain = 'EAI_AGAIN'
-        HostUnreachable = 'EHOSTUNREACH'; NetworkUnreachable = 'ENETUNREACH'; TimedOut = 'ETIMEDOUT'; ConnectionReset = 'ECONNRESET'
-      }
-      $name = [string]$e.SocketErrorCode
-      if ($names.ContainsKey($name)) { return $names[$name] }
-      return $name
-    }
-    if ($e -is [Security.Authentication.AuthenticationException]) { return 'TLS' }
-    if ($e -is [TimeoutException]) { return 'TimeoutError' }
-    $e = $e.InnerException
-  }
-  'network error'
+# A socket of the address's own family when the host is an IP address: Windows PowerShell's default TcpClient reaches
+# IPv4 only, so an IPv6 address such as [::1] needs an IPv6 one. A host name keeps the default.
+function New-TcpClient([string]$hostName) {
+  $ip = $null
+  if ([Net.IPAddress]::TryParse($hostName, [ref]$ip)) { return New-Object System.Net.Sockets.TcpClient($ip.AddressFamily) }
+  New-Object System.Net.Sockets.TcpClient
 }
 
-# One request to the stored origin only, never following a redirect. -Connect names the request adiutor-connect.
-# $body is JSON text or $null. Answers @{ status; text; json }.
-function Invoke-Request([string]$origin, [string]$method, [string]$target, $body, [string]$bearer, [bool]$connect, [string]$label) {
-  # A header value with a control character would change the request: refused before anything is sent.
-  if ("$bearer$label" -cmatch '[\x00-\x1f\x7f]' -or $target -cmatch '[\x00-\x20\x7f]') {
-    throw (New-Fail 'unreachable' "Cannot reach $origin (invalid header value)." @{ sent = $false })
+# One request. $bearer marks an API call (with its longer time limit); $policy is the revision to send with it, and
+# $kind the kind the client found for the call.
+function Invoke-Http($ctx, [string]$method, [string]$url, $form, [string]$bearer, $json, [string]$policy = '', [string]$kind = '') {
+  $timeoutMs = 15000
+  if ($bearer) { $timeoutMs = $ApiTimeoutMs }
+  $u = [Uri]$url
+  $bodyBytes = $null; $contentType = ''
+  if ($form) {
+    $pairs = foreach ($k in $form.Keys) { [Uri]::EscapeDataString([string]$k) + '=' + [Uri]::EscapeDataString([string]$form[$k]) }
+    $bodyBytes = $Utf8.GetBytes(($pairs -join '&')); $contentType = 'application/x-www-form-urlencoded'
+  } elseif ($null -ne $json) {
+    $bodyBytes = $Utf8.GetBytes([string]$json); $contentType = 'application/json'
   }
-  $u = [Uri]$origin
-  $bodyBytes = $null
-  $head = "$method $target HTTP/1.1`r`nHost: $($u.Authority)`r`nAccept: application/json`r`n"
-  if ($null -ne $body) { $bodyBytes = $Utf8.GetBytes([string]$body); $head += "Content-Type: application/json`r`n" }
-  if ($bearer) { $head += "Authorization: Bearer $bearer`r`n" }
-  if ($connect) { $head += "User-Agent: $ClientId`r`n" } else { $head += "User-Agent: adiutor`r`n" }
-  if ($label) { $head += "X-Adiutor-Agent: $label`r`n" }
-  if ($null -ne $bodyBytes) { $head += "Content-Length: $($bodyBytes.Length)`r`n" }
-  elseif ($method -cne 'GET') { $head += "Content-Length: 0`r`n" }
-  $head += "Connection: close`r`n`r`n"
-  $tcp = New-Object System.Net.Sockets.TcpClient
-  $stream = $null
+  $head = "$method $($u.PathAndQuery) HTTP/1.1`r`nHost: $($u.Authority)`r`nAccept: application/json`r`nConnection: close`r`nUser-Agent: $Cmd`r`n"
+  if ($bearer) { $head += "Authorization: Bearer $bearer`r`n${SkillHeaderName}: $SkillHeader`r`n" }
+  # The revision and the kind go together: the server runs the call only when both still hold for the route it picks.
+  if ($policy) { $head += "${PolicyHeaderName}: $policy`r`n${KindHeaderName}: $kind`r`n" }
+  if ($null -ne $bodyBytes) { $head += "Content-Type: $contentType`r`nContent-Length: $($bodyBytes.Length)`r`n" }
+  elseif (@('POST', 'PUT', 'PATCH') -contains $method) { $head += "Content-Length: 0`r`n" }
+  $head += "`r`n"
+  $tcp = New-TcpClient $u.DnsSafeHost
+  $stream = $null; $sent = $false
   $clock = [Diagnostics.Stopwatch]::StartNew()
-  $raw = New-Object System.IO.MemoryStream
   try {
     try {
-      $connecting = $tcp.ConnectAsync($u.DnsSafeHost, $u.Port)
-      if (-not $connecting.Wait([int][Math]::Max(1, $TimeoutMs))) { throw [TimeoutException]::new('connect') }
+      $connect = $tcp.ConnectAsync($u.DnsSafeHost, $u.Port)
+      if (-not $connect.Wait(10000)) { throw 'the connection timed out' }
       $stream = $tcp.GetStream()
-      if ($u.Scheme -ceq 'https') {
-        $left = [int]($TimeoutMs - $clock.ElapsedMilliseconds)
-        if ($left -le 0) { throw [TimeoutException]::new('tls') }
-        $tcp.ReceiveTimeout = $left
-        $tcp.SendTimeout = $left
+      if ($u.Scheme -eq 'https') {
         $ssl = New-Object System.Net.Security.SslStream($stream, $false)
-        # The system's TLS versions; Windows PowerShell 5.1 may offer only old ones unless TLS 1.2 is named.
-        $protocols = [Security.Authentication.SslProtocols]::None
-        if (-not $Core) { $protocols = [Security.Authentication.SslProtocols]::Tls12 }
-        $handshake = $ssl.AuthenticateAsClientAsync($u.DnsSafeHost, $null, $protocols, $true)
-        if (-not $handshake.Wait($left)) { $tcp.Close(); throw [TimeoutException]::new('tls') }
+        # The system's TLS versions; the certificate is checked as usual. The handshake gets
+        # what is left of the request's time: a server that stops in it cannot hold the lock.
+        $left = $timeoutMs - [int]$clock.ElapsedMilliseconds
+        if ($left -le 0) { throw 'the connection timed out' }
+        $tcp.ReceiveTimeout = $left; $tcp.SendTimeout = $left
+        $handshake = $ssl.AuthenticateAsClientAsync($u.DnsSafeHost, $null, [Security.Authentication.SslProtocols]::None, $true)
+        if (-not $handshake.Wait($left)) { $tcp.Close(); throw 'the TLS handshake timed out' }
         $stream = $ssl
       }
     } catch {
-      # The name, the connection or TLS failed first: nothing reached Adiutor.
-      throw (New-Fail 'unreachable' "Cannot reach $origin ($(Get-NetCode $_.Exception))." @{ sent = $false })
+      # The name, the connection or TLS failed first: nothing reached the server.
+      $f = [ClientFail]::new('unreachable', "Cannot reach $($ctx.issuer) ($($_.Exception.GetBaseException().Message)).")
+      $f.Sent = $false
+      throw $f
     }
+    $raw = New-Object System.IO.MemoryStream
     try {
+      $sent = $true
+      $stream.WriteTimeout = $timeoutMs
       $headBytes = [Text.Encoding]::ASCII.GetBytes($head)
-      $stream.WriteTimeout = [int][Math]::Max(1, $TimeoutMs - $clock.ElapsedMilliseconds)
       $stream.Write($headBytes, 0, $headBytes.Length)
       if ($null -ne $bodyBytes) { $stream.Write($bodyBytes, 0, $bodyBytes.Length) }
       $stream.Flush()
       $buf = New-Object byte[] 65536
       while ($true) {
-        $left = [int]($TimeoutMs - $clock.ElapsedMilliseconds)
-        if ($left -le 0) { throw [TimeoutException]::new('answer') }
+        $left = $timeoutMs - [int]$clock.ElapsedMilliseconds
+        if ($left -le 0) { throw 'no answer in time' }
         $stream.ReadTimeout = $left
         $n = $stream.Read($buf, 0, $buf.Length)
         if ($n -le 0) { break }
         $raw.Write($buf, 0, $n)
       }
     } catch {
-      $code = Get-NetCode $_.Exception
-      if ($code -ceq 'network error' -and $_.Exception.GetBaseException() -is [IO.IOException]) { $code = 'UND_ERR_SOCKET' }
-      if ($code -ceq 'ETIMEDOUT') { $code = 'TimeoutError' }
-      throw (New-Fail 'unreachable' "Cannot reach $origin ($code)." @{ sent = $true })
+      $f = [ClientFail]::new('unreachable', "Cannot reach $($ctx.issuer) ($($_.Exception.GetBaseException().Message)).")
+      $f.Sent = $true
+      throw $f
     }
   } finally {
     if ($stream) { try { $stream.Dispose() } catch {} }
     try { $tcp.Close() } catch {}
   }
   $all = $raw.ToArray()
-  # Interim answers (1xx, such as 103 Early Hints) come before the final one and are skipped (RFC 9110, section 15.2);
-  # 101 would switch protocols, which this request never asks for.
-  $from = 0
-  while ($true) {
-    $split = Find-Bytes $all ([byte[]](13, 10, 13, 10)) $from
-    $status = 0
-    $lines = @()
-    if ($split -gt $from) {
-      $lines = [Text.Encoding]::ASCII.GetString($all, $from, $split - $from) -split "`r`n"
-      if ($lines[0] -cmatch '^HTTP/1\.[01] ([0-9]{3})') { $status = [int]$Matches[1] }
-    }
-    if ($status -lt 100 -or $status -ge 200 -or $status -eq 101) { break }
-    $from = $split + 4
+  $split = Find-Bytes $all ([byte[]](13, 10, 13, 10)) 0
+  $status = 0
+  if ($split -gt 0) {
+    $lines = [Text.Encoding]::ASCII.GetString($all, 0, $split) -split "`r`n"
+    if ($lines[0] -match '^HTTP/1\.[01] (\d{3})') { $status = [int]$Matches[1] }
   }
-  # The answer started and broke off (or never came): Adiutor got the request and may have acted on it.
-  if ($status -lt 200) { throw (New-Fail 'unreachable' "Cannot reach $origin (UND_ERR_SOCKET)." @{ sent = $true }) }
-  if ($status -ge 300 -and $status -lt 400) {
-    throw (New-Fail 'unreachable' "$origin answered with a redirect ($status), which the command does not follow. Check Adiutor's address." @{ sent = $true })
-  }
+  # The answer started and broke off (or never came): the server got the request and may have acted on it.
+  if ($status -eq 0) { throw [ClientFail]::new('unreachable', "The answer from $($ctx.issuer) broke off.") }
   $headers = @{}
   foreach ($line in ($lines | Select-Object -Skip 1)) {
     $at = $line.IndexOf(':')
@@ -1233,585 +739,679 @@ function Invoke-Request([string]$origin, [string]$method, [string]$target, $body
   $rest = New-Object byte[] ($all.Length - $split - 4)
   [Array]::Copy($all, $split + 4, $rest, 0, $rest.Length)
   $bytes = $rest
-  if ($headers.ContainsKey('transfer-encoding') -and $headers['transfer-encoding'] -match 'chunked') { $bytes = Get-Unchunked $rest }
-  elseif ($headers.ContainsKey('content-length')) {
+  if ($headers.ContainsKey('transfer-encoding') -and $headers['transfer-encoding'] -match 'chunked') {
+    $bytes = Get-Unchunked $rest
+  } elseif ($headers.ContainsKey('content-length')) {
     $length = 0
     if (-not [int]::TryParse($headers['content-length'], [ref]$length) -or $rest.Length -lt $length) { $bytes = $null }
     else { $bytes = New-Object byte[] $length; [Array]::Copy($rest, 0, $bytes, 0, $length) }
   }
-  if ($null -eq $bytes) { throw (New-Fail 'unreachable' "The answer from $origin broke off." @{ sent = $true }) }
+  if ($null -eq $bytes) { throw [ClientFail]::new('unreachable', "The answer from $($ctx.issuer) broke off.") }
   $text = $Utf8.GetString($bytes)
   $parsed = $null
-  if ($text) { try { $parsed = (ConvertFrom-JsonText $text).value } catch {} }
-  @{ status = $status; text = $text; json = $parsed }
-}
-
-# A refusal: Adiutor's {error: {code, message}} (or Better Auth's code), carried in body.
-function New-HttpFail($r, [string]$what) {
-  $body = $null
-  if ($r.json -is [Collections.IDictionary] -or $r.json -is [Collections.IList]) { $body = $r.json }
-  $inner = $null
-  if ($body -is [Collections.IDictionary] -and $body.Contains('error') -and ($body['error'] -is [Collections.IDictionary] -or $body['error'] -is [Collections.IList])) { $inner = $body['error'] }
-  $detail = ''
-  foreach ($pair in @(@($inner, 'message'), @($inner, 'code'), @($body, 'message'), @($body, 'error_description'), @($body, 'error'))) {
-    if (-not $detail) { $detail = Get-Str $pair[0] $pair[1] }
+  $fields = $null
+  # Only strict JSON is read (see Read-JsonText): ConvertFrom-Json alone also reads text that is not JSON. The answer
+  # is JSON even when ConvertFrom-Json cannot hold it; its markers come from the strict reader's fields.
+  $doc = Read-JsonText $text
+  $isJson = $null -ne $doc
+  if ($isJson) {
+    $fields = $doc.fields
+    try { $parsed = $text | ConvertFrom-Json } catch {}
   }
-  $suffix = ''
-  if ($detail) { $suffix = ": $detail" }
-  New-Fail "http_$($r.status)" "$what failed ($($r.status)$suffix)." @{ status = $r.status; body = $body }
+  $challenge = ''
+  if ($headers.ContainsKey('www-authenticate')) { $challenge = $headers['www-authenticate'] }
+  @{ status = $status; text = $text; bytes = $bytes; json = $parsed; isJson = $isJson; fields = $fields; challenge = $challenge }
 }
 
-# Connecting
+# One JSON token, after any whitespace: a string, a number or a literal, or a structural character (RFC 8259).
+$JsonToken = [regex]'\G[ \t\n\r]*(?:("(?:[^"\\\x00-\x1f]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*")|(-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null)|([{}\[\]:,]))'
 
-function Get-KeyName {
-  $raw = $env:ADIUTOR_AGENT_NAME
-  if (-not $raw) { $raw = Get-HostName }
-  $computer = $raw -creplace '[^A-Za-z0-9._-]+', '-'
-  if ($computer.Length -gt 15) { $computer = $computer.Substring(0, 15) }
-  $computer = $computer -creplace '^-+|-+\z', ''
-  if (-not $computer) { $computer = 'agent' }
-  "skill:${computer}:$(Hex 4)"
-}
+$JsonEscape = [regex]'\\(?:u([0-9a-fA-F]{4})|(.))'
 
-function Get-PendingAnswer($pend) {
-  $o = New-Object-Ordered
-  $o['status'] = 'pending'
-  $o['origin'] = $pend.origin
-  $o['link'] = $pend.link
-  $o['code'] = Get-GroupedCode $pend.userCode
-  $o['expiresAt'] = Iso $pend.codeExpiresAt
-  $o['next'] = Get-WaitCommand $pend.origin
-  $o
-}
-
-function Get-ConnectedAnswer($conn) {
-  $o = New-Object-Ordered
-  $o['status'] = 'connected'
-  $o['origin'] = $conn.origin
-  $o['keyName'] = $conn.keyName
-  $o['expiresAt'] = $conn.expiresAt
-  $o
-}
-
-# The key name was saved as the connection: the attempt finished creating its key.
-function Test-KeySaved($pend, $conn) { [bool]$pend.keySaved -or ($null -ne $conn -and $conn.keyName -ceq $pend.keyName) }
-
-# What may be left on Adiutor if this attempt were removed now; nothing for a completed connect.
-function Get-AttemptWarnings($pend, $conn) {
-  $warnings = @()
-  if ($pend.phase -ceq 'creating_key') {
-    # The token arrived, so an earlier poll whose answer was lost redeemed nothing: only this session counts. A create
-    # that Adiutor refused, or that was never sent, made no key.
-    if (-not (Test-KeySaved $pend $conn) -and -not $pend.noKey) { $warnings += 'key_unknown' }
-    if ($pend.sessionOpen) { $warnings += 'session_unknown' }
-  } elseif ($pend.pollInFlight -or $pend.uncertain -or $pend.sessionOpen) { $warnings += 'session_unknown' }
-  , $warnings
-}
-
-# Removes an attempt, after writing what it may have left on Adiutor. Under the lock; the file is removed only while it
-# is exactly as this command last read or wrote it ($seen).
-function Remove-Attempt($ctx, $pend, $conn, $seen) {
-  if ($null -eq $seen) { $seen = $pend }
-  $warnings = Get-AttemptWarnings $pend $conn
-  if ($warnings.Count) {
-    Add-Left $ctx @($warnings | ForEach-Object { @{ origin = $pend.origin; keyName = $pend.keyName; reason = $_ } })
-  }
-  if (Test-SameRec $PendingFields (Read-Pending $ctx) $seen) { Remove-PrivateFile $ctx $ctx.pending }
-  , $warnings
-}
-
-function New-UnknownFail($warnings, $pend) {
-  $session = ''
-  if ($warnings -ccontains 'session_unknown') { $session = " $SessionText" }
-  if ($warnings -ccontains 'key_unknown') {
-    return New-Fail 'key_unknown' "The connection to $($pend.origin) did not finish, and a key named `"$($pend.keyName)`" may exist: delete it in Settings, Agent access.$session" $null
-  }
-  New-Fail 'session_unknown' "The connection to $($pend.origin) did not finish, and the command cannot tell what Adiutor did. $SessionText" $null
-}
-
-# An attempt a lock holder finds in creating_key belongs to a run that is gone (the lock is held through every step
-# of a redeem): it is removed with what it may have left.
-function Resolve-Orphan($ctx, $conn, $pend) {
-  if ($null -eq $pend -or $pend.phase -cne 'creating_key') { return @{ pend = $pend; orphan = $null; warnings = @() } }
-  $warnings = Remove-Attempt $ctx $pend $conn $null
-  @{ pend = $null; orphan = $pend; warnings = $warnings }
-}
-
-function Invoke-Connect($ctx, $opts) {
-  $days = Get-Days $opts.days
-  [void](Protect-Home $ctx $true)
-  $token = Enter-Lock $ctx
-  try {
-    $result = $null
-    $conn = Read-Connection $ctx
-    Update-Left $ctx $conn
-    $found = Read-Pending $ctx
-    $pend = (Resolve-Orphan $ctx $conn $found).pend
-    if ($opts.url) { $origin = Get-Origin $opts.url }
-    elseif ($conn -and $conn.origin) { $origin = $conn.origin }
-    elseif ($found) { $origin = $found.origin }
-    else { $origin = '' }
-    if (-not $origin) { Fail 'no_url' 'No Adiutor address is known. Ask the owner for it, then run: adiutor connect --url <address>' }
-    # The open code again, unless asked for a new one (--replace: the link did not work for the owner).
-    if ($pend -and -not $opts.replace -and $pend.origin -ceq $origin -and $pend.phase -ceq 'polling' -and $pend.codeExpiresAt -gt (Now)) {
-      $result = Get-PendingAnswer $pend
-    } else {
-      if ($conn -and -not $opts.replace) {
-        Fail 'already_connected' "Already connected to $($conn.origin) with the key `"$($conn.keyName)`", until $($conn.expiresAt). To connect again, run: adiutor connect --replace"
+# A JSON string token as JSON.parse reads it, escapes and all ("busy" is busy).
+function ConvertFrom-JsonStringToken([string]$token) {
+  $inner = $token.Substring(1, $token.Length - 2)
+  if (-not $inner.Contains('\')) { return $inner }
+  $JsonEscape.Replace($inner, [Text.RegularExpressions.MatchEvaluator] {
+      param($m)
+      if ($m.Groups[1].Success) { return [string][char][Convert]::ToInt32($m.Groups[1].Value, 16) }
+      switch -CaseSensitive ($m.Groups[2].Value) {
+        'b' { "`b" } 'f' { "`f" } 'n' { "`n" } 'r' { "`r" } 't' { "`t" } default { $m.Groups[2].Value }
       }
-      $r = Invoke-Request $origin 'POST' '/api/auth/device/code' (ConvertTo-JsonText ([ordered]@{ client_id = $ClientId })) '' $true ''
-      if ($r.status -ne 200) { throw (New-HttpFail $r 'Asking Adiutor for a code') }
-      $d = $r.json
-      $deviceCode = Get-Str $d 'device_code'
-      $userCode = Get-Str $d 'user_code'
-      $link = Get-Str $d 'verification_uri_complete'
-      if ($deviceCode -cnotmatch $Secret -or $userCode -cnotmatch '^[A-Za-z0-9-]{4,20}\z' -or $link -cnotmatch $Plain) {
-        Fail 'unexpected_answer' 'Adiutor answered without a usable code. Nothing was stored.'
-      }
-      $linkOrigin = ''
-      $lu = $null
-      if ([Uri]::TryCreate($link, [UriKind]::Absolute, [ref]$lu) -and ($lu.Scheme -ceq 'http' -or $lu.Scheme -ceq 'https')) { $linkOrigin = "$($lu.Scheme)://$($lu.Authority)" }
-      if ($linkOrigin -cne $origin) { Fail 'unexpected_answer' "Adiutor's approval link is not on $origin. Nothing was stored." }
-      # A pending attempt is replaced only now, once the new code exists; its link stops being used.
-      if ($pend) { [void](Remove-Attempt $ctx $pend $conn $null) }
-      $t = Now
-      $interval = [Math]::Max(1, [Math]::Floor((Get-Num $d 'interval')))
-      if ((Get-Num $d 'interval') -eq 0) { $interval = 5 }
-      $expiresIn = [Math]::Floor((Get-Num $d 'expires_in'))
-      if ((Get-Num $d 'expires_in') -eq 0) { $expiresIn = 600 }
-      $next = @{
-        v = 1; attemptId = (Hex 8); origin = $origin; deviceCode = $deviceCode; userCode = $userCode; link = $link
-        interval = $interval; nextPollAt = $t + $interval; codeExpiresAt = $t + [Math]::Max(1, $expiresIn); days = $days
-        keyName = (Get-KeyName); phase = 'polling'; pollInFlight = 0; uncertain = 0; sessionOpen = 0; keySaved = 0; noKey = 0
-      }
-      # Only into the state this command read: no attempt, and the connection it decided on.
-      if (-not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $conn)) { throw [AdiutorChanged]::new() }
-      [void](Save-Pending $ctx $next $null)
-      $result = Get-PendingAnswer $next
-    }
-  } finally { Exit-Lock $ctx $token }
-  $result['left'] = Get-LeftNow $ctx
-  Write-Answer $result
+    })
 }
 
-function Invoke-Wait($ctx, $opts) {
-  $origin = ''
-  if ($opts.url) { $origin = Get-Origin $opts.url }
-  if (-not $origin) {
-    $p = Read-Pending $ctx
-    if ($p) { $origin = $p.origin }
-    if (-not $origin) { Fail 'not_connected' 'No connection is being made. Run: adiutor connect --url <address>' }
-  }
-  $until = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
-  $state = @{ attemptId = $null }
+# A top field's value that is neither a string nor true or false (a number, null, an object or an array).
+$NotTextOrBool = [DBNull]::Value
+
+# Reads a text that is one complete JSON value with nothing after it but whitespace, as JSON.parse reads it (the Node
+# version) and json_scan in the sh version, or returns $null when it is not. ConvertFrom-Json alone also takes single
+# quotes, names without quotes, comments, trailing commas, NaN and leading zeros, so a broken answer could read as one
+# of the server's refusals. The result holds the top object's own fields (`fields`, empty for any other value): a
+# string, $true or $false, or $NotTextOrBool, by their exact keys with escapes read, the last value of a key given
+# twice, as JSON.parse reads them. The refusal and failure markers come only from these fields, never from
+# ConvertFrom-Json, which matches keys in any case, turns other values into strings, unrolls a top array (PowerShell
+# 7) and cannot hold some valid JSON (an empty key, two keys that differ only in case, or in Windows PowerShell a
+# number beyond the double range).
+function Read-JsonText([string]$text) {
+  $stack = New-Object System.Collections.Generic.List[string]
+  # Ordinal, so case-sensitive: "Error" is not "error".
+  $fields = New-Object 'System.Collections.Generic.Dictionary[string,object]'
+  $key = ''
+  $state = 'value'
+  $at = 0
   while ($true) {
-    $step = $null
+    $m = $JsonToken.Match($text, $at)
+    if (-not $m.Success) { break }
+    $at += $m.Length
+    if ($state -eq 'end') { return $null }
+    # Inside the top object itself (not nested deeper).
+    $inTop = $stack.Count -eq 1 -and $stack[0] -eq '{'
+    if ($m.Groups[1].Success -and ($state -eq 'key' -or $state -eq 'firstKey')) {
+      if ($inTop) { $key = ConvertFrom-JsonStringToken $m.Groups[1].Value }
+      $state = 'colon'; continue
+    }
+    $top = ''
+    if ($stack.Count) { $top = $stack[$stack.Count - 1] }
+    if ($m.Groups[3].Success) {
+      $t = $m.Groups[3].Value
+      if ($t -eq '{' -or $t -eq '[') {
+        if ($state -ne 'value' -and $state -ne 'first') { return $null }
+        if ($inTop) { $fields[$key] = $NotTextOrBool }
+        $stack.Add($t)
+        if ($t -eq '{') { $state = 'firstKey' } else { $state = 'first' }
+        continue
+      }
+      if ($t -eq ':') {
+        if ($state -ne 'colon') { return $null }
+        $state = 'value'; continue
+      }
+      if ($t -eq ',') {
+        if ($state -ne 'next') { return $null }
+        if ($top -eq '{') { $state = 'key' } else { $state = 'value' }
+        continue
+      }
+      # A closing bracket: of an empty container, or after a value in one of its kind.
+      $open = '['; $empty = 'first'
+      if ($t -eq '}') { $open = '{'; $empty = 'firstKey' }
+      if (-not ($state -eq $empty -or ($state -eq 'next' -and $top -eq $open))) { return $null }
+      $stack.RemoveAt($stack.Count - 1)
+    } elseif ($state -ne 'value' -and $state -ne 'first') { return $null }
+    elseif ($inTop) {
+      # A string, number or literal as a value of the top object.
+      if ($m.Groups[1].Success) { $fields[$key] = ConvertFrom-JsonStringToken $m.Groups[1].Value }
+      elseif ($m.Groups[2].Value -ceq 'true') { $fields[$key] = $true }
+      elseif ($m.Groups[2].Value -ceq 'false') { $fields[$key] = $false }
+      else { $fields[$key] = $NotTextOrBool }
+    }
+    # A value ended.
+    if ($stack.Count) { $state = 'next' } else { $state = 'end' }
+  }
+  if (-not ($state -eq 'end' -and $text.Substring($at) -match '^[ \t\n\r]*\z')) { return $null }
+  @{ fields = $fields }
+}
+
+function Test-JsonText([string]$text) { $null -ne (Read-JsonText $text) }
+
+# The top object's string field, by its exact key, or $null (no such field, another type, or no JSON object).
+function Get-TopText($r, [string]$name) {
+  if ($null -ne $r.fields -and $r.fields.ContainsKey($name) -and $r.fields[$name] -is [string]) { return $r.fields[$name] }
+  $null
+}
+
+function Invoke-OAuth($ctx, [string]$path, $form) {
+  $form['client_id'] = $ClientId
+  Invoke-Http $ctx 'POST' "$($ctx.issuer)$path" $form '' $null
+}
+
+function Test-Object($value) { $null -ne $value -and $value -is [pscustomobject] }
+
+function Get-Field($r, [string]$name) {
+  if ((Test-Object $r.json) -and $r.json.PSObject.Properties[$name]) { return [string]$r.json.$name }
+  ''
+}
+
+function New-HttpFail($r, [string]$what) {
+  $detail = Get-Field $r 'error_description'
+  if (-not $detail) { $detail = Get-Field $r 'message' }
+  if (-not $detail -and (Test-Object $r.json) -and $r.json.PSObject.Properties['detail'] -and $r.json.detail -is [string]) { $detail = $r.json.detail }
+  if (-not $detail) { $detail = Get-Field $r 'error' }
+  $msg = "$what failed ($($r.status)"
+  if ($detail) { $msg += ": $detail" }
+  $f = [ClientFail]::new("http_$($r.status)", "$msg).")
+  if ((Test-Object $r.json) -or $r.json -is [array]) { $f.Body = $r.json }
+  $f
+}
+
+function Get-Tokens($r) {
+  $access = Get-Field $r 'access_token'; $refresh = Get-Field $r 'refresh_token'; $scope = Get-Field $r 'scope'
+  if ($access -notmatch $Secret -or $refresh -notmatch $Secret -or $scope -notmatch $Plain) {
+    Fail 'unexpected_answer' "$Product answered without usable tokens."
+  }
+  $expires = [long]0; [void][long]::TryParse((Get-Field $r 'expires_in'), [ref]$expires)
+  @{ refreshToken = $refresh; accessToken = $access; accessExpiresAt = (Now) + [Math]::Max([long]0, $expires); scope = $scope }
+}
+
+function Merge($rec, $values) { $next = $rec.Clone(); foreach ($k in $values.Keys) { $next[$k] = $values[$k] }; $next }
+
+function Invoke-RevokePending($ctx, $rec) {
+  if (-not $rec.toRevoke) { return $rec }
+  $left = @()
+  foreach ($token in ($rec.toRevoke -split ' ' | Where-Object { $_ })) {
+    $ok = $false
+    try { $r = Invoke-OAuth $ctx $RevokePath ([ordered]@{ token = $token; token_type_hint = 'refresh_token' }); $ok = $r.status -eq 200 } catch {}
+    if (-not $ok) { $left += $token }
+  }
+  $next = Merge $rec @{ toRevoke = ($left -join ' ') }
+  if ($next.toRevoke -ne $rec.toRevoke) { Write-Record $ctx $next }
+  $next
+}
+
+# Commands
+
+function Show-Status($ctx) {
+  $rec = Read-Record $ctx
+  $state = 'not_connected'
+  if ($rec -and $rec.refreshToken) { $state = 'connected' } elseif ($rec -and $rec.deviceCode) { $state = 'pending' }
+  $label = $ctx.label
+  if ($rec -and $rec.label) { $label = $rec.label }
+  $out = [ordered]@{ status = $state; url = $ctx.issuer; label = $label }
+  if ($state -eq 'connected') { $out.scope = $rec.scope; $out.accessExpiresIn = [Math]::Max([long]0, $rec.accessExpiresAt - (Now)) }
+  Write-Json $out
+}
+
+# The hint names the address, so the wait asks the same server even if the kept address changes meanwhile. Quoted:
+# a shell would take the brackets of an IPv6 address as a file pattern.
+function Get-Pending($ctx, $rec) {
+  [ordered]@{
+    status = 'pending'; link = $rec.link; code = $rec.userCode; expiresIn = [Math]::Max([long]0, $rec.deviceExpiresAt - (Now))
+    next = "End your turn with a reply that shows the person the link and the code and asks them to reply once they approve. When they reply, run: $Cmd connect --wait --url `"$($ctx.issuer)`""
+  }
+}
+
+function Clear-Pending($rec) { Merge $rec @{ deviceCode = ''; userCode = ''; link = ''; deviceExpiresAt = [long]0; interval = [long]0; nextPollAt = [long]0 } }
+
+function Invoke-Connect($ctx, [bool]$replace) {
+  # Before any code exists: can it keep a connection here, and is the server there?
+  Protect-Dir $ctx.dir
+  $probe = Join-Path $ctx.dir ".probe-$(Hex 4)"
+  try { [IO.File]::Open($probe, [IO.FileMode]::CreateNew).Dispose(); [IO.File]::Delete($probe) } catch {
+    Fail 'cannot_save' "Cannot write in $($ctx.dir). Allow this agent to write there."
+  }
+  $meta = Invoke-Http $ctx 'GET' "$($ctx.issuer)/.well-known/oauth-authorization-server" $null '' $null
+  if ($meta.status -ne 200 -or (Get-Field $meta 'issuer') -ne $ctx.issuer) {
+    Fail 'unreachable' "$($ctx.issuer) does not answer as $Product with agents allowed ($($meta.status)). Check the address, and ask an administrator to allow agents in $Product's settings."
+  }
+  $lock = Enter-Lock $ctx
+  try {
+    $rec = Read-Record $ctx
+    if (-not $rec) { $rec = New-Record $ctx }
+    $rec = Invoke-RevokePending $ctx $rec
+    if ($rec.refreshToken -and -not $replace) {
+      Save-Address $ctx
+      return Write-Json ([ordered]@{ status = 'already_connected'; label = $rec.label; scope = $rec.scope })
+    }
+    # The open code again, unless asked for a new one (--replace: the link did not work for the person).
+    if ($rec.deviceCode -and ($rec.deviceExpiresAt - (Now)) -gt 30 -and -not $replace) { return Write-Json (Get-Pending $ctx $rec) }
+    Assert-Mine $ctx $lock
+    $r = Invoke-OAuth $ctx $DevicePath ([ordered]@{ scope = $Scope; resource = "$($ctx.issuer)$Resource"; client_label = $ctx.label })
+    if ($r.status -ne 200) { throw (New-HttpFail $r 'Asking to connect') }
+    $deviceCode = Get-Field $r 'device_code'; $userCode = Get-Field $r 'user_code'; $link = Get-Field $r 'verification_uri_complete'
+    if ($deviceCode -notmatch $Secret -or $userCode -cnotmatch '^[A-Z0-9-]{4,20}\z' -or $link -notmatch $Plain) {
+      Fail 'unexpected_answer' "$Product answered without a code."
+    }
+    if (-not $link.StartsWith("$($ctx.issuer)/")) { Fail 'unexpected_answer' "The approval link is not on $Product." }
+    $interval = [long]0; [void][long]::TryParse((Get-Field $r 'interval'), [ref]$interval); if ($interval -le 0) { $interval = $PollSeconds }; $interval = [Math]::Max([long]$PollSeconds, $interval)
+    $expires = [long]0; [void][long]::TryParse((Get-Field $r 'expires_in'), [ref]$expires); if ($expires -le 0) { $expires = 600 }
+    $rec = Merge $rec @{
+      label = $ctx.label; deviceCode = $deviceCode; userCode = $userCode; link = $link
+      deviceExpiresAt = (Now) + [Math]::Max([long]60, $expires); interval = $interval; nextPollAt = (Now) + $interval
+    }
+    Write-Record $ctx $rec
+    Write-Json (Get-Pending $ctx $rec)
+  } finally { Exit-Lock $ctx $lock }
+}
+
+function Invoke-Wait($ctx) {
+  $until = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
+  while ($true) {
+    $wait = 0; $done = $null
+    $lock = Enter-Lock $ctx
     try {
-      $token = Enter-Lock $ctx
-      try { $step = Invoke-WaitStep $ctx $origin $state } finally { Exit-Lock $ctx $token }
-    } catch [AdiutorChanged] { continue }
-    if ($step.ContainsKey('done')) {
-      $step.done['left'] = Get-LeftNow $ctx
-      return Write-Answer $step.done
+      $rec = Read-Record $ctx
+      if (-not $rec -or -not $rec.deviceCode) {
+        if ($rec -and $rec.refreshToken) { $done = [ordered]@{ status = 'connected'; label = $rec.label; scope = $rec.scope } }
+        else { Fail 'not_connected' "No connection is being made. Run: $Cmd connect" }
+      } else {
+        $t = Now
+        if ($rec.deviceExpiresAt + $StaleCodeSeconds -le $t) {
+          Write-Record $ctx (Clear-Pending $rec)
+          Fail 'expired' "The code expired before it was approved. Run: $Cmd connect"
+        }
+        if ($rec.nextPollAt -gt $t) { $wait = $rec.nextPollAt - $t }
+        else {
+          Assert-Mine $ctx $lock
+          try {
+            $r = Invoke-OAuth $ctx $TokenPath ([ordered]@{ grant_type = 'urn:ietf:params:oauth:grant-type:device_code'; device_code = $rec.deviceCode })
+          } catch [ClientFail] {
+            if ($_.Exception.Code -eq 'unreachable') { Write-Record $ctx (Merge $rec @{ nextPollAt = $t + $rec.interval }) }
+            throw
+          }
+          $oauthError = Get-Field $r 'error'
+          if ($r.status -eq 200) {
+            $tokens = Get-Tokens $r
+            # Connecting again (--replace): the old connection is ended once the new one is stored.
+            $old = ''
+            if ($rec.refreshToken -and $rec.refreshToken -ne $tokens.refreshToken) { $old = $rec.refreshToken }
+            $rec = Merge (Clear-Pending $rec) $tokens
+            $rec = Merge $rec @{ generation = (Hex 8); refreshStartedAt = [long]0; refreshRetried = [long]0; toRevoke = ((@($rec.toRevoke, $old) | Where-Object { $_ }) -join ' ') }
+            Write-Record $ctx $rec
+            Remove-Kinds $ctx
+            $rec = Invoke-RevokePending $ctx $rec
+            $done = [ordered]@{ status = 'connected'; label = $rec.label; scope = $rec.scope }
+          } elseif ($oauthError -eq 'authorization_pending' -or $oauthError -eq 'slow_down') {
+            $interval = $rec.interval
+            if ($oauthError -eq 'slow_down') { $interval += 5 }
+            Write-Record $ctx (Merge $rec @{ interval = $interval; nextPollAt = $t + $interval })
+            $wait = $interval
+          } elseif ($oauthError -eq 'access_denied') {
+            Write-Record $ctx (Clear-Pending $rec)
+            Fail 'denied' 'The person did not approve the connection.'
+          } elseif ($oauthError -eq 'expired_token' -or $oauthError -eq 'invalid_grant') {
+            Write-Record $ctx (Clear-Pending $rec)
+            Fail 'expired' "The code is no longer valid. Run: $Cmd connect"
+          } else { throw (New-HttpFail $r 'Waiting for the approval') }
+        }
+      }
+    } finally { Exit-Lock $ctx $lock }
+    if ($done) { Save-Address $ctx; return Write-Json $done }
+    if ([DateTime]::UtcNow.AddSeconds($wait) -gt $until) {
+      return Write-Json ([ordered]@{ status = 'still_waiting'; next = "Not approved yet. Run again: $Cmd connect --wait --url `"$($ctx.issuer)`"" })
     }
-    if ([DateTime]::UtcNow.AddSeconds($step.wait) -gt $until) {
-      $o = New-Object-Ordered
-      $o['status'] = 'still_waiting'
-      $o['next'] = Get-WaitCommand $origin
-      $o['left'] = Get-LeftNow $ctx
-      return Write-Answer $o
-    }
-    Start-Sleep -Milliseconds ([int]($step.wait * 1000))
+    Start-Sleep -Seconds $wait
   }
 }
 
-# One look at the attempt under the lock: an answer, the seconds until the next poll, or one poll.
-function Invoke-WaitStep($ctx, [string]$origin, $state) {
-  $conn = Read-Connection $ctx
-  Update-Left $ctx $conn
-  $settled = Resolve-Orphan $ctx $conn (Read-Pending $ctx)
-  $pend = $settled.pend
-  if ($settled.orphan -and $settled.orphan.origin -ceq $origin) {
-    if ($settled.warnings.Count) { throw (New-UnknownFail $settled.warnings $settled.orphan) }
-    if ($conn -and $conn.keyName -ceq $settled.orphan.keyName) { return @{ done = (Get-ConnectedAnswer $conn) } }
-  }
-  if (-not $pend -or $pend.origin -cne $origin) {
-    # Another command finished this attempt (a parallel --wait), or it was never made here.
-    if ($conn -and $conn.origin -ceq $origin -and ($state.attemptId -or -not $pend)) { return @{ done = (Get-ConnectedAnswer $conn) } }
-    if ($state.attemptId) { Fail 'not_connected' "The connection to $origin was cancelled meanwhile." }
-    Fail 'not_connected' "No connection to $origin is being made. Run: adiutor connect --url $origin"
-  }
-  # Replaced meanwhile (connect --replace): the new attempt has its own link and code.
-  if ($state.attemptId -and $pend.attemptId -cne $state.attemptId) { return @{ done = (Get-PendingAnswer $pend) } }
-  $state.attemptId = $pend.attemptId
-  # Every save is conditional on the attempt exactly as this command last read or wrote it.
-  $seen = Copy-Rec $pend $null
-  $t = Now
-  if ($pend.codeExpiresAt -le $t) {
-    $warnings = Remove-Attempt $ctx $pend $conn $null
-    if ($warnings.Count) { throw (New-UnknownFail $warnings $pend) }
-    Fail 'expired' "The code expired before it was approved. Run: adiutor connect --url $origin"
-  }
-  if ($pend.nextPollAt -gt $t) { return @{ wait = $pend.nextPollAt - $t } }
-  # A mark left set: the run before this one sent a poll and never recorded its answer.
-  if ($pend.pollInFlight) { $pend.uncertain = 1 }
-  $pend.pollInFlight = 1
-  $seen = Save-Pending $ctx $pend $seen
-  Assert-Mine $ctx
-  Invoke-Hook 'poll'
+function Test-Usable($rec) { $rec.accessToken -and ($rec.accessExpiresAt - (Now)) -gt 60 -and -not $rec.refreshStartedAt }
+
+# A live access token: the stored one while it lasts, else one refresh under the lock.
+function Get-AccessToken($ctx, [string]$stale) {
+  $first = Read-Record $ctx
+  if (-not $first -or -not $first.refreshToken) { Fail 'not_connected' "Not connected. Run: $Cmd connect" }
+  if (-not $stale -and (Test-Usable $first)) { return $first.accessToken }
+  $lock = Enter-Lock $ctx
   try {
-    $pollBody = ConvertTo-JsonText ([ordered]@{ grant_type = $DeviceGrant; device_code = $pend.deviceCode; client_id = $ClientId })
-    $r = Invoke-Request $origin 'POST' '/api/auth/device/token' $pollBody '' $true ''
-  } catch {
-    $e = $_.Exception
-    if ($e -is [AdiutorFail] -and $e.Code -ceq 'unreachable') {
-      $pend.pollInFlight = 0
-      if ($e.Extra['sent'] -ne $false) { $pend.uncertain = 1 }
-      $pend.nextPollAt = (Now) + $pend.interval
-      $seen = Save-Pending $ctx $pend $seen
+    $rec = Read-Record $ctx
+    if (-not $rec -or -not $rec.refreshToken) { Fail 'not_connected' "Not connected. Run: $Cmd connect" }
+    $rec = Invoke-RevokePending $ctx $rec
+    # Another command refreshed while this one waited for the lock.
+    if ((Test-Usable $rec) -and $rec.accessToken -ne $stale) { return $rec.accessToken }
+    $before = @{ refreshStartedAt = $rec.refreshStartedAt; refreshRetried = $rec.refreshRetried }
+    # A refresh that started moments ago may still be on its way (its holder lost the lock): never send it twice.
+    if ($rec.refreshStartedAt -and ((Now) - $rec.refreshStartedAt) -lt $RefreshGrace) {
+      Fail 'busy' "Another $Cmd command is refreshing this connection. Nothing was sent; run it again."
     }
-    throw $e
-  }
-  $sessionToken = ''
-  if ($r.status -eq 200) { $sessionToken = Get-Str $r.json 'access_token' }
-  if ($sessionToken) { return @{ done = (Invoke-Redeem $ctx $seen $conn $sessionToken) } }
-  $err = Get-Str $r.json 'error'
-  $pend.pollInFlight = 0
-  if ($err -ceq 'authorization_pending' -or $err -ceq 'slow_down' -or $r.status -eq 429) {
-    # RFC 8628: 5 seconds longer from now on; a rate-limited poll is the same request to slow down.
-    if ($err -ceq 'slow_down' -or $r.status -eq 429) { $pend.interval += 5 }
-    $pend.nextPollAt = (Now) + $pend.interval
-    $seen = Save-Pending $ctx $pend $seen
-    return @{ wait = $pend.interval }
-  }
-  if ($err -ceq 'access_denied' -or $err -ceq 'expired_token' -or $err -ceq 'invalid_grant') {
-    $warnings = Remove-Attempt $ctx $pend $conn $seen
-    if ($warnings.Count) { throw (New-UnknownFail $warnings $pend) }
-    if ($err -ceq 'access_denied') { Fail 'denied' 'The owner did not approve the connection. Nothing was created.' }
-    Fail 'expired' "The code is no longer valid. Run: adiutor connect --url $origin"
-  }
-  # A failure after the server may have started: a session may exist.
-  if ($r.status -ge 500 -or $r.status -eq 200) { $pend.uncertain = 1 }
-  $pend.nextPollAt = (Now) + $pend.interval
-  $seen = Save-Pending $ctx $pend $seen
-  throw (New-HttpFail $r 'Waiting for the approval')
+    if ($rec.refreshStartedAt) {
+      # The last refresh got no answer; trying once more either continues the connection or ends it there.
+      if ($rec.refreshRetried) { Fail 'connection_ended' "Two refreshes got no answer, so this connection cannot be trusted. Run: $Cmd connect --replace" }
+      $rec.refreshRetried = [long]1
+    }
+    $rec.refreshStartedAt = Now
+    Write-Record $ctx $rec
+    Assert-Mine $ctx $lock
+    Invoke-Hook 'before-refresh'
+    try {
+      $r = Invoke-OAuth $ctx $TokenPath ([ordered]@{ grant_type = 'refresh_token'; refresh_token = $rec.refreshToken; resource = "$($ctx.issuer)$Resource" })
+    } catch [ClientFail] {
+      # Nothing left the computer: the token is as good as before.
+      if ($_.Exception.Code -eq 'unreachable' -and -not $_.Exception.Sent) { Write-Record $ctx (Merge $rec $before) }
+      throw
+    }
+    if ($r.status -eq 200) {
+      $next = Merge (Merge $rec (Get-Tokens $r)) @{ refreshStartedAt = [long]0; refreshRetried = [long]0 }
+      Invoke-Hook 'before-write'
+      if (-not (Test-Mine $ctx $lock)) {
+        # The lock was taken while this one waited for the server: keep the new tokens anyway, under a fresh lock.
+        $again = Enter-Lock $ctx $lock
+        try { Write-Record $ctx $next } finally { Exit-Lock $ctx $again }
+      } else { Write-Record $ctx $next }
+      return $next.accessToken
+    }
+    if ((Get-Field $r 'error') -eq 'invalid_grant') {
+      # An old connection still to be ended (after --replace) keeps its place until the server confirms it.
+      if ($rec.toRevoke) { Write-Record $ctx (Merge (New-Record $ctx) @{ label = $rec.label; toRevoke = $rec.toRevoke }) }
+      else { Remove-Record $ctx }
+      Fail 'connection_ended' "This connection has ended (disconnected in $Product, its time ran out, sign-in settings changed, or its token was used twice). Run: $Cmd connect"
+    }
+    # The server answered with an error before spending the token (a 4xx); a 5xx may have come after.
+    if ($r.status -lt 500) { Write-Record $ctx (Merge $rec $before) }
+    throw (New-HttpFail $r 'Refreshing the connection')
+  } finally { Exit-Lock $ctx $lock }
 }
 
-# Ends the approval's session with its own token. True only when Adiutor confirmed it. Sent even after the lock was
-# lost: no other command knows this token, and a session left open is the worse outcome.
-function Stop-Session([string]$origin, [string]$sessionToken) {
-  try {
-    $r = Invoke-Request $origin 'POST' '/api/auth/revoke-session' (ConvertTo-JsonText ([ordered]@{ token = $sessionToken })) $sessionToken $true ''
-    return $r.status -eq 200 -and $r.json -is [Collections.IDictionary] -and $r.json.Contains('status') -and $r.json['status'] -is [bool] -and $r.json['status']
-  } catch { return $false }
+# The full path of a call (with its query) and the URL to send it to: a path under one of $Prefixes, never anywhere
+# else, so the token goes only to the API.
+function Test-Prefixed([string]$pathOnly) {
+  foreach ($x in $Prefixes) { if ($pathOnly.StartsWith($x) -and $pathOnly.Length -gt $x.Length) { return $true } }
+  $false
 }
 
-# The approved code gave a session token: record that a key is being created, create it, save the connection, end
-# the session, remove the attempt. In this order in every version, all under the lock. $seen is the attempt as last
-# written, $conn the connection as read at the start of this step.
-function Invoke-Redeem($ctx, $seen, $conn, [string]$sessionToken) {
-  $id = $seen.attemptId
-  $att = @{ pend = (Copy-Rec $seen @{ phase = 'creating_key'; sessionOpen = 1; pollInFlight = 0 }); conn = $conn; seen = $seen }
-  try {
-    $att.seen = Save-Pending $ctx $att.pend $seen
-  } catch {
-    $e = $_.Exception
-    # Nothing is sent before this mark is written: the session ends at once.
-    [void](Stop-Session $seen.origin $sessionToken)
-    if ($e -is [AdiutorChanged]) { Fail 'cannot_save' 'The connection changed while this command ran. Run: adiutor status' }
-    throw $e
+function Get-ApiTarget($ctx, [string]$p) {
+  $bad = "Give a path from ``$Cmd endpoints``, for example: get '/api/items?q=report' (percent-encode anything else)"
+  if (-not $p) { Fail 'bad_path' $bad }
+  # Encoded dots too: a server or proxy that decodes them would take the token out of the API.
+  if ($p -notmatch $PathChars -or $p.Contains('://') -or $p.StartsWith('//') -or $p -match '%2e') { Fail 'bad_path' $bad }
+  $pathOnly = ($p -split '\?', 2)[0]
+  # The kind is found from the path as it is sent, but a server may decode the path before it routes it. So in the
+  # path an escape may not stand for a character a route template holds as it is (A-Z a-z 0-9 . _ ~ : -), nor for
+  # / \ or % (/api/items/7%2Fsend would match /api/items/{id} here and may run /api/items/{id}/send there), and
+  # every % must start an escape. The query keeps any escape.
+  if ($pathOnly -match '%(?![0-9a-f]{2})|%(2[5def]|3[0-9a]|4[1-9a-f]|5[0-9acf]|6[1-9a-f]|7[0-9ae])') { Fail 'bad_path' $bad }
+  # Some servers drop ;parameters from a segment before they route (/api/items/export;x runs /api/items/export).
+  # The server's check of the declared kind stops such a call too; this refuses it before it is sent.
+  if ($pathOnly.Contains(';')) { Fail 'bad_path' $bad }
+  if (-not (Test-Prefixed $pathOnly)) { Fail 'bad_path' $bad }
+  foreach ($s in ($pathOnly -split '/')) { if ($s -eq '.' -or $s -eq '..') { Fail 'bad_path' $bad } }
+  $u = $null
+  if (-not [Uri]::TryCreate("$($ctx.issuer)$p", [UriKind]::Absolute, [ref]$u)) { Fail 'bad_path' $bad }
+  if ((Get-Origin $u) -ne $ctx.issuer -or -not (Test-Prefixed $u.AbsolutePath)) { Fail 'bad_path' $bad }
+  @{ url = $u.AbsoluteUri; path = $u.AbsolutePath; hasQuery = $p.Contains('?') }
+}
+
+# Kinds: whether a call is a read or an act, from the server's own list of this connection's calls, kept with the
+# list's revision for the current connection only. Access and the listing itself are reads, exempt from the list.
+
+function Test-Exempt([string]$method, [string]$path) { $method -ceq 'GET' -and ($path -ceq $AccessPath -or $path -ceq $EndpointsPath) }
+
+# The usable part of a listing answer, or $null when it is not a list with a valid revision.
+function ConvertTo-KindList($r) {
+  # The top level must be an object with these exact keys (ConvertFrom-Json in PowerShell 7 unwraps a top array).
+  if ($null -eq (Get-TopText $r 'revision') -or $null -eq $r.fields -or -not $r.fields.ContainsKey('endpoints')) { return $null }
+  $data = $r.json
+  if (-not (Test-Object $data) -or -not $data.PSObject.Properties['endpoints'] -or -not $data.PSObject.Properties['revision']) { return $null }
+  if ($data.endpoints -isnot [array] -or $data.revision -isnot [string] -or $data.revision -cnotmatch $RevisionPattern) { return $null }
+  $entries = New-Object System.Collections.Generic.List[object]
+  foreach ($e in $data.endpoints) {
+    if (-not (Test-Object $e)) { continue }
+    $method = ''; $template = ''; $kind = 'act'
+    if ($e.PSObject.Properties['method']) { $method = [string]$e.method }
+    if ($e.PSObject.Properties['path']) { $template = [string]$e.path }
+    # Anything but an explicit read counts as an act.
+    if ($e.PSObject.Properties['kind'] -and [string]$e.kind -ceq 'read') { $kind = 'read' }
+    if ($method -cmatch '^[A-Z]{3,7}\z' -and $template -cmatch $TemplatePattern) { $entries.Add(@{ method = $method; template = $template; kind = $kind }) }
   }
-  Invoke-Hook 'token'
-  $saved = $null
-  $failure = $null
-  try { $saved = Invoke-CreateAndSave $ctx $att $sessionToken } catch { $failure = $_.Exception }
-  $ended = Stop-Session $seen.origin $sessionToken
-  # A step from here that fails keeps the attempt, and with it what the attempt may have left on Adiutor; it never
-  # replaces the answer.
-  try { if ($ended) { $att.seen = Save-Pending $ctx (Copy-Rec $att.seen @{ sessionOpen = 0 }) $att.seen } } catch {}
-  Invoke-Hook 'revoked'
+  @{ revision = [string]$data.revision; entries = $entries }
+}
+
+function Read-Kinds($ctx, $rec) {
+  if (-not $rec.generation) { return $null }
+  try { $text = Read-Shared $ctx.kinds } catch { return $null }
+  $lines = $text -split "`r?`n"
+  $head = $lines[0] -split ' '
+  if ($head.Count -lt 5 -or $head[0] -cne $KindsMagic -or $head[1] -cne $KindsFormat -or $head[2] -cne $rec.generation) { return $null }
+  $at = [long]0; [void][long]::TryParse($head[3], [ref]$at)
+  if ((Now) - $at -gt $KindsMaxAge) { return $null }
+  if ($head[4] -cnotmatch $RevisionPattern) { return $null }
+  $entries = New-Object System.Collections.Generic.List[object]
+  for ($i = 1; $i -lt $lines.Count; $i++) {
+    $f = $lines[$i] -split ' '
+    if ($f.Count -eq 3 -and $f[0] -cmatch '^[A-Z]{3,7}\z' -and $f[1] -cmatch $TemplatePattern -and ($f[2] -ceq 'read' -or $f[2] -ceq 'act')) {
+      $entries.Add(@{ method = $f[0]; template = $f[1]; kind = $f[2] })
+    }
+  }
+  @{ revision = $head[4]; entries = $entries }
+}
+
+# Keeps a list for the connection it was fetched under. Only a cache: a failure changes nothing.
+function Save-Kinds($ctx, [string]$generation, $list) {
   try {
-    $last = Read-Pending $ctx
-    if ($null -ne $last -and $last.attemptId -ceq $id) {
-      # A connection that cannot be read now counts as not saved: the key is then reported, never lost.
-      $now = $null
-      try { $now = Read-Connection $ctx } catch {}
-      [void](Remove-Attempt $ctx $last $now $null)
-    } elseif (-not $ended) { Add-Left $ctx @(@{ origin = $seen.origin; keyName = $seen.keyName; reason = 'session_unknown' }) }
+    $rec = Read-Record $ctx
+    if (-not $generation -or -not $rec -or $rec.generation -cne $generation) { return }
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("$KindsMagic $KindsFormat $generation $(Now) $($list.revision)")
+    foreach ($e in $list.entries) { $lines.Add("$($e.method) $($e.template) $($e.kind)") }
+    Write-Private $ctx $ctx.kinds (($lines -join "`n") + "`n")
   } catch {}
-  Invoke-Hook 'done'
-  if ($failure) {
-    if (-not $ended -and $failure -is [AdiutorFail]) { $failure.Text += " $SessionText" }
-    throw $failure
-  }
-  $answer = Get-ConnectedAnswer $saved
-  if (-not $ended) {
-    $answer['warning'] = 'Could not confirm that the approval''s temporary session ended. End the session "adiutor connect (agent approval)" on the Account page in Adiutor.'
-  }
-  $answer
 }
 
-function Invoke-CreateAndSave($ctx, $att, [string]$sessionToken) {
-  $origin = $att.pend.origin
-  $name = $att.pend.keyName
-  $unknown = New-Fail 'key_unknown' "Adiutor's answer to creating the key was lost, so a key named `"$name`" may exist on ${origin}: delete it in Settings, Agent access. Then run: adiutor connect --url $origin" $null
-  # Adiutor refused the key, or the request never left: no key exists, and the attempt records it (no key_unknown).
-  $noKey = {
-    param($fail)
-    try { $att.seen = Save-Pending $ctx (Copy-Rec $att.seen @{ noKey = 1 }) $att.seen } catch {}
-    $fail
-  }
-  Assert-Mine $ctx
-  $create = ConvertTo-JsonText ([ordered]@{ name = $name; expiresIn = [long]($att.pend.days * 86400) })
+# The list from the server, kept for this connection. Fails closed: when the listing cannot be read, or its answer
+# is not a list, nothing is sent (endpoints_unavailable). Errors of the connection itself are passed on as they are.
+function Get-FreshKinds($ctx) {
+  $generation = ''
+  $rec = Read-Record $ctx
+  if ($rec) { $generation = $rec.generation }
   try {
-    $r = Invoke-Request $origin 'POST' '/api/auth/api-key/create' $create $sessionToken $true ''
-  } catch {
-    $e = $_.Exception
-    if ($e -is [AdiutorFail] -and $e.Code -ceq 'unreachable' -and $e.Extra['sent'] -ne $false) { throw $unknown }
-    throw (& $noKey $e)
+    $r = Send-Api $ctx 'GET' "$($ctx.issuer)$EndpointsPath" $null @{ kind = 'read'; revision = ''; path = $EndpointsPath }
+  } catch [ClientFail] {
+    if ($_.Exception.Api) { Fail 'endpoints_unavailable' $Unavailable }
+    throw
   }
-  Invoke-Hook 'key'
-  if ($r.status -ge 500) { throw $unknown }
-  if ($r.status -ne 200) { throw (& $noKey (New-HttpFail $r 'Creating the key')) }
-  $key = Get-Str $r.json 'key'
-  $expiresAt = Get-Str $r.json 'expiresAt'
-  if ($key -cnotmatch $Secret -or $expiresAt -cnotmatch $Plain -or $null -eq (Get-DateMs $expiresAt)) { throw $unknown }
-  # From here the key exists with a known name and end date: any failure records it before the answer.
-  try {
-    # Saved only while both files are as this command read them: a parallel disconnect or --replace wins.
-    if (-not (Test-SameRec $PendingFields (Read-Pending $ctx) $att.seen) -or -not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $att.conn)) {
-      Fail 'cannot_save' 'Another adiutor command disconnected or started a new connection while this one waited, so the new key was not saved. Run: adiutor status'
-    }
-    $old = $att.conn
-    # The key being replaced stays on Adiutor: recorded before the connection that names it is replaced.
-    if ($old -and $old.keyName -cne $name) {
-      Add-Left $ctx @(@{ origin = $old.origin; keyName = $old.keyName; expiresAt = $old.expiresAt; reason = 'replaced' })
-      Invoke-Hook 'recorded'
-    }
-    Write-Connection $ctx @{ v = 1; origin = $origin; key = $key; keyName = $name; expiresAt = $expiresAt }
-  } catch {
-    $fail = $_.Exception
-    if (-not ($fail -is [AdiutorFail])) { $fail = New-Fail 'cannot_save' "Cannot save the connection in $($ctx.dir)." $null }
-    try { Add-Left $ctx @(@{ origin = $origin; keyName = $name; expiresAt = $expiresAt; reason = 'not_saved' }) }
-    catch { $fail.Text += " The key `"$name`" on $origin works until ${expiresAt}: delete it in Settings, Agent access." }
-    throw $fail
-  }
-  try { $att.seen = Save-Pending $ctx (Copy-Rec $att.seen @{ keySaved = 1 }) $att.seen } catch {}
-  Invoke-Hook 'saved'
-  @{ origin = $origin; keyName = $name; expiresAt = $expiresAt }
+  $list = $null
+  if ($r.status -eq 200) { $list = ConvertTo-KindList $r }
+  if ($null -eq $list) { Fail 'endpoints_unavailable' $Unavailable }
+  Save-Kinds $ctx $generation $list
+  $list
 }
 
-# The other commands
+function Test-TemplateMatch([string]$template, [string]$path) {
+  $t = $template -split '/'
+  $s = $path -split '/'
+  for ($i = 0; $i -lt $t.Count; $i++) {
+    if ($t[$i] -match '^\{[^}]*:path\}$') {
+      return ($i -eq $t.Count - 1 -and $s.Count -gt $i -and (($s[$i..($s.Count - 1)]) -join '') -ne '')
+    }
+    if ($i -ge $s.Count) { return $false }
+    if ($t[$i] -match '^\{[^}]*\}$') { if ($s[$i] -eq '') { return $false } }
+    elseif ($t[$i] -cne $s[$i]) { return $false }
+  }
+  $t.Count -eq $s.Count
+}
 
-function Get-Status($ctx) {
-  $conn = Read-Connection $ctx
-  $pend = Read-Pending $ctx
-  $out = New-Object-Ordered
-  if ($conn) {
-    $out['status'] = 'connected'
-    $out['origin'] = $conn.origin
-    $out['keyName'] = $conn.keyName
-    $out['expiresAt'] = $conn.expiresAt
-  } else { $out['status'] = 'not_connected' }
-  # An attempt whose key was saved and whose session ended is a finished connect that only lost its last step.
-  $finished = $pend -and $pend.phase -ceq 'creating_key' -and (Test-KeySaved $pend $conn) -and -not $pend.sessionOpen
-  if ($pend -and -not $finished) {
-    $warnings = Get-AttemptWarnings $pend $conn
-    $p = New-Object-Ordered
-    $p['origin'] = $pend.origin
-    $p['link'] = $pend.link
-    $p['code'] = Get-GroupedCode $pend.userCode
-    $p['expiresAt'] = Iso $pend.codeExpiresAt
-    if ($warnings.Count) { $p['warnings'] = $warnings }
-    $out['pending'] = $p
+# 'read', 'act', 'both' (a read and an act both match the path, such as /api/items/export and /api/items/{id}), or
+# $null when the list does not hold the call.
+function Find-Kind($list, [string]$method, [string]$path) {
+  $read = $false; $act = $false
+  foreach ($e in $list.entries) {
+    if ($e.method -ceq $method -and (Test-TemplateMatch $e.template $path)) { if ($e.kind -ceq 'act') { $act = $true } else { $read = $true } }
   }
-  $entries = Read-Left $ctx
-  if (@($entries | Where-Object { Test-Stale $_ $conn }).Count) {
-    try {
-      $token = Enter-Lock $ctx
-      try { Update-Left $ctx (Read-Connection $ctx) } finally { Exit-Lock $ctx $token }
-    } catch {}
+  if ($read -and $act) { return 'both' }
+  if ($act) { return 'act' }
+  if ($read) { return 'read' }
+  $null
+}
+
+# How a call is sent: its kind, and the revision of the list it was classified with. A path the list does not hold is
+# not sent (bad_path), after the list was fetched again in case it changed. A path that a read and an act both match
+# goes as an act first (both: Send-Api may send it once more as a read).
+function Get-CallPlan($ctx, [string]$method, [string]$path) {
+  if (Test-Exempt $method $path) { return @{ kind = 'read'; revision = ''; path = $path; both = $false } }
+  $rec = Read-Record $ctx
+  $list = $null
+  if ($rec -and $rec.refreshToken) { $list = Read-Kinds $ctx $rec }
+  $fresh = $false
+  while ($true) {
+    if ($null -eq $list) { $list = Get-FreshKinds $ctx; $fresh = $true }
+    $kind = Find-Kind $list $method $path
+    if ($kind -eq 'both') { return @{ kind = 'act'; revision = $list.revision; path = $path; both = $true } }
+    if ($kind) { return @{ kind = $kind; revision = $list.revision; path = $path; both = $false } }
+    if ($fresh) { Fail 'bad_path' $NotListed }
+    $list = $null
   }
-  $out['left'] = Get-PublicLeft $entries $conn
-  $out
+}
+
+# The three refusals the server makes before any route code runs. Nothing ran, so the call may go again. The markers
+# are read as JSON.parse reads them: the top object's exact key error with a string value (Get-TopText).
+function Test-TokenRefused($r) { $r.status -eq 401 -and $r.challenge.Contains('error="invalid_token"') }
+function Test-BusyRefused($r) { $r.status -eq 429 -and (Get-TopText $r 'error') -ceq 'busy' }
+function Test-PolicyRefused($r) { $r.status -eq 409 -and (Get-TopText $r 'error') -ceq 'policy_changed' }
+
+# One API call with its retries, each at most once: after a 401 with the invalid_token challenge, a refresh and the
+# call again; after a 429 busy, a wait and the call again; after a 409 policy_changed, the list again and the call
+# again under its new kind. A path that a read and an act both match went as an act; when the list read again still
+# has both for it, it goes once more as a read (the router picked the read route). Every one of these follows a
+# refusal made before any route code ran. Any other answer is the answer. For a read, one retry after a network
+# failure; an act is never sent again once it may have reached the server.
+function Send-Api($ctx, [string]$method, [string]$url, $json, $call) {
+  $token = Get-AccessToken $ctx ''
+  $refreshed = $false; $busyRetried = $false; $netRetried = $false; $policyRetried = $false
+  while ($true) {
+    try { $r = Invoke-Http $ctx $method $url $null $token $json $call.revision $call.kind } catch [ClientFail] {
+      $e = $_.Exception
+      if ($e.Code -ne 'unreachable') { throw }
+      $e.Api = $true
+      if ($call.kind -eq 'act') {
+        if (-not $e.Sent) { throw }
+        Fail 'outcome_unknown' $UnknownOutcome
+      }
+      if ($netRetried) { throw }
+      $netRetried = $true
+      continue
+    }
+    if ((Test-TokenRefused $r) -and -not $refreshed) { $refreshed = $true; $token = Get-AccessToken $ctx $token; continue }
+    if ((Test-BusyRefused $r) -and -not $busyRetried) {
+      $busyRetried = $true
+      Start-Sleep -Milliseconds $BusyWaitMs
+      continue
+    }
+    if ($call.revision -and (Test-PolicyRefused $r)) {
+      if ($policyRetried) { $f = [ClientFail]::new('policy_changed', $PolicyChanged); $f.Status = $r.status; throw $f }
+      $policyRetried = $true
+      $list = Get-FreshKinds $ctx
+      $kind = Find-Kind $list $method $call.path
+      if (-not $kind) { Fail 'bad_path' $NotListed }
+      if ($kind -eq 'both') { if ($call.both) { $kind = 'read' } else { $kind = 'act' } }
+      $call.kind = $kind
+      $call.revision = $list.revision
+      continue
+    }
+    if ($call.kind -eq 'act' -and $r.status -ge 500) {
+      $f = [ClientFail]::new('outcome_unknown', $UnknownOutcome); $f.Status = $r.status; throw $f
+    }
+    return $r
+  }
+}
+
+# The answer as JSON text on one line: a JSON answer as it is (its line breaks are only spacing), text as a string.
+function Get-DataText($r) {
+  if ($r.isJson) { return ($r.text -replace "[`r`n]", '').Trim() }
+  ConvertTo-JsonString $r.text
+}
+
+# Whether an answer says it failed: its top object's own "success": false, or "status": "error", by their exact keys.
+function Test-FailedAnswer($r) {
+  if ($null -eq $r.fields) { return $false }
+  if ($r.fields.ContainsKey('success') -and $r.fields['success'] -is [bool] -and -not $r.fields['success']) { return $true }
+  (Get-TopText $r 'status') -ceq 'error'
+}
+
+function Invoke-Api($ctx, [string]$method, [string]$p, $json) {
+  $target = Get-ApiTarget $ctx $p
+  if ($null -ne $json -and -not (Test-JsonText $json)) { Fail 'bad_body' 'The body is not JSON.' }
+  $listing = $method -ceq 'GET' -and $target.path -ceq $EndpointsPath -and -not $target.hasQuery
+  $generation = ''
+  if ($listing) { $rec = Read-Record $ctx; if ($rec) { $generation = $rec.generation } }
+  $call = Get-CallPlan $ctx $method $target.path
+  $r = Send-Api $ctx $method $target.url $json $call
+  if ($r.status -ge 200 -and $r.status -lt 300) {
+    if ($listing) { $list = ConvertTo-KindList $r; if ($null -ne $list) { Save-Kinds $ctx $generation $list } }
+    $data = Get-DataText $r
+    if (Test-FailedAnswer $r) {
+      Write-Line ('{"error":"failed","message":' + (ConvertTo-JsonString "$method $p answered that it failed.") + ',"status":' + $r.status + ',"data":' + $data + '}')
+      $script:ExitCode = 1
+      return
+    }
+    Write-Line ('{"status":' + $r.status + ',"data":' + $data + '}')
+    return
+  }
+  # The server's own refusals for agents carry a code and a message: passed on as they are.
+  # Exact keys and string values, read from the document's structure, as the other versions read them.
+  $code = Get-TopText $r 'error'; $message = Get-TopText $r 'message'
+  if ($code -cmatch '^[a-z_]{1,40}\z' -and $null -ne $message) {
+    $f = [ClientFail]::new($code, $message); $f.Status = $r.status; throw $f
+  }
+  throw (New-HttpFail $r "$method $p")
 }
 
 function Invoke-Disconnect($ctx) {
-  if (-not (Protect-Home $ctx $false)) {
-    $o = New-Object-Ordered
-    $o['status'] = 'not_connected'
-    $o['left'] = @()
-    return Write-Answer $o
-  }
-  $token = Enter-Lock $ctx
+  $lock = Enter-Lock $ctx
   try {
-    $result = New-Object-Ordered
-    $conn = Read-Connection $ctx
-    Update-Left $ctx $conn
-    $pend = Read-Pending $ctx
-    if ($pend) { [void](Remove-Attempt $ctx $pend $conn $null) }
-    if (-not $conn) { $result['status'] = 'not_connected' }
-    else {
-      # The key stays on Adiutor (a key cannot delete itself): recorded before the connection is removed.
-      Add-Left $ctx @(@{ origin = $conn.origin; keyName = $conn.keyName; expiresAt = $conn.expiresAt; reason = 'disconnected' })
-      Invoke-Hook 'recorded'
-      if (-not (Test-SameRec $ConnectionFields (Read-Connection $ctx) $conn)) { throw [AdiutorChanged]::new() }
-      Remove-PrivateFile $ctx $ctx.connection
-      $result['status'] = 'disconnected'
-      $result['origin'] = $conn.origin
-      $result['keyName'] = $conn.keyName
-      $result['expiresAt'] = $conn.expiresAt
-      $result['message'] = "Forgot the connection on this computer. The key `"$($conn.keyName)`" still works on $($conn.origin) until $($conn.expiresAt): delete it in Settings, Agent access, if nothing uses it."
+    $rec = Read-Record $ctx
+    if (-not $rec) { return Write-Json ([ordered]@{ status = 'not_connected' }) }
+    Assert-Mine $ctx $lock
+    $left = @()
+    foreach ($token in (@($rec.refreshToken) + ($rec.toRevoke -split ' ') | Where-Object { $_ })) {
+      $ok = $false
+      try { $r = Invoke-OAuth $ctx $RevokePath ([ordered]@{ token = $token; token_type_hint = 'refresh_token' }); $ok = $r.status -eq 200 } catch {}
+      if (-not $ok) { $left += $token }
     }
-  } finally { Exit-Lock $ctx $token }
-  $result['left'] = Get-LeftNow $ctx
-  Write-Answer $result
+    if ($left.Count) {
+      Write-Record $ctx (Merge $rec @{ refreshToken = ''; accessToken = ''; accessExpiresAt = [long]0; toRevoke = ($left -join ' ') })
+      Fail 'disconnect_failed' "$Product did not confirm the disconnect. Run it again, or end the connection in $Product."
+    }
+    Remove-Record $ctx
+    Write-Json ([ordered]@{ status = 'disconnected' })
+  } finally { Exit-Lock $ctx $lock }
 }
 
-# The API
-
-function Get-ApiPath([string]$method, $raw) {
-  $value = ''
-  if ($null -ne $raw) { $value = [string]$raw }
-  $hint = " Use one of the paths in SKILL.md, for example: get 'items?q=login' (percent-encode anything else in a query)."
-  if ($value.StartsWith('/', [StringComparison]::Ordinal)) { $value = $value.Substring(1) }
-  $q = $value.IndexOf('?')
-  if ($q -lt 0) { $part = $value; $qs = '' } else { $part = $value.Substring(0, $q); $qs = $value.Substring($q + 1) }
-  if ($part -cnotmatch $PathPart -or $part.Contains('//')) { Fail 'bad_path' ('The path may hold only lower-case letters, digits, / and -.' + $hint) }
-  if ($q -ge 0 -and $method -cne 'GET') { Fail 'bad_path' ('Only get takes a query.' + $hint) }
-  if ($qs -cnotmatch $Query) { Fail 'bad_path' ('The query holds a character that must be percent-encoded.' + $hint) }
-  $known = $false
-  foreach ($route in $Routes) { if ($route[0] -ceq $method -and $part -cmatch $route[1]) { $known = $true } }
-  if (-not $known) { Fail 'bad_path' ("$($method.ToLowerInvariant()) '$part' is not a call this skill makes." + $hint) }
-  if ($q -lt 0) { return $part }
-  "${part}?$qs"
-}
-
-function Get-Body([string]$method, $opts) {
-  if ($method -ceq 'GET') {
-    if ($null -ne $opts.json -or $null -ne $opts.jsonFile) { Fail 'bad_json' 'get takes no body.' }
-    return $null
-  }
-  $text = $opts.json
-  if ($null -ne $opts.jsonFile) {
-    if ($null -ne $text) { Fail 'bad_json' 'Give either --json or --json-file, not both.' }
-    try { $text = $Utf8.GetString([IO.File]::ReadAllBytes([IO.Path]::GetFullPath($opts.jsonFile))) } catch { Fail 'bad_json' "Cannot read $($opts.jsonFile)." }
-  }
-  if ($null -eq $text) { Fail 'bad_json' "$($method.ToLowerInvariant()) needs a body: --json '<body>' or --json-file <file>." }
-  try { [void](ConvertFrom-JsonText $text) } catch { Fail 'bad_json' 'The body is not JSON.' }
-  $text
-}
-
-function Get-AgentLabel($opts) {
-  $label = $opts.as
-  if ($null -eq $label) { $label = $env:ADIUTOR_AGENT_LABEL }
-  if ($null -eq $label) { $label = '' }
-  if ($label -eq '' -and $null -eq $opts.as) { return '' }
-  if ($label -cnotmatch $LabelPattern) { Fail 'bad_label' 'The agent label takes 1 to 60 letters, digits, spaces and . _ : - only.' }
-  $label
-}
-
-# A key Adiutor no longer accepts is forgotten, while it is still the saved one.
-function Clear-Connection($ctx, $conn) {
-  try {
-    $token = Enter-Lock $ctx
-    try {
-      $saved = Read-Connection $ctx
-      if (Test-SameRec $ConnectionFields $saved $conn) { Remove-PrivateFile $ctx $ctx.connection }
-    } finally { Exit-Lock $ctx $token }
-  } catch {}
-}
-
-function Invoke-Api($ctx, [string]$method, $opts) {
-  if ($opts.positional.Count -ne 1) { Fail 'bad_path' "Give one path: adiutor $($method.ToLowerInvariant()) '<path>'" }
-  $target = Get-ApiPath $method $opts.positional[0]
-  $label = Get-AgentLabel $opts
-  $body = Get-Body $method $opts
-  $conn = Read-Connection $ctx
-  if (-not $conn) { Fail 'not_connected' 'Not connected to Adiutor. Run: adiutor connect' }
-  if ($opts.url -and (Get-Origin $opts.url) -cne $conn.origin) { Fail 'not_connected' "Connected to $($conn.origin), not to $(Get-Origin $opts.url)." }
-  $unknown = {
-    param($status)
-    $extra = @{}
-    $note = ''
-    if ($status) { $extra.status = $status; $note = " ($status)" }
-    New-Fail 'outcome_unknown' "The $method was sent, but its answer was lost${note}: it may still be written. Read the state once before doing anything else, and never send it again blindly." $extra
-  }
-  try {
-    $r = Invoke-Request $conn.origin $method "/api/v1/$target" $body $conn.key $false $label
-  } catch {
-    $e = $_.Exception
-    if ($e -is [AdiutorFail] -and $e.Code -ceq 'unreachable' -and $method -cne 'GET' -and $e.Extra['sent'] -ne $false) { throw (& $unknown 0) }
-    throw $e
-  }
-  if ($r.status -eq 401) {
-    Clear-Connection $ctx $conn
-    Fail 'connection_ended' "Adiutor no longer accepts this connection's key (it was disconnected in Settings or it expired). Run: adiutor connect --url $($conn.origin)"
-  }
-  if ($method -cne 'GET' -and @(502, 503, 504) -contains $r.status) { throw (& $unknown $r.status) }
-  if ($r.status -ge 200 -and $r.status -lt 300) {
-    # Adiutor answers {data} (a page also has nextCursor and the like): its fields go next to the HTTP status.
-    $answer = $r.json
-    $o = New-Object-Ordered
-    $o['status'] = $r.status
-    if ($answer -is [Collections.IDictionary] -and $answer.Contains('data')) {
-      foreach ($k in $answer.get_Keys()) { if ([string]$k -cne 'status') { $o[$k] = $answer[$k] } }
-    } else { $o['data'] = $answer }
-    return Write-Answer $o
-  }
-  throw (New-HttpFail $r "$method $($target.Split('?')[0])")
+function Get-Body($o, $fallback) {
+  $body = $o.json
+  # The file as it is, as the other versions read it: ReadAllText would drop a byte order mark, which is not JSON.
+  if ($null -ne $o.jsonFile) { try { $body = $Utf8.GetString([IO.File]::ReadAllBytes($o.jsonFile)) } catch { Fail 'bad_body' "Cannot read $($o.jsonFile)." } }
+  if ($null -eq $body) { $body = $fallback }
+  $body
 }
 
 function Invoke-Main([string[]]$argv) {
-  $list = @($argv)
+  $list = New-Object System.Collections.Generic.List[string]
+  foreach ($a in $argv) { $list.Add($a) }
   $command = 'help'
-  if ($list.Count) { $command = $list[0]; $list = @($list | Select-Object -Skip 1) }
-  if (@('help', '--help', '-h') -ccontains $command) { Write-Raw $Utf8.GetBytes("$Help`n"); return }
-  $opts = Read-Options $list
-  $ctx = Get-Ctx
-  try {
-    if ($command -ceq 'status') {
-      if ($opts.clearLeft) {
-        [void](Protect-Home $ctx $true)
-        $token = Enter-Lock $ctx
-        try { Write-Left $ctx @() } finally { Exit-Lock $ctx $token }
-      }
-      return Write-Answer (Get-Status $ctx)
-    }
-    if ($command -ceq 'connect') { if ($opts.wait) { return Invoke-Wait $ctx $opts }; return Invoke-Connect $ctx $opts }
-    if ($command -ceq 'disconnect') { return Invoke-Disconnect $ctx }
-    if ($command -ceq 'get') { return Invoke-Api $ctx 'GET' $opts }
-    if ($command -ceq 'post') { return Invoke-Api $ctx 'POST' $opts }
-    if ($command -ceq 'patch') { return Invoke-Api $ctx 'PATCH' $opts }
-  } catch {
-    $e = $_.Exception
-    # The files changed under a lock this command no longer held: nothing more was done.
-    if ($e -is [AdiutorChanged]) { $e = New-Fail 'busy' 'Another adiutor command changed the connection meanwhile. Run: adiutor status' $null }
-    # What the command left on Adiutor travels with every answer about the connection.
-    if ($e -is [AdiutorFail] -and @('connect', 'disconnect', 'status') -ccontains $command) { $e.Extra['left'] = Get-LeftNow $ctx }
-    throw $e
+  if ($list.Count) { $command = $list[0]; $list.RemoveAt(0) }
+  $o = @{ url = ''; replace = $false; wait = $false; json = $null; jsonFile = $null; positional = @() }
+  for ($i = 0; $i -lt $list.Count; $i++) {
+    $a = $list[$i]
+    if ($a -eq '--url') { $i++; $o.url = $list[$i] }
+    elseif ($a -eq '--replace') { $o.replace = $true }
+    elseif ($a -eq '--wait') { $o.wait = $true }
+    elseif ($a -eq '--json') { $i++; $o.json = $list[$i] }
+    elseif ($a -eq '--json-file') { $i++; $o.jsonFile = $list[$i] }
+    else { $o.positional += $a }
   }
-  Fail 'unknown_command' "Unknown command `"$command`". Run: adiutor help"
+  if (@('help', '--help', '-h') -contains $command) { Write-Line $Help; return }
+  $ctx = Get-Context $o.url
+  $first = $null
+  if ($o.positional.Count) { $first = $o.positional[0] }
+  switch -CaseSensitive ($command) {
+    'status' { Show-Status $ctx }
+    'connect' { if ($o.wait) { Invoke-Wait $ctx } else { Invoke-Connect $ctx $o.replace } }
+    'access' { Invoke-Api $ctx 'GET' $AccessPath $null }
+    'endpoints' {
+      if ($null -eq $first) { Invoke-Api $ctx 'GET' $EndpointsPath $null }
+      elseif ($first -cnotmatch '^[a-z_]{1,40}\z') { Fail 'bad_path' 'Give an area name, for example: items' }
+      else { Invoke-Api $ctx 'GET' "$($EndpointsPath)?area=$first" $null }
+    }
+    'get' { Invoke-Api $ctx 'GET' $first $null }
+    'post' { Invoke-Api $ctx 'POST' $first (Get-Body $o '{}') }
+    'put' { Invoke-Api $ctx 'PUT' $first (Get-Body $o '{}') }
+    'patch' { Invoke-Api $ctx 'PATCH' $first (Get-Body $o '{}') }
+    'delete' { Invoke-Api $ctx 'DELETE' $first (Get-Body $o $null) }
+    'disconnect' { Invoke-Disconnect $ctx }
+    default { Fail 'unknown_command' "Unknown command `"$command`". Run: $Cmd help" }
+  }
 }
 
+$script:ExitCode = 0
 try {
   Invoke-Main $args
-  exit 0
+  exit $script:ExitCode
 } catch {
   $e = $_.Exception
-  $out = New-Object-Ordered
-  if ($e -is [AdiutorFail]) {
-    $out['error'] = $e.Code
-    $out['message'] = $e.Text
-    if ($e.Extra.ContainsKey('status') -and $null -ne $e.Extra['status']) { $out['status'] = $e.Extra['status'] }
-    if ($e.Extra.ContainsKey('body') -and $null -ne $e.Extra['body']) { $out['body'] = $e.Extra['body'] }
-    $left = $null
-    if ($e.Extra.ContainsKey('left')) { $left = $e.Extra['left'] }
-    if ($left -is [Collections.ICollection] -and $left.Count) { $out['left'] = $left }
+  if ($e -is [ClientFail]) {
+    $out = [ordered]@{ error = $e.Code; message = $e.Message }
+    if ($e.Status) { $out.status = $e.Status }
+    if ($null -ne $e.Body) { $out.body = $e.Body }
+    Write-Json $out
   } else {
-    $out['error'] = 'failed'
-    $out['message'] = $e.Message
+    Write-Json ([ordered]@{ error = 'failed'; message = $e.Message })
   }
-  Write-Answer $out
   exit 1
 }
