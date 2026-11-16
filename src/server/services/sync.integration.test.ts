@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { audit, items, itemThreads, projects, securitySources, suppressions, syncRuns } from "../db/schema.ts"
@@ -790,26 +790,35 @@ describe("snoozed threads (D-T6)", () => {
     expect((await linkOf("a"))?.snoozed).toBe(false)
   })
 
-  it("never takes the snooze of a snapshot collected before the one that set it, at the same activity time", async () => {
+  it("changes no snooze from a snapshot applied late, after a newer one, even when the newer one changed nothing", async () => {
     const at = ago(HOUR)
     const until = new Date(t.ctx.clock().getTime() + DAY)
-    const newer = t.ctx.clock()
-    const older = new Date(newer.getTime() - 10 * 60_000)
-    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at })], { collectedAt: older }))
-    // The newer push sets the snooze; the older one, applied late (its answer was lost), would clear it.
-    await applyT3Snapshot(
-      t.ctx,
-      snapshot([thread("a", { updatedAt: at, snoozed: true, snoozedUntil: until })], { collectedAt: newer }),
-    )
-    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: false })], { collectedAt: older }))
-    expect(await linkOf("a")).toMatchObject({ snoozed: true, snoozedUntil: until, snoozeAsOf: newer })
-    // And the other way: a newer push ended the snooze; the older one does not bring it back.
-    await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: at, snoozed: false })], { collectedAt: newer }))
-    await applyT3Snapshot(
-      t.ctx,
-      snapshot([thread("a", { updatedAt: at, snoozed: true, snoozedUntil: until })], { collectedAt: older }),
-    )
+    const t3 = t.ctx.clock()
+    const t2 = new Date(t3.getTime() - 10 * 60_000)
+    const t1 = new Date(t3.getTime() - 20 * 60_000)
+    const snoozed = thread("a", { updatedAt: at, snoozed: true, snoozedUntil: until })
+    const awake = thread("a", { updatedAt: at, snoozed: false })
+    // S1 sets the snooze, S3 keeps it (it writes nothing), and S2, collected between them but applied last, would end it.
+    await applyT3Snapshot(t.ctx, snapshot([snoozed], { collectedAt: t1 }))
+    await applyT3Snapshot(t.ctx, snapshot([snoozed], { collectedAt: t3 }))
+    await applyT3Snapshot(t.ctx, snapshot([awake], { collectedAt: t2 }))
+    expect(await linkOf("a")).toMatchObject({ snoozed: true, snoozedUntil: until })
+  })
+
+  it("and the other way: a late snapshot never brings back a snooze that a newer one left ended", async () => {
+    const at = ago(HOUR)
+    const until = new Date(t.ctx.clock().getTime() + DAY)
+    const t3 = t.ctx.clock()
+    const t2 = new Date(t3.getTime() - 10 * 60_000)
+    const t1 = new Date(t3.getTime() - 20 * 60_000)
+    const snoozed = thread("a", { updatedAt: at, snoozed: true, snoozedUntil: until })
+    const awake = thread("a", { updatedAt: at, snoozed: false })
+    await applyT3Snapshot(t.ctx, snapshot([awake], { collectedAt: t1 }))
+    await applyT3Snapshot(t.ctx, snapshot([awake], { collectedAt: t3 }))
+    await applyT3Snapshot(t.ctx, snapshot([snoozed], { collectedAt: t2 }))
     expect(await linkOf("a")).toMatchObject({ snoozed: false, snoozedUntil: null })
+    const [run] = await t.ctx.db.select().from(syncRuns).orderBy(desc(syncRuns.startedAt)).limit(1)
+    expect(run?.collectedAt).toEqual(t2)
   })
 
   it("changes no status decision", async () => {

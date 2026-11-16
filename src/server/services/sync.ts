@@ -1,9 +1,9 @@
-import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
+import { and, desc, eq, gt, inArray, isNotNull, ne, sql } from "drizzle-orm"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { AppError, invalid } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
-import { type By, type Ctx, inLinkTx, inTx, writeAudit } from "./context.ts"
+import { type By, type Ctx, inLinkTx, inTx, type Tx, writeAudit } from "./context.ts"
 import { createItemTx, type ItemRow, isSuppressed, type ThreadLinkRow, updateItemTx } from "./items.ts"
 import { createProjectTx } from "./projects.ts"
 import { newItemStatus, rootThreadId, syncDecision, wantsItem } from "./sync-rules.ts"
@@ -77,10 +77,27 @@ class Run {
   }
 }
 
-async function startRun(ctx: Ctx, kind: string): Promise<string> {
-  const [row] = await ctx.db.insert(syncRuns).values({ kind, startedAt: ctx.clock() }).returning({ id: syncRuns.id })
+async function startRun(ctx: Ctx, kind: string, collectedAt: Date): Promise<string> {
+  const [row] = await ctx.db
+    .insert(syncRuns)
+    .values({ kind, startedAt: ctx.clock(), collectedAt })
+    .returning({ id: syncRuns.id })
   if (!row) throw new Error("insert returned no row")
   return row.id
+}
+
+/**
+ * Whether a T3 snapshot collected later than this run's has started to apply: its run row is written, outside any
+ * transaction, before it applies anything. A snapshot applied late (after its answer was lost) then changes no snooze,
+ * whatever its threads say: the watermark of the snooze is the newest T3 snapshot, not each thread's last change.
+ */
+async function newerSnapshotApplied(tx: Tx, runId: string, collectedAt: Date): Promise<boolean> {
+  const [row] = await tx
+    .select({ id: syncRuns.id })
+    .from(syncRuns)
+    .where(and(eq(syncRuns.kind, "t3"), ne(syncRuns.id, runId), gt(syncRuns.collectedAt, collectedAt)))
+    .limit(1)
+  return row !== undefined
 }
 
 async function finishRun(ctx: Ctx, id: string, run: Run): Promise<SyncResult> {
@@ -139,7 +156,8 @@ export type ApplyHooks = {
 export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: ApplyHooks = {}): Promise<SyncResult> {
   const limit = latestAllowed(ctx)
   await refuseFutureSnapshot(ctx, "t3", snapshot.collectedAt, limit)
-  const runId = await startRun(ctx, "t3")
+  const runId = await startRun(ctx, "t3", snapshot.collectedAt)
+  const snoozeAllowed = async (tx: Tx) => !(await newerSnapshotApplied(tx, runId, snapshot.collectedAt))
   const run = new Run("t3")
   return guarded(ctx, runId, run, async () => {
     const [previous] = await ctx.db
@@ -216,7 +234,7 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       if (!thread.parentThreadId) continue
       await run.record(`thread:${thread.threadId}`, async () => {
         const root = rootThreadId(thread.threadId, parentOf)
-        if (root) await foldChildLink(ctx, run, thread.threadId, root, byId.get(root), snapshot.collectedAt)
+        if (root) await foldChildLink(ctx, run, thread.threadId, root, byId.get(root), snoozeAllowed)
       })
     }
 
@@ -243,17 +261,22 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
           }
           if (link) {
             // An older snapshot applied after a newer one: the stored state is newer. At the same activity time only
-            // the snooze can be new (T3 need not move a thread's time when it is snoozed, or when a snooze ends), and
-            // only from a snapshot collected no earlier than the one that last set it (a push applied late, after its
-            // answer was lost, never brings back a snooze that ended or clears a new one).
+            // the snooze can be new (T3 need not move a thread's time when it is snoozed, or when a snooze ends). A
+            // snooze is taken only while no later T3 snapshot has started to apply (newerSnapshotApplied): a push
+            // applied late never brings back a snooze that ended or clears a new one.
             const stored = link.lastActivityAt?.getTime()
             if (stored !== undefined && thread.updatedAt.getTime() < stored) return
             const sameTime = stored === thread.updatedAt.getTime()
-            if (sameTime && link.snoozeAsOf && snapshot.collectedAt.getTime() < link.snoozeAsOf.getTime()) return
-            const next = sameTime ? snooze : fields
+            const keepSnooze = linkChanged(link, snooze) && !(await snoozeAllowed(tx))
+            const next = keepSnooze
+              ? sameTime
+                ? {}
+                : { ...fields, snoozed: link.snoozed, snoozedUntil: link.snoozedUntil }
+              : sameTime
+                ? snooze
+                : fields
             if (!linkChanged(link, next)) return
-            const write = linkChanged(link, snooze) ? { ...next, snoozeAsOf: snapshot.collectedAt } : next
-            const [after] = await tx.update(itemThreads).set(write).where(eq(itemThreads.id, link.id)).returning()
+            const [after] = await tx.update(itemThreads).set(next).where(eq(itemThreads.id, link.id)).returning()
             await writeAudit(ctx, tx, SYNC, {
               action: "thread.update",
               entityType: "item",
@@ -282,13 +305,7 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
           )
           const [inserted] = await tx
             .insert(itemThreads)
-            .values({
-              itemId: item.id,
-              threadId: thread.threadId,
-              linkedAt: ctx.clock(),
-              ...fields,
-              snoozeAsOf: snapshot.collectedAt,
-            })
+            .values({ itemId: item.id, threadId: thread.threadId, linkedAt: ctx.clock(), ...fields })
             .onConflictDoNothing({ target: itemThreads.threadId })
             .returning()
           // An agent linked the thread at the same moment: roll this item back; the next run sees the link.
@@ -376,12 +393,13 @@ async function foldChildLink(
   childId: string,
   rootId: string,
   root: T3Snapshot["threads"][number] | undefined,
-  collectedAt: Date,
+  snoozeAllowed: (tx: Tx) => Promise<boolean>,
 ) {
   // Under the link structure lock: an owner delete or an agent's link of the root thread runs entirely
   // before or after this fold, so a delete suppresses either the child's link or the moved one.
   await inLinkTx(ctx, async (tx) => {
     const [child] = await tx.select().from(itemThreads).where(eq(itemThreads.threadId, childId)).for("update")
+    const snooze = root && (await snoozeAllowed(tx)) ? snoozeOf(root) : {}
     if (!child) return
     const [rootLink] = await tx.select().from(itemThreads).where(eq(itemThreads.threadId, rootId))
     if (rootLink) {
@@ -410,8 +428,7 @@ async function foldChildLink(
             lastStatus: root.status,
             settled: root.settled,
             lastActivityAt: root.updatedAt,
-            ...snoozeOf(root),
-            snoozeAsOf: collectedAt,
+            ...snooze,
           }),
         })
         .where(eq(itemThreads.id, child.id))
@@ -435,7 +452,7 @@ async function foldChildLink(
 export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot): Promise<SyncResult> {
   const limit = latestAllowed(ctx)
   await refuseFutureSnapshot(ctx, "security", snapshot.collectedAt, limit)
-  const runId = await startRun(ctx, "security")
+  const runId = await startRun(ctx, "security", snapshot.collectedAt)
   const run = new Run("security")
   return guarded(ctx, runId, run, async () => {
     for (const repo of snapshot.repos) {

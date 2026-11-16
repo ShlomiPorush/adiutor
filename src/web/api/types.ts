@@ -468,6 +468,8 @@ export type SyncRun = {
   kind: "t3" | "security"
   startedAt: string
   finishedAt: string | null
+  /** When the sync collected the snapshot the run applied; null for a snapshot refused whole and for older runs. */
+  collectedAt: string | null
   outcome: SyncOutcome | null
   counts: Record<string, number>
   errors: { record: string; code: string }[]
