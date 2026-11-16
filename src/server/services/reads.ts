@@ -139,7 +139,7 @@ export async function syncStatus(ctx: Ctx) {
     lastFinished(ctx, "t3", ["succeeded"]),
     lastFinished(ctx, "t3", ["partial"]),
     lastFinished(ctx, "security", ["succeeded", "partial"]),
-    syncConnected(ctx.db),
+    syncConnected(ctx.db, ctx.clock()),
   ])
   return {
     connected,

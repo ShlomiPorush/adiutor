@@ -203,6 +203,8 @@ export function createAgentChannel(options: AgentChannelOptions) {
   const busySeen = new Map<string, number>()
   /** Audit writes still running, for `drain`. */
   const writing = new Set<Promise<void>>()
+  /** Calls whose row is not written yet, for `drain`: a call whose client left is still running. */
+  const unwritten = new Set<Promise<void>>()
   const issuer = access.issuer ?? ""
   const metadata = (resource: AgentResource) =>
     `${issuer}/.well-known/oauth-protected-resource${resource === "mcp" ? "/mcp" : "/api/v1"}`
@@ -343,15 +345,33 @@ export function createAgentChannel(options: AgentChannelOptions) {
     const release = () => {
       if (--left === 0) running.give(call.connection.id)
     }
-    void work.then(release, release)
-    const done = await within(work, limits.deadlineMs)
-    if (done.late) {
-      await record(call, "unknown", {}, release)
-      return done
+    let settle = () => {}
+    const entry = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    unwritten.add(entry)
+    const settled = () => {
+      unwritten.delete(entry)
+      settle()
     }
-    const { outcome, details } = await judge(done.value)
-    await record(call, signal.aborted ? "unknown" : outcome, details, release)
-    return done
+    const written = () => {
+      settled()
+      release()
+    }
+    void work.then(release, release)
+    try {
+      const done = await within(work, limits.deadlineMs)
+      if (done.late) {
+        await record(call, "unknown", {}, written)
+        return done
+      }
+      const { outcome, details } = await judge(done.value)
+      await record(call, signal.aborted ? "unknown" : outcome, details, written)
+      return done
+    } catch (error) {
+      settled()
+      throw error
+    }
   }
 
   // --- The agent router of /api/v1 ---
@@ -563,9 +583,12 @@ export function createAgentChannel(options: AgentChannelOptions) {
     toolGuard,
     authenticate,
     accessAnswer,
-    /** Waits for the audit writes still running: on shutdown, before the database closes. */
+    /**
+     * Waits until every open call has written its row, on shutdown before the database closes: calls still running
+     * (also those whose client left, which server.close does not wait for), bounded by the deadline, and the writes.
+     */
     async drain(): Promise<void> {
-      while (writing.size > 0) await Promise.allSettled([...writing])
+      while (unwritten.size > 0 || writing.size > 0) await Promise.allSettled([...unwritten, ...writing])
     },
     /** The routes of the agent router, for the exposure test. */
     restRoutes: rest.routes,

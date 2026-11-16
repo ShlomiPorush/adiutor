@@ -76,6 +76,19 @@ describe("the sync shown as disconnected", () => {
     expect((await h.access.checkToken(first.body.access_token, "rest")).ok).toBe(false)
     expect((await morning(t.ctx)).sync.connected).toBe(false)
   })
+
+  it("past the idle days, before the sweep ends it, the morning read already says the sync is disconnected", async () => {
+    const sync = await connectWithCode(h, { scope: "sync", label: "Idle sync", areas: ["sync"] })
+    const row = await connectionOfToken(sync.tokens.body.access_token)
+    expect((await morning(t.ctx)).sync.connected).toBe(true)
+    const old = new Date(Date.now() - 91 * 86_400_000)
+    await t.ctx.db
+      .update(agentConnections)
+      .set({ approvedAt: old, lastUsedAt: old })
+      .where(eq(agentConnections.id, row.id))
+    expect((await rowOf(row.id))?.endedAt).toBeNull()
+    expect((await morning(t.ctx)).sync.connected).toBe(false)
+  })
 })
 
 describe("disconnecting", () => {

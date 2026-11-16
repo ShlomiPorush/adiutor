@@ -843,6 +843,74 @@ describe("the audit of every call", () => {
       await t2.close()
     }
   })
+
+  it("waits on shutdown for a call whose client already left, and records it unknown", async () => {
+    const t2 = await createTestDatabase("agents_shutdown_gone")
+    const h2 = await oauthHarness(t2, { channel: { ...channelLimits(), deadlineMs: 30_000 } })
+    try {
+      const c = await connectWithCode(h2, { scope: "read write", label: "Gone" })
+      const token = String(c.tokens.body.access_token)
+      const check = await h2.access.checkToken(token, "rest")
+      if (!check.ok) throw new Error("no connection")
+      const item = await createItem(t2.ctx, owner, { type: "task", title: "Gone item" })
+      let release = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let locked = () => {}
+      const isLocked = new Promise<void>((resolve) => {
+        locked = resolve
+      })
+      const holder = t2.ctx.db.transaction(async (tx) => {
+        await tx.execute(sql`select 1 from items where id = ${item.id} for update`)
+        locked()
+        await held
+      })
+      await isLocked
+      const gone = new AbortController()
+      const pending = fetch(`${h2.issuer}/api/v1/items/${item.id}`, {
+        method: "PATCH",
+        signal: gone.signal,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          [HEADERS.policy]: REVISION,
+          [HEADERS.kind]: "act",
+        },
+        body: JSON.stringify({ version: 1, title: "Client gone" }),
+      }).catch(() => null)
+      await vi.waitFor(async () => {
+        const n = [
+          ...(await t2.ctx.db.execute<{ n: number }>(
+            sql`select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock' and query ilike '%from "items"%'`,
+          )),
+        ]
+        expect(n[0]?.n).toBe(1)
+      })
+      gone.abort()
+      await pending
+      // index.ts's order: the server closes (the client is gone, so nothing holds it), then drain, then the database.
+      await new Promise<void>((resolve) => h2.server.close(() => resolve()))
+      let drained = false
+      const drain = h2.mount.drain().then(() => {
+        drained = true
+      })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(drained).toBe(false)
+      release()
+      await holder
+      await drain
+      const rows = await t2.ctx.db
+        .select()
+        .from(audit)
+        .where(and(eq(audit.action, "agent.api_call"), eq(audit.entityId, check.connection.id)))
+        .orderBy(desc(audit.id))
+      expect(rows.map((r) => (r.after as { outcome: string }).outcome)).toEqual(["unknown"])
+    } finally {
+      await h2.close()
+      await t2.close()
+    }
+  })
 })
 
 describe("without agent access", () => {
