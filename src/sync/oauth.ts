@@ -71,6 +71,8 @@ export type ClientDeps = {
   now: () => number
   sleep: (ms: number) => Promise<void>
   httpTimeoutMs?: number
+  /** Test seam: runs in a push bound to a connection, after it read its token and before it checks the connection. */
+  beforeBind?: () => Promise<void>
 }
 
 /** Adiutor's address as an issuer: https (http only on this computer), a plain origin with nothing after it. */
@@ -537,18 +539,18 @@ export function syncClient(issuer: string, deps: ClientDeps) {
    */
   async function push(path: string, payload: unknown, bind: { connection?: string } = {}): Promise<PushResult> {
     /**
-     * A push bound to a connection (`run --request`): the token it sends must be that connection's, read under the
-     * connection's lock, which connect --replace and disconnect take too. A token of a newer connection is never sent
-     * for a run that began under another; the old connection's token works only for the old connection.
+     * A push bound to a connection (`run --request`): under the connection's lock, which connect --replace and
+     * disconnect take too, the connection kept must still be that one (its address and id), and the token sent is its
+     * token of now, refreshed by any command meanwhile. Null when another connection is kept: nothing is sent.
      */
-    const boundTo = async (token: string) =>
-      bind.connection === undefined ||
-      withLock(async () => {
-        const rec = await readRecord()
-        return Boolean(
-          rec && !rec.endedAt && rec.accessToken === token && `${issuer}#${rec.connection}` === bind.connection,
-        )
-      })
+    const boundTo = async (token: string): Promise<string | null> =>
+      bind.connection === undefined
+        ? token
+        : withLock(async () => {
+            const rec = await readRecord()
+            if (!rec?.refreshToken || rec.endedAt || `${issuer}#${rec.connection}` !== bind.connection) return null
+            return rec.accessToken || token
+          })
     const changed: PushResult = {
       kind: "failed",
       code: "connection_changed",
@@ -567,7 +569,10 @@ export function syncClient(issuer: string, deps: ClientDeps) {
       let policyRetried = false
       let refreshed = false
       let token = await accessToken()
-      if (!(await boundTo(token))) return changed
+      if (bind.connection !== undefined) await deps.beforeBind?.()
+      const first = await boundTo(token)
+      if (first === null) return changed
+      token = first
       for (;;) {
         let a: Answer
         try {
@@ -585,8 +590,9 @@ export function syncClient(issuer: string, deps: ClientDeps) {
         }
         if (!refreshed && a.status === 401 && a.challenge.includes('error="invalid_token"')) {
           refreshed = true
-          token = await accessToken(token)
-          if (!(await boundTo(token))) return changed
+          const fresh = await boundTo(await accessToken(token))
+          if (fresh === null) return changed
+          token = fresh
           continue
         }
         if (!busyRetried && a.status === 429 && topText(a, "error") === "busy") {
