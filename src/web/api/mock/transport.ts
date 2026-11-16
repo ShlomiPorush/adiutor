@@ -783,31 +783,42 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
 
 /**
  * Sync now over a computer that checked in a minute ago: a request waits until the owner cancels it. For screenshots,
- * `adiutor.mock.sync` in localStorage set to "none" has no computer that ever checked in, and "silent" a paused
- * computer that has not checked in for ten minutes.
+ * `adiutor.mock.sync` in localStorage set to "none" has no computer that ever checked in, "silent" a paused
+ * computer that has not checked in for ten minutes, "paused" a paused computer, and "partial" a request that finished
+ * in part.
  */
 let syncRequest: SyncRequest | null = null
-function mockSyncClient(): "none" | "silent" | null {
+function mockSyncClient(): "none" | "silent" | "paused" | "partial" | null {
   try {
     const value = localStorage.getItem("adiutor.mock.sync")
-    return value === "none" || value === "silent" ? value : null
+    return value === "none" || value === "silent" || value === "paused" || value === "partial" ? value : null
   } catch {
     return null
   }
 }
+/** "partial": a request the computer ran an hour ago, the security part not run. */
+const finishedRequest = (): SyncRequest => ({
+  id: uuid(),
+  requestedAt: ago(1.1),
+  state: "partial",
+  claimedAt: ago(1.09),
+  leaseUntil: ago(0.9),
+  finishedAt: ago(1),
+  result: { t3: "accepted", security: "not_run" },
+})
 function syncRequestsRoute(method: string, requestId: string | undefined): TransportResponse {
   const mode = mockSyncClient()
   if (method === "GET")
     return ok({
-      request: syncRequest,
+      request: syncRequest ?? (mode === "partial" ? finishedRequest() : null),
       client:
         mode === "none"
           ? null
           : {
               lastCheckinAt: ago(mode === "silent" ? 1 / 6 : 1 / 60),
               version: "0.3.0",
-              paused: mode === "silent",
-              pausedUntil: mode === "silent" ? ago(-2) : null,
+              paused: mode === "silent" || mode === "paused",
+              pausedUntil: mode === "silent" || mode === "paused" ? ago(-2) : null,
               nextRunAt: ago(-3),
               running: null,
               silent: mode === "silent",
