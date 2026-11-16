@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto"
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { randomBytes, randomUUID } from "node:crypto"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
@@ -173,6 +173,64 @@ describe("checkin --json", () => {
       expect([bad, exit, result.ok, (result.error as { code: string }).code]).toEqual([bad, 2, false, "invalid_report"])
     }
     expect(fake.checkins).toEqual([])
+  })
+})
+
+describe('the stored endpoints listing (client-contract.md, "Kind from the server")', () => {
+  const listingFile = () => {
+    const name = readdirSync(data()).find((f) => f.startsWith("endpoints-") && f.endsWith(".json"))
+    if (!name) throw new Error("no stored listing")
+    return join(data(), name)
+  }
+
+  it("is kept after the first check-in, so a later check-in sends one request", async () => {
+    const listings = fake.counts.listing
+    expect((await checkin()).result.ok).toBe(true)
+    expect(fake.counts.listing - listings).toBe(1)
+    expect(JSON.parse(readFileSync(listingFile(), "utf8"))).toMatchObject({
+      issuer: fake.issuer,
+      revision: fake.revision,
+    })
+    expect((await checkin()).result.ok).toBe(true)
+    expect(fake.counts.listing - listings).toBe(1)
+    expect(fake.checkins).toHaveLength(2)
+  })
+
+  it("is fetched once more after policy_changed, and the check-in sent again", async () => {
+    await checkin()
+    const before = fake.revision
+    fake.revision = randomBytes(8).toString("hex")
+    try {
+      const listings = fake.counts.listing
+      expect((await checkin()).result.ok).toBe(true)
+      expect(fake.counts.listing - listings).toBe(1)
+      expect(fake.checkins).toHaveLength(2)
+      expect(JSON.parse(readFileSync(listingFile(), "utf8")).revision).toBe(fake.revision)
+    } finally {
+      fake.revision = before
+    }
+  })
+
+  it("is not used for another address, nor when it cannot be read", async () => {
+    await checkin()
+    const stored = JSON.parse(readFileSync(listingFile(), "utf8"))
+    writeFileSync(listingFile(), JSON.stringify({ ...stored, issuer: "https://other.example.com" }))
+    const listings = fake.counts.listing
+    expect((await checkin()).result.ok).toBe(true)
+    expect(fake.counts.listing - listings).toBe(1)
+    writeFileSync(listingFile(), "not json")
+    expect((await checkin()).result.ok).toBe(true)
+    expect(fake.counts.listing - listings).toBe(2)
+  })
+
+  it("is fetched again when it does not hold the check-in, before the sync says Adiutor is older", async () => {
+    fake.offersCheckin = false
+    expect(((await checkin()).result.error as { code: string }).code).toBe("server_older")
+    // Adiutor was updated: the stored listing has no check-in, so a fresh one is read.
+    fake.offersCheckin = true
+    const listings = fake.counts.listing
+    expect((await checkin()).result.ok).toBe(true)
+    expect(fake.counts.listing - listings).toBe(1)
   })
 })
 

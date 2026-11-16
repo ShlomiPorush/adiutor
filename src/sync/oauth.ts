@@ -7,14 +7,15 @@
 // scripts implement the same contract for agents (skill/adiutor/scripts); this is its port for the bundle.
 
 import { createHash, randomBytes } from "node:crypto"
-import { closeSync, openSync, rmSync } from "node:fs"
+import { closeSync, openSync, readFileSync, rmSync } from "node:fs"
 import { homedir } from "node:os"
-import { join, resolve, win32 } from "node:path"
+import { dirname, join, resolve, win32 } from "node:path"
 import { ClientError } from "./errors.ts"
 import type { Runner } from "./exec.ts"
 import type { FetchLike } from "./http.ts"
 import { connectionLockOptions, fileLock } from "./lock.ts"
 import { ownerOnlyFolder } from "./owner-folder.ts"
+import { writeAtomic } from "./state.ts"
 
 export { ClientError } from "./errors.ts"
 export { othersAllowed } from "./owner-folder.ts"
@@ -125,6 +126,18 @@ const TEXTS = ["issuer", "label", "refreshToken", "accessToken", "scope", "toRev
 
 type Answer = { status: number; text: string; json: unknown; isJson: boolean; challenge: string }
 type Listing = { revision: string; entries: { method: string; path: string; kind: "read" | "act" }[] }
+
+/** The calls of a listing: method, path template and kind; anything but an explicit read counts as an act. */
+function entriesOf(endpoints: unknown[]): Listing["entries"] {
+  const entries: Listing["entries"] = []
+  for (const e of endpoints as Record<string, unknown>[]) {
+    const method = String(e?.method ?? "")
+    const path = String(e?.path ?? "")
+    if (/^[A-Z]{3,7}$/.test(method) && path.startsWith("/api/v1/"))
+      entries.push({ method, path, kind: e?.kind === "read" ? "read" : "act" })
+  }
+  return entries
+}
 
 /** What a push came to. Never holds a token. */
 export type PushResult =
@@ -431,15 +444,45 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     const revision = field(a, "revision")
     if (a.status !== 200 || !Array.isArray(endpoints) || typeof revision !== "string" || !REVISION.test(revision))
       throw unavailable()
-    const entries: Listing["entries"] = []
-    for (const e of endpoints as Record<string, unknown>[]) {
-      const method = String(e?.method ?? "")
-      const path = String(e?.path ?? "")
-      // Anything but an explicit read counts as an act.
-      if (/^[A-Z]{3,7}$/.test(method) && path.startsWith("/api/v1/"))
-        entries.push({ method, path, kind: e?.kind === "read" ? "read" : "act" })
+    const fresh = { revision, entries: entriesOf(endpoints) }
+    await saveListing(fresh)
+    return fresh
+  }
+
+  // --- The stored listing (client-contract.md, "Kind from the server"): kept in the data folder for this address,
+  // reused by every later command, and fetched again only when it is missing, unreadable, for another address, does
+  // not hold the call, or after policy_changed. It holds no secret: the open routes, their kinds and the revision. ---
+
+  const listingFile = join(dirname(dir), `endpoints-${key}.json`)
+
+  function readStoredListing(): Listing | null {
+    try {
+      const root = JSON.parse(readFileSync(listingFile, "utf8")) as Record<string, unknown>
+      const { revision, endpoints } = root
+      if (
+        root.issuer !== issuer ||
+        typeof revision !== "string" ||
+        !REVISION.test(revision) ||
+        !Array.isArray(endpoints)
+      )
+        return null
+      return { revision, entries: entriesOf(endpoints) }
+    } catch {
+      return null
     }
-    return { revision, entries }
+  }
+
+  async function saveListing(list: Listing): Promise<void> {
+    const text = `${JSON.stringify({ issuer, revision: list.revision, endpoints: list.entries })}
+`
+    // A listing that cannot be kept is fetched again by the next command: nothing else depends on it.
+    await writeAtomic(listingFile, text, { platform: deps.platform, now: deps.now, sleep: deps.sleep }).catch(() => {})
+  }
+
+  /** A connection made or ended: its listing may differ (other areas), so the next command fetches it. */
+  const forgetListing = () => {
+    listing = null
+    rmSync(listingFile, { force: true })
   }
 
   const kindOf = (list: Listing, method: string, path: string) =>
@@ -448,18 +491,36 @@ export function syncClient(issuer: string, deps: ClientDeps) {
   let listing: Listing | null = null
 
   /**
+   * The kind of a call from the stored listing; a listing that is missing, unreadable or for another address is fetched,
+   * and so is a stored one that does not hold the call (it may be older than the server). Undefined: not open to this
+   * connection. Throws the listing's ClientError when it cannot be fetched.
+   */
+  async function kindFor(method: string, path: string): Promise<{ list: Listing; kind: "read" | "act" | undefined }> {
+    const stored = listing ?? readStoredListing()
+    let list = stored ?? (await fetchListing())
+    let kind = kindOf(list, method, path)
+    if (!kind && stored) {
+      list = await fetchListing()
+      kind = kindOf(list, method, path)
+    }
+    listing = list
+    return { list, kind }
+  }
+
+  /**
    * Whether the endpoints listing holds a call: `listed`; `older` when it holds the sync's pushes but not this call (an
    * Adiutor from before it); otherwise why it cannot be made (the listing unreadable, or the sync area not granted).
    */
   async function route(method: string, path: string): Promise<"listed" | "older" | { code: string; message: string }> {
+    let found: Awaited<ReturnType<typeof kindFor>>
     try {
-      listing ??= await fetchListing()
+      found = await kindFor(method, path)
     } catch (error) {
       if (error instanceof ClientError) return { code: error.code, message: error.message }
       throw error
     }
-    if (kindOf(listing, method, path)) return "listed"
-    if (kindOf(listing, "POST", "/api/v1/sync/t3")) return "older"
+    if (found.kind) return "listed"
+    if (kindOf(found.list, "POST", "/api/v1/sync/t3")) return "older"
     return {
       code: "not_allowed",
       message: "This connection may not make this call: connect the sync again and approve the sync area.",
@@ -473,8 +534,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
    */
   async function push(path: string, payload: unknown): Promise<PushResult> {
     try {
-      listing ??= await fetchListing()
-      let kind = kindOf(listing, "POST", path)
+      let { list, kind } = await kindFor("POST", path)
       if (!kind)
         return {
           kind: "failed",
@@ -492,7 +552,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
           a = await request("POST", `${issuer}${path}`, {
             bearer: token,
             json,
-            policy: listing.revision,
+            policy: list.revision,
             kind,
             timeout: deps.httpTimeoutMs ?? API_TIMEOUT_MS,
           })
@@ -519,8 +579,9 @@ export function syncClient(issuer: string, deps: ClientDeps) {
               message: "Adiutor refused the call twice: its calls changed.",
             }
           policyRetried = true
-          listing = await fetchListing()
-          kind = kindOf(listing, "POST", path)
+          list = await fetchListing()
+          listing = list
+          kind = kindOf(list, "POST", path)
           if (!kind) return { kind: "failed", code: "not_allowed", message: "This connection may not make this call." }
           continue
         }
@@ -576,6 +637,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
       // The intent first, in one step: no usable token is left, and every token to revoke is kept. A crash or a lost
       // answer from here on leaves the connection disconnected with its revocation pending, never active.
       await writeRecord({ ...emptyRecord(rec.label), toRevoke: tokens })
+      forgetListing()
       assertMine(lock)
       const left = await revokeAll(tokens)
       if (!left) folder.remove(name)
@@ -660,6 +722,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
             toRevoke: [rec.toRevoke, old].filter(Boolean).join(" "),
           }
           await writeRecord(rec)
+          forgetListing()
           rec = await revokeLeft(rec)
           return { kind: "done" as const, scope: rec.scope, notRevoked: rec.toRevoke !== "" }
         }

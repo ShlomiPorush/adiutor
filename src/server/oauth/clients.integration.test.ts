@@ -211,15 +211,15 @@ describe("the sync's connection", () => {
     const report = { version: "0.3.0", paused: false, pausedUntil: null, nextRunAt: null, running: null, finished: [] }
     expect(await sendCheckin(client, report)).toEqual({ ok: true, claim: request.id })
     expect(await sendCheckin(client, report)).toEqual({ ok: true, claim: request.id })
-    // A check-in of a new engine process, as the tray starts one every minute, is two audited calls: the endpoints
-    // listing and the check-in (docs/sync.md, "Requests from Adiutor").
+    // A check-in of a new engine process, as the tray starts one every minute, is one audited call: the engine keeps
+    // the endpoints listing in its data folder (docs/sync.md, "Requests from Adiutor").
     await h.mount.drain()
     const rows = async () =>
       (await t.ctx.db.select({ action: audit.action }).from(audit)).filter((r) => r.action === "agent.api_call").length
     const before = await rows()
     expect(await sendCheckin(syncClient(h.issuer, deps), report)).toEqual({ ok: true, claim: request.id })
     await h.mount.drain()
-    expect((await rows()) - before).toBe(2)
+    expect((await rows()) - before).toBe(1)
 
     const listed = await browserCall(h.owner, "/api/v1/agents/connections")
     const mine = listed.body.connections.find((c: Loose) => c.name === "Laptop sync")
