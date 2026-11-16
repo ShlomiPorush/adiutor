@@ -463,12 +463,22 @@ export function t3Session(deps: T3SessionDeps) {
     async status() {
       const session = await readSession()
       const pending = await readPending()
+      // A t3-disconnect cut off before it deleted the session: disconnecting, which the next T3 command finishes.
+      const disconnecting =
+        session !== null && pending.revokes.some((r) => r.after === "disconnected" && r.sessionId === session.sessionId)
       return {
-        state: !session ? ("not_connected" as const) : session.ended ? ("ended" as const) : ("connected" as const),
-        ...(session?.ended ? { reason: session.ended } : {}),
-        ...(session ? { environmentId: session.environmentId, expiresAt: session.expiresAt } : {}),
-        // An entry for the saved session itself (a renewal that did not finish) is only ever dropped, never revoked.
-        revocationPending: pending.revokes.some((r) => r.sessionId !== session?.sessionId),
+        state:
+          !session || disconnecting
+            ? ("not_connected" as const)
+            : session.ended
+              ? ("ended" as const)
+              : ("connected" as const),
+        ...(session?.ended && !disconnecting ? { reason: session.ended } : {}),
+        ...(session && !disconnecting ? { environmentId: session.environmentId, expiresAt: session.expiresAt } : {}),
+        // A replacement's entry for the saved session itself (a renewal that did not finish) is only ever dropped.
+        revocationPending: pending.revokes.some(
+          (r) => r.after === "disconnected" || r.sessionId !== session?.sessionId,
+        ),
       }
     },
 
@@ -556,7 +566,13 @@ export function t3Session(deps: T3SessionDeps) {
             used = renewed.session.sessionId
             renewal = `the T3 session was renewed until ${renewed.session.expiresAt}`
           } catch (error) {
-            renewal = `the T3 session could not be renewed (${error instanceof ClientError ? error.message : "unexpected error"}); it stays until ${session.expiresAt}`
+            const why = error instanceof ClientError ? error.message : "unexpected error"
+            // The new session may be saved already, and a later step failed: the run uses what is saved.
+            const saved = await readSession().catch(() => null)
+            if (saved && saved.sessionId !== session.sessionId) {
+              used = saved.sessionId
+              renewal = `the T3 session was renewed until ${saved.expiresAt}, and finishing the renewal failed (${why}); the next T3 command finishes it`
+            } else renewal = `the T3 session could not be renewed (${why}); it stays until ${session.expiresAt}`
           }
         }
         return {

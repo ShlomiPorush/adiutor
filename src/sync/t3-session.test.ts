@@ -258,6 +258,21 @@ describe("a command cut off at each step of the lifecycle", () => {
     expect(issues()).toHaveLength(1)
   })
 
+  it("status says a disconnect cut off before it deleted the session is not connected, its revocation pending", async () => {
+    for (const step of ["revoke entry", "revoked"] as const) {
+      const u = user()
+      await u.session().connect()
+      u.control.crashAt = step
+      await expect(u.session().disconnect()).rejects.toThrow("crash")
+      const calls = fake.calls.length
+      const counts = { ...fake.counts }
+      // From the files alone: no T3 call.
+      expect(await u.session().status()).toMatchObject({ state: "not_connected", revocationPending: true })
+      expect(fake.calls.length).toBe(calls)
+      expect(fake.counts).toEqual(counts)
+    }
+  })
+
   it("in t3-disconnect, after the revoke: the next command finishes the disconnect", async () => {
     const u = user()
     await u.session().connect()
@@ -338,6 +353,16 @@ describe("readProjects", () => {
     const saved = JSON.parse(u.read(SESSION_FILE) ?? "{}").sessionId
     expect(saved).not.toBe(old.sessionId)
     expect(live()).toEqual([saved])
+  })
+
+  it("reports the renewed session once it was saved, even when a later step of the renewal fails", async () => {
+    const u = user()
+    await u.session().connect()
+    u.clock.offset = 23 * 86_400_000
+    u.control.crashAt = "saved"
+    const read = await u.session().readProjects()
+    const saved = JSON.parse(u.read(SESSION_FILE) ?? "{}").sessionId
+    expect(read).toMatchObject({ kind: "ok", sessionId: saved })
   })
 
   it("keeps the session when the renewal fails", async () => {
