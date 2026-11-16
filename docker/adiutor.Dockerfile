@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Adiutor: API, MCP and (later) the built UI in one bundle. Build context: repository root.
 
-FROM node:26.13.0-bookworm-slim AS build
+FROM node:26.13.1-bookworm-slim AS build
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 # Node 25 and later no longer ship corepack; it reads the pnpm version from "packageManager".
 RUN npm install --global corepack@0.36.0 && corepack enable
@@ -15,7 +15,7 @@ RUN pnpm run build
 
 # The bundle needs no node_modules. Runs as node on a read-only root file system; nothing is written at
 # runtime, since every piece of state lives in PostgreSQL.
-FROM node:26.13.0-bookworm-slim
+FROM node:26.13.1-bookworm-slim
 ARG VERSION=dev
 ENV NODE_ENV=production \
     ADIUTOR_VERSION=${VERSION} \
