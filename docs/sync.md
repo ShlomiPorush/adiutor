@@ -20,11 +20,11 @@ Security values follow the snapshot honestly: an enabled family sends its alert 
 
 Read from the environment, or from a `--env` file of `KEY=VALUE` lines, which wins over the environment:
 
-| Name                   | Purpose                                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `ADIUTOR_URL`          | Adiutor's address alone, for example `https://adiutor.example.com` (https, or http on `localhost` only)    |
-| `T3CODE_CLI_PATH`      | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                       |
-| `ADIUTOR_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it                                                          |
+| Name                   | Purpose                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `ADIUTOR_URL`          | Adiutor's address alone, for example `https://adiutor.example.com` (https, or http on `localhost` only) |
+| `T3CODE_CLI_PATH`      | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                   |
+| `ADIUTOR_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it                                                      |
 
 The env file holds no secret: `connect` writes `ADIUTOR_URL` into it (`%LOCALAPPDATA%\adiutor\sync.env` on Windows, `~/.config/adiutor/sync.env` elsewhere, readable only by the owner). `ADIUTOR_AGENT_TOKEN`, the agent key of the sync before agent access, is no longer read: when it is still set, each run says so once (never its value), and the owner deletes that line, and the key in Settings, Agent access, if it is still listed.
 
