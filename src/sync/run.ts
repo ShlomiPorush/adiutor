@@ -17,6 +17,8 @@ export type RunOptions = {
   settings: Resolved
   /** Whether ADIUTOR_AGENT_TOKEN, the sync's agent key before agent approval, is still set (never its value). */
   oldToken: boolean
+  /** The sync request from Adiutor this run serves (`--request`): named in its report, for the tray's check-in. */
+  requestId?: string
 }
 
 export type Deps = {
@@ -229,6 +231,7 @@ async function runLocked(
           startedAt,
           finishedAt,
           dryRun: false,
+          requestId: options.requestId ?? null,
           t3: { ...t3, reason },
           security: { ...security, reason },
           lastGoodSyncAt: null,
@@ -439,6 +442,7 @@ async function runLocked(
     startedAt,
     finishedAt: deps.now().toISOString(),
     dryRun: options.dryRun,
+    requestId: options.requestId ?? null,
     t3,
     security,
     lastGoodSyncAt: null,

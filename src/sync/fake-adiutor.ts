@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net"
 
 const id = () => randomBytes(24).toString("base64url")
 const SYNC_ROUTES = ["/api/v1/sync/t3", "/api/v1/sync/security"]
+const CHECKIN = "/api/v1/sync/checkin"
 
 export type Push = { path: string; body: unknown; policy?: string; kind?: string; auth?: string }
 
@@ -36,6 +37,14 @@ export async function startFakeAdiutor() {
     /** The outcome the next pushes that run answer with, in order (succeeded when empty), as Adiutor's sync does. */
     pushOutcome: [] as Array<"succeeded" | "partial" | "failed">,
     listingStatus: 0,
+    /** Whether the listing has the check-in (false: an Adiutor from before it). */
+    offersCheckin: true,
+    /** The check-ins that ran, their bodies in order. */
+    checkins: [] as unknown[],
+    /** The claim the next check-ins answer (a request id), or null. */
+    claim: null as string | null,
+    /** What happens after the next check-ins ran, in order: "drop" (no answer), or a status to answer with. */
+    afterCheckin: [] as Array<"drop" | number>,
     /** What happens to the next listings, in order: "drop" (no answer) or "busy" (429 busy). */
     beforeListing: [] as Array<"drop" | "busy">,
     approve() {
@@ -170,8 +179,9 @@ export async function startFakeAdiutor() {
         if (next === "drop") return drop()
         if (next === "busy") return send(429, { error: "busy", message: "Busy." })
         if (s.listingStatus) return send(s.listingStatus, { error: "server_error" })
+        const routes = [...SYNC_ROUTES, ...(s.offersCheckin ? [CHECKIN] : [])]
         const endpoints = grant.scope.split(" ").includes("sync")
-          ? SYNC_ROUTES.map((path) => ({ method: "POST", path, kind: "act", area: "sync", description: "" }))
+          ? routes.map((path) => ({ method: "POST", path, kind: "act", area: "sync", description: "" }))
           : []
         return send(200, { endpoints, count: endpoints.length, revision: s.revision })
       }
@@ -201,6 +211,28 @@ export async function startFakeAdiutor() {
         if (after === "drop") return drop()
         if (typeof after === "number") return send(after, { error: "internal_error", message: "Something went wrong." })
         return send(200, { data: { outcome: s.pushOutcome.shift() ?? "succeeded", counts: {} } })
+      }
+      if (req.method === "POST" && url.pathname === CHECKIN && s.offersCheckin) {
+        if (req.headers["x-adiutor-policy"] !== s.revision || req.headers["x-adiutor-kind"] !== "act")
+          return send(409, { error: "policy_changed", message: "Run endpoints again." })
+        if (!grant.scope.split(" ").includes("sync"))
+          return send(403, { error: "area_not_granted", message: "Not granted." })
+        s.checkins.push(JSON.parse(raw))
+        const after = s.afterCheckin.shift()
+        if (after === "drop") return drop()
+        if (typeof after === "number") return send(after, { error: "validation_failed", message: "Not valid." })
+        const now = Date.now()
+        return send(200, {
+          data: {
+            claim: s.claim
+              ? {
+                  requestId: s.claim,
+                  claimedAt: new Date(now).toISOString(),
+                  leaseUntil: new Date(now + 600_000).toISOString(),
+                }
+              : null,
+          },
+        })
       }
       return send(403, { error: "forbidden", message: "Agents cannot make this call." })
     }

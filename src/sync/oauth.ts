@@ -448,6 +448,25 @@ export function syncClient(issuer: string, deps: ClientDeps) {
   let listing: Listing | null = null
 
   /**
+   * Whether the endpoints listing holds a call: `listed`; `older` when it holds the sync's pushes but not this call (an
+   * Adiutor from before it); otherwise why it cannot be made (the listing unreadable, or the sync area not granted).
+   */
+  async function route(method: string, path: string): Promise<"listed" | "older" | { code: string; message: string }> {
+    try {
+      listing ??= await fetchListing()
+    } catch (error) {
+      if (error instanceof ClientError) return { code: error.code, message: error.message }
+      throw error
+    }
+    if (kindOf(listing, method, path)) return "listed"
+    if (kindOf(listing, "POST", "/api/v1/sync/t3")) return "older"
+    return {
+      code: "not_allowed",
+      message: "This connection may not make this call: connect the sync again and approve the sync area.",
+    }
+  }
+
+  /**
    * Pushes one payload. Every resend follows a refusal Adiutor makes before any route code runs: a 401 with the token
    * challenge (refresh, once), 429 busy (wait, once), 409 policy_changed (the list again, once). A push that may have
    * reached Adiutor and lost its answer, or that Adiutor failed (5xx), is outcome_unknown and never sent again.
@@ -660,7 +679,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     }
   }
 
-  return { dir, file, status, prepare, deviceCode, waitForApproval, push, disconnect, retryRevocations }
+  return { dir, file, status, prepare, deviceCode, waitForApproval, route, push, disconnect, retryRevocations }
 }
 
 export type SyncClient = ReturnType<typeof syncClient>

@@ -23,6 +23,9 @@ export type ThreadRecord = {
   settledAt: string | null
   parentThreadId: string | null
   updatedAt: string | null
+  /** Snoozed in T3, until snoozedUntil when T3 gives a time (D-T6). */
+  snoozed: boolean
+  snoozedUntil: string | null
 }
 
 /** Project ids travel on the T3 CLI command line, so only plain id characters are accepted. */
@@ -103,6 +106,8 @@ function mapThread(data: JsonObject, t3ProjectId: string): ThreadRecord | undefi
     settledAt: asTime(data.settledAt),
     parentThreadId: asString(data.parentThreadId) || null,
     updatedAt: asTime(data.updatedAt),
+    snoozed: data.snoozed === true,
+    snoozedUntil: data.snoozed === true ? asTime(data.snoozedUntil) : null,
   }
 }
 

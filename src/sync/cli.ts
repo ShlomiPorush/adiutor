@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises"
 import { parseArgs } from "node:util"
+import { isRequestId, keepClaim, parseReport, readClaim, sendCheckin } from "./checkin.ts"
 import { type ConnectDeps, connect, defaultEnvFile, NAME_MAX } from "./connect.ts"
 import {
   type AdiutorState,
+  type CheckinReport,
   type Command,
   type Failure,
   type Output,
@@ -20,12 +22,13 @@ import { DEFAULT_T3_URL, dataDir, envFileToRead, type Resolved, resolveSettings 
 import { readStatus, runningSince } from "./state.ts"
 import { t3Session } from "./t3-session.ts"
 
-export const USAGE = `Usage: node adiutor-sync.js run [--env <file>] [--overview <dir>] [--no-collect] [--dry-run] [--json]
+export const USAGE = `Usage: node adiutor-sync.js run [--env <file>] [--overview <dir>] [--no-collect] [--dry-run] [--request <id>] [--json]
        node adiutor-sync.js status [--url <url>] [--env <file>] [--json]
        node adiutor-sync.js connect --name <name> [--url <url>] [--env <file>] [--replace] [--no-open] [--json]
        node adiutor-sync.js disconnect [--url <url>] [--env <file>] [--json]
        node adiutor-sync.js t3-connect [--env <file>] [--json]
        node adiutor-sync.js t3-disconnect [--env <file>] [--json]
+       node adiutor-sync.js checkin [--url <url>] [--env <file>] [--json] < report.json
        node adiutor-sync.js setup-mcp --for <claude|codex> [--url <url>] [--env <file>]
 
 run: runs the overview collector, reads T3's projects with the sync's T3 session and every project's threads through
@@ -35,6 +38,7 @@ the T3 CLI, and sends both to Adiutor. One run at a time: a second one answers t
   --env <file>       KEY=VALUE file with the settings below (default: the sync.env that connect writes, if any)
   --no-collect       do not run the collector; use the newest existing snapshot
   --dry-run          print payload sizes and a sample; send nothing
+  --request <id>     the sync request from Adiutor this run serves (from checkin); named in the run's report
   --json             one JSON object per line: events, then one result (see docs/sync.md)
 
 Settings: ADIUTOR_URL, T3CODE_CLI_PATH (default: T3's own install), ADIUTOR_T3_URL (default: ${DEFAULT_T3_URL}),
@@ -59,6 +63,10 @@ kept and every later command tries it again. Exit code: 0 when done, 1 when the 
 t3-connect: issues the sync's read-only T3 session on this computer (t3 auth session issue) and keeps it in the
 sync's connection folder; a session it had is replaced. t3-disconnect: revokes it, then forgets it.
 
+checkin: the tray's check-in. Reads its report, one JSON object, on stdin (version, paused, pausedUntil, nextRunAt,
+running, finished; see docs/sync.md), sends it to Adiutor, and keeps a sync request Adiutor hands back in the data
+folder before it answers. Exit code: 0 when Adiutor answered, 1 when not, 2 for bad arguments or a bad report.
+
 setup-mcp: sets up Claude Code or Codex to use Adiutor's MCP server with OAuth, replacing a setup with a key.
 
   --for <client>     claude: the adiutor entry of Claude Code's user scope (claude mcp remove, then add)
@@ -66,7 +74,11 @@ setup-mcp: sets up Claude Code or Codex to use Adiutor's MCP server with OAuth, 
   --url <url>        Adiutor's address (default: ADIUTOR_URL from the env file, the environment or the settings file)
 Exit code: 0 when set up, 1 when something is left to do by hand, 2 for bad arguments.`
 
-export type MainDeps = Deps & Partial<Pick<ConnectDeps, "sleep" | "platform" | "findCommand" | "systemCommand">>
+export type MainDeps = Deps &
+  Partial<Pick<ConnectDeps, "sleep" | "platform" | "findCommand" | "systemCommand">> & {
+    /** The whole of stdin, for `checkin`'s report; the process's own unless a test gives it. */
+    stdin?: () => Promise<string>
+  }
 
 const COMMANDS: readonly string[] = [
   "status",
@@ -75,6 +87,7 @@ const COMMANDS: readonly string[] = [
   "t3-connect",
   "t3-disconnect",
   "run",
+  "checkin",
   "setup-mcp",
 ]
 
@@ -88,6 +101,7 @@ type Values = {
   url?: string
   replace?: boolean
   "no-open"?: boolean
+  request?: string
   help?: boolean
   json?: boolean
 }
@@ -114,6 +128,7 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
           url: { type: "string" },
           replace: { type: "boolean" },
           "no-open": { type: "boolean" },
+          request: { type: "string" },
           help: { type: "boolean", short: "h" },
           json: { type: "boolean" },
         },
@@ -155,13 +170,17 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
         return await t3ConnectCommand(settings, deps, out)
       case "t3-disconnect":
         return await t3DisconnectCommand(settings, deps, out)
+      case "checkin":
+        return await checkinCommand(settings, deps, out)
       case "run": {
+        if (values.request !== undefined && !isRequestId(values.request)) return usage(out, "--request must be an id")
         const { exit, body } = await runSync(
           {
             collect: !values["no-collect"],
             dryRun: values["dry-run"] === true,
             settings,
             oldToken: resolved.oldTokenValue !== undefined,
+            ...(values.request ? { requestId: values.request.toLowerCase() } : {}),
           },
           deps,
           out,
@@ -295,6 +314,7 @@ async function statusCommand(settings: Resolved, deps: MainDeps, out: Output): P
     lastGoodSyncAt: kept.lastGoodSyncAt,
     running: runningSince(data, { platform: all.platform, env: deps.env }),
     paused: settings.pause,
+    claim: readClaim(data),
     settings: { problems },
   }
   const said: Record<AdiutorState["state"], string> = {
@@ -321,6 +341,7 @@ async function statusCommand(settings: Resolved, deps: MainDeps, out: Output): P
   out.say(`Last good sync: ${kept.lastGoodSyncAt ?? "none recorded"}`)
   if (body.running) out.say(`A run is going since ${body.running.startedAt}`)
   if (body.paused) out.say(`Paused ${body.paused.until ? `until ${body.paused.until}` : "until resumed"}`)
+  if (body.claim) out.say(`A sync request from Adiutor is kept to run: ${body.claim.requestId}`)
   for (const problem of problems) out.say(`Problem: ${problem}`)
   out.result({ command: "status", ok: true, ...body })
   return EXIT_OK
@@ -443,6 +464,43 @@ async function t3DisconnectCommand(settings: Resolved, deps: MainDeps, out: Outp
     })
     return EXIT_NOTHING_PUSHED
   }
+}
+
+// --- checkin ---
+
+async function checkinCommand(settings: Resolved, deps: MainDeps, out: Output): Promise<number> {
+  const all = connectDeps(deps)
+  const data = dataDir(all.platform, deps.env)
+  const fail = (error: Failure, exit: number) => {
+    out.say(`checkin: ${error.message}`)
+    out.result({ command: "checkin", ok: false, claim: readClaim(data), error })
+    return exit
+  }
+  if (!settings.url) return fail({ code: "usage", message: URL_PROBLEM }, EXIT_USAGE)
+  let report: CheckinReport
+  try {
+    report = parseReport(await (deps.stdin ?? readStdin)())
+  } catch (error) {
+    return fail(failure(error), EXIT_USAGE)
+  }
+  const client = syncClient(settings.url, all)
+  await client.retryRevocations().catch(() => true)
+  const sent = await sendCheckin(client, report)
+  if (!sent.ok) return fail({ code: sent.code, message: sent.message }, EXIT_NOTHING_PUSHED)
+  const claim = await keepClaim(data, report, sent.claim, {
+    platform: all.platform,
+    now: all.now,
+    sleep: all.sleep,
+  })
+  out.say(sent.claim ? `Adiutor asks for a sync: request ${sent.claim}` : "Checked in; no sync request waits.")
+  out.result({ command: "checkin", ok: true, claim: sent.claim ? claim : null })
+  return EXIT_OK
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks).toString("utf8")
 }
 
 // --- setup-mcp (no JSON output) ---
