@@ -258,4 +258,4 @@ The release that switches agents to connect by approval (CHANGELOG, "Agents and 
 4. **Approve each client once** (section 6): the skill once per computer, Claude Code and Codex with `setup-mcp` (it replaces the setup with the key), and the sync with `connect --replace` if it says a connection is kept, else `connect`.
 5. **Clean up:** Settings, Agent access lists the agent keys left over, which no longer work: delete them there (the list goes away in a later release). On the Account page, sign out any session named "adiutor connect (agent approval)" that a cut-off approval of the old command left.
 
-Between steps 2 and 5 no agent can write to Adiutor and the sync does not run; the board and the morning message keep working.
+From the deploy until you approve each client again, that client cannot write to Adiutor, and the sync does not run until it is connected again; the board and the morning message keep working.
