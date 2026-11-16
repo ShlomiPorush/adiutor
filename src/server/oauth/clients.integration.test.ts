@@ -1,6 +1,16 @@
 import { spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -202,6 +212,39 @@ describe("the sync's connection", () => {
       payload,
     )
     expect(ended).toMatchObject({ kind: "failed", code: "connection_ended" })
+  }, 120_000)
+
+  it("disconnect revokes the refresh token, which ends the whole connection, the access token included", async () => {
+    const home = mkdtempSync(join(temp, "sync-"))
+    const deps = {
+      fetch: (input: string, init: RequestInit) => fetch(input, init),
+      runner: async () => ({ code: 1, stdout: "", stderr: "" }),
+      systemCommand: async () => undefined,
+      platform: "linux" as const,
+      env: { HOME: home, XDG_CONFIG_HOME: join(home, ".config") },
+      now: () => Date.now(),
+      sleep: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      },
+    }
+    const client = syncClient(h.issuer, deps)
+    await client.prepare()
+    const device = await client.deviceCode("Desk sync")
+    const waiting = client.waitForApproval(device, "Desk sync")
+    await approve(device.userCode, ["sync"])
+    await waiting
+    const payload = { collectedAt: t.ctx.clock().toISOString(), projects: [], threads: [], failedProjects: [] }
+    expect(await client.push("/api/v1/sync/t3", payload)).toMatchObject({ kind: "answer", status: 200 })
+    const folder = join(home, ".config", "adiutor", "connection")
+    const file = readdirSync(folder).find((name) => name.endsWith(".json")) as string
+    const access = JSON.parse(readFileSync(join(folder, file), "utf8")).accessToken as string
+
+    expect(await client.disconnect()).toEqual({ wasConnected: true, revocationPending: false })
+    expect(readdirSync(folder).filter((name) => name.endsWith(".json"))).toEqual([])
+    const listed = await browserCall(h.owner, "/api/v1/agents/connections")
+    expect(listed.body.connections.some((c: Loose) => c.name === "Desk sync")).toBe(false)
+    const after = await fetch(`${h.issuer}/api/v1/agent/endpoints`, { headers: { authorization: `Bearer ${access}` } })
+    expect(after.status).toBe(401)
   }, 120_000)
 })
 

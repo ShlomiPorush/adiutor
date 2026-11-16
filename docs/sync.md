@@ -1,16 +1,21 @@
 # Sync tool
 
-Status: built and tested against fixtures, a stand-in Adiutor and, in the integration tests, the real authorization server. It connects by agent access by approval, so it works against the agent access release and later only: an Adiutor before it has no authorization server. The server routes it calls (`/api/v1/sync/t3`, `/api/v1/sync/security`) are on `main`; see [api.md](api.md). Not yet run against an Adiutor server; that happens in the launch checks in production.
+Status: built and tested against fixtures, a stand-in Adiutor, a stand-in T3 and, in the integration tests, the real authorization server. It connects by agent access by approval, so it works against the agent access release and later only: an Adiutor before it has no authorization server. The server routes it calls (`/api/v1/sync/t3`, `/api/v1/sync/security`) are on `main`; see [api.md](api.md). Not yet run against an Adiutor server; that happens in the launch checks in production.
 
-`dist/sync/adiutor-sync.js` runs on the owner's PC, started by the T3 scheduled task in [prompts/reconcile.md](../prompts/reconcile.md). It is the only way T3 and GitHub data reach Adiutor: the server never calls T3 or GitHub.
+`dist/sync/adiutor-sync.js` runs on the owner's PC. You start it by hand, and the tray app (planned: the sync tray plan's third pull request) starts it on a schedule and reads its JSON answers. It is the only way T3 and GitHub data reach Adiutor: the server never calls T3 or GitHub.
 
 ## What one run does
 
+One run at a time, across the tray and the command line: a run holds the run lock (`run.lock` in the data folder, a file created exclusively and naming its holder) for the whole run, the collector included. A second run does not wait: it answers that a run is going, with the first run's start time, and runs nothing. A lock whose holder died (same computer, process gone) is taken over.
+
 1. Runs the `overview` collector (`node src/cli.mjs collect` in the overview checkout, 20 minute limit), then reads the newest snapshot: the run in `data/latest-run.txt`, or else the newest readable `data/runs/<runId>/snapshot.json`. When the collector fails (for example, another overview run holds its lock), the newest existing snapshot is used and the output says so.
-2. Reads the projects file that the scheduled agent wrote from `t3_project_list`. Deleted projects and projects whose id holds characters other than letters, digits, `.`, `_`, `:` and `-` are skipped and counted.
-3. Runs `t3 thread list --project <id> --json` for every project, four at a time, 2 minute limit each. Top-level and child threads are both sent with their `parentThreadId`; the server folds child threads into their parent's item. Projects whose threads could not be read, or whose thread list had invalid records, are sent as `failedProjects`, so the server records the run as `partial` and does not decide their items in that run. When no project could be read, the T3 payload is not sent.
-4. Finds each project's GitHub repository: from T3's repository identity when its provider is GitHub, otherwise by matching the project's folder (`workspaceRoot` or the identity's `rootPath`) against the snapshot's local repositories and their worktrees, ignoring case and separators.
+2. Reads T3's project list with the sync's T3 session (below): first `GET <T3 address>/.well-known/t3/environment` must name the session's environment, then `GET <T3 address>/api/projects` with the session. Deleted projects and projects whose id holds characters other than letters, digits, `.`, `_`, `:` and `-` are skipped and counted. A list read this way is kept as the last good list (`t3-projects.json` in the data folder, with its time). When T3 cannot be reached or fails (connection refused, timeout, a 5xx answer), the last good list is used and the output says `T3 projects from <time>`; with no last good list, T3 is not read. When T3 refuses the session (401), or its address or its CLI answers as another environment, the T3 part stops (no last good list, no thread list) until you connect T3 again.
+3. Runs `t3 thread list --project <id> --json` for every project, four at a time, 2 minute limit each. Top-level and child threads are both sent with their `parentThreadId`; the server folds child threads into their parent's item. Projects whose threads could not be read, or whose thread list had invalid records, are sent as `failedProjects`, so the server records the run as `partial` and does not decide their items in that run. When no project could be read, the T3 payload is not sent. Each thread's `link` (`https://app.t3.codes/threads/<environment id>/<thread id>`) must name the session's environment; a thread without a link is not checked.
+4. Finds each project's GitHub repository: from T3's repository identity when its provider is GitHub, otherwise by matching the project's folder (`workspaceRoot` or the identity's `rootPath`) against the snapshot's local repositories and their worktrees, ignoring case and separators. When this run has no project list, the security part uses the repositories of the last good list.
 5. Sends `POST /api/v1/sync/t3`, then `POST /api/v1/sync/security` for the project repositories found in the snapshot, over the connection `connect` kept (below), and prints each answer. First it reads Adiutor's endpoints listing once and sends each push with the listing's policy revision (`X-Adiutor-Policy`) and the kind it gives (`X-Adiutor-Kind: act`); when the listing cannot be read, or does not hold the push, nothing is sent. A push whose answer was lost, or that Adiutor answered with a server error, is reported as `outcome unknown` and never sent again in that run: a push carries the whole state, so the next run decides again. Adiutor's reserved refusals made before any route code runs get one more try each: `401 invalid_token` a refresh and the push again, `429 busy` a short wait, `409 policy_changed` the listing again. When the connection has ended, the run says `The sync is disconnected from Adiutor; reconnect it` with the `connect` command to run.
+6. Writes the run's report into the status file (`status.json` in the data folder, in one step, under the run lock; no secret). A dry run writes nothing.
+
+**The result of each part** (T3, security): `accepted` (Adiutor answered `succeeded`), `partial` (Adiutor answered `partial`, or projects were missing: `failedProjects` was not empty), `failed` (Adiutor refused the push or answered `failed`, or the push was not made because of the connection), `outcome_unknown` (the answer was lost, Adiutor failed with a 5xx, or a 2xx answer had no outcome the sync can read) and `not_run` (not sent: the reason says why). The report also has the data's age: the time of the project list (`projectsAt`, with `projectsFrom` `t3` or `last_good`) and the snapshot's finish time (`snapshotAt`). The **last good sync** is the last run in which both parts were `accepted`. The exit code does not tell this.
 
 The server refuses times more than 5 minutes ahead of its own clock ([api.md](api.md), "Times later than the server's clock"). Keep the PC's clock, and the clocks behind T3's and the collector's times, set automatically. When the PC runs ahead, the run prints `refused (HTTP 400)` with `validation_failed` and Settings, Sync shows the T3 run as failed; a single record that is ahead shows in the answer's `errors` as `time_in_future`.
 
@@ -18,15 +23,16 @@ Security values follow the snapshot honestly: an enabled family sends its alert 
 
 ## Settings
 
-Read from the environment, or from a `--env` file of `KEY=VALUE` lines, which wins over the environment:
+The data folder is `%LOCALAPPDATA%\adiutor` on Windows and `$XDG_CONFIG_HOME/adiutor` (`~/.config/adiutor`) elsewhere. Each setting comes from the first of: an option (`--url`, `--overview`), the env file (`--env`, or else `sync.env` in the data folder when it exists), the environment, the settings file `settings.json` in the data folder, and the default:
 
-| Name                   | Purpose                                                                                                 |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| `ADIUTOR_URL`          | Adiutor's address alone, for example `https://adiutor.example.com` (https, or http on `localhost` only) |
-| `T3CODE_CLI_PATH`      | The T3 CLI. T3 sets it for its agents; on Windows it is a `.cmd` file                                   |
-| `ADIUTOR_OVERVIEW_DIR` | The `overview` checkout; `--overview` overrides it                                                      |
+| Name                   | Settings file key | Purpose                                                                                                 |
+| ---------------------- | ----------------- | ------------------------------------------------------------------------------------------------------- |
+| `ADIUTOR_URL`          | `adiutorUrl`      | Adiutor's address alone, for example `https://adiutor.example.com` (https, or http on `localhost` only) |
+| `T3CODE_CLI_PATH`      | `t3CliPath`       | The T3 CLI; default `%USERPROFILE%\.t3\bin\t3.cmd` on Windows, `~/.t3/bin/t3` elsewhere                 |
+| `ADIUTOR_T3_URL`       | `t3Url`           | T3's address alone; default `http://127.0.0.1:3773` (https, or http on this computer only)              |
+| `ADIUTOR_OVERVIEW_DIR` | `overviewDir`     | The `overview` checkout; `--overview` overrides it                                                      |
 
-The env file holds no secret: `connect` writes `ADIUTOR_URL` into it (`%LOCALAPPDATA%\adiutor\sync.env` on Windows, `~/.config/adiutor/sync.env` elsewhere, readable only by the owner). `ADIUTOR_AGENT_TOKEN`, the agent key of the sync before agent access, is no longer read: when it is still set, each run says so once (never its value), and the owner deletes that line, and the key in Settings, Agent access, if it is still listed.
+The settings file is the tray's: it writes it, and the engine only reads it. It also holds the tray's pause, `"pause": {"until": "<time>"}` or `{"until": null}` (until resumed), which `status` reports. Neither file holds a secret: `connect` writes `ADIUTOR_URL` into the env file (`%LOCALAPPDATA%\adiutor\sync.env` on Windows, `~/.config/adiutor/sync.env` elsewhere, readable only by the owner). `ADIUTOR_AGENT_TOKEN`, the agent key of the sync before agent access, is no longer read: when it is still set, each run says so once (never its value), and the owner deletes that line, and the key in Settings, Agent access, if it is still listed.
 
 ## The connection
 
@@ -35,16 +41,48 @@ The sync connects like the agent skill, as a client of the agent REST contract (
 - **Where:** its own folder, never the skill's `~/.adiutor`: `%LOCALAPPDATA%\adiutor\connection` on Windows, which must be inside the user profile, and `$XDG_CONFIG_HOME/adiutor/connection` (`~/.config/adiutor/connection`) elsewhere. One file per Adiutor address (a hash of the address), written in one step through a private temporary file. No token is ever printed, logged, put on a command line or handed to a child process.
 - **Owner-only, checked, never loosened:** mode 0700 and 0600 elsewhere; on Windows `%SystemRoot%\System32\icacls.exe` limits the folder to the user, SYSTEM and Administrators, makes the user its owner, and reads the access lists back (`/save`), refusing any other entry. Every run checks the folder again before it reads the connection.
 - **Refresh:** the access token (15 minutes) is reused until a minute before its end, so a run refreshes once, after the collection and before the first push. A refresh runs under the connection's lock (a file created exclusively, naming its holder; never taken from a live holder, taken over from a dead one by moving it aside), with its start written first. Adiutor rotates the refresh token on every use and ends the connection when a spent one comes back, so a refresh whose answer was lost is never sent again within 30 seconds, is tried once more after that (which continues the connection or ends it), and two lost answers end it on this computer.
+- **Ended:** when Adiutor ends the connection (disconnected in Adiutor, unused for its idle days, sign-in settings changed, or a token used twice), the file is kept without any token, so `status` says it ended; `connect --replace` connects again.
+- **Disconnect:** `disconnect` revokes the refresh token at Adiutor's revocation endpoint (`/oauth/revoke`, the authorization server library's own, which ends the whole connection), then deletes the file. When the revocation's answer is lost, the token is kept, with no connection, and every later command (`status`, `connect`, `disconnect`, `run`) tries the revocation again.
+
+## The T3 session
+
+The sync reads T3's project list with a read-only session of its own (owner's decision D-T4: 30 days), kept like the Adiutor connection in the owner-only connection folder (`t3-session.json`: session id, token, expiry, environment id, T3's address and the session's label). T3's own clients use `/api/projects`; it is not a documented public API, which is why the last good list exists.
+
+- **`t3-connect`** reads T3's environment id from `<T3 address>/.well-known/t3/environment`, then, under the T3 lock (`t3.lock`), writes a pending record (`t3-pending.json`: a label `Adiutor sync <random id>` and its start), runs `t3 auth session issue --scope orchestration:read --ttl 30d --label "<label>" --json`, adds the child's process id and creation time to the record, checks the new session against T3's address (its project list must answer), saves the session in one step, and only then clears the record. A session it had is replaced: the old one is listed as pending revoke first, and revoked once the new one is saved. When the CLI's T3 and the address's T3 are different environments, the new session is revoked and nothing is kept.
+- **Recovery:** every T3 command (`t3-connect`, `t3-disconnect`, `run`) first finishes what a cut-off command left. A pending issue is looked up only once its child is certainly gone (no process with that id and creation time, or, when the record names no child, two minutes after it started): in `t3 auth session list --json` by its label, the saved session is kept and any other session with that label is revoked. A pending revoke is done only when the saved session is no longer that session; otherwise the entry is dropped. So a crash never revokes the only saved session. Started from the command line, the engine's children can outlive it when it is stopped; the pending record's process id covers that.
+- **Renewal:** when less than a quarter of the 30 days is left and the session still works, a run replaces it the same way. A renewal that fails keeps the old session.
+- **Ended:** a 401 on the project list, or an address or a CLI that names another environment, marks the session ended. It is never issued again on its own, and the T3 part of every run stops until `t3-connect`.
+- **`t3-disconnect`** revokes the session with `t3 auth session revoke <id>`, then deletes it; a failed revoke stays pending and later T3 commands try it again.
+- Every T3 CLI call runs from T3's default data folder: `T3CODE_HOME`, `VITE_DEV_SERVER_URL` and `T3CODE_BOOTSTRAP_FD` (which T3 reads to move its data folder) are removed from its environment. The token goes only into the session file and the `Authorization` header to T3's address, never in a redirect; the output of `t3 auth session issue` is never printed.
 
 ## Commands
 
 ```
-node dist/sync/adiutor-sync.js run --projects <file> [--env <file>] [--overview <dir>] [--no-collect] [--dry-run]
+node dist/sync/adiutor-sync.js run [--env <file>] [--overview <dir>] [--no-collect] [--dry-run] [--json]
+node dist/sync/adiutor-sync.js status [--url <url>] [--env <file>] [--json]
+node dist/sync/adiutor-sync.js disconnect [--url <url>] [--env <file>] [--json]
+node dist/sync/adiutor-sync.js t3-connect [--env <file>] [--json]
+node dist/sync/adiutor-sync.js t3-disconnect [--env <file>] [--json]
 ```
 
 - `--no-collect` uses the newest existing snapshot without running the collector.
-- `--dry-run` prints the payload sizes and a sample and sends nothing; it needs no URL or connection.
-- Exit code 0 when at least one payload was accepted (or a dry run had something to send), 1 when nothing could be sent (an `outcome unknown` push counts as not accepted), 2 for bad arguments or settings.
+- `--dry-run` prints the payload sizes and a sample of ids and sends nothing; it needs no Adiutor address or connection, and still reads T3 with the session.
+- `run`'s exit code: 0 when at least one part was `accepted` or `partial` (or a dry run had something to send), 1 when nothing could be sent or another run is going, 2 for bad arguments or settings. `status` exits 0; `disconnect` and `t3-disconnect` exit 1 while a revocation is pending; `t3-connect` exits 0 when connected.
+
+## Machine-readable output
+
+With `--json`, a command writes one JSON object per line on stdout and nothing else: events, then exactly one result, also after a failure. The types are in `src/sync/contract.ts`. No line holds a token, and T3 titles and paths never appear in one (projects are named by id).
+
+- **Events:** `{"type":"event","event":"message","text":...}` for each human line, and for `connect` `{"type":"event","event":"approval","link":...,"userCode":"ABCD-EFGH"}`.
+- **Result:** `{"type":"result","v":1,"command":...,"ok":...}` with, by command:
+  - `status`: `adiutor` (`state`: `connected`, `not_connected` or `ended`; `url`, `label`, `scope`, `revocationPending`), `t3` (`state`: `connected`, `not_connected` or `ended`; `reason` `rejected` or `other_environment`; `environmentId`, `expiresAt`, `revocationPending`), `lastRun` (the last run's report), `lastGoodSyncAt`, `running` (`{startedAt}` while a run holds the lock), `paused` (the settings file's pause), `settings.problems`.
+  - `connect`: `state` (`connected`, `already_connected`, `not_connected`), `scope`.
+  - `disconnect`, `t3-disconnect`: `wasConnected`, `revocationPending`.
+  - `t3-connect`: `environmentId`, `expiresAt`.
+  - `run`: `report` (`startedAt`, `finishedAt`, `dryRun`, `t3` and `security` each with `result`, `reason`, `message`, `httpStatus`; `t3` with `projectsFrom`, `projectsAt`, `projects`, `threads`, `failedProjects`; `security` with `snapshotRunId`, `snapshotAt`, `repos`; and `lastGoodSyncAt`), or `busy` (`{startedAt}`: another run holds the lock, nothing ran).
+  - A failure: `ok` false and `error` (`code`, `message`); bad arguments have `command` null and the code `usage`.
+
+`setup-mcp` has no JSON output.
 
 ## Connecting the sync
 
@@ -58,7 +96,7 @@ node dist/sync/adiutor-sync.js connect --name <name> [--url <url>] [--env <file>
 4. It polls every 5 seconds (5 more after each `slow_down`) until the owner approves or denies, or the code ends. A poll whose answer was lost is never repeated (the code may have been spent): it stops and says to run `connect` again.
 5. Approved, it keeps the connection (above) and sets `ADIUTOR_URL` in the env file, keeping every other line. When the `sync` area was not approved, it says so: the sync cannot push.
 
-A connection already kept for the address is reported and left alone. `--replace` connects again (for example after the owner disconnected it in Settings, Agent access) and ends the old connection once the new one is kept. `--url` falls back to `ADIUTOR_URL` in the environment, then in the env file. Exit code 0 when connected, 1 when not, 2 for bad arguments. `connect --for claude|codex` is gone: `setup-mcp` below replaces it.
+A connection already kept for the address is reported and left alone. `--replace` connects again (for example after the owner disconnected it in Settings, Agent access) and ends the old connection once the new one is kept. `--url` falls back to `ADIUTOR_URL` as in "Settings" above (the env file, the environment, the settings file). Exit code 0 when connected, 1 when not, 2 for bad arguments. `connect --for claude|codex` is gone: `setup-mcp` below replaces it.
 
 ## Setting up Claude Code and Codex
 
@@ -91,6 +129,6 @@ The bundle needs only Node.js 24 or later on Windows; it has no runtime dependen
 
 ## Safety
 
-- Child processes run through `execFile` with an argument array and no shell. Started by bare name, Node looks in the current folder before `PATH` on Windows, so every command runs by its full path: `icacls`, `whoami`, `rundll32` and `reg` from `%SystemRoot%\System32` (where Windows installs them; only administrators can write there), `claude` and `codex` from the absolute `PATH` entries, and the T3 CLI from `T3CODE_CLI_PATH`. Node refuses to start a `.cmd` file without a shell, so the T3 CLI runs as `cmd.exe /d /v:off /s /c ""<cli>" "thread" "list" "--project" "<id>" "--json""`, and so does `codex.cmd` for `setup-mcp --for codex`. Every part is quoted; a part holding a quote, a percent sign or a line break is refused, because `cmd.exe` would still expand or split it inside quotes.
+- Child processes run through `execFile` with an argument array and no shell. Started by bare name, Node looks in the current folder before `PATH` on Windows, so every command runs by its full path: `icacls`, `whoami`, `rundll32`, `reg` and Windows PowerShell (`WindowsPowerShell\v1.0\powershell.exe`, which reads a process's creation time for the T3 session's pending record, given only a number) from `%SystemRoot%\System32` (where Windows installs them; only administrators can write there), `claude` and `codex` from the absolute `PATH` entries, and the T3 CLI from its setting (`T3CODE_CLI_PATH`, by default where T3 installs it). Node refuses to start a `.cmd` file without a shell, so the T3 CLI runs as `cmd.exe /d /v:off /s /c ""<cli>" "thread" "list" "--project" "<id>" "--json""`, and so does `codex.cmd` for `setup-mcp --for codex`. Every part is quoted; a part holding a quote, a percent sign or a line break is refused, because `cmd.exe` would still expand or split it inside quotes.
 - Titles, paths and other text from T3 and the snapshot travel only as JSON to the API, never into a command line or a prompt.
 - Redirects are not followed, so a token is sent only to `ADIUTOR_URL` (or `--url`).

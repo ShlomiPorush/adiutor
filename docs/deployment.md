@@ -150,7 +150,7 @@ Agents and the sync connect by approval: each asks once, you approve it in the b
 
 - **An agent that runs commands** (Claude Code, Codex): tell it the sentence from Settings, Agent access: "Install the adiutor skill into your personal skills folder as described at https://adiutor.example.com/agents/skill/, then connect to Adiutor." It installs the skill from Adiutor, then shows a link and a code; open the link, check that the code matches, and approve. A skill installed from the repository (the shared agent configuration) connects with `adiutor connect --url "https://adiutor.example.com"` instead. The connection belongs to your computer user and is shared by every agent there.
 - **Claude Code and Codex over MCP:** in the Adiutor checkout on your PC, `node dist/sync/adiutor-sync.js setup-mcp --for claude --url "https://adiutor.example.com"` (or `--for codex`). It sets the client up for `https://adiutor.example.com/mcp` with OAuth and replaces an older setup that used an agent key; the client then opens Adiutor for you to approve it. For Claude Code alone, `claude mcp add --transport http adiutor "https://adiutor.example.com/mcp"` does the same for a new setup. [sync.md](sync.md), "Setting up Claude Code and Codex", has the details.
-- **The sync:** in the Adiutor checkout on your PC, `node dist/sync/adiutor-sync.js connect --name "sync" --url "https://adiutor.example.com"`, and keep the sync area ticked when you approve. It writes `ADIUTOR_URL` into `%LOCALAPPDATA%\adiutor\sync.env` and keeps its connection in a folder of its own, restricted to your Windows user. The T3 scheduled task in [prompts/reconcile.md](../prompts/reconcile.md) runs the sync with that file; after its first run, the sync card in Adiutor shows the time of the last sync.
+- **The sync:** in the Adiutor checkout on your PC, `node dist/sync/adiutor-sync.js connect --name "sync" --url "https://adiutor.example.com"`, and keep the sync area ticked when you approve. It writes `ADIUTOR_URL` into `%LOCALAPPDATA%\adiutor\sync.env` and keeps its connection in a folder of its own, restricted to your Windows user. Then connect it to T3 with `node dist/sync/adiutor-sync.js t3-connect` and run it with `node dist/sync/adiutor-sync.js run` (see [sync.md](sync.md)); after its first run, the sync card in Adiutor shows the time of the last sync.
 - Always pass `--url` with the value of `ADIUTOR_PUBLIC_URL`. Without it, the sync falls back to `ADIUTOR_URL` from the environment or an existing env file, which may still point at the development stack.
 - A connection ends for good when you disconnect it, turn agents off, leave it unused for the idle days, change the password, reset it with the recovery command, turn two-factor off, or change `ADIUTOR_PUBLIC_URL`. The agent then says it is disconnected; connect it again the same way (the sync: add `--replace`). When the sync has no connection, the morning message and the sync card say that it is disconnected and must be connected again. [agent-instruction.md](agent-instruction.md) has the instruction text for the agents.
 
@@ -170,7 +170,7 @@ The dry run runs on the development stack on your PC with real data. Move its da
 
 A `docker-compose-dev.yml` copied before these changes is refused: copy `docker/docker-compose-dev.example.yml` again, then `scripts/local.sh start`. `scripts/verify.sh` and `scripts/try-pr.sh` never read `.env.dev`. To check the bot without waiting for 08:00, use Settings, "Send a test morning message": it sends today's message now and does not change the 08:00 send.
 
-1. Pause the reconciler's T3 scheduled task.
+1. Do not run the sync (`adiutor-sync.js run`) until step 8.
 2. Stop the local application, and keep its database running. The local stack is the only consumer of the Telegram bot; two consumers would take each other's updates. In the Adiutor checkout in WSL:
 
    ```bash
@@ -200,7 +200,7 @@ A `docker-compose-dev.yml` copied before these changes is refused: copy `docker/
 
 6. Start production and check it (step 4).
 7. Sign in with your dry-run account and sign out everywhere (step 8, "After any restore"). Sign-in cookies belong to a host, so the browsers signed in on the PC are not signed in on the production host anyway. Use the dry run's `ADIUTOR_AUTH_SECRETS` and `ADIUTOR_SETTINGS_KEYS` in production's `.env` (or list them after new versions): otherwise the stored TOTP secret, the backup codes and the bot token cannot be read. The backup codes are encrypted with the same key, so they do not help then; see "Lost an auth secret" in step 8.
-8. Connect the sync to production (step 6): a connection belongs to the public URL it was approved under, so every connection of the dry run ended when production started under its own address. Resume the scheduled task and check its first run.
+8. Connect the sync to production (step 6): a connection belongs to the public URL it was approved under, so every connection of the dry run ended when production started under its own address. Then run the sync once and check its result.
 9. Connect the agents to production (step 6).
 10. Keep the local stack off: `scripts/local.sh down`. Before you ever start it again, remove the bot token in its Settings (or reset its database), so it never polls the real bot.
 11. Delete the dump: `rm -r ~/adiutor-move`.
