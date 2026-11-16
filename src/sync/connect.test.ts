@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -142,7 +143,7 @@ describe("the env file", () => {
     const dir = join(d.home, "adiutor")
     const file = join(dir, "sync.env")
     mkdirSync(dir, { recursive: true })
-    const old = `ADIUTOR_AGENT_TOKEN=adt_${"x".repeat(8)}${Date.now()}`
+    const old = `ADIUTOR_AGENT_TOKEN=adt_${randomBytes(32).toString("hex")}`
     writeFileSync(file, `${old}\n`, { mode: 0o600 })
     expect(await connect(options(file), d.deps)).toBe(0)
     expect(readFileSync(file, "utf8")).toBe(`${old}\nADIUTOR_URL=${fake.issuer}\n`)

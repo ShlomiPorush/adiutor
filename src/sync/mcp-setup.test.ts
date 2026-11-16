@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -264,7 +265,7 @@ describe("setup-mcp for Codex", () => {
     const d = deps({ codex: codex.run })
     const file = codexEnvFile(d.deps.env)
     mkdirSync(join(file, ".."), { recursive: true })
-    writeFileSync(file, `export ${CODEX_KEY_VARIABLE}='adt_${Date.now()}'\n`, { mode: 0o600 })
+    writeFileSync(file, `export ${CODEX_KEY_VARIABLE}='adt_${randomBytes(32).toString("hex")}'\n`, { mode: 0o600 })
     expect(await setupMcp(ISSUER, "codex", d.deps)).toBe(0)
     expect(existsSync(file)).toBe(false)
     expect(d.output()).toContain(`Remove the line . "${file}" from your shell profile`)
@@ -273,7 +274,7 @@ describe("setup-mcp for Codex", () => {
     const e = deps({ codex: again.run })
     const kept = codexEnvFile(e.deps.env)
     mkdirSync(join(kept, ".."), { recursive: true })
-    const text = `export ${CODEX_KEY_VARIABLE}='adt_${Date.now()}'\nexport OTHER=1\n`
+    const text = `export ${CODEX_KEY_VARIABLE}='adt_${randomBytes(32).toString("hex")}'\nexport OTHER=1\n`
     writeFileSync(kept, text, { mode: 0o600 })
     expect(await setupMcp(ISSUER, "codex", e.deps)).toBe(0)
     expect(readFileSync(kept, "utf8")).toBe(text)

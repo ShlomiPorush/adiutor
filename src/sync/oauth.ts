@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto"
 import {
   closeSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -402,7 +403,8 @@ export function syncClient(issuer: string, deps: ClientDeps) {
       return true
     }
     try {
-      renameSync(moved, lockFile)
+      // A link, not a rename: a newer lock already in its place wins.
+      linkSync(moved, lockFile)
     } catch {}
     rmSync(moved, { force: true })
     return false

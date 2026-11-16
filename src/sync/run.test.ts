@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -249,7 +250,7 @@ describe("runSync", () => {
 
 describe("the old agent key", () => {
   it("is reported once and never printed or sent, from the environment or the env file", async () => {
-    const old = `adt_${Date.now()}${"k".repeat(40)}`
+    const old = `adt_${randomBytes(32).toString("hex")}`
     const envFile = join(tempDir(), "sync.env")
     writeFileSync(envFile, `ADIUTOR_URL=${fake.issuer}\nADIUTOR_AGENT_TOKEN=${old}\n`)
     const { deps: d, output } = deps({}, { ADIUTOR_URL: "" })
@@ -260,7 +261,7 @@ describe("the old agent key", () => {
   })
 
   it("is never printed when the env file is broken, and never accepted on the command line", async () => {
-    const old = `adt_${Date.now()}${"k".repeat(40)}`
+    const old = `adt_${randomBytes(32).toString("hex")}`
     const envFile = join(tempDir(), "sync.env")
     writeFileSync(envFile, `ADIUTOR_URL=${fake.issuer}\n${old}\n`)
     const bad = deps()
