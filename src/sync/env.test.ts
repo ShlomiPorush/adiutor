@@ -47,41 +47,34 @@ describe("loadSyncConfig", () => {
     const config = loadSyncConfig(env, { ADIUTOR_URL: "https://adiutor.example.com/" }, { requireServer: true })
     expect(config).toEqual({
       url: "https://adiutor.example.com",
-      token,
       cliPath: "/usr/local/bin/t3",
       overviewDir: "/home/dev/overview",
+      oldToken: true,
     })
+    expect(JSON.stringify(config)).not.toContain(token)
   })
 
-  it("needs the URL and the token only when something is sent", () => {
+  it("needs the URL only when something is sent, and no token at all", () => {
     expect(loadSyncConfig({}, {}, { requireServer: false })).toEqual({
       url: undefined,
-      token: undefined,
       cliPath: undefined,
       overviewDir: undefined,
+      oldToken: false,
     })
-    expect(() => loadSyncConfig({}, {}, { requireServer: true })).toThrow(
-      "ADIUTOR_URL is required; ADIUTOR_AGENT_TOKEN is required",
+    expect(() => loadSyncConfig({}, {}, { requireServer: true })).toThrow("ADIUTOR_URL is required")
+    expect(loadSyncConfig({ ADIUTOR_URL: "https://adiutor.example.com" }, {}, { requireServer: true }).oldToken).toBe(
+      false,
     )
   })
 
-  it("refuses a short token without printing it", () => {
-    const short = "s".repeat(31)
-    try {
-      loadSyncConfig({ ...env, ADIUTOR_AGENT_TOKEN: short }, {}, { requireServer: true })
-      throw new Error("accepted")
-    } catch (error) {
-      expect((error as Error).message).toContain("at least 32 characters")
-      expect((error as Error).message).not.toContain(short)
-    }
-  })
-
-  it("refuses a URL that is not plain http or https", () => {
+  it("refuses a URL that is not Adiutor's address alone, https or http on this computer", () => {
     for (const url of [
       "ftp://adiutor.example.com",
       "not a url",
       "https://user:pw@adiutor.example.com",
       "https://x.example.com/?a=1",
+      "https://x.example.com/app",
+      "http://adiutor.example.com",
     ])
       expect(() => loadSyncConfig({ ...env, ADIUTOR_URL: url }, {}, { requireServer: true })).toThrow("ADIUTOR_URL")
   })

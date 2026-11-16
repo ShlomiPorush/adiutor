@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises"
 import { loadSyncConfig, parseEnvFile, redactor, type SyncConfig } from "./env.ts"
-import { lastLine, type Runner } from "./exec.ts"
-import { type FetchLike, type PostResult, postJson } from "./http.ts"
+import { lastLine, type Runner, systemCommand } from "./exec.ts"
+import type { FetchLike } from "./http.ts"
+import { type PushResult, type SyncClient, syncClient } from "./oauth.ts"
 import { resolveRepo } from "./repo.ts"
 import { readLatestSnapshot, type Snapshot, securityReports } from "./snapshot.ts"
 import { listThreads, parseProjectsFile, type ThreadRecord } from "./t3.ts"
@@ -26,6 +27,10 @@ export type Deps = {
   collectTimeoutMs?: number
   threadTimeoutMs?: number
   httpTimeoutMs?: number
+  /** For the connection (src/sync/oauth.ts); the process's own unless a test sets them. */
+  platform?: NodeJS.Platform
+  systemCommand?: (name: string) => Promise<string | undefined>
+  sleep?: (ms: number) => Promise<void>
 }
 
 export const EXIT_OK = 0
@@ -54,10 +59,21 @@ function compact(value: unknown, max = 2000): string {
   return text.length > max ? `${text.slice(0, max)}...` : text
 }
 
-function describeResult(name: string, result: PostResult): string {
-  if (result.error) return `${name}: not sent: ${result.error}`
+function describeResult(name: string, result: PushResult): string {
+  if (result.kind === "outcome_unknown")
+    return `${name}: outcome unknown${result.status ? ` (HTTP ${result.status})` : ""}: it may have reached Adiutor, and its answer was lost or failed. It is not sent again; the next run sends the whole state again.`
+  if (result.kind === "failed") return `${name}: not sent: ${result.code}: ${result.message}`
   const body = result.body === undefined ? "" : ` ${compact(result.body)}`
-  return result.ok ? `${name}: sent (HTTP ${result.status})${body}` : `${name}: refused (HTTP ${result.status})${body}`
+  return ok(result) ? `${name}: sent (HTTP ${result.status})${body}` : `${name}: refused (HTTP ${result.status})${body}`
+}
+
+const ok = (result: PushResult) => result.kind === "answer" && result.status >= 200 && result.status < 300
+
+/** The sync's connection ended or was never made: the output says so, and how to reconnect. */
+const DISCONNECTED = new Set(["connection_ended", "not_connected"])
+function disconnected(url: string, envFile: string | undefined): string {
+  const env = envFile ? ` --env "${envFile}"` : ""
+  return `The sync is disconnected from Adiutor; reconnect it: node adiutor-sync.js connect --name "<name>" --url "${url}"${env} --replace`
 }
 
 /**
@@ -86,6 +102,10 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
     say(`config: ${(error as Error).message}`)
     return EXIT_USAGE
   }
+  if (config.oldToken)
+    say(
+      "config: ADIUTOR_AGENT_TOKEN, the sync's old agent key, is set but no longer used: the sync uses the connection `connect` keeps. Delete that line, and the key in Settings, Agent access, if it is still listed.",
+    )
 
   // 1. The overview collector, then its newest snapshot (even when the collector failed).
   const overviewDir = options.overviewDir ?? config.overviewDir
@@ -206,21 +226,40 @@ export async function runSync(options: RunOptions, deps: Deps): Promise<number> 
     return canSendT3 || securityPayload ? EXIT_OK : EXIT_NOTHING_PUSHED
   }
 
-  // 5. Push: T3 first, then security.
+  // 5. Push: T3 first, then security, over the sync's connection (src/sync/oauth.ts).
   const url = config.url as string
-  const token = config.token as string
-  const timeout = deps.httpTimeoutMs ?? 60_000
+  let client: SyncClient
+  try {
+    client = syncClient(url, {
+      fetch: deps.fetch,
+      runner: deps.runner,
+      systemCommand: deps.systemCommand ?? ((name) => systemCommand(name, deps.env)),
+      platform: deps.platform ?? process.platform,
+      env: deps.env,
+      now: () => deps.now().getTime(),
+      sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+      ...(deps.httpTimeoutMs ? { httpTimeoutMs: deps.httpTimeoutMs } : {}),
+    })
+  } catch (error) {
+    say(`connection: ${(error as Error).message}`)
+    return EXIT_USAGE
+  }
   let pushed = 0
-  if (canSendT3) {
-    const result = await postJson(deps.fetch, url, "/api/v1/sync/t3", token, t3Payload, timeout)
-    say(describeResult("t3 sync", result))
-    if (result.ok) pushed += 1
-  } else say("t3 sync: not sent (no threads could be read)")
-  if (securityPayload) {
-    const result = await postJson(deps.fetch, url, "/api/v1/sync/security", token, securityPayload, timeout)
-    say(describeResult("security sync", result))
-    if (result.ok) pushed += 1
-  } else say("security sync: not sent (no snapshot data)")
+  let ended = false
+  const pushOne = async (name: string, path: string, payload: unknown) => {
+    if (ended) return say(`${name}: not sent (the sync is disconnected)`)
+    const result = await client.push(path, payload)
+    say(describeResult(name, result))
+    if (result.kind === "failed" && DISCONNECTED.has(result.code)) {
+      ended = true
+      say(disconnected(url, options.envFile))
+    }
+    if (ok(result)) pushed += 1
+  }
+  if (canSendT3) await pushOne("t3 sync", "/api/v1/sync/t3", t3Payload)
+  else say("t3 sync: not sent (no threads could be read)")
+  if (securityPayload) await pushOne("security sync", "/api/v1/sync/security", securityPayload)
+  else say("security sync: not sent (no snapshot data)")
 
   return pushed > 0 ? EXIT_OK : EXIT_NOTHING_PUSHED
 }

@@ -1,6 +1,6 @@
 // Settings against the real server, in the browser auth.spec.ts stored: the sections and their addresses (a deep
 // link, a reload, an unknown section, the browser title), the one draft across sections with Back and Forward and one
-// Discard, a refused field in a hidden section, how agents connect (connect.spec.ts runs it), Changed and Reset to
+// Discard, a refused field in a hidden section, how agents connect, Changed and Reset to
 // default, the password changed and changed back in its dialog without leaving the page, the dialog's own checks and
 // its question before it drops what was typed, the browsers list, and Telegram off: its fields editable when no
 // environment variable sets them, the test and the sign-in codes locked areas. Stores the browser again at the end: a
