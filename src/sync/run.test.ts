@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -481,6 +481,56 @@ describe("run", () => {
     const { exit, result } = await json(["run", "--projects", "x.json"], d, lines)
     expect(exit).toBe(2)
     expect(result).toMatchObject({ command: null, ok: false, error: { code: "usage" } })
+  })
+})
+
+describe("a run for a request from Adiutor", () => {
+  /** connect --replace in this home folder, the owner approving at once. */
+  async function reconnect() {
+    const client = syncClient(fake.issuer, {
+      fetch: (input: string, init: RequestInit) => fetch(input, init),
+      runner: (async () => ({ code: 1, stdout: "", stderr: "" })) as Runner,
+      systemCommand: async () => undefined,
+      platform: "linux",
+      env: { HOME: home, XDG_CONFIG_HOME: join(home, ".config") },
+      now: () => Date.now(),
+      sleep: async () => {
+        fake.approve()
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      },
+    })
+    await client.waitForApproval(await client.deviceCode("Test sync"), "Test sync")
+  }
+
+  afterEach(() => {
+    Object.assign(fake, { claim: null, checkins: [] })
+  })
+
+  it("sends nothing more when the sync connected again during the run, and ends with connection_changed", async () => {
+    const requestId = randomUUID()
+    fake.claim = requestId
+    const report = { version: "0.3.0", paused: false, pausedUntil: null, nextRunAt: null, running: null, finished: [] }
+    const checkin = deps({ stdin: async () => JSON.stringify(report) })
+    expect((await json(["checkin"], checkin.deps, checkin.lines)).result.ok).toBe(true)
+    fake.claim = null
+    // The connection is replaced while the collector runs.
+    const run: Runner = async (command, args, opts) => {
+      if (command === NODE) {
+        await reconnect()
+        return { code: 0, stdout: '{"runId":"20261101T060000Z"}\n', stderr: "" }
+      }
+      return t3.runner(command, args, opts)
+    }
+    const d = deps({ runner: run })
+    const { result } = await json(["run", "--request", requestId], d.deps, d.lines)
+    expect([result.ok, (result.error as { code: string }).code]).toEqual([false, "connection_changed"])
+    const report_ = reportOf(result)
+    expect([report_.requestId, report_.t3.reason, report_.security.reason]).toEqual([
+      requestId,
+      "connection_changed",
+      "connection_changed",
+    ])
+    expect(fake.pushes).toHaveLength(0)
   })
 })
 

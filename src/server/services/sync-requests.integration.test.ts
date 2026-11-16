@@ -276,6 +276,47 @@ describe("the check-in", () => {
     expect([(await row(first.id)).state, (await row(second.id)).state]).toEqual(["done", "done"])
   })
 
+  it("never deadlocks when one check-in finishes a request while another expires the claim the first renews", async () => {
+    const computer = randomUUID()
+    // A: claimed, then unknown once its lease passed. B: claimed after it, its lease ending in 10 minutes.
+    const a = (await requestSync(t.ctx, owner)).request
+    await checkIn(t.ctx, computer, report())
+    t.clock.travel(SYNC_LEASE_MS + MINUTE)
+    const b = (await requestSync(t.ctx, owner)).request
+    await checkIn(t.ctx, computer, report())
+    const base = t.ctx.clock().getTime()
+    const at = (ms: number) => ({ ...t.ctx, clock: () => new Date(base + ms) })
+    const result = { t3: "accepted" as const, security: "accepted" as const }
+    const finishedA = { finished: [{ requestId: a.id, result }] }
+    // Call 1, before B's lease ends: finishes A, then stops before it renews B.
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let reached = () => {}
+    const atSeam = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    const first = checkIn(
+      at(SYNC_LEASE_MS - MINUTE),
+      computer,
+      report({ ...finishedA, running: { kind: "request", requestId: b.id } }),
+      {
+        afterFinished: async () => {
+          reached()
+          await held
+        },
+      },
+    )
+    await atSeam
+    // Call 2, after B's lease ended: expires B, and reports A finished too.
+    const second = checkIn(at(SYNC_LEASE_MS + MINUTE), computer, report(finishedA))
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    release()
+    await Promise.all([first, second])
+    expect((await row(a.id)).state).toBe("done")
+  })
+
   it("makes a claim whose lease passed unknown, and still takes its late result", async () => {
     const computer = randomUUID()
     const { request } = await requestSync(t.ctx, owner)

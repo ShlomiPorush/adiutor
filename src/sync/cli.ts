@@ -79,6 +79,8 @@ export type MainDeps = Deps &
   Partial<Pick<ConnectDeps, "sleep" | "platform" | "findCommand" | "systemCommand">> & {
     /** The whole of stdin, for `checkin`'s report; the process's own unless a test gives it. */
     stdin?: () => Promise<string>
+    /** Test seam of `checkin`: runs under the connection's lock, right before the claim is kept. */
+    checkinBeforeSave?: () => Promise<void>
   }
 
 const COMMANDS: readonly string[] = [
@@ -176,9 +178,11 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
       case "run": {
         if (values.request !== undefined && !isRequestId(values.request)) return usage(out, "--request must be an id")
         // Only the claim kept for the connection and address of now: Adiutor takes a result from that connection alone.
+        let connection: string | null = null
         if (values.request !== undefined) {
           const all = connectDeps(deps)
           const identity = settings.url ? await syncClient(settings.url, all).identity() : null
+          connection = identity
           const claim = readClaim(dataDir(all.platform, deps.env), identity)
           if (claim?.requestId !== values.request.toLowerCase()) {
             const message =
@@ -195,6 +199,7 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
             settings,
             oldToken: resolved.oldTokenValue !== undefined,
             ...(values.request ? { requestId: values.request.toLowerCase() } : {}),
+            ...(connection ? { connection } : {}),
           },
           deps,
           out,
@@ -503,12 +508,13 @@ async function checkinCommand(settings: Resolved, deps: MainDeps, out: Output): 
   await client.retryRevocations().catch(() => true)
   let round: Awaited<ReturnType<typeof checkinRound>>
   try {
-    round = await checkinRound(data, client, report, {
-      platform: all.platform,
-      env: deps.env,
-      now: all.now,
-      sleep: all.sleep,
-    })
+    round = await checkinRound(
+      data,
+      client,
+      report,
+      { platform: all.platform, env: deps.env, now: all.now, sleep: all.sleep },
+      deps.checkinBeforeSave,
+    )
   } catch (error) {
     return fail(failure(error), EXIT_NOTHING_PUSHED, readClaim(data, await client.identity().catch(() => null)))
   }

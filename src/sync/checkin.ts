@@ -140,6 +140,8 @@ export async function checkinRound(
   client: SyncClient,
   report: CheckinReport,
   deps: LockDeps,
+  /** Test seam: runs under the connection's lock, right before the claim is kept. */
+  beforeSave?: () => Promise<void>,
 ): Promise<{ sent: CheckinOutcome; claim: CheckinClaim | null; identity: string | null }> {
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const file = join(dir, CHECKIN_LOCK)
@@ -148,13 +150,17 @@ export async function checkinRound(
   return lock.withLock(options, async () => {
     const identity = await client.identity()
     const sent = await sendCheckin(client, report)
-    // The connection may have changed while the answer was on its way (connect --replace takes another lock): an
-    // answer for a connection that is no longer the kept one is dropped, and its claim never kept or answered.
-    const now = await client.identity()
-    if (sent.ok && (identity === null || now !== identity))
-      return { sent: CONNECTION_CHANGED, claim: readClaim(dir, now), identity: now }
-    if (!sent.ok || identity === null) return { sent, claim: readClaim(dir, identity), identity }
-    return { sent, claim: await keepClaim(dir, identity, report, sent.claim, deps), identity }
+    // From the identity check to the claim kept and answered, under the connection's lock, which connect --replace
+    // and disconnect take to change the connection: an answer for a connection that is no longer the kept one is
+    // dropped, and a claim is kept and answered only while its connection is the kept one.
+    return client.whileConnected(async () => {
+      const now = await client.identity()
+      if (sent.ok && (identity === null || now !== identity))
+        return { sent: CONNECTION_CHANGED, claim: readClaim(dir, now), identity: now }
+      if (!sent.ok || identity === null) return { sent, claim: readClaim(dir, identity), identity }
+      await beforeSave?.()
+      return { sent, claim: await keepClaim(dir, identity, report, sent.claim, deps), identity }
+    })
   })
 }
 

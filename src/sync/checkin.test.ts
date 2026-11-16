@@ -212,6 +212,27 @@ describe("checkin --json", () => {
     expect((await json(["status"])).result.claim).toBeNull()
   })
 
+  it("keeps and answers a claim only while its connection is the kept one: a replace waits for the save", async () => {
+    fake.claim = randomUUID()
+    let replaced = false
+    let replacing: Promise<void> = Promise.resolve()
+    const { deps: d, lines } = deps(JSON.stringify(REPORT))
+    // A replace that starts while the claim is being kept, under the connection's lock.
+    d.checkinBeforeSave = async () => {
+      replacing = connectSync().then(() => {
+        replaced = true
+      })
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+    expect(await main(["checkin", "--json"], d)).toBe(0)
+    const result = JSON.parse(lines.at(-1) ?? "{}")
+    expect(result).toMatchObject({ ok: true, claim: { requestId: fake.claim } })
+    // The replace waited for the claim to be kept and answered; once it lands, the new connection never sees it.
+    expect(replaced).toBe(false)
+    await replacing
+    expect((await json(["status"])).result.claim).toBeNull()
+  })
+
   it("keeps the next claim when the answer to a finished report hands one", async () => {
     const [first, next] = [randomUUID(), randomUUID()]
     fake.claim = first

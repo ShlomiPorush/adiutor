@@ -1,10 +1,10 @@
-import { and, asc, desc, eq, inArray, lt } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm"
 import type { SyncCheckin } from "../../shared/api.ts"
 import type { SyncRequestState } from "../../shared/enums.ts"
 import { type SyncRequestResult, type SyncRunning, syncClient, syncRequests, syncRuns } from "../db/schema.ts"
 import { AppError, notFound } from "../errors.ts"
 import { syncConnected } from "../oauth/sync-status.ts"
-import { type By, type Ctx, inTx, requireOwner, type Tx, writeAudit } from "./context.ts"
+import { type By, type Ctx, requireOwner, type Tx, writeAudit } from "./context.ts"
 
 /*
  * Syncs the owner asks for from Adiutor ("Sync now"), and the check-in of the sync on the owner's computer (the sync
@@ -21,6 +21,20 @@ export const SYNC_SILENT_AFTER_MS = 3 * SYNC_CHECKIN_EVERY_MS
 
 export type SyncRequestRow = typeof syncRequests.$inferSelect
 export type SyncClientRow = typeof syncClient.$inferSelect
+
+/**
+ * One transaction-level advisory lock, taken as the first statement of every transaction that changes sync_requests or
+ * sync_client (Sync now, Cancel, the check-in, and the lease expiry inside each): they run one at a time, so no order
+ * of row locks among them can deadlock (as the link structure lock does for thread links, services/context.ts).
+ */
+export const SYNC_REQUESTS_LOCK_KEY = 0x73796e63
+
+function inRequestsTx<T>(ctx: Ctx, run: (tx: Tx) => Promise<T>): Promise<T> {
+  return ctx.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(SYNC_REQUESTS_LOCK_KEY))})`)
+    return run(tx)
+  })
+}
 
 /** The states a request can still leave: at most one request is in one of them (sync_requests_one_open_idx). */
 const OPEN: SyncRequestState[] = ["waiting", "claimed"]
@@ -61,7 +75,7 @@ export function requestView(ctx: Ctx, row: SyncRequestRow) {
  */
 export async function requestSync(ctx: Ctx, by: By) {
   requireOwner(by, "ask for a sync")
-  return inTx(ctx, async (tx) => {
+  return inRequestsTx(ctx, async (tx) => {
     await expireLeases(ctx, tx)
     const [created] = await tx
       .insert(syncRequests)
@@ -86,7 +100,7 @@ export async function requestSync(ctx: Ctx, by: By) {
 /** Cancels a request that still waits for the computer; one it claimed runs to its end. */
 export async function cancelSyncRequest(ctx: Ctx, by: By, id: string) {
   requireOwner(by, "cancel a sync")
-  return inTx(ctx, async (tx) => {
+  return inRequestsTx(ctx, async (tx) => {
     await expireLeases(ctx, tx)
     const [cancelled] = await tx
       .update(syncRequests)
@@ -121,18 +135,17 @@ const pausedNow = (ctx: Ctx, report: Pick<SyncCheckin, "paused" | "pausedUntil">
  * claims whose lease passed become `unknown`; each finished request this connection claimed takes its result
  * (`claimed` or `unknown` only: the final states ignore later reports); the reported running request's lease is
  * renewed; the answer is the claim this connection holds and has not finished, or else, when the computer is not paused
- * and nothing runs, the oldest waiting request, claimed atomically; and last the client's state is recorded. One lock
- * order everywhere: request rows first (as Sync now and Cancel, which never touch `sync_client`), `sync_client` last,
- * so two check-ins at once, one of them expiring a lease, never wait on each other in a circle. `beforeClientState`
- * is a test seam: it runs once the request rows are written.
+ * and nothing runs, the oldest waiting request, claimed atomically; and last the client's state is recorded. Under the
+ * sync requests lock (inRequestsTx), so check-ins, Sync now and Cancel run one at a time. `afterFinished` and
+ * `beforeClientState` are test seams: they run once the finished requests, and once all request rows, are written.
  */
 export async function checkIn(
   ctx: Ctx,
   connectionId: string,
   report: SyncCheckin,
-  hooks: { beforeClientState?: () => Promise<void> } = {},
+  hooks: { afterFinished?: () => Promise<void>; beforeClientState?: () => Promise<void> } = {},
 ) {
-  return inTx(ctx, async (tx) => {
+  return inRequestsTx(ctx, async (tx) => {
     const now = ctx.clock()
     const leaseUntil = new Date(now.getTime() + SYNC_LEASE_MS)
     await expireLeases(ctx, tx)
@@ -161,6 +174,7 @@ export async function checkIn(
         )
     }
 
+    await hooks.afterFinished?.()
     if (running?.kind === "request")
       await tx
         .update(syncRequests)

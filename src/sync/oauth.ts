@@ -535,7 +535,25 @@ export function syncClient(issuer: string, deps: ClientDeps) {
    * challenge (refresh, once), 429 busy (wait, once), 409 policy_changed (the list again, once). A push that may have
    * reached Adiutor and lost its answer, or that Adiutor failed (5xx), is outcome_unknown and never sent again.
    */
-  async function push(path: string, payload: unknown): Promise<PushResult> {
+  async function push(path: string, payload: unknown, bind: { connection?: string } = {}): Promise<PushResult> {
+    /**
+     * A push bound to a connection (`run --request`): the token it sends must be that connection's, read under the
+     * connection's lock, which connect --replace and disconnect take too. A token of a newer connection is never sent
+     * for a run that began under another; the old connection's token works only for the old connection.
+     */
+    const boundTo = async (token: string) =>
+      bind.connection === undefined ||
+      withLock(async () => {
+        const rec = await readRecord()
+        return Boolean(
+          rec && !rec.endedAt && rec.accessToken === token && `${issuer}#${rec.connection}` === bind.connection,
+        )
+      })
+    const changed: PushResult = {
+      kind: "failed",
+      code: "connection_changed",
+      message: "The sync connected again during this run, so nothing more is sent for the request it began with.",
+    }
     try {
       let { list, kind } = await kindFor("POST", path)
       if (!kind)
@@ -549,6 +567,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
       let policyRetried = false
       let refreshed = false
       let token = await accessToken()
+      if (!(await boundTo(token))) return changed
       for (;;) {
         let a: Answer
         try {
@@ -567,6 +586,7 @@ export function syncClient(issuer: string, deps: ClientDeps) {
         if (!refreshed && a.status === 401 && a.challenge.includes('error="invalid_token"')) {
           refreshed = true
           token = await accessToken(token)
+          if (!(await boundTo(token))) return changed
           continue
         }
         if (!busyRetried && a.status === 429 && topText(a, "error") === "busy") {
@@ -755,11 +775,15 @@ export function syncClient(issuer: string, deps: ClientDeps) {
     }
   }
 
+  /** Runs `fn` under the connection's lock, which connect --replace and disconnect take to change the connection. */
+  const whileConnected = <T>(fn: () => Promise<T>) => withLock(async () => fn())
+
   return {
     dir,
     file,
     status,
     identity,
+    whileConnected,
     prepare,
     deviceCode,
     waitForApproval,
