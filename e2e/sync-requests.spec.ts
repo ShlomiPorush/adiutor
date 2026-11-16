@@ -65,7 +65,10 @@ const REPORT = {
 
 /** One check-in as the tray makes it; the claim Adiutor answered. */
 async function checkIn(report: Record<string, unknown> = {}): Promise<string | null> {
-  const { code, output } = await sync(["checkin", "--url", BASE_URL, "--json"], JSON.stringify({ ...REPORT, ...report }))
+  const { code, output } = await sync(
+    ["checkin", "--url", BASE_URL, "--json"],
+    JSON.stringify({ ...REPORT, ...report }),
+  )
   expect(code, output).toBe(0)
   const result = JSON.parse(output.trim().split("\n").at(-1) ?? "{}")
   return result.claim?.requestId ?? null

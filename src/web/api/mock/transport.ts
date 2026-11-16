@@ -781,22 +781,38 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
   return fail(404, "not_found", "Nothing is here.")
 }
 
-/** Sync now over a computer that checked in a minute ago: a request waits until the owner cancels it. */
+/**
+ * Sync now over a computer that checked in a minute ago: a request waits until the owner cancels it. For screenshots,
+ * `adiutor.mock.sync` in localStorage set to "none" has no computer that ever checked in, and "silent" a paused
+ * computer that has not checked in for ten minutes.
+ */
 let syncRequest: SyncRequest | null = null
+function mockSyncClient(): "none" | "silent" | null {
+  try {
+    const value = localStorage.getItem("adiutor.mock.sync")
+    return value === "none" || value === "silent" ? value : null
+  } catch {
+    return null
+  }
+}
 function syncRequestsRoute(method: string, requestId: string | undefined): TransportResponse {
+  const mode = mockSyncClient()
   if (method === "GET")
     return ok({
       request: syncRequest,
-      client: {
-        lastCheckinAt: ago(1 / 60),
-        version: "0.3.0",
-        paused: false,
-        pausedUntil: null,
-        nextRunAt: ago(-3),
-        running: null,
-        silent: false,
-      },
-      unavailable: null,
+      client:
+        mode === "none"
+          ? null
+          : {
+              lastCheckinAt: ago(mode === "silent" ? 1 / 6 : 1 / 60),
+              version: "0.3.0",
+              paused: mode === "silent",
+              pausedUntil: mode === "silent" ? ago(-2) : null,
+              nextRunAt: ago(-3),
+              running: null,
+              silent: mode === "silent",
+            },
+      unavailable: mode === "none" ? "no_client" : null,
     })
   if (method === "POST") {
     if (syncRequest?.state === "waiting") return ok({ request: syncRequest, created: false })
