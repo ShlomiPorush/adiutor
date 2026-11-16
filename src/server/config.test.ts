@@ -6,11 +6,13 @@ import { testBotToken, testSecret } from "./testing/secrets.ts"
 // Every value the loader accepts is new on each run; only refused values are literal.
 const authSecret = testSecret()
 const settingsKey = testSecret()
+const oauthKey = testSecret()
 const valid = {
   DATABASE_URL: `postgres://adiutor:${randomBytes(16).toString("hex")}@db.example.com:5432/adiutor`,
   ADIUTOR_PUBLIC_URL: "https://adiutor.example.com",
   ADIUTOR_AUTH_SECRETS: `1:${authSecret}`,
   ADIUTOR_SETTINGS_KEYS: `1:${settingsKey}`,
+  ADIUTOR_OAUTH_SECRETS: `1:${oauthKey}`,
 }
 
 function refusal(env: Record<string, string | undefined>): string {
@@ -29,22 +31,26 @@ describe("loadConfig", () => {
     expect(config.port).toBe(8080)
     expect(config.migrationsDir).toBe("drizzle")
     expect(config.publicUrl.origin).toBe("https://adiutor.example.com")
+    expect(config.publicUrlText).toBe("https://adiutor.example.com")
     expect(config.authSecrets).toEqual([{ version: 1, value: authSecret }])
     expect(config.settingsKeys).toEqual([{ version: 1, value: settingsKey }])
-    expect(config.oauthSecrets).toBeNull()
+    expect(config.oauthSecrets).toEqual([{ version: 1, value: oauthKey }])
     expect(config.trustedProxies).toEqual([])
     expect(config.telegramApiUrl).toBe("https://api.telegram.org")
     expect(config.overrides).toEqual({})
     expect(config.warnings).toEqual([])
   })
 
-  it.each(["DATABASE_URL", "ADIUTOR_PUBLIC_URL", "ADIUTOR_AUTH_SECRETS", "ADIUTOR_SETTINGS_KEYS"])(
-    "refuses without %s",
-    (name) => {
-      expect(refusal({ ...valid, [name]: undefined })).toContain(`${name} is required`)
-      expect(refusal({ ...valid, [name]: "" })).toContain(`${name} is required`)
-    },
-  )
+  it.each([
+    "DATABASE_URL",
+    "ADIUTOR_PUBLIC_URL",
+    "ADIUTOR_AUTH_SECRETS",
+    "ADIUTOR_SETTINGS_KEYS",
+    "ADIUTOR_OAUTH_SECRETS",
+  ])("refuses without %s", (name) => {
+    expect(refusal({ ...valid, [name]: undefined })).toContain(`${name} is required`)
+    expect(refusal({ ...valid, [name]: "" })).toContain(`${name} is required`)
+  })
 
   it("reads versioned keys, newest first, and refuses a bad entry, a repeated version or a short key unprinted", () => {
     const older = testSecret()
@@ -73,12 +79,19 @@ describe("loadConfig", () => {
     ).toContain("ADIUTOR_SETTINGS_KEYS must differ from every auth secret")
   })
 
-  describe("ADIUTOR_OAUTH_SECRETS, optional until the release that switches agents to it", () => {
+  describe("ADIUTOR_OAUTH_SECRETS, required: the authorization server for agents", () => {
     const oauthSecret = testSecret()
 
-    it("is absent when unset, empty or blank", () => {
-      for (const value of [undefined, "", "  "])
-        expect(loadConfig({ ...valid, ADIUTOR_OAUTH_SECRETS: value }).oauthSecrets).toBeNull()
+    it("refuses a blank value", () => {
+      expect(refusal({ ...valid, ADIUTOR_OAUTH_SECRETS: "  " })).toContain(
+        "ADIUTOR_OAUTH_SECRETS entry 1 must look like <version>:<secret>",
+      )
+    })
+
+    it("keeps ADIUTOR_PUBLIC_URL as written beside the parsed URL", () => {
+      const config = loadConfig({ ...valid, ADIUTOR_PUBLIC_URL: "https://Adiutor.example.com/" })
+      expect(config.publicUrl.origin).toBe("https://adiutor.example.com")
+      expect(config.publicUrlText).toBe("https://Adiutor.example.com/")
     })
 
     it("reads versioned keys, newest first", () => {

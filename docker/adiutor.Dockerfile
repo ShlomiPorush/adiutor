@@ -24,6 +24,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=build /src/dist ./dist
 COPY drizzle ./drizzle
+# The agent skill, served at /agents/skill/ with the public URL and its version filled in (oauth/skill.ts).
+COPY skill/adiutor ./skill/adiutor
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 CMD ["node", "dist/server/healthcheck.js"]
