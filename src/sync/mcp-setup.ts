@@ -128,6 +128,8 @@ type CodexEntry = {
     bearer_token_env_var?: unknown
     http_headers?: unknown
     env_http_headers?: unknown
+    http_headers_helper?: unknown
+    env_vars?: unknown
   }
   auth_status?: unknown
 }
@@ -150,12 +152,28 @@ const hasAuthorization = (headers: unknown) =>
   typeof headers === "object" &&
   Object.keys(headers as object).some((k) => k.toLowerCase() === "authorization")
 
-/** Whether an entry still reads the old key's variable. */
-const usesKeyVariable = (e: CodexEntry) =>
-  e.transport?.bearer_token_env_var === CODEX_KEY_VARIABLE ||
-  (e.transport?.env_http_headers !== null &&
-    typeof e.transport?.env_http_headers === "object" &&
-    Object.values(e.transport.env_http_headers as object).includes(CODEX_KEY_VARIABLE))
+/**
+ * Whether an entry may still read the old key's variable, by every field of `codex mcp list --json` (Codex 0.169.0,
+ * mcp_cmd.rs) that can name one: `bearer_token_env_var` and `env_http_headers` (streamable HTTP), `env_vars` (stdio:
+ * a name, or `{name, source}`), and `http_headers_helper`, a command the list shows only as `<redacted>`, so an entry
+ * with one is counted as reading it.
+ */
+const usesKeyVariable = (e: CodexEntry) => {
+  const t = e.transport
+  const envVars = Array.isArray(t?.env_vars) ? (t.env_vars as unknown[]) : []
+  return (
+    t?.bearer_token_env_var === CODEX_KEY_VARIABLE ||
+    (t?.env_http_headers !== null &&
+      typeof t?.env_http_headers === "object" &&
+      Object.values(t.env_http_headers as object).includes(CODEX_KEY_VARIABLE)) ||
+    envVars.some(
+      (v) =>
+        v === CODEX_KEY_VARIABLE ||
+        (v !== null && typeof v === "object" && (v as { name?: unknown }).name === CODEX_KEY_VARIABLE),
+    ) ||
+    (t?.http_headers_helper !== null && t?.http_headers_helper !== undefined)
+  )
+}
 
 async function setupCodex(issuer: string, deps: McpSetupDeps): Promise<number> {
   const say = deps.out

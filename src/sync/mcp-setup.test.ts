@@ -64,8 +64,8 @@ function fakeClaude(state: { user?: ClaudeEntry; local?: ClaudeEntry; project?: 
 
 type CodexEntry = {
   transport:
-    | { type: "streamable_http"; url: string; bearer_token_env_var: string | null }
-    | { type: "stdio"; command: string }
+    | { type: "streamable_http"; url: string; bearer_token_env_var: string | null; http_headers_helper?: string }
+    | { type: "stdio"; command: string; env_vars?: unknown[] }
   signedIn: boolean
 }
 /** Codex as `codex mcp` answered in a disposable CODEX_HOME; `server` is how Adiutor's address answers it. */
@@ -90,14 +90,22 @@ function fakeCodex(entries: Record<string, CodexEntry>, server: "oauth" | "unrea
         disabled_reason: null,
         transport:
           e.transport.type === "stdio"
-            ? { type: "stdio", command: e.transport.command, args: [], env: null, env_vars: [], cwd: null }
+            ? {
+                type: "stdio",
+                command: e.transport.command,
+                args: [],
+                env: null,
+                env_vars: e.transport.env_vars ?? [],
+                cwd: null,
+              }
             : {
                 type: "streamable_http",
                 url: e.transport.url,
                 bearer_token_env_var: e.transport.bearer_token_env_var,
                 http_headers: null,
                 env_http_headers: null,
-                http_headers_helper: null,
+                // Codex shows a helper command only as "<redacted>".
+                http_headers_helper: e.transport.http_headers_helper ? "<redacted>" : null,
               },
         startup_timeout_sec: null,
         tool_timeout_sec: null,
@@ -288,6 +296,33 @@ describe("setup-mcp for Codex", () => {
     expect(reg.values).toEqual({ [CODEX_KEY_VARIABLE]: "old" })
     expect(d.output()).toContain("Codex's work entry still reads it")
     expect(codex.entries.work).toEqual(oldCodexEntry())
+  })
+
+  it("keeps ADIUTOR_AGENT_KEY while a stdio entry passes it on or an entry runs a headers helper", async () => {
+    // Codex 0.169.0 lists a stdio entry's env_vars as names or {name, source}, and a helper only as "<redacted>".
+    for (const other of [
+      { transport: { type: "stdio", command: "node", env_vars: [CODEX_KEY_VARIABLE] }, signedIn: false },
+      {
+        transport: { type: "stdio", command: "node", env_vars: [{ name: CODEX_KEY_VARIABLE, source: "local" }] },
+        signedIn: false,
+      },
+      {
+        transport: {
+          type: "streamable_http",
+          url: "https://tools.example.com/mcp",
+          bearer_token_env_var: null,
+          http_headers_helper: "get-headers",
+        },
+        signedIn: true,
+      },
+    ] as CodexEntry[]) {
+      const codex = fakeCodex({ adiutor: oldCodexEntry(), work: other })
+      const reg = fakeRegistry({ [CODEX_KEY_VARIABLE]: "old" })
+      const d = deps({ codex: codex.run, reg: reg.run }, "win32")
+      expect(await setupMcp(ISSUER, "codex", d.deps)).toBe(0)
+      expect(reg.values).toEqual({ [CODEX_KEY_VARIABLE]: "old" })
+      expect(d.output()).toContain("Codex's work entry still reads it")
+    }
   })
 
   it("changes nothing for an entry that is signed in already: no approval", async () => {
