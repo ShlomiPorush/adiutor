@@ -274,7 +274,7 @@ public sealed class SyncLoop
      * tray or the command line, while an update is checked, downloaded or installed. Null when a run holds it (or the
      * engine cannot). The holding engine is in the tray's job: if the tray ends, it ends, and its lock is taken over.
      */
-    public async Task<IAsyncDisposable?> HoldRunLockAsync(CancellationToken cancellationToken)
+    public async Task<RunLockLease?> HoldRunLockAsync(CancellationToken cancellationToken)
     {
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -288,14 +288,14 @@ public sealed class SyncLoop
             return null;
         lock (_gate)
             _runLockHeld = true;
-        return new AsyncRelease(async () =>
+        // However it ends (released, or hold-run ended early), the tray no longer holds the lock.
+        _ = holding.ContinueWith(_ =>
         {
-            release.TrySetResult();
-            await holding.ConfigureAwait(false);
             lock (_gate)
                 _runLockHeld = false;
             Wake();
-        });
+        }, TaskScheduler.Default);
+        return new RunLockLease(holding, release);
     }
 
     /** Longer than an update's check, download and install may take; the lock is released before. */
@@ -847,13 +847,6 @@ public sealed class SyncLoop
         a is null ? b : b is null ? a : a > b ? a : b;
 
     private static DateTimeOffset Max(DateTimeOffset a, DateTimeOffset b) => a > b ? a : b;
-
-    private sealed class AsyncRelease(Func<Task> action) : IAsyncDisposable
-    {
-        private Func<Task>? _action = action;
-
-        public ValueTask DisposeAsync() => Interlocked.Exchange(ref _action, null) is { } act ? new ValueTask(act()) : ValueTask.CompletedTask;
-    }
 
     private sealed class Release(Action action) : IDisposable
     {

@@ -72,7 +72,8 @@ public sealed class UpdateCoordinator(SyncLoop loop, IAppUpdater updater, TimePr
         if (runLock is null)
             return RetryWhenBusy;
         using var limit = new CancellationTokenSource(HoldLimit, time);
-        using var both = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, limit.Token);
+        // The check and the download stop when the lock is lost (hold-run ended early).
+        using var both = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, limit.Token, runLock.Lost);
         try
         {
             var update = await updater.CheckAsync(both.Token).ConfigureAwait(false);
@@ -86,6 +87,11 @@ public sealed class UpdateCoordinator(SyncLoop loop, IAppUpdater updater, TimePr
             loop.SetUpdateReady(true);
             log.Info("updates: downloaded");
             return TimeSpan.Zero;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && !runLock.Holds)
+        {
+            log.Info("updates: stopped, the run lock was lost");
+            return RetryWhenBusy;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -115,7 +121,7 @@ public sealed class UpdateCoordinator(SyncLoop loop, IAppUpdater updater, TimePr
         if (hold is null)
             return false;
         await using var runLock = await loop.HoldRunLockAsync(cancellationToken).ConfigureAwait(false);
-        if (runLock is null)
+        if (runLock is null || !runLock.Holds)
             return false;
         log.Info("updates: installing");
         try

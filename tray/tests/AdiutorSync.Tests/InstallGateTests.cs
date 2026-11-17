@@ -105,6 +105,37 @@ public class InstallGateTests
     }
 
     [Fact]
+    public async Task A_run_lock_lost_during_the_download_stops_it()
+    {
+        using var h = new Harness();
+        await h.Tick();
+        var updater = new FakeUpdater { DownloadGate = new TaskCompletionSource() };
+        var updates = new UpdateCoordinator(h.Loop, updater, h.Time, NoLog.Instance);
+        h.Engine.RunLockEnds = new TaskCompletionSource();
+        var download = updates.CheckAndDownloadAsync(CancellationToken.None);
+        await WaitFor(() => updater.Downloads == 1);
+        // hold-run ends on its own: the tray no longer holds the lock.
+        h.Engine.RunLockEnds.SetResult();
+        Assert.Equal(UpdateCoordinator.RetryWhenBusy, await download.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.False(h.Loop.Snapshot.UpdateReady);
+    }
+
+    [Fact]
+    public async Task No_install_without_the_run_lock_still_held()
+    {
+        using var h = new Harness();
+        await h.Tick();
+        var updater = new FakeUpdater();
+        var updates = new UpdateCoordinator(h.Loop, updater, h.Time, NoLog.Instance);
+        await updates.CheckAndDownloadAsync(CancellationToken.None);
+        // hold-run says it holds the lock, then ends at once.
+        h.Engine.RunLockEnds = new TaskCompletionSource();
+        h.Engine.RunLockEnds.SetResult();
+        Assert.False(await updates.TryApplyAsync(CancellationToken.None));
+        Assert.Empty(updater.Applied);
+    }
+
+    [Fact]
     public async Task While_an_install_holds_everything_the_loop_waits_instead_of_spinning()
     {
         using var h = new Harness();

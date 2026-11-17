@@ -121,6 +121,9 @@ public sealed class FakeEngine : IEngine
     /** When true, `hold-run` answers busy: a run holds the engine's run lock. */
     public bool RunLockBusy { get; set; }
 
+    /** When set, `hold-run` ends on its own once it completes (it crashed), whatever the tray asked. */
+    public TaskCompletionSource? RunLockEnds { get; set; }
+
     /** How many `hold-run` commands hold the run lock now. */
     public int RunLockHolders => Volatile.Read(ref _holders);
 
@@ -154,7 +157,12 @@ public sealed class FakeEngine : IEngine
                     try
                     {
                         if (command.InputOpenUntil is { } until)
-                            await until.WaitAsync(cancellationToken);
+                        {
+                            if (RunLockEnds is { } ends)
+                                await Task.WhenAny(until, ends.Task);
+                            else
+                                await until.WaitAsync(cancellationToken);
+                        }
                     }
                     finally
                     {
