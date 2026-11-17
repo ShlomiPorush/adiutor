@@ -166,7 +166,7 @@ public sealed class NodeEngine(EngineLocation location, EngineJob job, ITrayLog 
     }
 
     /** An error code as the log may hold it: the engine's codes are short words; anything else is not written. */
-    internal static string SafeCode(string code) =>
+    public static string SafeCode(string code) =>
         code.Length is > 0 and <= 40 && code.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_') ? code : "other";
 
     private static void Kill(Process process)

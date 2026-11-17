@@ -1,0 +1,95 @@
+<Window x:Class="AdiutorSync.PanelWindow" x:ClassModifier="internal"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Adiutor Sync" Width="380" SizeToContent="Height"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" ShowActivated="True">
+  <Window.Resources>
+    <Style x:Key="FactLabel" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Margin" Value="0,3,18,3" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+    </Style>
+    <Style x:Key="FactValue" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Margin" Value="0,3" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+    </Style>
+    <Style x:Key="QuietButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="10,6" />
+      <Setter Property="Margin" Value="0,0,4,0" />
+    </Style>
+  </Window.Resources>
+  <Border CornerRadius="10" Padding="22,20,22,16" BorderThickness="1"
+          Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+          BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+    <StackPanel>
+      <StackPanel Orientation="Horizontal">
+        <Ellipse x:Name="StateDot" Width="10" Height="10" VerticalAlignment="Center" Margin="0,0,8,0" />
+        <TextBlock x:Name="AppName" FontSize="13" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+      </StackPanel>
+      <TextBlock x:Name="StateText" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,14"
+                 Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+
+      <Grid x:Name="Facts">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock x:Name="T3Label" Grid.Row="0" Style="{StaticResource FactLabel}" />
+        <TextBlock x:Name="T3Value" Grid.Row="0" Grid.Column="1" Style="{StaticResource FactValue}" />
+        <TextBlock x:Name="SecurityLabel" Grid.Row="1" Style="{StaticResource FactLabel}" />
+        <TextBlock x:Name="SecurityValue" Grid.Row="1" Grid.Column="1" Style="{StaticResource FactValue}" />
+        <TextBlock x:Name="LastRunLabel" Grid.Row="2" Style="{StaticResource FactLabel}" />
+        <TextBlock x:Name="LastRunValue" Grid.Row="2" Grid.Column="1" Style="{StaticResource FactValue}" />
+        <TextBlock x:Name="LastGoodLabel" Grid.Row="3" Style="{StaticResource FactLabel}" />
+        <TextBlock x:Name="LastGoodValue" Grid.Row="3" Grid.Column="1" Style="{StaticResource FactValue}" />
+        <TextBlock x:Name="NextRunLabel" Grid.Row="4" Style="{StaticResource FactLabel}" />
+        <TextBlock x:Name="NextRunValue" Grid.Row="4" Grid.Column="1" Style="{StaticResource FactValue}" />
+      </Grid>
+
+      <ItemsControl x:Name="Notices" Margin="0,10,0,0">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border CornerRadius="6" Padding="10,7" Margin="0,4,0,0"
+                    Background="{DynamicResource SubtleFillColorSecondaryBrush}">
+              <TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="13"
+                         Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+        <Button x:Name="SyncNowButton" Style="{DynamicResource AccentButtonStyle}" MinWidth="120" Padding="14,7" Click="SyncNow_Click" />
+        <Button x:Name="PauseButton" Margin="8,0,0,0" MinWidth="96" Padding="14,7" Click="Pause_Click">
+          <Button.ContextMenu>
+            <ContextMenu x:Name="PauseMenu">
+              <MenuItem x:Name="Pause1h" Click="Pause1h_Click" />
+              <MenuItem x:Name="Pause4h" Click="Pause4h_Click" />
+              <MenuItem x:Name="PauseOpen" Click="PauseOpen_Click" />
+            </ContextMenu>
+          </Button.ContextMenu>
+        </Button>
+        <Button x:Name="ResumeButton" Margin="8,0,0,0" MinWidth="96" Padding="14,7" Click="Resume_Click" />
+      </StackPanel>
+
+      <Separator Margin="0,16,0,8" />
+      <StackPanel Orientation="Horizontal">
+        <Button x:Name="OpenAdiutorButton" Style="{StaticResource QuietButton}" Click="OpenAdiutor_Click" />
+        <Button x:Name="SettingsButton" Style="{StaticResource QuietButton}" Click="Settings_Click" />
+        <Button x:Name="QuitButton" Style="{StaticResource QuietButton}" Click="Quit_Click" />
+      </StackPanel>
+    </StackPanel>
+  </Border>
+</Window>
