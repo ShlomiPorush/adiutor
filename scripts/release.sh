@@ -385,7 +385,8 @@ expected_tray_assets() {
 # Reads every tray asset of the draft back from GitHub. The build's files must match the local ones by
 # SHA-256. vpk writes the feed files at upload, so there is no local copy: releases.win.json must list
 # exactly the build's packages of VERSION with their real SHA-256 and size, and RELEASES (Velopack's
-# older feed) only those packages, with their real SHA-1 and size, the full one included.
+# older feed, which vpk 1.2.161 writes as UTF-8 with a byte order mark and only the full package) only
+# those packages, with their real SHA-1 and size, the full one included.
 verify_tray_assets() {
   local draft="$1" assets got dir id name file want have line
   assets="$(release_assets "$draft")"
@@ -415,7 +416,7 @@ verify_tray_assets() {
       echo "$(sha1_of "$TRAY_DIR/$file" | tr a-f A-F) $file $(size_of "$TRAY_DIR/$file")"
     fi
   done)"
-  have="$(tr -d '\r' <"$dir/RELEASES" | awk 'NF { print toupper($1), $2, $3 }')"
+  have="$(LC_ALL=C sed $'1s/^\xef\xbb\xbf//' "$dir/RELEASES" | tr -d '\r' | awk 'NF { print toupper($1), $2, $3 }')"
   file="AdiutorSync-$VERSION-full.nupkg"
   grep -qxF "$(sha1_of "$TRAY_DIR/$file" | tr a-f A-F) $file $(size_of "$TRAY_DIR/$file")" <<<"$have" ||
     die "RELEASES on the draft $TAG does not list the full package. Run the release again."
@@ -537,6 +538,8 @@ main() {
 
   [ -z "$EXPECT_SHA" ] || [[ "$EXPECT_SHA" =~ ^[0-9a-f]{40}$ ]] || die "--expect-sha must be a full commit SHA"
   if [ -n "$TRAY_DIR" ]; then
+    # Absolute, since vpk runs from tray/: it must read the folder read_tray_build checked.
+    TRAY_DIR="$(cd "$TRAY_DIR" && pwd)" || die "--tray needs the folder of a packed tray"
     if [ -n "$TARGET$BUMP$OUTPUT" ] || [ $SKIP_VERIFY -eq 1 ]; then
       die "--tray takes only --tag, --expect-sha and --dry-run"
     fi

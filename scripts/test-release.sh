@@ -242,16 +242,21 @@ r="$(release_dir "$tag")" || {
   : >"$r/draft"
 }
 grep -qx releases.win.json "$r"/assets/*.name 2>/dev/null && { echo "There is already a remote asset named 'releases.win.json'" >&2; exit 1; }
+# Uploads stdin as one asset (never in a pipeline, which would lose the count); with MOCK_UPLOAD_FAIL_AFTER=N
+# the run stops before the (N+1)th, feeds included.
 count=0
+upload() {
+  if [ "${MOCK_UPLOAD_FAIL_AFTER:-}" = "$count" ]; then echo "upload failed" >&2; exit 1; fi
+  add_asset "$r" "$1" || exit 1
+  count=$((count + 1))
+}
 feed="" legacy=""
 while IFS= read -r name; do
-  if [ "${MOCK_UPLOAD_FAIL_AFTER:-}" = "$count" ]; then echo "upload failed" >&2; exit 1; fi
   if [ "${MOCK_UPLOAD_CORRUPT:-}" = "$name" ]; then
-    { cat "$dir/$name"; echo changed; } | add_asset "$r" "$name" || exit 1
+    upload "$name" < <(cat "$dir/$name" && echo changed)
   else
-    add_asset "$r" "$name" <"$dir/$name" || exit 1
+    upload "$name" <"$dir/$name"
   fi
-  count=$((count + 1))
   case "$name" in
     *-full.nupkg | *-delta.nupkg)
       kind=Full
@@ -263,13 +268,15 @@ while IFS= read -r name; do
       [ "${MOCK_FEED:-}" = wrong ] && sha256="$(printf '0%.0s' {1..64})"
       size="$(wc -c <"$dir/$name" | tr -d ' ')"
       feed="$feed${feed:+,}{\"PackageId\":\"AdiutorSync\",\"Version\":\"$version\",\"Type\":\"$kind\",\"FileName\":\"$name\",\"SHA1\":\"$sha1\",\"SHA256\":\"$sha256\",\"Size\":$size}"
-      [ $kind = Full ] && legacy="$legacy$sha1 $name $size"$'\n'
+      # RELEASES holds the newest full package only, the one of this build.
+      [ $kind = Full ] && legacy="$sha1 $name $size"
       ;;
   esac
 done < <(jq -r '.[].RelativeFileName' "$dir/assets.win.json")
-[ "${MOCK_FEED:-}" = legacy-extra ] && legacy="${legacy}0000000000000000000000000000000000000000 AdiutorSync-9.9.9-full.nupkg 1"$'\n'
-printf '{"Assets":[%s]}' "$feed" | add_asset "$r" releases.win.json || exit 1
-printf '%s' "$legacy" | add_asset "$r" RELEASES || exit 1
+[ "${MOCK_FEED:-}" = legacy-extra ] && legacy="$legacy"$'\n'"0000000000000000000000000000000000000000 AdiutorSync-9.9.9-full.nupkg 1"
+upload releases.win.json < <(printf '{"Assets":[%s]}' "$feed")
+# As vpk 1.2.161 writes it: UTF-8 with a byte order mark, no line break at the end.
+upload RELEASES < <(printf '\xef\xbb\xbf%s' "$legacy")
 EOF
 chmod +x "$WORK/bin/docker" "$WORK/bin/gh" "$WORK/bin/dotnet"
 
@@ -410,6 +417,10 @@ not_said() { ! said "$1"; }
 untouched() { lacks_tag "$1" && nothing_published; }
 draft_holding() { is_draft "$1" && [ "$(asset_names "$1" | wc -l)" = "$2" ]; }
 draft_with_tray() { is_draft "v$1" && tray_on "$1"; }
+# One version came of a run that stopped in its tray upload and the next run.
+upload_stop_once() {
+  lacks_tag v0.2.0 && [ "$(calls "buildx build") $(calls "release create")" = "1 1" ] && [ "$(calls "-X PATCH")" = 1 ]
+}
 # The calls of the upload, the removals and the publish.
 upload_calls() { [ "$(calls "vpk \[win\] upload") $(calls "-X DELETE") $(calls "-X PATCH")" = "$1" ]; }
 
@@ -688,6 +699,17 @@ check "  and the next run says what the draft holds" said "holds 2 tray asset(s)
 check "  removes them" said "removing AdiutorSync-win-Portable.zip, left on the draft by an earlier run"
 check "  and finishes 0.1.0 with the new build" complete 0.1.0
 check "  without building the image again" [ "$(calls "buildx build")" = 1 ]
+
+# A stop after each upload: none, each of the three files, and releases.win.json before RELEASES.
+for n in 0 1 2 3 4; do
+  sandbox
+  MOCK_UPLOAD_FAIL_AFTER=$n release
+  check "the upload stops after $n asset(s): the run stops" [ $? -ne 0 ]
+  check "  with a draft holding $n asset(s)" draft_holding v0.1.0 "$n"
+  release
+  check "  and the next run finishes 0.1.0" complete 0.1.0
+  check "  with one tag, one image build and one GitHub Release" upload_stop_once
+done
 
 sandbox
 MOCK_UPLOAD_CORRUPT=AdiutorSync-win-Setup.exe release
