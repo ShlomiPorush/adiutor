@@ -573,7 +573,12 @@ describe("the machine-readable output", () => {
     })
     // Each setting as the engine uses it, with its source, for the tray to show.
     expect(status.result.settings.values.adiutorUrl).toMatchObject({ value: fake.issuer })
-    expect(Object.keys(status.result.settings.values).sort()).toEqual(["adiutorUrl", "overviewDir", "t3CliPath", "t3Url"])
+    expect(Object.keys(status.result.settings.values).sort()).toEqual([
+      "adiutorUrl",
+      "overviewDir",
+      "t3CliPath",
+      "t3Url",
+    ])
     expect((await json(["run"], d, lines)).result).toMatchObject({ command: "run", ok: true })
     expect((await json(["t3-disconnect"], d, lines)).result).toMatchObject({
       command: "t3-disconnect",
