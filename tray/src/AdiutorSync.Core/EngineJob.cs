@@ -18,12 +18,17 @@ public sealed partial class EngineJob : IDisposable
 
     private readonly SafeFileHandle _handle;
 
-    public EngineJob()
+    /**
+     * The tray's job ends every process in it when it closes. A command's own job (killOnClose false) only groups the
+     * engine and its children, to end them on purpose (a limit, a failed start): a child that outlives a command that
+     * ended normally, such as git's fsmonitor daemon, stays until the tray ends.
+     */
+    public EngineJob(bool killOnClose = true)
     {
         _handle = CreateJobObjectW(IntPtr.Zero, IntPtr.Zero);
         if (_handle.IsInvalid)
             throw new InvalidOperationException($"CreateJobObject failed ({Marshal.GetLastPInvokeError()})");
-        var info = new ExtendedLimitInformation { BasicLimitInformation = { LimitFlags = JobObjectLimitKillOnJobClose } };
+        var info = new ExtendedLimitInformation { BasicLimitInformation = { LimitFlags = killOnClose ? JobObjectLimitKillOnJobClose : 0 } };
         if (!SetInformationJobObject(_handle, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<ExtendedLimitInformation>()))
         {
             var error = Marshal.GetLastPInvokeError();

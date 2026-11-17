@@ -9,8 +9,9 @@ namespace AdiutorSync.Core;
 /// CreateProcessW with STARTUPINFOEX, PROC_THREAD_ATTRIBUTE_JOB_LIST and PROC_THREAD_ATTRIBUTE_HANDLE_LIST). It inherits
 /// only its three standard handles, which are inheritable just for the call. The handle CreateProcessW returned is kept
 /// for the command's whole life: waiting and ending go through it and through the command's job, never through a
-/// process id, which Windows may give to another process once this one has ended. Ending the command's job ends this
-/// process and every child it started, and nothing else.
+/// process id, which Windows may give to another process once this one has ended. Ending the command's job (on a limit
+/// or a failed start) ends this process and every child it started, and nothing else; a command that ends normally ends
+/// nothing.
 /// </summary>
 public sealed partial class JobProcess : IDisposable
 {
@@ -69,7 +70,7 @@ public sealed partial class JobProcess : IDisposable
         commandLine.Append('\0');
         var line = commandLine.ToString().ToCharArray();
 
-        var job = new EngineJob();
+        var job = new EngineJob(killOnClose: false);
         SafeFileHandle? inChild = null, inParent = null, outParent = null, outChild = null, errParent = null, errChild = null;
         IntPtr attributes = IntPtr.Zero;
         SafeProcessHandle? process = null;
@@ -158,7 +159,8 @@ public sealed partial class JobProcess : IDisposable
             errChild?.Dispose();
             if (!handedBack)
             {
-                // Closing the command's job ends a process that was created but not handed back, whatever failed.
+                // A process that was created but not handed back is ended with its job, whatever failed.
+                TerminateJobObject(job.Handle, 1);
                 job.Dispose();
                 process?.Dispose();
                 inParent?.Dispose();
@@ -177,7 +179,7 @@ public sealed partial class JobProcess : IDisposable
         StandardInput.Dispose();
         StandardOutput.Dispose();
         StandardError.Dispose();
-        // A child the engine left running ends with the command's job.
+        // A child the engine left running stays (in the tray's job, which ends it with the tray).
         _job.Dispose();
         _exitHandle.Dispose();
         _process.Dispose();

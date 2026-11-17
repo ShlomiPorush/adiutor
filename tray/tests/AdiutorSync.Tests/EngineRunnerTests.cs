@@ -136,9 +136,14 @@ public class EngineRunnerTests
         // The child holds the pipe for 30 seconds; the command ends soon after the engine did.
         Assert.True(outcome.Result?.Ok, outcome.Failure);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(15), $"took {watch.Elapsed}");
-        // The command's own job ended the child it left.
+        // A child left by a command that ended normally stays (a daemon such as git's fsmonitor), until the tray ends.
         Assert.NotEqual(0, leaked);
-        await WaitGone(leaked);
+        using (var child = Process.GetProcessById(leaked))
+        {
+            Assert.False(child.HasExited, "a command that ended normally ended its child");
+            job.Dispose();
+            Assert.True(child.WaitForExit(TimeSpan.FromSeconds(15)), "the child outlived the tray's job");
+        }
     }
 
     [Fact]

@@ -34,9 +34,11 @@ if (command === "status") {
   line({ type: "event", event: "message", text: String(child.pid) })
   setInterval(() => {}, 1000)
 } else if (command === "leak") {
-  // A child that keeps the engine's output open after the engine has ended.
+  // A child that keeps the engine's output open after the engine has ended. Detached: node otherwise ends its children
+  // with it (libuv's own job); a daemon that git starts is not node's child either.
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
     stdio: ["ignore", "inherit", "ignore"],
+    detached: true,
   })
   line({ type: "event", event: "message", text: String(child.pid) })
   result({ command: "checkin", claim: null })
