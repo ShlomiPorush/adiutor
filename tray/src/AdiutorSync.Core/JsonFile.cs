@@ -17,8 +17,18 @@ public static class JsonFile
         }
         finally
         {
-            if (File.Exists(temp))
-                File.Delete(temp);
+            try
+            {
+                if (File.Exists(temp))
+                    File.Delete(temp);
+            }
+            catch (IOException)
+            {
+                // A temporary file left behind never stands for the settings.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
     }
 

@@ -46,6 +46,9 @@ public sealed record TraySnapshot
     public string? CheckinProblem { get; init; }
     public bool Quitting { get; init; }
     public bool UpdateReady { get; init; }
+
+    /** The last change to the settings file could not be written, so it did not happen. */
+    public bool SettingsNotSaved { get; init; }
 }
 
 /// <summary>
@@ -96,6 +99,7 @@ public sealed class SyncLoop
     private int _holdRuns;
     private bool _holdAll;
     private bool _updateReady;
+    private bool _settingsNotSaved;
     private readonly HashSet<string> _expectingDisconnect = [];
 
     /** Requests whose run ended in this tray (reported, refused by the engine, or without a result): never run again. */
@@ -152,42 +156,70 @@ public sealed class SyncLoop
         Wake();
     }
 
-    /** Pauses for a time, or until resumed (null), written to settings.json in the engine's format. */
-    public void PauseFor(TimeSpan? duration)
+    /**
+     * Pauses for a time, or until resumed (null), written to settings.json in the engine's format. False, with nothing
+     * changed, when the file cannot be written.
+     */
+    public bool PauseFor(TimeSpan? duration)
     {
         lock (_gate)
         {
             var now = _time.GetUtcNow();
-            _settings = _settings with { Pause = new Pause(duration is { } d ? now + d : null) };
-            SettingsStore.Save(_settingsPath, _settings);
+            if (!TryWriteSettings(_settings with { Pause = new Pause(duration is { } d ? now + d : null) }))
+                return false;
             _nextCheckinAt = Timestamp();
             _log.Info(duration is { } d2 ? $"paused for {d2.TotalHours:0.#} h" : "paused until resumed");
         }
         Wake();
+        return true;
     }
 
-    public void Resume()
+    public bool Resume()
     {
         lock (_gate)
         {
-            _settings = _settings with { Pause = null };
-            SettingsStore.Save(_settingsPath, _settings);
+            if (!TryWriteSettings(_settings with { Pause = null }))
+                return false;
             _nextCheckinAt = Timestamp();
             _log.Info("resumed");
         }
         Wake();
+        return true;
     }
 
-    /** Saves the settings the settings window changed; the pause is the loop's own and is kept. */
-    public void SaveSettings(TraySettings settings)
+    /** Saves the settings the settings window changed; the pause is the loop's own and is kept. False when not written. */
+    public bool SaveSettings(TraySettings settings)
     {
         lock (_gate)
         {
-            _settings = settings with { Pause = _settings.Pause };
-            SettingsStore.Save(_settingsPath, _settings);
+            if (!TryWriteSettings(settings with { Pause = _settings.Pause }))
+                return false;
             _statusDue = true;
         }
         Wake();
+        return true;
+    }
+
+    /**
+     * Writes the settings file, and only then takes the new settings: a write that fails (a full disk, no permission,
+     * a file another program holds) changes nothing, and the windows say so. Called under the lock.
+     */
+    private bool TryWriteSettings(TraySettings next)
+    {
+        try
+        {
+            SettingsStore.Save(_settingsPath, next);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _settingsNotSaved = true;
+            _log.Info($"settings file not written ({e.GetType().Name})");
+            Publish();
+            return false;
+        }
+        _settings = next;
+        _settingsNotSaved = false;
+        return true;
     }
 
     /** Quit: no new run; a run going finishes first ("finishing the run"), then the loop ends. */
@@ -778,6 +810,7 @@ public sealed class SyncLoop
         CheckinProblem = _checkinProblem,
         Quitting = _quitRequested,
         UpdateReady = _updateReady,
+        SettingsNotSaved = _settingsNotSaved,
     };
 
     private void Publish()

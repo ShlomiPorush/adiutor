@@ -1529,7 +1529,8 @@
       "status": "Could not read the sync's state ({code}).",
       "engineMissing": "The sync tool (node.exe and adiutor-sync.js) was not found. Install the app again.",
       "settings": "A setting is not valid. Check it in Settings.",
-      "connect": "Connect Adiutor and T3 in Settings."
+      "connect": "Connect Adiutor and T3 in Settings.",
+      "notSaved": "The settings file could not be saved, so nothing changed. Check that the disk has room, then try again."
     },
     "notify": {
       "runsNotGoodTitle": "Two scheduled syncs in a row did not complete",
@@ -1578,7 +1579,8 @@
       "sync": "Sync",
       "lockedEnvironment": "Set by the environment ({name}); change it there.",
       "lockedEnvFile": "Set in sync.env ({name}); change it there.",
-      "urlFromConnect": "Connect saved this address in sync.env. A new address takes effect when you connect."
+      "urlFromConnect": "Connect saved this address in sync.env. A new address takes effect when you connect.",
+      "notSaved": "Not saved: the settings file could not be written. Check that the disk has room, then try again."
     }
   }
 }

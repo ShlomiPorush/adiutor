@@ -14,8 +14,8 @@ internal interface ISettingsHost
     Texts Texts { get; }
     string Version { get; }
 
-    /** Saves the settings and applies what changed (language, start with Windows). */
-    void Save(TraySettings settings);
+    /** Saves the settings and applies what changed (language, start with Windows); false when not written. */
+    bool Save(TraySettings settings);
 
     void OpenInBrowser(string url);
 }
@@ -117,19 +117,24 @@ internal sealed partial class SettingsWindow : Window
     /** Shows each setting as the engine uses it; called again when a newer status arrives. */
     private void ShowEffective(TraySettings s)
     {
-        Show(AdiutorUrl, Effective(EffectiveSettings.AdiutorUrl)?.Value ?? s.AdiutorUrl ?? _host.Loop.Snapshot.Status?.Adiutor.Url ?? "");
-        Show(T3Cli, Effective(EffectiveSettings.T3CliPath)?.Value ?? s.T3CliPath ?? DefaultT3Cli);
-        Show(T3Url, Effective(EffectiveSettings.T3Url)?.Value ?? s.T3Url ?? DefaultT3Url);
-        Show(Overview, Effective(EffectiveSettings.OverviewDir)?.Value ?? s.OverviewDir ?? "");
+        Show(AdiutorUrl, EffectiveSettings.AdiutorUrl, Effective(EffectiveSettings.AdiutorUrl)?.Value ?? s.AdiutorUrl ?? _host.Loop.Snapshot.Status?.Adiutor.Url ?? "");
+        Show(T3Cli, EffectiveSettings.T3CliPath, Effective(EffectiveSettings.T3CliPath)?.Value ?? s.T3CliPath ?? DefaultT3Cli);
+        Show(T3Url, EffectiveSettings.T3Url, Effective(EffectiveSettings.T3Url)?.Value ?? s.T3Url ?? DefaultT3Url);
+        Show(Overview, EffectiveSettings.OverviewDir, Effective(EffectiveSettings.OverviewDir)?.Value ?? s.OverviewDir ?? "");
         ApplyModes();
     }
 
-    private void Show(TextBox box, string value)
+    private void Show(TextBox box, string key, string value)
     {
-        if (_shown.TryGetValue(box, out var last) && box.Text != last)
-            return;
-        box.Text = value;
-        _shown[box] = value;
+        box.Text = EffectiveSettings.FieldText(box.Text, _shown.TryGetValue(box, out var last) ? last : null, value, IsLocked(key));
+        _shown[box] = box.Text;
+    }
+
+    /** After a save, what the fields show is no longer a draft. */
+    private void MarkSaved()
+    {
+        foreach (var box in new[] { AdiutorUrl, T3Cli, T3Url, Overview })
+            _shown[box] = box.Text;
     }
 
     private EffectiveSetting? Effective(string key) =>
@@ -270,7 +275,12 @@ internal sealed partial class SettingsWindow : Window
     {
         if (Collect() is not { } settings)
             return;
-        _host.Save(settings);
+        if (!_host.Save(settings))
+        {
+            SaveMessage.Text = T["settings.notSaved"];
+            return;
+        }
+        MarkSaved();
         SaveMessage.Text = T["settings.saved"];
     }
 
@@ -286,7 +296,12 @@ internal sealed partial class SettingsWindow : Window
             AdiutorMessage.Text = T["settings.addressFirst"];
             return;
         }
-        _host.Save(settings);
+        if (!_host.Save(settings))
+        {
+            AdiutorMessage.Text = T["settings.notSaved"];
+            return;
+        }
+        MarkSaved();
         var status = _host.Loop.Snapshot.Status?.Adiutor;
         // An ended connection for this address is connected again; the engine then ends the old one.
         var args = ConnectCommand.Args(Environment.MachineName, url, status is { State: ConnectionState.Ended } && Addresses.Origin(status.Url) == effective);
@@ -305,7 +320,12 @@ internal sealed partial class SettingsWindow : Window
     {
         if (Collect() is not { } settings)
             return;
-        _host.Save(settings);
+        if (!_host.Save(settings))
+        {
+            T3Message.Text = T["settings.notSaved"];
+            return;
+        }
+        MarkSaved();
         await RunAsync(["t3-connect"], T3Message, _ => T["settings.connectedNow"]);
     }
 

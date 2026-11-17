@@ -45,6 +45,8 @@ public static class TrayView
             nextRun = t["panel.noSchedule"];
 
         var notices = new List<string>();
+        if (s.SettingsNotSaved)
+            notices.Add(t["notice.notSaved"]);
         if (s.UpdateReady)
             notices.Add(t["panel.updateReady"]);
         if (s.EngineMissing)

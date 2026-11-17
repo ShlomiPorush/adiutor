@@ -45,6 +45,14 @@ public static class EffectiveSettings
         _ => "ADIUTOR_OVERVIEW_DIR",
     };
 
+    /**
+     * The text a settings field shows when a value arrives: the value the engine uses, unless the owner is editing an
+     * editable field (its text differs from what it last showed). A locked field always shows the binding value: a
+     * draft typed before the lock arrived is dropped, so what is shown is what commands use.
+     */
+    public static string FieldText(string current, string? lastShown, string value, bool locked) =>
+        locked || lastShown is null || current == lastShown ? value : current;
+
     public static FieldMode Mode(string key, SettingSource? source) => source switch
     {
         SettingSource.Environment or SettingSource.Option => FieldMode.LockedByEnvironment,

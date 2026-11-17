@@ -208,6 +208,7 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
 
     public void SyncNow() => Loop.SyncNow();
 
+    // A pause or resume that could not be written shows as a notice in the panel; nothing else changes.
     public void PauseFor(TimeSpan? duration) => Loop.PauseFor(duration);
 
     public void Resume() => Loop.Resume();
@@ -238,10 +239,14 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
 
     // --- ISettingsHost ---
 
-    public void Save(TraySettings settings)
+    public bool Save(TraySettings settings)
     {
         var before = Loop.Snapshot.Settings;
-        Loop.SaveSettings(settings);
+        if (!Loop.SaveSettings(settings))
+        {
+            Render(Loop.Snapshot);
+            return false;
+        }
         if (before.Language != settings.Language)
         {
             Texts = Texts.Load(Texts.Choose(settings.Language, CultureInfo.CurrentUICulture));
@@ -251,6 +256,7 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
         if (before.StartWithWindows != settings.StartWithWindows)
             ApplyStartup(settings.StartWithWindows);
         Render(Loop.Snapshot);
+        return true;
     }
 
     public void OpenInBrowser(string url)
