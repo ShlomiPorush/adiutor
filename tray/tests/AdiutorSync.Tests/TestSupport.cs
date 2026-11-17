@@ -117,6 +117,9 @@ public sealed class FakeEngine : IEngine
     /** When set, a run waits for it before it answers. */
     public TaskCompletionSource? RunGate { get; set; }
 
+    /** When set, a check-in waits for it before it answers. */
+    public TaskCompletionSource? CheckinGate { get; set; }
+
     public int Active => Volatile.Read(ref _active);
 
     public IEnumerable<EngineCommand> Of(string name) => Calls.Where(c => c.Name == name);
@@ -134,6 +137,8 @@ public sealed class FakeEngine : IEngine
                     line = Status();
                     break;
                 case "checkin":
+                    if (CheckinGate is { } checkinGate)
+                        await checkinGate.Task.WaitAsync(cancellationToken);
                     line = Checkin();
                     break;
                 case "run":

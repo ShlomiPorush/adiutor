@@ -12,6 +12,9 @@ internal sealed class FakeUpdater : IAppUpdater
     public int Downloads { get; private set; }
     public List<object> Applied { get; } = [];
 
+    /** When set, Apply throws it, as Velopack does when Update.exe cannot start. */
+    public Exception? ApplyThrows { get; set; }
+
     public Task<object?> CheckAsync(CancellationToken cancellationToken)
     {
         Checks++;
@@ -25,7 +28,12 @@ internal sealed class FakeUpdater : IAppUpdater
             await gate.Task.WaitAsync(cancellationToken);
     }
 
-    public void Apply(object update) => Applied.Add(update);
+    public void Apply(object update)
+    {
+        if (ApplyThrows is { } e)
+            throw e;
+        Applied.Add(update);
+    }
 }
 
 public class UpdateTests
@@ -49,7 +57,7 @@ public class UpdateTests
         Assert.Equal(TimeSpan.Zero, await updates.CheckAndDownloadAsync(CancellationToken.None));
         Assert.True(h.Loop.Snapshot.UpdateReady);
         Assert.Equal(IconState.UpdateReady, IconStates.Map(h.Loop.Snapshot));
-        Assert.True(updates.TryApply());
+        Assert.True(await updates.TryApplyAsync(CancellationToken.None));
         Assert.Equal(["1.2.4"], updater.Applied);
     }
 
@@ -61,7 +69,7 @@ public class UpdateTests
         var updates = new UpdateCoordinator(h.Loop, updater, h.Time, NoLog.Instance);
         Assert.Equal(UpdateCoordinator.CheckEvery, await updates.CheckAndDownloadAsync(CancellationToken.None));
         Assert.False(h.Loop.Snapshot.UpdateReady);
-        Assert.False(updates.TryApply());
+        Assert.False(await updates.TryApplyAsync(CancellationToken.None));
     }
 
     [Fact]
@@ -97,11 +105,11 @@ public class UpdateTests
         await h.Tick();
         Assert.Equal(["run", "--request", id], Assert.Single(h.Runs).Args);
         // The run is going: the install waits for it.
-        Assert.False(updates.TryApply());
+        Assert.False(await updates.TryApplyAsync(CancellationToken.None));
         Assert.Empty(updater.Applied);
         h.Engine.RunGate.SetResult();
         await h.Loop.CurrentRun;
-        Assert.True(updates.TryApply());
+        Assert.True(await updates.TryApplyAsync(CancellationToken.None));
     }
 
     [Fact]
@@ -136,6 +144,6 @@ public class UpdateTests
             var outcome = await h.Loop.RunCommandAsync(["connect"], null, CancellationToken.None);
             Assert.Equal("updating", outcome.Failure);
         }
-        Assert.True(updates.TryApply());
+        Assert.True(await updates.TryApplyAsync(CancellationToken.None));
     }
 }

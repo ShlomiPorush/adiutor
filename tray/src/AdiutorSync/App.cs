@@ -50,8 +50,7 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
         var settings = SettingsStore.Load(Path.Combine(_dataFolder, TraySettings.FileName)).Settings;
         Texts = Texts.Load(Texts.Choose(settings.Language, CultureInfo.CurrentUICulture));
         Loop = new SyncLoop(CreateEngine(settings), _dataFolder, TimeProvider.System, Version, _log);
-        _tray = new TrayIcon(Texts["appName"]);
-        _tray.Clicked += TogglePanel;
+        ShowTrayIcon();
         Loop.Changed += snapshot => Dispatcher.BeginInvoke(() => Render(snapshot));
         Loop.Notify += notice => Dispatcher.BeginInvoke(() => ShowNotice(notice));
         ApplyStartup(settings.StartWithWindows);
@@ -70,6 +69,14 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
             if (signalled && !_exiting && _panel is not { IsVisible: true })
                 TogglePanel();
         }
+    }
+
+    private void ShowTrayIcon()
+    {
+        if (_tray is not null || _exiting)
+            return;
+        _tray = new TrayIcon(Texts["appName"]);
+        _tray.Clicked += TogglePanel;
     }
 
     private NodeEngine? CreateEngine(TraySettings settings)
@@ -112,11 +119,18 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
     {
         try
         {
-            var updater = new VelopackUpdater(() => Dispatcher.Invoke(() =>
-            {
-                _tray?.Dispose();
-                _tray = null;
-            }));
+            var updater = new VelopackUpdater(
+                () => Dispatcher.Invoke(() =>
+                {
+                    _tray?.Dispose();
+                    _tray = null;
+                }),
+                // The install did not start: the tray goes on, with its icon.
+                () => Dispatcher.Invoke(() =>
+                {
+                    ShowTrayIcon();
+                    Render(Loop.Snapshot);
+                }));
             await Task.Run(() => new UpdateCoordinator(Loop, updater, TimeProvider.System, _log).RunAsync(_stop.Token));
         }
         catch (OperationCanceledException)

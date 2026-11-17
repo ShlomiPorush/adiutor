@@ -9,8 +9,9 @@ internal sealed class Harness : IDisposable
 {
     public static readonly DateTimeOffset T0 = DateTimeOffset.Parse("2026-11-17T09:00:00Z", CultureInfo.InvariantCulture);
 
-    public Harness(TraySettings? settings = null, TrayState? state = null)
+    public Harness(TraySettings? settings = null, TrayState? state = null, FakeTimeProvider? time = null)
     {
+        Time = time ?? new FakeTimeProvider(T0);
         if (settings is not null)
             SettingsStore.Save(Dir.File(TraySettings.FileName), settings);
         if (state is not null)
@@ -23,7 +24,7 @@ internal sealed class Harness : IDisposable
 
     public TempFolder Dir { get; } = new();
     public FakeEngine Engine { get; } = new();
-    public FakeTimeProvider Time { get; } = new(T0);
+    public FakeTimeProvider Time { get; }
     public SyncLoop Loop { get; }
     public List<Notice> Notices { get; } = [];
 

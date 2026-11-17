@@ -8,7 +8,7 @@ namespace AdiutorSync;
 /// Velopack's update manager against the GitHub Releases of this repository (owner's decision D-T7), through its
 /// documented API only: check, download, then apply and restart. No token: releases are public.
 /// </summary>
-internal sealed class VelopackUpdater(Action beforeApply) : IAppUpdater
+internal sealed class VelopackUpdater(Action beforeApply, Action applyFailed) : IAppUpdater
 {
     public const string Repository = "https://github.com/ShlomiPorush/adiutor";
 
@@ -22,9 +22,18 @@ internal sealed class VelopackUpdater(Action beforeApply) : IAppUpdater
     public Task DownloadAsync(object update, CancellationToken cancellationToken) =>
         _manager.DownloadUpdatesAsync((UpdateInfo)update, progress: null, cancellationToken);
 
+    /** The icon goes just before Velopack ends the process; when the install does not start, it comes back. */
     public void Apply(object update)
     {
         beforeApply();
-        _manager.ApplyUpdatesAndRestart(((UpdateInfo)update).TargetFullRelease);
+        try
+        {
+            _manager.ApplyUpdatesAndRestart(((UpdateInfo)update).TargetFullRelease);
+        }
+        catch
+        {
+            applyFailed();
+            throw;
+        }
     }
 }

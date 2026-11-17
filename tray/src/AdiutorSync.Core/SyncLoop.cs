@@ -83,8 +83,10 @@ public sealed class SyncLoop
     private bool _quitRequested;
     private bool _statusDue = true;
     private bool _recovered;
-    private DateTimeOffset _nextCheckinAt = DateTimeOffset.MinValue;
-    private DateTimeOffset _retryAt = DateTimeOffset.MinValue;
+    // Cadence on the monotonic clock (TimeProvider timestamps), so a wall clock set back never stops the check-ins.
+    private long _nextCheckinAt = long.MinValue;
+    private long _retryAt = long.MinValue;
+    private int _commands;
     private bool _lastStartBusy;
     private bool _serverOlder;
     private string? _checkinProblem;
@@ -121,15 +123,20 @@ public sealed class SyncLoop
         }
     }
 
-    /** No engine process of this tray runs and the loop starts none (for an update to be applied). */
+    /**
+     * Nothing runs: no run and no other engine command of this tray, and no run started from the command line (the
+     * engine's last status), so an update may be checked, downloaded or installed.
+     */
     public bool IsIdle
     {
         get
         {
             lock (_gate)
-                return _run is null && (_engine?.Active ?? 0) == 0;
+                return IdleCore();
         }
     }
+
+    private bool IdleCore() => _run is null && _commands == 0 && _status?.RunningSince is null;
 
     public bool IsRunning
     {
@@ -157,7 +164,7 @@ public sealed class SyncLoop
             var now = _time.GetUtcNow();
             _settings = _settings with { Pause = new Pause(duration is { } d ? now + d : null) };
             SettingsStore.Save(_settingsPath, _settings);
-            _nextCheckinAt = now;
+            _nextCheckinAt = Timestamp();
             _log.Info(duration is { } d2 ? $"paused for {d2.TotalHours:0.#} h" : "paused until resumed");
         }
         Wake();
@@ -169,7 +176,7 @@ public sealed class SyncLoop
         {
             _settings = _settings with { Pause = null };
             SettingsStore.Save(_settingsPath, _settings);
-            _nextCheckinAt = _time.GetUtcNow();
+            _nextCheckinAt = Timestamp();
             _log.Info("resumed");
         }
         Wake();
@@ -221,6 +228,28 @@ public sealed class SyncLoop
         });
     }
 
+    /**
+     * Holds everything for an install, then reads the engine's status once more (allowed while held) so a run started
+     * from the command line meanwhile is seen. Null, with nothing held, when anything runs.
+     */
+    public async Task<IDisposable?> HoldForInstallAsync(CancellationToken cancellationToken)
+    {
+        var hold = HoldAll();
+        bool idle;
+        lock (_gate)
+            idle = IdleCore();
+        if (idle)
+        {
+            await RefreshStatusAsync(cancellationToken, duringInstallHold: true).ConfigureAwait(false);
+            lock (_gate)
+                idle = IdleCore() && _statusProblem is null;
+        }
+        if (idle)
+            return hold;
+        hold.Dispose();
+        return null;
+    }
+
     public void SetUpdateReady(bool ready)
     {
         lock (_gate)
@@ -239,20 +268,18 @@ public sealed class SyncLoop
         var name = args[0];
         lock (_gate)
         {
-            if (_holdAll)
-                return EngineOutcome.Failed("updating");
             if (name == "disconnect")
                 _expectingDisconnect.Add("adiutor");
             if (name == "t3-disconnect")
                 _expectingDisconnect.Add("t3");
         }
         var limit = name is "connect" or "t3-connect" ? ConnectLimit : CommandLimit;
-        var outcome = await _engine.RunAsync(new EngineCommand(args, limit, OnEvent: onEvent), cancellationToken).ConfigureAwait(false);
+        var outcome = await RunEngineAsync(new EngineCommand(args, limit, OnEvent: onEvent), cancellationToken).ConfigureAwait(false);
         await RefreshStatusAsync(cancellationToken).ConfigureAwait(false);
         lock (_gate)
         {
             _expectingDisconnect.Clear();
-            _nextCheckinAt = _time.GetUtcNow();
+            _nextCheckinAt = Timestamp();
         }
         Wake();
         return outcome;
@@ -295,7 +322,7 @@ public sealed class SyncLoop
         {
             quitNow = _quitRequested && _run is null;
             holdAll = _holdAll;
-            checkinDue = !holdAll && now >= _nextCheckinAt;
+            checkinDue = !holdAll && Timestamp() >= _nextCheckinAt;
             statusDue = !holdAll && (_statusDue || checkinDue);
         }
         if (quitNow)
@@ -317,7 +344,7 @@ public sealed class SyncLoop
         if (checkinDue)
         {
             lock (_gate)
-                _nextCheckinAt = now + CheckinEvery;
+                _nextCheckinAt = TimestampAfter(CheckinEvery);
             await CheckInAsync(cancellationToken).ConfigureAwait(false);
         }
         RunningRun? started;
@@ -368,11 +395,13 @@ public sealed class SyncLoop
         }
     }
 
-    private async Task RefreshStatusAsync(CancellationToken cancellationToken)
+    private async Task RefreshStatusAsync(CancellationToken cancellationToken, bool duringInstallHold = false)
     {
         if (_engine is null)
             return;
-        var outcome = await _engine.RunAsync(new EngineCommand(["status"], CommandLimit), cancellationToken).ConfigureAwait(false);
+        var outcome = await RunEngineAsync(new EngineCommand(["status"], CommandLimit), cancellationToken, duringInstallHold).ConfigureAwait(false);
+        if (outcome.Failure == Updating)
+            return;
         var notices = new List<Notice>();
         lock (_gate)
         {
@@ -419,7 +448,9 @@ public sealed class SyncLoop
             sent = [.. finished.Select(f => f.RequestId)];
             report = BuildReport(now, finished);
         }
-        var outcome = await _engine.RunAsync(new EngineCommand(["checkin"], CommandLimit, report), cancellationToken).ConfigureAwait(false);
+        var outcome = await RunEngineAsync(new EngineCommand(["checkin"], CommandLimit, report), cancellationToken).ConfigureAwait(false);
+        if (outcome.Failure == Updating)
+            return;
         lock (_gate)
         {
             if (outcome.Result is { Ok: true } result)
@@ -503,7 +534,7 @@ public sealed class SyncLoop
             _manualRequested = false;
             return StartRun(RunKind.Manual, null, now);
         }
-        if (now < _retryAt || _status?.RunningSince is not null)
+        if (Timestamp() < _retryAt || _status?.RunningSince is not null)
             return null;
         // A claim, also one recovered after a restart, never starts a run while paused (docs/sync.md, "While paused").
         if (_pendingClaim is { } claim && !paused)
@@ -552,7 +583,7 @@ public sealed class SyncLoop
             {
                 // Another run holds the lock: nothing ran. A request waits and is handed again by Adiutor.
                 _lastStartBusy = true;
-                _retryAt = now + RetryAfterBusy;
+                _retryAt = TimestampAfter(RetryAfterBusy);
                 _log.Info("run not started: another run is going");
             }
             else
@@ -564,7 +595,7 @@ public sealed class SyncLoop
                     var security = report?.Security.Result ?? PartResult.Failed;
                     _state = _state with { Finished = [.. _state.Finished.Where(f => f.RequestId != requestId), new FinishedRequest(requestId, t3, security)] };
                     // Report it now rather than at the next minute.
-                    _nextCheckinAt = now;
+                    _nextCheckinAt = Timestamp();
                 }
                 if (run.Kind == RunKind.Scheduled)
                 {
@@ -587,18 +618,56 @@ public sealed class SyncLoop
 
     private static string Name(PartResult? part) => part is { } p ? EngineOutput.PartName(p) : "none";
 
+    /** The shortest wait: the check-in and a retry on the monotonic clock, a pause's end and the schedule on the wall clock. */
     private TimeSpan NextWake(DateTimeOffset now)
     {
-        var next = _nextCheckinAt;
-        if (_settings.Pause?.Until is { } until && until > now && until < next)
-            next = until;
-        if (_retryAt > now && _retryAt < next)
-            next = _retryAt;
+        var wait = Until(_nextCheckinAt);
+        if (_retryAt > Timestamp() && Until(_retryAt) < wait)
+            wait = Until(_retryAt);
+        if (_settings.Pause?.Until is { } until && until > now && until - now < wait)
+            wait = until - now;
         var due = DueAt(now);
-        if (due > now && due < next)
-            next = due;
-        var wait = next - now;
+        if (due > now && due - now < wait)
+            wait = due - now;
         return wait < TimeSpan.Zero ? TimeSpan.Zero : wait;
+    }
+
+    private long Timestamp() => _time.GetTimestamp();
+
+    private long TimestampAfter(TimeSpan span) => _time.GetTimestamp() + (long)(span.TotalSeconds * _time.TimestampFrequency);
+
+    private TimeSpan Until(long timestamp)
+    {
+        var now = _time.GetTimestamp();
+        return timestamp <= now ? TimeSpan.Zero : TimeSpan.FromSeconds((timestamp - now) / (double)_time.TimestampFrequency);
+    }
+
+    private const string Updating = "updating";
+
+    /**
+     * Every engine command but a run goes through here: whether an install holds everything and the registration of
+     * the command are decided in one step under the lock, so an install never starts while a command is starting.
+     * Only the install's own status read passes the hold.
+     */
+    private async Task<EngineOutcome> RunEngineAsync(EngineCommand command, CancellationToken cancellationToken, bool duringInstallHold = false)
+    {
+        if (_engine is null)
+            return EngineOutcome.Failed("engine_missing");
+        lock (_gate)
+        {
+            if (_holdAll && !duringInstallHold)
+                return EngineOutcome.Failed(Updating);
+            _commands++;
+        }
+        try
+        {
+            return await _engine.RunAsync(command, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_gate)
+                _commands--;
+        }
     }
 
     private TraySnapshot BuildSnapshot(DateTimeOffset now) => new()

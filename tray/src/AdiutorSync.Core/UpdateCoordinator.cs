@@ -11,7 +11,10 @@ public interface IAppUpdater
 
     Task DownloadAsync(object update, CancellationToken cancellationToken);
 
-    /** Installs the downloaded release and starts the new version; the process ends. */
+    /**
+     * Installs the downloaded release and starts the new version; the process ends. When the install cannot start, it
+     * throws, and the app is as it was (its icon included).
+     */
     void Apply(object update);
 }
 
@@ -31,6 +34,7 @@ public sealed class UpdateCoordinator(SyncLoop loop, IAppUpdater updater, TimePr
     public static readonly TimeSpan ApplyEvery = TimeSpan.FromSeconds(30);
 
     private object? _ready;
+    private bool _applyFailed;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -49,9 +53,9 @@ public sealed class UpdateCoordinator(SyncLoop loop, IAppUpdater updater, TimePr
                 if (_ready is null)
                     continue;
             }
-            if (TryApply())
+            if (await TryApplyAsync(cancellationToken).ConfigureAwait(false))
                 return;
-            wait = ApplyEvery;
+            wait = _applyFailed ? CheckEvery : ApplyEvery;
         }
     }
 
@@ -93,16 +97,32 @@ public sealed class UpdateCoordinator(SyncLoop loop, IAppUpdater updater, TimePr
         }
     }
 
-    /** Installs the downloaded update when no engine process of the tray runs; false to try again later. */
-    internal bool TryApply()
+    /**
+     * Installs the downloaded update when nothing runs (no run or command of the tray, and no run from the command line
+     * by a fresh status read under the hold); false to try again later. An install that cannot start leaves the tray
+     * running as it was, and is tried again at the next check.
+     */
+    internal async Task<bool> TryApplyAsync(CancellationToken cancellationToken)
     {
+        _applyFailed = false;
         if (_ready is null || !loop.IsIdle)
             return false;
-        using var hold = loop.HoldAll();
-        if (!loop.IsIdle)
+        using var hold = await loop.HoldForInstallAsync(cancellationToken).ConfigureAwait(false);
+        if (hold is null)
             return false;
         log.Info("updates: installing");
-        updater.Apply(_ready);
-        return true;
+        try
+        {
+            updater.Apply(_ready);
+            return true;
+        }
+#pragma warning disable CA1031 // Update.exe blocked or refused: the tray goes on, and says so in its log.
+        catch (Exception e)
+#pragma warning restore CA1031
+        {
+            _applyFailed = true;
+            log.Info($"updates: install did not start ({e.GetType().Name})");
+            return false;
+        }
     }
 }
