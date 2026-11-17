@@ -7,7 +7,7 @@ These notes are for the owner, who deploys production himself. Agents never depl
 ## What you deploy
 
 - **Image:** `ghcr.io/shlomiporush/adiutor:<version>`, published by the Release workflow. Every release has an immutable version tag (`0.1.0`) and moves `latest`. Run a version tag, never `latest`: `docker-compose.yml` refuses to start without `VERSION`.
-- **The sync tray** is not deployed to the server: each release also carries its Windows installer, `AdiutorSync-win-Setup.exe`, on the release's GitHub page, and an installed tray updates itself from there ([sync.md](sync.md), "The tray app"). Before the first release that carries it, turn on immutable releases in the repository's Settings (Releases, Enable release immutability): until then a release stops before it publishes anything.
+- **The sync tray** is not deployed to the server: each release also carries its Windows installer, `AdiutorSync-win-Setup.exe`, on the release's GitHub page, and an installed tray updates itself from there ([sync.md](sync.md), "The tray app"). Immutable releases are on in the repository's Settings (Releases, Enable release immutability), so a published installer can never be replaced; keep them on: a release with the tray that GitHub did not make immutable fails.
 - **One container:** `docker-compose.yml` runs only `adiutor`. It keeps no files: all state is in your PostgreSQL database. It runs as `node` with no capabilities, no new privileges and a read-only root file system.
 - **Migrations** run on every start, before the server listens. There is no separate migration step.
 - **Backups** are yours: back up the Adiutor database with your own tools. Adiutor has no backup feature.

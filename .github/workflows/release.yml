@@ -11,7 +11,7 @@ name: Release
 # meanwhile. Then the sync tray, from the exact commit and version the Release job names: the engine
 # bundle built on Linux, the tray built and packed with Velopack on Windows with the pinned Node.js
 # (tray/node.json), and scripts/release.sh --tray, which uploads it to the draft, reads every asset
-# back and publishes the release. A real release stops while GitHub's immutable releases are off.
+# back and publishes the release; a published release that GitHub did not make immutable fails the run.
 # With dry_run, the same jobs and checks run, the tray is built and packed, and nothing is published
 # or uploaded. A run that stopped halfway is finished by the next run, which ignores the bump: start
 # a new run, since "Re-run failed jobs" keeps the old commit and stops once the release commit is on

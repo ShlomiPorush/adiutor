@@ -114,8 +114,9 @@ EOF
 cat >"$WORK/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 # GitHub stand-in for the calls release.sh makes: release create, and the API (through the real jq for
-# --jq): the releases with drafts, one release, its assets, deleting and reading an asset, publishing, the
-# immutable releases setting. Fails on request.
+# --jq): the releases with drafts, one release, its assets, deleting and reading an asset, publishing. It
+# does not answer the repository's immutable releases setting, which the workflow's token cannot read.
+# Fails on request.
 # shellcheck source=/dev/null
 source "$(dirname "$0")/github-state.sh"
 echo "gh $*" >>"$STATE/calls"
@@ -161,13 +162,6 @@ path="${path#repos/\{owner\}/\{repo\}}"
 id="${path##*/}"
 case "$method $path" in
   "GET ") echo '{"full_name":"owner/repo"}' | answer ;;
-  "GET /immutable-releases")
-    case "${MOCK_IMMUTABLE:-on}" in
-      on) echo '{"enabled":true,"enforced_by_owner":false}' | answer ;;
-      off) echo '{"enabled":false,"enforced_by_owner":false}' | answer ;;
-      *) echo "HTTP 403: Resource not accessible by integration" >&2; exit 1 ;;
-    esac
-    ;;
   "GET /releases?per_page=100")
     {
       echo "["
@@ -201,7 +195,8 @@ case "$method $path" in
     { [ "$fields" = "draft=false" ] && [ -f "$r/tag" ]; } || { echo "unexpected publish: $fields" >&2; exit 2; }
     [ "${MOCK_PUBLISH:-}" = fail ] && { echo "HTTP 500" >&2; exit 1; }
     rm -f "$r/draft"
-    [ "${MOCK_IMMUTABLE:-on}" = on ] && [ -z "${MOCK_NOT_IMMUTABLE:-}" ] && : >"$r/immutable"
+    # The repository's immutable releases are on: a published release is immutable unless MOCK_NOT_IMMUTABLE.
+    [ -z "${MOCK_NOT_IMMUTABLE:-}" ] && : >"$r/immutable"
     [ "${MOCK_PUBLISH:-}" = lost ] && { echo "connection reset" >&2; exit 1; }
     release_json "$r"
     ;;
@@ -511,6 +506,7 @@ check "  and a published GitHub Release without tray assets" published_bare v0.1
 check "  created published, not as a draft" not_called "release create v0.1.0 --verify-tag --draft"
 check "  and it names no tray for the workflow" grep -qx "tray=false" "$WORK/case/output"
 check "  nor uploads one" nothing_uploaded
+check "  nor reads the immutable releases setting" not_called "immutable-releases"
 check "  and does not move the tag" [ "$(tag_rev v0.1.0)" = "$tagged" ]
 release
 check "  the run after it releases 0.2.0 with the tray" complete 0.2.0
@@ -598,28 +594,16 @@ check "  with a clear reason" said "no entries under \[Unreleased\]"
 # --- GitHub's immutable releases -------------------------------------------------------------
 
 sandbox
-MOCK_IMMUTABLE=off release
-check "immutable releases off: the release stops" [ $? -ne 0 ]
-check "  and says what the owner turns on" said "Enable release immutability"
-check "  before anything is pushed or published" untouched v0.1.0
-
-sandbox
-MOCK_IMMUTABLE=unreadable release
-check "immutable releases that cannot be read: the release stops" [ $? -ne 0 ]
-check "  and says why" said "cannot read whether GitHub's immutable releases are on (HTTP 403"
-check "  before anything is pushed or published" untouched v0.1.0
-
-sandbox
-NO_TRAY=1 release
-MOCK_IMMUTABLE=off DIR="$(checkout)" tray
-check "immutable releases turned off before the tray step: it stops" [ $? -ne 0 ]
-check "  before uploading anything" nothing_uploaded
-check "  and the release stays a draft" is_draft v0.1.0
+release
+check "a release never reads the repository's immutable releases setting" not_called "immutable-releases"
+check "  which the workflow's token cannot read" complete 0.1.0
 
 sandbox
 MOCK_NOT_IMMUTABLE=1 release
 check "a release GitHub did not make immutable when published: the run fails" [ $? -ne 0 ]
 check "  and says so" said "GitHub did not make it immutable"
+check "  and what to turn on" said "Turn on immutable releases in the repository's settings"
+check "  with the release published" is_published v0.1.0
 DIR="$(checkout)" tray
 check "  the tray step run again does not count it as finished" [ $? -ne 0 ]
 check "  and says why" said "v0.1.0 is published with the tray, but GitHub did not make it immutable"
@@ -650,14 +634,7 @@ check "the tray's dry run of a new version succeeds" [ $? -eq 0 ]
 check "  and lists what it would upload" said "AdiutorSync-win-Setup.exe"
 check "  with the feed files" said "releases.win.json"
 check "  and uploads nothing" nothing_published
-
-sandbox
-MOCK_IMMUTABLE=off DIR="$(checkout)" run_in --target ghcr --bump minor --dry-run --output "$WORK/case/output"
-check "a dry run with immutable releases off succeeds" [ $? -eq 0 ]
-check "  and says a real release stops there" said "immutable releases are off.*A real release stops here"
-MOCK_IMMUTABLE=off DIR="$(checkout)" TRAY_DRY=1 tray
-check "  and the tray's dry run too" [ $? -eq 0 ]
-check "  saying the same" said "A real release stops here"
+check "  and neither dry run reads the immutable releases setting" not_called "immutable-releases"
 
 sandbox
 MOCK_FAIL_BUILD=1 release

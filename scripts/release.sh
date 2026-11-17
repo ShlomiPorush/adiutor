@@ -47,8 +47,8 @@ Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verif
                     every asset back and publish the release.
   --dry-run         Check everything and print the plan without changing anything.
 
-Steps: preflight (clean main in sync with origin, release notes present, version unused, GitHub's
-immutable releases on), full scripts/verify.sh, version and changelog update, release commit and tag
+Steps: preflight (clean main in sync with origin, release notes present, version unused), full
+scripts/verify.sh, version and changelog update, release commit and tag
 pushed together, the image built from the tag and pushed, then :latest, then the GitHub Release from
 the CHANGELOG section as a draft. Then, with --tray, the tray's installer and Velopack feed go on the
 draft through `vpk upload github`; the release is published only once every one of them is read back
@@ -151,12 +151,12 @@ require_full_release() {
     die "the draft GitHub Release $TAG is marked as a pre-release, which installed trays never read. Clear its pre-release mark on GitHub, then run the release again."
 }
 
-# What a run does about a published GitHub Release (tag $1, id $2) that carries the tray but that GitHub
-# did not make immutable: its installer and feed, which installed trays update from, could still be
-# replaced, so it never counts as finished. The one place for the owner's decision on such a release;
-# until then the run stops and says so.
+# A published GitHub Release (tag $1) that carries the tray but that GitHub did not make immutable: its
+# installer and feed, which installed trays update from, could still be replaced, so it never counts as
+# finished. GitHub's immutable releases are on for this repository and must stay on (owner's decision
+# D-T7); the job's token cannot read that setting, only each release's own mark, so the run fails here.
 published_not_immutable() {
-  die "the GitHub Release $1 is published with the tray, but GitHub did not make it immutable, so its installer and feed could still be replaced. Nothing more is released until the owner decides what to do with it."
+  die "the GitHub Release $1 is published with the tray, but GitHub did not make it immutable, so its installer and feed could still be replaced. Turn on immutable releases in the repository's settings (Settings, Releases, Enable release immutability) and keep them on."
 }
 
 # Checks the state of a published GitHub Release (tag $1, id $2) before a run counts it as finished:
@@ -205,40 +205,6 @@ clear_tray_assets() {
   done <<<"$assets"
 }
 
-# Prints "on", "off" or "unreadable: <reason>" for GitHub's immutable releases setting of the repository.
-immutable_releases() {
-  local out
-  if out="$(gh api "repos/{owner}/{repo}/immutable-releases" --jq '.enabled' 2>&1)"; then
-    case "$out" in
-      true) echo on && return ;;
-      false) echo off && return ;;
-    esac
-  fi
-  echo "unreadable: $(head -1 <<<"$out")"
-}
-
-# The owner turns on GitHub's immutable releases before a release carries the tray (owner's decision
-# D-T7), so a published installer and feed, which installed trays update from, can never be replaced. A
-# real release stops while they are off or cannot be read; a dry run says so and goes on.
-require_immutable() {
-  local state message
-  state="$(immutable_releases)"
-  case "$state" in
-    on)
-      echo "    GitHub's immutable releases: on"
-      return
-      ;;
-    off) message="GitHub's immutable releases are off for this repository" ;;
-    *) message="cannot read whether GitHub's immutable releases are on (${state#unreadable: })" ;;
-  esac
-  message="$message. A release carries the tray app, which installs its updates from the published release, so the owner turns them on first: the repository's Settings, Releases, Enable release immutability."
-  if [ $DRY_RUN -eq 1 ]; then
-    echo "    $message A real release stops here."
-  else
-    die "$message Nothing was published."
-  fi
-}
-
 # Prints "missing", "match" (built from the given commit) or "other" for an image tag. A registry
 # that cannot be read stops the release: it must never count as a free version.
 image_state() {
@@ -275,7 +241,6 @@ preflight() {
   if [ -n "$EXPECT_SHA" ] && [ "$head" != "$EXPECT_SHA" ]; then
     die "main is at $head, not at the verified $EXPECT_SHA: something was pushed meanwhile. Start a new release run."
   fi
-  require_immutable
 
   # A version is finished once its GitHub Release is published, which happens only after the tray's
   # assets are all on it and read back, and the published release passes check_published. Releases from
@@ -528,7 +493,6 @@ tray_release() {
   done
   info "The tray of $TAG"
   read_tray_build
-  require_immutable
   git_ fetch --quiet --tags origin
   if git_ rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     [ "$(git_ rev-parse "$TAG^{commit}")" = "$EXPECT_SHA" ] ||
@@ -576,13 +540,12 @@ tray_release() {
     [ "$(release_state "$TAG")" = "published $draft" ] || die "publishing the GitHub Release $TAG failed. Run the release again to finish it."
   fi
   [ "$(release_state "$TAG")" = "published $draft" ] || die "the GitHub Release $TAG is not published"
-  # The one sign of the setting this job's token can read: the published release itself. Read a few times,
-  # in case GitHub marks it a moment after the publish.
+  # The published release's own immutable mark, read a few times in case GitHub sets it a moment after
+  # the publish.
   local tries=0
   until [ "$(gh api "repos/{owner}/{repo}/releases/$draft" --jq .immutable)" = true ]; do
     tries=$((tries + 1))
-    [ $tries -lt 3 ] ||
-      die "the GitHub Release $TAG is published, but GitHub did not make it immutable: turn on immutable releases (the repository's Settings, Releases, Enable release immutability)"
+    [ $tries -lt 3 ] || published_not_immutable "$TAG" "$draft"
     sleep 5
   done
 }
