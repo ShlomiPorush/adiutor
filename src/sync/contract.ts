@@ -6,7 +6,15 @@
 
 export const CONTRACT_VERSION = 1
 
-export type Command = "status" | "connect" | "disconnect" | "t3-connect" | "t3-disconnect" | "run" | "checkin"
+export type Command =
+  | "status"
+  | "connect"
+  | "disconnect"
+  | "t3-connect"
+  | "t3-disconnect"
+  | "run"
+  | "checkin"
+  | "hold-run"
 
 /** What one part of a run (T3 or security) came to. */
 export type PartResult = "accepted" | "partial" | "failed" | "outcome_unknown" | "not_run"
@@ -15,8 +23,19 @@ export type PartResult = "accepted" | "partial" | "failed" | "outcome_unknown" |
 export type Event =
   | { type: "event"; event: "message"; text: string }
   | { type: "event"; event: "approval"; link: string; userCode: string }
+  /** `hold-run` holds the run lock now, until its stdin ends. */
+  | { type: "event"; event: "held" }
 
 export type Failure = { code: string; message: string }
+
+/**
+ * Where a setting's value came from (docs/sync.md, "Settings"): a command-line option, the environment, an env file
+ * (--env, or the default sync.env that `connect` writes), the settings file the tray writes, or the default.
+ */
+export type SettingSource = "option" | "environment" | "envFile" | "settingsFile" | "default"
+
+/** A setting as the engine uses it: its value (null when none is set or it cannot be used) and its source. */
+export type EffectiveSetting = { value: string | null; source: SettingSource }
 
 export type AdiutorState = {
   /** `ended`: Adiutor ended the connection (disconnected there, idle, or a token used twice); connect again. */
@@ -116,6 +135,7 @@ export type Result = { type: "result"; v: typeof CONTRACT_VERSION } & (
   | ({ command: "t3-disconnect"; ok: boolean } & DisconnectBody)
   | ({ command: "run"; ok: boolean } & RunBody)
   | ({ command: "checkin"; ok: boolean } & CheckinBody)
+  | ({ command: "hold-run"; ok: boolean } & RunBody)
 )
 
 export type StatusBody = {
@@ -128,7 +148,11 @@ export type StatusBody = {
   paused: Pause | null
   /** A sync request Adiutor handed this computer that no answered check-in reported finished yet. */
   claim: CheckinClaim | null
-  settings: { problems: string[] }
+  settings: {
+    problems: string[]
+    /** Each setting as this engine uses it, by the settings file's key. */
+    values: Record<"adiutorUrl" | "t3CliPath" | "t3Url" | "overviewDir", EffectiveSetting>
+  }
 }
 
 export type CheckinBody = {
@@ -167,6 +191,10 @@ export type RunBody = {
   error?: Failure
 }
 
+/** The events other than a human line, each with its own fields. */
+type EventInput =
+  Exclude<Event, { event: "message" }> extends infer E ? (E extends unknown ? Omit<E, "type"> : never) : never
+
 /** Distributes Omit over a union, so each result keeps its own fields. */
 type ResultInput = Result extends infer R ? (R extends unknown ? Omit<R, "type" | "v"> : never) : never
 
@@ -181,8 +209,8 @@ export function output(json: boolean, out: (line: string) => void) {
       if (json) write({ type: "event", event: "message", text } satisfies Event)
       else out(text)
     },
-    event(value: Omit<Extract<Event, { event: "approval" }>, "type">) {
-      if (!done && json) write({ type: "event", ...value } satisfies Event)
+    event(value: EventInput) {
+      if (!done && json) write({ type: "event", ...value } as Event)
     },
     /** The one result; human output has printed its lines already. Later calls are ignored. */
     result(value: ResultInput) {

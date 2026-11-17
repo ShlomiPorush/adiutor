@@ -1,0 +1,1 @@
+{"type":"result","v":1,"command":"disconnect","ok":false,"wasConnected":true,"revocationPending":true,"error":{"code":"revocation_pending","message":"The revocation is kept and tried again."}}

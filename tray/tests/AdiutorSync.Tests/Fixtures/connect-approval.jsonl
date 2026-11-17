@@ -1,0 +1,3 @@
+{"type":"event","event":"message","text":"Open the link and approve the sync in Adiutor."}
+{"type":"event","event":"approval","link":"https://adiutor.example.com/connect/device?user_code=ABCD-EFGH","userCode":"ABCD-EFGH"}
+{"type":"result","v":1,"command":"connect","ok":true,"state":"connected","scope":"sync"}

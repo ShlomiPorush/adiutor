@@ -8,6 +8,7 @@ import { readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
 import { defaultEnvFile } from "./connect.ts"
+import type { SettingSource } from "./contract.ts"
 import { ClientError } from "./errors.ts"
 import { asObject, asString, asTime, parseJson } from "./json.ts"
 import { credentialsDir, issuerOf } from "./oauth.ts"
@@ -85,6 +86,8 @@ export type Resolved = {
   pause: { until: string | null } | null
   /** Settings that cannot be used, without their values. */
   problems: string[]
+  /** Where each setting came from. */
+  sources: Record<keyof typeof NAMES, SettingSource>
   /** The env file that was read, if any. */
   envFile?: string
 }
@@ -118,14 +121,27 @@ export function resolveSettings(input: {
   const problems = file.problem ? [file.problem] : []
   const pick = (name: keyof typeof NAMES, flag?: string) => {
     const fromFile = input.envFileVars?.[NAMES[name].env]
-    const from = input.envFileFirst
-      ? [flag, fromFile, env[NAMES[name].env], file.settings[NAMES[name].file]]
-      : [flag, env[NAMES[name].env], fromFile, file.settings[NAMES[name].file]]
-    for (const value of from) {
+    const environment: [string | undefined, SettingSource] = [env[NAMES[name].env], "environment"]
+    const envFile: [string | undefined, SettingSource] = [fromFile, "envFile"]
+    const from: [string | undefined, SettingSource][] = [
+      [flag, "option"],
+      ...(input.envFileFirst ? [envFile, environment] : [environment, envFile]),
+      [file.settings[NAMES[name].file], "settingsFile"],
+    ]
+    for (const [value, source] of from) {
       const trimmed = value?.trim()
-      if (trimmed) return trimmed
+      if (trimmed) {
+        sources[name] = source
+        return trimmed
+      }
     }
     return undefined
+  }
+  const sources: Record<keyof typeof NAMES, SettingSource> = {
+    url: "default",
+    cliPath: "default",
+    t3Url: "default",
+    overviewDir: "default",
   }
   let url = pick("url", input.flags?.url)
   if (url !== undefined) {
@@ -152,6 +168,7 @@ export function resolveSettings(input: {
     // A pause that ended is no pause.
     pause: pause && (pause.until === null || Date.parse(pause.until) > input.now) ? pause : null,
     problems,
+    sources,
     ...(input.envFile ? { envFile: input.envFile } : {}),
   }
 }

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The tray app: the notification area icon, the panel, the settings window and Velopack's install, startup and
+       update hooks. Its logic is in AdiutorSync.Core. Self-contained for win-x64, the owner's PC (the plan, "Shape"). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <AssemblyName>AdiutorSync</AssemblyName>
+    <RootNamespace>AdiutorSync</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <!-- Windows Forms only for NotifyIcon, .NET's notification area icon; WPF has none. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <StartupObject>AdiutorSync.Program</StartupObject>
+    <!-- WPF0001: ThemeMode (the Fluent theme that follows Windows' light and dark) is marked experimental. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- WPF and Windows Forms share type names (Application, Button); only WPF's are imported implicitly. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AdiutorSync.Core\AdiutorSync.Core.csproj" />
+  </ItemGroup>
+</Project>

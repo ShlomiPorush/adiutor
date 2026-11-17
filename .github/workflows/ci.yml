@@ -30,6 +30,7 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      tray: ${{ steps.tray.outputs.tray }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: filter
@@ -42,6 +43,16 @@ jobs:
               - '!docs/**'
               - '!**/*.md'
               - '!LICENSE'
+      # The tray app runs the sync's commands, so a change to either, or to this workflow, builds and tests it.
+      - id: tray
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            tray:
+              - 'tray/**'
+              - 'src/sync/**'
+              - 'src/shared/locales/**'
+              - '.github/workflows/ci.yml'
 
   # Always runs: documentation is where Hebrew text, addresses and private names slip in.
   guards:
@@ -70,10 +81,36 @@ jobs:
         if: github.event_name != 'pull_request'
         run: scripts/verify.sh
 
+  # The Windows tray app (tray/): build and xUnit tests with a stand-in engine and temporary folders; no real T3,
+  # Adiutor or profile. On a pull request only when the tray, the sync, the locales or this workflow changed; on every
+  # other run (main, the release's CI, the weekly sweep) always.
+  tray:
+    name: Tray (Windows)
+    needs: changes
+    if: needs.changes.outputs.tray == 'true' || github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tray
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: tray/global.json
+      - name: Build
+        run: dotnet build AdiutorSync.slnx --configuration Release
+      - name: Test
+        env:
+          ADIUTOR_TEST_TMP: ${{ runner.temp }}
+        run: dotnet test --solution AdiutorSync.slnx --configuration Release --no-build
+
   summary:
     name: CI summary
     if: always()
-    needs: [changes, guards, verify]
+    needs: [changes, guards, verify, tray]
     runs-on: ubuntu-latest
     steps:
       - name: Check results

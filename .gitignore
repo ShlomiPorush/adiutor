@@ -29,3 +29,8 @@ Thumbs.db
 
 # The local project map (an agent's status page, never committed)
 /.project-map/
+
+# The tray app's build output (tray/)
+tray/**/bin/
+tray/**/obj/
+tray/**/TestResults/

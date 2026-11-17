@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The tray's logic without any window: the engine's JSON, the engine runner and its Job Object, the settings and
+       state files, the pause, the loop, the updates' timing and the text the windows show. Tested by
+       tests/AdiutorSync.Tests. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>AdiutorSync.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AdiutorSync.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The repository's locale files: the tray reads their `tray` section (Texts.cs). -->
+    <EmbeddedResource Include="..\..\..\src\shared\locales\en.json" LogicalName="locales.en.json" Link="Locales\en.json" />
+    <EmbeddedResource Include="..\..\..\src\shared\locales\he.json" LogicalName="locales.he.json" Link="Locales\he.json" />
+  </ItemGroup>
+</Project>

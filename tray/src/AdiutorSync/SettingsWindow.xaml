@@ -1,0 +1,127 @@
+<Window x:Class="AdiutorSync.SettingsWindow" x:ClassModifier="internal"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Adiutor Sync" Width="620" SizeToContent="Height" MinWidth="480" MinHeight="420"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize">
+  <Window.Resources>
+    <Style x:Key="Section" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="20" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="0,16,0,8" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+    </Style>
+    <Style x:Key="Label" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Margin" Value="0,8,0,4" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+    </Style>
+    <Style x:Key="Note" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Margin" Value="0,8,0,0" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+    </Style>
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="18,4,18,14" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
+    </Style>
+  </Window.Resources>
+  <DockPanel>
+    <Border DockPanel.Dock="Bottom" Padding="28,14" BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}">
+      <DockPanel>
+        <Button x:Name="SaveButton" DockPanel.Dock="Right" Style="{DynamicResource AccentButtonStyle}" MinWidth="110" Padding="16,7" Click="Save_Click" />
+        <TextBlock x:Name="VersionText" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,16,0"
+                   Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+        <TextBlock x:Name="SaveMessage" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"
+                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+      </DockPanel>
+    </Border>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="28,4,28,18">
+        <TextBlock x:Name="Heading" FontSize="26" FontWeight="SemiBold" Margin="0,10,0,0"
+                   Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+
+        <TextBlock x:Name="AdiutorHeading" Style="{StaticResource Section}" />
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <TextBlock x:Name="AdiutorUrlLabel" Style="{StaticResource Label}" />
+            <TextBox x:Name="AdiutorUrl" FlowDirection="LeftToRight" FontSize="14" />
+            <TextBlock x:Name="AdiutorUrlNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+            <DockPanel Margin="0,14,0,0">
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button x:Name="AdiutorConnect" MinWidth="96" Padding="14,6" Click="AdiutorConnect_Click" />
+                <Button x:Name="AdiutorDisconnect" MinWidth="96" Padding="14,6" Margin="8,0,0,0" Click="AdiutorDisconnect_Click" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Ellipse x:Name="AdiutorDot" Width="10" Height="10" Margin="0,0,8,0" />
+                <TextBlock x:Name="AdiutorState" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+              </StackPanel>
+            </DockPanel>
+            <Border x:Name="ApprovalBox" Visibility="Collapsed" Margin="0,14,0,0" CornerRadius="6" Padding="14,10"
+                    Background="{DynamicResource SubtleFillColorSecondaryBrush}">
+              <StackPanel>
+                <TextBlock x:Name="ApprovalText" TextWrapping="Wrap" FontSize="14"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                <TextBlock x:Name="ApprovalCode" FontSize="26" FontWeight="SemiBold" FontFamily="Consolas"
+                           FlowDirection="LeftToRight" HorizontalAlignment="Left" Margin="0,6,0,8"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="OpenApproval" Padding="12,5" Click="OpenApproval_Click" />
+                  <Button x:Name="CancelCommand" Padding="12,5" Margin="8,0,0,0" Click="Cancel_Click" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+            <TextBlock x:Name="AdiutorMessage" Style="{StaticResource Note}" />
+          </StackPanel>
+        </Border>
+
+        <TextBlock x:Name="T3Heading" Style="{StaticResource Section}" />
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <TextBlock x:Name="T3CliLabel" Style="{StaticResource Label}" />
+            <TextBox x:Name="T3Cli" FlowDirection="LeftToRight" FontSize="14" />
+            <TextBlock x:Name="T3CliNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+            <TextBlock x:Name="T3UrlLabel" Style="{StaticResource Label}" />
+            <TextBox x:Name="T3Url" FlowDirection="LeftToRight" FontSize="14" />
+            <TextBlock x:Name="T3UrlNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+            <DockPanel Margin="0,14,0,0">
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button x:Name="T3Connect" MinWidth="96" Padding="14,6" Click="T3Connect_Click" />
+                <Button x:Name="T3Disconnect" MinWidth="96" Padding="14,6" Margin="8,0,0,0" Click="T3Disconnect_Click" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Ellipse x:Name="T3Dot" Width="10" Height="10" Margin="0,0,8,0" />
+                <TextBlock x:Name="T3State" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+              </StackPanel>
+            </DockPanel>
+            <TextBlock x:Name="T3Message" Style="{StaticResource Note}" />
+          </StackPanel>
+        </Border>
+
+        <TextBlock x:Name="SyncHeading" Style="{StaticResource Section}" />
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <TextBlock x:Name="OverviewLabel" Style="{StaticResource Label}" />
+            <DockPanel>
+              <Button x:Name="BrowseOverview" DockPanel.Dock="Right" Padding="12,5" Margin="8,0,0,0" Click="BrowseOverview_Click" />
+              <TextBox x:Name="Overview" FlowDirection="LeftToRight" FontSize="14" />
+            </DockPanel>
+            <TextBlock x:Name="OverviewNote" Style="{StaticResource Note}" Visibility="Collapsed" />
+            <TextBlock x:Name="ScheduleLabel" Style="{StaticResource Label}" />
+            <ComboBox x:Name="Schedule" MinWidth="180" HorizontalAlignment="Left" />
+            <CheckBox x:Name="StartBox" Margin="0,12,0,0" FontSize="14" />
+            <TextBlock x:Name="StartNote" Style="{StaticResource Note}" />
+            <TextBlock x:Name="LanguageLabel" Style="{StaticResource Label}" />
+            <ComboBox x:Name="LanguageBox" MinWidth="180" HorizontalAlignment="Left" />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>
