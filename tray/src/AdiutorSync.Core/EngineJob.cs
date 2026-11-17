@@ -6,8 +6,8 @@ namespace AdiutorSync.Core;
 
 /// <summary>
 /// One Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (documented Win32: CreateJobObjectW,
-/// SetInformationJobObject, AssignProcessToJobObject). Every engine process is assigned to it as soon as it starts,
-/// before the tray writes its input, and its children (the T3 CLI, the collector) are created inside it. When the
+/// SetInformationJobObject, AssignProcessToJobObject). Every engine process is put in it while it is still suspended
+/// (JobProcess), before it runs any code, and its children (the T3 CLI, the collector) are created inside it. When the
 /// tray ends, however it ends, Windows closes the job's last handle and ends every process in it, so no engine or
 /// child of the engine outlives the tray (the plan, "Process tree").
 /// </summary>
@@ -32,8 +32,15 @@ public sealed partial class EngineJob : IDisposable
         }
     }
 
-    /** Puts a started process in the job; false when Windows refuses, and the caller then ends the process. */
-    public bool Assign(Process process) => AssignProcessToJobObject(_handle, process.Handle);
+    /** Puts a process in the job; false when Windows refuses, and the caller then ends the process. */
+    public bool Assign(SafeHandle process) => AssignProcessToJobObject(_handle, process.DangerousGetHandle());
+
+    /** Whether a running process is in this job (for the tests). */
+    internal bool Contains(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        return IsProcessInJob(process.Handle, _handle, out var inJob) && inJob;
+    }
 
     /** Closes the job: every process still in it ends. */
     public void Dispose() => _handle.Dispose();
@@ -84,4 +91,8 @@ public sealed partial class EngineJob : IDisposable
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool IsProcessInJob(IntPtr process, SafeFileHandle job, [MarshalAs(UnmanagedType.Bool)] out bool result);
 }

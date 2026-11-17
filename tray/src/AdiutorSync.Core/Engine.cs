@@ -74,47 +74,32 @@ public sealed class NodeEngine(EngineLocation location, EngineJob job, ITrayLog 
 
     public int Active => Volatile.Read(ref _active);
 
+    /** A test seam: runs while the engine process exists, suspended and not yet in the job. */
+    internal Action<int>? BeforeResume { get; set; }
+
     public async Task<EngineOutcome> RunAsync(EngineCommand command, CancellationToken cancellationToken)
     {
-        var info = new ProcessStartInfo(location.NodePath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(false),
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            WorkingDirectory = Path.GetDirectoryName(location.ScriptPath)!,
-        };
-        info.ArgumentList.Add(location.ScriptPath);
-        foreach (var arg in command.Args)
-            info.ArgumentList.Add(arg);
-        info.ArgumentList.Add("--json");
-
+        List<string> args = [location.ScriptPath, .. command.Args, "--json"];
         Interlocked.Increment(ref _active);
         try
         {
-            using var process = new Process { StartInfo = info };
+            JobProcess? process;
             try
             {
-                if (!process.Start())
-                    return Fail(command, "start_failed");
+                process = JobProcess.Start(location.NodePath, args, Path.GetDirectoryName(location.ScriptPath)!, job, BeforeResume);
             }
-            catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+            catch (System.ComponentModel.Win32Exception)
             {
+                process = null;
+            }
+            if (process is null)
                 return Fail(command, "start_failed");
-            }
-            if (!job.Assign(process))
-            {
-                // Never run the engine outside the job.
-                Kill(process);
-                return Fail(command, "job_failed");
-            }
+            using var owned = process;
 
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             limit.CancelAfter(command.Timeout);
+            // The pipes are read without overlapped I/O, so a limit ends the process; the reads then end too.
+            using var stop = limit.Token.Register(process.Kill);
             var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
             EngineResult? result = null;
             try
@@ -126,28 +111,22 @@ public sealed class NodeEngine(EngineLocation location, EngineJob job, ITrayLog 
             {
                 // The engine closed its input early; its result, if any, still decides.
             }
-            try
+            while (await process.StandardOutput.ReadLineAsync(CancellationToken.None).ConfigureAwait(false) is { } line)
             {
-                while (await process.StandardOutput.ReadLineAsync(limit.Token).ConfigureAwait(false) is { } line)
+                switch (EngineOutput.ParseLine(line))
                 {
-                    switch (EngineOutput.ParseLine(line))
-                    {
-                        case EngineEvent e:
-                            command.OnEvent?.Invoke(e);
-                            break;
-                        case EngineResult r when result is null:
-                            result = r;
-                            break;
-                    }
+                    case EngineEvent e:
+                        command.OnEvent?.Invoke(e);
+                        break;
+                    case EngineResult r when result is null:
+                        result = r;
+                        break;
                 }
-                await process.WaitForExitAsync(limit.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-                Kill(process);
-                return Fail(command, cancellationToken.IsCancellationRequested ? "cancelled" : "timeout");
-            }
+            await process.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             await stderr.ConfigureAwait(false);
+            if (limit.IsCancellationRequested)
+                return Fail(command, cancellationToken.IsCancellationRequested ? "cancelled" : "timeout");
             if (result is null)
                 return Fail(command, "no_result");
             log.Info($"engine {command.Name}: ok={result.Ok}{(result.Error is { } f ? $" code={SafeCode(f.Code)}" : "")}");
@@ -169,17 +148,4 @@ public sealed class NodeEngine(EngineLocation location, EngineJob job, ITrayLog 
     public static string SafeCode(string code) =>
         code.Length is > 0 and <= 40 && code.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_') ? code : "other";
 
-    private static void Kill(Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-        }
-    }
 }

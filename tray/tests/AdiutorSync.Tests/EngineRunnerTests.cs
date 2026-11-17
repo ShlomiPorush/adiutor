@@ -91,6 +91,52 @@ public class EngineRunnerTests
     }
 
     [Fact]
+    public async Task The_engine_is_in_the_job_before_it_runs_any_code()
+    {
+        using var job = new EngineJob();
+        var engine = new NodeEngine(Location(), job, NoLog.Instance);
+        var threadsWhileStalled = 0;
+        var inJobWhileSuspended = true;
+        // A stall between creating the engine and putting it in the job: the engine must not run meanwhile. A started
+        // node.exe has many threads within a second; a suspended one has only its first.
+        engine.BeforeResume = pid =>
+        {
+            Thread.Sleep(1500);
+            using var process = Process.GetProcessById(pid);
+            threadsWhileStalled = process.Threads.Count;
+            inJobWhileSuspended = job.Contains(pid);
+        };
+        var childPid = new TaskCompletionSource<int>();
+        var run = engine.RunAsync(
+            new EngineCommand(["spawn"], TimeSpan.FromSeconds(20), OnEvent: e =>
+            {
+                if (e is MessageEvent m && int.TryParse(m.Text, out var pid))
+                    childPid.TrySetResult(pid);
+            }),
+            TestContext.Current.CancellationToken);
+        var child = await childPid.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Equal(1, threadsWhileStalled);
+        Assert.False(inJobWhileSuspended);
+        Assert.True(job.Contains(child), "the engine's child is outside the job");
+        var outcome = await run.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        Assert.Equal("timeout", outcome.Failure);
+    }
+
+    [Theory]
+    [InlineData("plain", "plain")]
+    [InlineData("a b", "\"a b\"")]
+    [InlineData("say \"hi\"", "\"say \\\"hi\\\"\"")]
+    [InlineData(@"C:\dir\", @"C:\dir\")]
+    [InlineData(@"C:\a dir\", "\"C:\\a dir\\\\\"")]
+    [InlineData("", "\"\"")]
+    public void Arguments_are_quoted_as_the_C_runtime_reads_them(string arg, string quoted)
+    {
+        var line = new System.Text.StringBuilder();
+        JobProcess.AppendArgument(line, arg);
+        Assert.Equal(quoted, line.ToString());
+    }
+
+    [Fact]
     public void Locator_prefers_the_installed_engine_and_needs_full_paths()
     {
         using var dir = new TempFolder();
