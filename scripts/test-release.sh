@@ -85,7 +85,7 @@ release_json() {
   local r="$1" assets="" a
   for a in "$r"/assets/*.name; do
     [ -e "$a" ] || continue
-    assets="$assets${assets:+,}{\"id\":$(basename "$a" .name),\"name\":\"$(cat "$a")\"}"
+    assets="$assets${assets:+,}{\"id\":$(basename "$a" .name),\"name\":\"$(cat "$a")\",\"size\":$(wc -c <"${a%.name}" | tr -d ' ')}"
   done
   printf '{"id":%s,"tag_name":"%s","draft":%s,"prerelease":%s,"immutable":%s,"assets":[%s]}\n' "${r##*/}" "$(cat "$r/tag")" \
     "$([ -e "$r/draft" ] && echo true || echo false)" "$([ -e "$r/prerelease" ] && echo true || echo false)" \
@@ -196,6 +196,12 @@ case "$method $path" in
     r="$STATE/rel/$id"
     { [[ "$fields" == draft=false* ]] && [ -f "$r/tag" ]; } || { echo "unexpected publish: $fields" >&2; exit 2; }
     [ "${MOCK_PUBLISH:-}" = fail ] && { echo "HTTP 500" >&2; exit 1; }
+    # MOCK_REMOVE_BEFORE_PUBLISH: another run removed that asset after this one read the draft back.
+    if [ -n "${MOCK_REMOVE_BEFORE_PUBLISH:-}" ]; then
+      for a in "$r"/assets/*.name; do
+        [ "$(cat "$a")" = "$MOCK_REMOVE_BEFORE_PUBLISH" ] && rm -f "$a" "${a%.name}"
+      done
+    fi
     rm -f "$r/draft"
     [[ "$fields" == *prerelease=false* ]] && rm -f "$r/prerelease"
     # The repository's immutable releases are on: a published release is immutable unless MOCK_NOT_IMMUTABLE.
@@ -316,14 +322,15 @@ checkout() {
 
 origin_head() { git -C "$WORK/case/origin.git" rev-parse main; }
 
-# Runs release.sh with the given arguments in the checkout DIR (a new one unless DIR is set). The output
-# goes to case/out, after what is there when APPEND is set.
+# Runs release.sh with the given arguments in the checkout DIR (a new one unless DIR is set), as in the
+# Release workflow (GITHUB_ACTIONS=true) unless TEST_ACTIONS is set; TEST_ACTIONS= runs it as on a PC. The
+# output goes to case/out, after what is there when APPEND is set.
 run_in() {
   local dir="${DIR:-$(checkout)}"
   if [ -n "${APPEND:-}" ]; then
-    (cd "$dir" && PATH="$WORK/bin:$PATH" bash scripts/release.sh "$@") >>"$WORK/case/out" 2>&1
+    (cd "$dir" && PATH="$WORK/bin:$PATH" GITHUB_ACTIONS="${TEST_ACTIONS-true}" bash scripts/release.sh "$@") >>"$WORK/case/out" 2>&1
   else
-    (cd "$dir" && PATH="$WORK/bin:$PATH" bash scripts/release.sh "$@") >"$WORK/case/out" 2>&1
+    (cd "$dir" && PATH="$WORK/bin:$PATH" GITHUB_ACTIONS="${TEST_ACTIONS-true}" bash scripts/release.sh "$@") >"$WORK/case/out" 2>&1
   fi
 }
 
@@ -501,8 +508,8 @@ sed -i 's/^## \[Unreleased\]$/## [Unreleased]\n\n### Added\n\n- The tray./' "$di
 git -C "$dir" add -A && git -C "$dir" commit --quiet -m "The tray's release"
 git -C "$dir" push --quiet origin main v0.1.0
 tagged="$(tag_rev v0.1.0)"
-release
-check "a stopped release from before the tray: the next run finishes it" [ $? -eq 0 ]
+TEST_ACTIONS='' release
+check "a stopped release from before the tray: the next run, by hand too, finishes it" [ $? -eq 0 ]
 check "  and says it has no tray" said "v0.1.0 has no tray packaging"
 check "  with the image and :latest from its tag" image_from 0.1.0 "$tagged"
 check "  and a published GitHub Release without tray assets" published_bare v0.1.0
@@ -628,6 +635,31 @@ release
 check "  moved back to a draft with every tray asset, the next run finishes it" complete 0.1.0
 check "  republished immutable, as the same version" lacks_tag v0.2.0
 check "  without building the image again" [ "$(calls "buildx build")" = 1 ]
+
+# Real tray work runs only in the Release workflow, whose concurrency group runs one at a time.
+sandbox
+NO_TRAY=1 release
+TEST_ACTIONS='' DIR="$(checkout)" tray
+check "a real tray step outside the Release workflow: refused" [ $? -ne 0 ]
+check "  and says where it runs" said "real tray releases go through the Release workflow"
+check "  before uploading" nothing_uploaded
+check "  and the release stays a draft" is_draft v0.1.0
+TEST_ACTIONS='' TRAY_DRY=1 DIR="$(checkout)" tray
+check "  its dry run is allowed on a PC" [ $? -eq 0 ]
+
+sandbox
+MOCK_UPLOAD_FAIL_AFTER=2 release
+TEST_ACTIONS='' NO_TRAY=1 release
+check "a release run by hand that would remove a stopped run's tray assets: refused" [ $? -ne 0 ]
+check "  and says where it runs" said "real tray releases go through the Release workflow"
+check "  and removes nothing" draft_holding v0.1.0 2
+
+# Another run removes a tray asset after this one read the draft back: the published version is incomplete.
+sandbox
+MOCK_REMOVE_BEFORE_PUBLISH=AdiutorSync-win-Portable.zip release
+check "a tray asset gone between the read-back and the publish: the run fails" [ $? -ne 0 ]
+check "  and says the version is incomplete" said "v0.1.0 was published without every tray asset"
+check "  after the publish" is_published v0.1.0
 
 # A published release with the tray marked as a pre-release, which the tray's updater skips.
 sandbox

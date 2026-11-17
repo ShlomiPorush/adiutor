@@ -30,6 +30,8 @@ TRAY_DIR=""
 TRAY=1
 # The files of the tray's build (assets.win.json), set by read_tray_build.
 TRAY_FILES=()
+# "<name> <size>" of each tray asset read back from the draft, set by verify_tray_assets.
+VERIFIED_ASSETS=""
 
 usage() {
   cat <<'EOF'
@@ -44,7 +46,9 @@ Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verif
   --output FILE     Write tag=, version=, sha= (the commit to build the tray from) and tray= (false
                     for a tag from before releases carried the tray) to FILE.
   --tray DIR        Upload the tray packed in DIR (scripts/pack-tray.ps1) to the draft of --tag, read
-                    every asset back and publish the release.
+                    every asset back and publish the release. Real tray work (--tray, or removing the
+                    tray assets a stopped run left on a draft) runs only in the Release workflow
+                    (GITHUB_ACTIONS=true), which runs one release at a time; a dry run runs anywhere.
   --dry-run         Check everything and print the plan without changing anything.
 
 Steps: preflight (clean main in sync with origin, release notes present, version unused), full
@@ -196,6 +200,14 @@ tray_assets_of() {
   tray_names <<<"$assets"
 }
 
+# Real tray work (removing, uploading or publishing a release's tray assets) runs only in the Release
+# workflow, whose concurrency group runs one release at a time: two runs on one draft could publish it
+# with assets the other removed. A dry run, and a release without the tray, run anywhere.
+require_release_workflow() {
+  [ "${GITHUB_ACTIONS:-}" = true ] ||
+    die "real tray releases go through the Release workflow, whose concurrency group runs one release at a time. Run the workflow, or add --dry-run here."
+}
+
 # Removes the tray assets an earlier, stopped run left on the draft $1 of TAG: a package built again never
 # matches them byte for byte, and `vpk upload github` refuses a draft that already holds a feed. Only from
 # that draft, checked again before each removal, and only the tray's names.
@@ -204,6 +216,7 @@ clear_tray_assets() {
   assets="$(release_assets "$draft")"
   while read -r id name; do
     if [ -z "$id" ] || ! is_tray_asset "$name"; then continue; fi
+    require_release_workflow
     [ "$(release_state "$TAG")" = "draft $draft" ] || die "the GitHub Release $TAG is no longer the draft $draft; nothing more is removed"
     echo "    removing $name, left on the draft by an earlier run"
     gh api -X DELETE "repos/{owner}/{repo}/releases/assets/$id" >/dev/null ||
@@ -486,8 +499,20 @@ verify_tray_assets() {
     grep -qxF "$line" <<<"$want" ||
       die "RELEASES on the draft $TAG lists $line, which is not a local package. Run the release again."
   done <<<"$have"
+  VERIFIED_ASSETS="$(for name in $(expected_tray_assets); do echo "$name $(size_of "$dir/$name")"; done | sort)"
   rm -rf "$dir"
   echo "    $(expected_tray_assets | grep -c .) tray assets on the draft match the local files"
+}
+
+# The tray assets of this build, by name and size, must all be on the release just published (id $1): a
+# run that changed the draft meanwhile cannot leave an incomplete version behind unnoticed.
+require_published_complete() {
+  local listed name size
+  listed="$(gh api "repos/{owner}/{repo}/releases/$1" --jq '.assets[] | .name + " " + (.size | tostring)' 2>&1)" ||
+    die "cannot read the assets of the GitHub Release $TAG: $listed"
+  listed="$(while read -r name size; do if is_tray_asset "$name"; then echo "$name $size"; fi; done <<<"$listed" | sort)"
+  [ "$listed" = "$VERIFIED_ASSETS" ] ||
+    die "the GitHub Release $TAG was published without every tray asset of this build (it holds [$(tr '\n' ' ' <<<"$listed")]), so the published version is incomplete, and a published release is not changed. Release a new version."
 }
 
 tray_release() {
@@ -495,6 +520,7 @@ tray_release() {
   [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--tag must be a release tag such as v1.2.3"
   [ -n "$EXPECT_SHA" ] || die "--tray needs --expect-sha of the commit the tray was built from"
   VERSION="${TAG#v}"
+  [ $DRY_RUN -eq 1 ] || require_release_workflow
   for tool in gh jq sha256sum sha1sum; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
   done
@@ -549,6 +575,7 @@ tray_release() {
     [ "$(release_state "$TAG")" = "published $draft" ] || die "publishing the GitHub Release $TAG failed. Run the release again to finish it."
   fi
   [ "$(release_state "$TAG")" = "published $draft" ] || die "the GitHub Release $TAG is not published"
+  require_published_complete "$draft"
   # The published release's own immutable mark, read a few times in case GitHub sets it a moment after
   # the publish, then the whole check a later run makes.
   local tries=0 immutable
