@@ -1,0 +1,15 @@
+<Project>
+  <!-- Shared by every project of the tray app. The version comes from the build (-p:Version=...); the default
+       marks a development build. The check-in sends it, so it keeps to letters, digits, '.', '+' and '-'. -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Authors>Adiutor</Authors>
+    <Product>Adiutor Sync</Product>
+  </PropertyGroup>
+</Project>

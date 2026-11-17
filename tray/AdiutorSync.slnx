@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AdiutorSync.Core/AdiutorSync.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AdiutorSync.Tests/AdiutorSync.Tests.csproj" />
+  </Folder>
+</Solution>

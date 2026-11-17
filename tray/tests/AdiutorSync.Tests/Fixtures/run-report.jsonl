@@ -1,0 +1,3 @@
+{"type":"event","event":"message","text":"Collecting the overview snapshot..."}
+{"type":"event","event":"message","text":"T3: 34 projects, 210 threads"}
+{"type":"result","v":1,"command":"run","ok":true,"report":{"startedAt":"2026-11-17T09:00:00.000Z","finishedAt":"2026-11-17T09:04:00.000Z","dryRun":false,"requestId":null,"t3":{"result":"accepted","projectsFrom":"last_good","projectsAt":"2026-11-16T09:00:00.000Z","projects":34,"threads":210,"failedProjects":0},"security":{"result":"accepted","snapshotRunId":"run-2","snapshotAt":"2026-11-17T09:03:00.000Z","repos":12,"projectsFrom":"t3","projectsAt":"2026-11-17T09:00:05.000Z"},"lastGoodSyncAt":"2026-11-17T09:04:00.000Z"}}

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The tray's logic without any window: the engine's JSON, the engine runner and its Job Object, the settings and
+       state files, the pause and the loop. Tested by tests/AdiutorSync.Tests. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>AdiutorSync.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AdiutorSync.Tests" />
+  </ItemGroup>
+</Project>
