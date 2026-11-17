@@ -49,7 +49,9 @@ describe("resolveSettings", () => {
       t3Url: "http://127.0.0.1:4000",
       overviewDir: "/flag/overview",
       problems: [],
+      sources: { url: "envFile", cliPath: "environment", t3Url: "settingsFile", overviewDir: "option" },
     })
+    expect(resolveSettings(given).sources.url).toBe("environment")
     expect(resolveSettings({ platform: "linux", env, now: NOW, flags: { url: "https://flag.example.com" } }).url).toBe(
       "https://flag.example.com",
     )
@@ -64,6 +66,7 @@ describe("resolveSettings", () => {
       overviewDir: undefined,
       pause: null,
       problems: [],
+      sources: { url: "default", cliPath: "default", t3Url: "default", overviewDir: "default" },
     })
     expect(defaultT3Cli("win32", { USERPROFILE: "C:\\Users\\dev" })).toBe("C:\\Users\\dev\\.t3\\bin\\t3.cmd")
   })

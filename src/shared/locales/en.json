@@ -1575,7 +1575,10 @@
       "badT3Url": "T3's address starts with http:// on this computer, or https://.",
       "version": "Version {version}",
       "addressFirst": "Enter Adiutor's address first.",
-      "sync": "Sync"
+      "sync": "Sync",
+      "lockedEnvironment": "Set by the environment ({name}); change it there.",
+      "lockedEnvFile": "Set in sync.env ({name}); change it there.",
+      "urlFromConnect": "Connect saved this address in sync.env. A new address takes effect when you connect."
     }
   }
 }

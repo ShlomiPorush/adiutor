@@ -336,7 +336,15 @@ async function statusCommand(settings: Resolved, deps: MainDeps, out: Output): P
     running: runningSince(data, { platform: all.platform, env: deps.env }),
     paused: settings.pause,
     claim: readClaim(data, identity),
-    settings: { problems },
+    settings: {
+      problems,
+      values: {
+        adiutorUrl: { value: settings.url ?? null, source: settings.sources.url },
+        t3CliPath: { value: settings.cliPath, source: settings.sources.cliPath },
+        t3Url: { value: settings.t3Url ?? null, source: settings.sources.t3Url },
+        overviewDir: { value: settings.overviewDir ?? null, source: settings.sources.overviewDir },
+      },
+    },
   }
   const said: Record<AdiutorState["state"], string> = {
     connected: `connected to ${adiutor.url} as "${adiutor.label}" (${adiutor.scope})`,

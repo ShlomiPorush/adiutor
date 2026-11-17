@@ -18,6 +18,15 @@ export type Event =
 
 export type Failure = { code: string; message: string }
 
+/**
+ * Where a setting's value came from (docs/sync.md, "Settings"): a command-line option, the environment, an env file
+ * (--env, or the default sync.env that `connect` writes), the settings file the tray writes, or the default.
+ */
+export type SettingSource = "option" | "environment" | "envFile" | "settingsFile" | "default"
+
+/** A setting as the engine uses it: its value (null when none is set or it cannot be used) and its source. */
+export type EffectiveSetting = { value: string | null; source: SettingSource }
+
 export type AdiutorState = {
   /** `ended`: Adiutor ended the connection (disconnected there, idle, or a token used twice); connect again. */
   state: "connected" | "not_connected" | "ended"
@@ -128,7 +137,11 @@ export type StatusBody = {
   paused: Pause | null
   /** A sync request Adiutor handed this computer that no answered check-in reported finished yet. */
   claim: CheckinClaim | null
-  settings: { problems: string[] }
+  settings: {
+    problems: string[]
+    /** Each setting as this engine uses it, by the settings file's key. */
+    values: Record<"adiutorUrl" | "t3CliPath" | "t3Url" | "overviewDir", EffectiveSetting>
+  }
 }
 
 export type CheckinBody = {

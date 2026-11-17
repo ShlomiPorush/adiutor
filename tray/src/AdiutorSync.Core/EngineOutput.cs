@@ -57,7 +57,8 @@ public sealed record EngineStatus(
     DateTimeOffset? LastGoodSyncAt,
     DateTimeOffset? RunningSince,
     Claim? Claim,
-    IReadOnlyList<string> SettingsProblems);
+    IReadOnlyList<string> SettingsProblems,
+    IReadOnlyDictionary<string, EffectiveSetting>? Settings = null);
 
 /** The one result line of a command, with the fields of every command; each command fills its own. */
 public sealed record EngineResult(
@@ -161,7 +162,8 @@ public static class EngineOutput
                 data.LastGoodSyncAt,
                 data.Running?.StartedAt,
                 ToClaim(data.Claim),
-                data.Settings?.Problems ?? []);
+                data.Settings?.Problems ?? [],
+                ToSettings(data.Settings?.Values));
         }
         return new EngineResult(
             data.Command,
@@ -176,6 +178,16 @@ public static class EngineOutput
             data.WasConnected,
             data.RevocationPending);
     }
+
+    private static Dictionary<string, EffectiveSetting>? ToSettings(Dictionary<string, EffectiveLine>? values) =>
+        values?.Where(v => v.Value is not null).ToDictionary(v => v.Key, v => new EffectiveSetting(v.Value.Value, v.Value.Source switch
+        {
+            "option" => SettingSource.Option,
+            "environment" => SettingSource.Environment,
+            "envFile" => SettingSource.EnvFile,
+            "settingsFile" => SettingSource.SettingsFile,
+            _ => SettingSource.Default,
+        }), StringComparer.Ordinal);
 
     private static Claim? ToClaim(ClaimLine? claim) =>
         claim is { RequestId: { Length: > 0 } id, ReceivedAt: { } at } ? new Claim(id.ToLowerInvariant(), at) : null;
@@ -255,6 +267,13 @@ public static class EngineOutput
     private sealed class SettingsLine
     {
         public List<string>? Problems { get; set; }
+        public Dictionary<string, EffectiveLine>? Values { get; set; }
+    }
+
+    private sealed class EffectiveLine
+    {
+        public string? Value { get; set; }
+        public string? Source { get; set; }
     }
 
     private sealed class PartLine

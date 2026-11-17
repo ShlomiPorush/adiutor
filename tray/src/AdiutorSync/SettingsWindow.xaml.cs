@@ -96,18 +96,57 @@ internal sealed partial class SettingsWindow : Window
         LanguageBox.Items.Add(new ComboBoxItem { Content = t["settings.english"], Tag = Texts.English });
         SelectTag(LanguageBox, language);
         if (_snapshot is not null)
+        {
             Render(_snapshot);
+            ApplyModes();
+        }
     }
 
+    /** Each setting as the engine uses it (its status), falling back to the settings file before a status was read. */
     private void Fill(TraySettings s)
     {
-        AdiutorUrl.Text = s.AdiutorUrl ?? _host.Loop.Snapshot.Status?.Adiutor.Url ?? "";
-        T3Cli.Text = s.T3CliPath ?? DefaultT3Cli;
-        T3Url.Text = s.T3Url ?? DefaultT3Url;
-        Overview.Text = s.OverviewDir ?? "";
+        AdiutorUrl.Text = Effective(EffectiveSettings.AdiutorUrl)?.Value ?? s.AdiutorUrl ?? _host.Loop.Snapshot.Status?.Adiutor.Url ?? "";
+        T3Cli.Text = Effective(EffectiveSettings.T3CliPath)?.Value ?? s.T3CliPath ?? DefaultT3Cli;
+        T3Url.Text = Effective(EffectiveSettings.T3Url)?.Value ?? s.T3Url ?? DefaultT3Url;
+        Overview.Text = Effective(EffectiveSettings.OverviewDir)?.Value ?? s.OverviewDir ?? "";
+        ApplyModes();
         SelectTag(Schedule, s.ScheduleHours);
         StartBox.IsChecked = s.StartWithWindows;
         SelectTag(LanguageBox, s.Language ?? T.Language);
+    }
+
+    private EffectiveSetting? Effective(string key) =>
+        _host.Loop.Snapshot.Status?.Settings is { } values && values.TryGetValue(key, out var value) ? value : null;
+
+    private bool IsLocked(string key) =>
+        EffectiveSettings.Mode(key, Effective(key)?.Source) is FieldMode.LockedByEnvironment or FieldMode.LockedByEnvFile;
+
+    /**
+     * A setting the environment or an env file sets is shown locked, with a note saying so (the owner's rule); Adiutor's
+     * address from sync.env stays editable, since Connect writes it there.
+     */
+    private void ApplyModes()
+    {
+        ApplyMode(AdiutorUrl, AdiutorUrlNote, EffectiveSettings.AdiutorUrl);
+        ApplyMode(T3Cli, T3CliNote, EffectiveSettings.T3CliPath);
+        ApplyMode(T3Url, T3UrlNote, EffectiveSettings.T3Url);
+        ApplyMode(Overview, OverviewNote, EffectiveSettings.OverviewDir);
+        BrowseOverview.IsEnabled = !IsLocked(EffectiveSettings.OverviewDir);
+    }
+
+    private void ApplyMode(TextBox box, TextBlock note, string key)
+    {
+        var t = T;
+        var mode = EffectiveSettings.Mode(key, Effective(key)?.Source);
+        box.IsReadOnly = mode is FieldMode.LockedByEnvironment or FieldMode.LockedByEnvFile;
+        note.Text = mode switch
+        {
+            FieldMode.LockedByEnvironment => t.Format("settings.lockedEnvironment", ("name", EffectiveSettings.EnvironmentName(key))),
+            FieldMode.LockedByEnvFile => t.Format("settings.lockedEnvFile", ("name", EffectiveSettings.EnvironmentName(key))),
+            FieldMode.EditableUntilConnect => t["settings.urlFromConnect"],
+            _ => "",
+        };
+        note.Visibility = note.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private static void SelectTag<TValue>(ComboBox box, TValue value)
@@ -191,13 +230,16 @@ internal sealed partial class SettingsWindow : Window
         }
         var cli = T3Cli.Text.Trim();
         var current = _host.Loop.Snapshot.Settings;
+        // A locked field shows the environment's value, which is never written to the settings file.
         return current with
         {
-            AdiutorUrl = adiutor,
-            T3Url = t3Url,
+            AdiutorUrl = IsLocked(EffectiveSettings.AdiutorUrl) ? current.AdiutorUrl : adiutor,
+            T3Url = IsLocked(EffectiveSettings.T3Url) ? current.T3Url : t3Url,
             // The default is not written, so the engine keeps finding T3 where T3 installs it.
-            T3CliPath = cli.Length == 0 || string.Equals(cli, DefaultT3Cli, StringComparison.OrdinalIgnoreCase) ? null : cli,
-            OverviewDir = Overview.Text.Trim().Length == 0 ? null : Overview.Text.Trim(),
+            T3CliPath = IsLocked(EffectiveSettings.T3CliPath) ? current.T3CliPath
+                : cli.Length == 0 || string.Equals(cli, DefaultT3Cli, StringComparison.OrdinalIgnoreCase) ? null : cli,
+            OverviewDir = IsLocked(EffectiveSettings.OverviewDir) ? current.OverviewDir
+                : Overview.Text.Trim().Length == 0 ? null : Overview.Text.Trim(),
             ScheduleHours = (Schedule.SelectedItem as ComboBoxItem)?.Tag as int? ?? TraySettings.DefaultScheduleHours,
             StartWithWindows = StartBox.IsChecked == true,
             Language = (LanguageBox.SelectedItem as ComboBoxItem)?.Tag as string,

@@ -26,7 +26,22 @@ public class EngineOutputTests
         // Request ids are compared in lower case, as the engine keeps them.
         Assert.Equal("0d2c9b4e-6a8f-4c1e-9d3b-7a5f2e1c0b9a", status.Claim?.RequestId);
         Assert.Single(status.SettingsProblems);
+        // Each setting as the engine uses it, with its source.
+        Assert.Equal(new EffectiveSetting("https://adiutor.example.com", SettingSource.EnvFile), status.Settings![EffectiveSettings.AdiutorUrl]);
+        Assert.Equal(SettingSource.Environment, status.Settings[EffectiveSettings.T3Url].Source);
+        Assert.Equal(new EffectiveSetting(null, SettingSource.Default), status.Settings[EffectiveSettings.OverviewDir]);
     }
+
+    [Theory]
+    [InlineData("adiutorUrl", SettingSource.SettingsFile, FieldMode.Editable)]
+    [InlineData("adiutorUrl", SettingSource.Default, FieldMode.Editable)]
+    [InlineData("adiutorUrl", SettingSource.EnvFile, FieldMode.EditableUntilConnect)]
+    [InlineData("adiutorUrl", SettingSource.Environment, FieldMode.LockedByEnvironment)]
+    [InlineData("t3Url", SettingSource.Environment, FieldMode.LockedByEnvironment)]
+    [InlineData("overviewDir", SettingSource.EnvFile, FieldMode.LockedByEnvFile)]
+    [InlineData("t3CliPath", SettingSource.Option, FieldMode.LockedByEnvironment)]
+    public void A_setting_the_environment_sets_is_locked(string key, SettingSource source, FieldMode mode) =>
+        Assert.Equal(mode, EffectiveSettings.Mode(key, source));
 
     [Fact]
     public void Status_of_a_new_computer()

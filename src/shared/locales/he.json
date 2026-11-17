@@ -1575,7 +1575,10 @@
       "badT3Url": "הכתובת של T3 מתחילה ב-http:// במחשב הזה, או ב-https://.",
       "version": "גרסה {version}",
       "addressFirst": "צריך להזין קודם את הכתובת של Adiutor.",
-      "sync": "סנכרון"
+      "sync": "סנכרון",
+      "lockedEnvironment": "נקבע על ידי הסביבה ({name}); אפשר לשנות אותו שם.",
+      "lockedEnvFile": "נקבע בקובץ sync.env ({name}); אפשר לשנות אותו שם.",
+      "urlFromConnect": "הכתובת הזו נשמרה ב-sync.env בזמן החיבור. כתובת חדשה תיכנס לתוקף כשתתחבר."
     }
   }
 }
