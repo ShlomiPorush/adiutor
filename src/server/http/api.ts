@@ -17,6 +17,7 @@ import {
   securitySnapshotBody,
   settingsBody,
   startThreadBody,
+  syncCheckinBody,
   t3SnapshotBody,
   updateItemBody,
   updateNoteBody,
@@ -64,6 +65,7 @@ import {
   projectDetail,
 } from "../services/reads.ts"
 import { applySecuritySnapshot, applyT3Snapshot, recentSyncRuns } from "../services/sync.ts"
+import { cancelSyncRequest, checkIn, requestSync, syncRequestsView } from "../services/sync-requests.ts"
 import { startThread } from "../services/threads.ts"
 import { TELEGRAM_OFF, type TelegramRuntime, telegramStatus } from "../telegram/status.ts"
 import { type AuthDeps, authenticate, byOf, type Env, requireOwnerAuth } from "./auth.ts"
@@ -212,11 +214,21 @@ export function openRouteHandlers(deps: { ctx: Ctx }): Record<string, RouteHandl
       requireToken(c)
       return c.json({ data: await applySecuritySnapshot(ctx, await body(c, securitySnapshotBody)) })
     },
+    "POST /api/v1/sync/checkin": async (c) => {
+      // The client is the agent connection that sends it: only a connection approved for the sync area checks in.
+      const auth = c.get("auth")
+      if (auth.via !== "agent") throw forbidden("The sync checks in over its connection to Adiutor.")
+      return c.json({ data: await checkIn(ctx, auth.connectionId, await body(c, syncCheckinBody)) })
+    },
   }
 }
 
 /** The body limits of /api/v1: sync snapshots are large, everything else is small. */
 export const BODY_LIMITS = { sync: 16 * 1024 * 1024, default: 512 * 1024 } as const
+
+/** The sync's two snapshot pushes, whose answer is a sync run (`data.outcome`), as opposed to its check-in. */
+export const SNAPSHOT_PATHS = ["/api/v1/sync/t3", "/api/v1/sync/security"] as const
+export const isSnapshotPath = (path: string) => (SNAPSHOT_PATHS as readonly string[]).includes(path)
 
 export function apiRoutes(deps: AuthDeps & { version: string; telegram?: TelegramRuntime; settings: SettingsHandle }) {
   const { ctx } = deps
@@ -232,10 +244,10 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   // authenticate reads headers only.
   api.use("*", authenticate(deps, { allowSession: true }))
 
-  // Snapshots from the sync tool are large; everything else is small.
+  // Snapshots from the sync tool are large; everything else, its check-in included, is small.
   const syncLimit = bodyLimit({ maxSize: BODY_LIMITS.sync, onError: tooLarge })
   const defaultLimit = bodyLimit({ maxSize: BODY_LIMITS.default, onError: tooLarge })
-  api.use("*", (c, next) => (c.req.path.includes("/sync/") ? syncLimit : defaultLimit)(c, next))
+  api.use("*", (c, next) => (isSnapshotPath(c.req.path) ? syncLimit : defaultLimit)(c, next))
 
   // --- Session and visits ---
   api.use("/session", noStore)
@@ -316,8 +328,19 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   api.post("/threads/start", h("POST /api/v1/threads/start"))
   api.post("/sync/t3", h("POST /api/v1/sync/t3"))
   api.post("/sync/security", h("POST /api/v1/sync/security"))
+  api.post("/sync/checkin", h("POST /api/v1/sync/checkin"))
   api.get("/sync/runs", async (c) =>
     c.json({ data: await recentSyncRuns(ctx, query(c, z.object({ limit })).limit ?? 20) }),
+  )
+  // "Sync now": the owner asks the sync on the computer for a run; it takes the request at its next check-in.
+  api.use("/sync/requests", noStore)
+  api.get("/sync/requests", requireOwnerAuth, async (c) => c.json({ data: await syncRequestsView(ctx) }))
+  api.post("/sync/requests", requireOwnerAuth, async (c) => {
+    const { request, created } = await requestSync(ctx, byOf(c))
+    return c.json({ data: { request, created } }, created ? 201 : 200)
+  })
+  api.delete("/sync/requests/:id", requireOwnerAuth, async (c) =>
+    c.json({ data: await cancelSyncRequest(ctx, byOf(c), idParam(c)) }),
   )
 
   // --- Owner only: settings, suppressions ---

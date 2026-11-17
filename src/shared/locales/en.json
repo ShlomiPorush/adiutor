@@ -288,6 +288,52 @@
     "disconnectedBody": "Connect it again on the computer that runs it: Settings, Agent access shows the command.",
     "disconnectedLast": "The last successful sync was at"
   },
+  "syncNow": {
+    "button": "Sync now",
+    "busy": "Asking...",
+    "asked": "Sync asked for. It waits for the computer's next check-in.",
+    "askedPaused": "Sync asked for. The computer is paused: the request waits until the pause ends.",
+    "askedSilent": "Sync asked for. The computer has not checked in lately: the request waits until it does.",
+    "already": "A sync is already asked for. The computer runs it once.",
+    "failed": "Could not ask for a sync: {reason}",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling...",
+    "cancelled": "The sync request was cancelled",
+    "cancelFailed": "Could not cancel the sync request: {reason}",
+    "noClient": "No computer has checked in yet, so no computer would run it.",
+    "olderClient": "The sync on the computer takes no requests from Adiutor. Install the tray app to use Sync now.",
+    "getTray": "The tray app for Windows comes from the GitHub release.",
+    "releases": "Open the releases",
+    "state": {
+      "waiting": "Waiting for the computer",
+      "claimed": "Running",
+      "done": "Done",
+      "partial": "Partly done",
+      "failed": "Failed",
+      "unknown": "The computer stopped answering",
+      "cancelled": "Cancelled"
+    },
+    "parts": "T3: {t3}, security: {security}",
+    "part": {
+      "accepted": "accepted",
+      "partial": "partial",
+      "failed": "failed",
+      "outcome_unknown": "outcome unknown",
+      "not_run": "not run"
+    },
+    "computer": "Last check-in",
+    "version": "Tray app {version}",
+    "silentSince": "The computer has not checked in since",
+    "pause": "Pause",
+    "paused": "Paused",
+    "pausedUntil": "Paused until",
+    "notPaused": "Not paused",
+    "runningLocal": "Syncing now",
+    "nextRun": "Next scheduled sync",
+    "request": "Last sync asked for here",
+    "requestedAt": "asked",
+    "noRequest": "None yet"
+  },
   "bell": {
     "title": "Needs you",
     "none": "Nothing needs you",
@@ -557,7 +603,9 @@
     "status": "T3: {status}",
     "unknown": "Status not known",
     "untitled": "Untitled thread",
-    "lastActivity": "last activity"
+    "lastActivity": "last activity",
+    "snoozed": "Snoozed",
+    "snoozedUntil": "until"
   },
   "toast": {
     "statusSet": "{title} is now {status}",
@@ -665,6 +713,8 @@
       "proposal_accept": "accepted a stage proposal",
       "proposal_reject": "rejected a stage proposal",
       "security_update": "updated security data",
+      "sync_request_create": "asked for a sync",
+      "sync_request_cancel": "cancelled a sync request",
       "suppression_create": "suppressed",
       "suppression_delete": "removed a suppression",
       "settings_update": "changed settings",
@@ -732,7 +782,8 @@
       "account": "The account",
       "api_key": "An agent key",
       "device_code": "An agent approval",
-      "agent_connection": "An agent connection"
+      "agent_connection": "An agent connection",
+      "sync_request": "A sync request"
     },
     "source": {
       "ui": "Board",
@@ -790,7 +841,8 @@
       "telegramCodes": "Sign-in codes",
       "privateNetwork": "Private network",
       "suppressed": "Not recreated by the sync",
-      "status": "Status"
+      "status": "Status",
+      "computer": "Sync on the computer"
     },
     "loading": "Loading settings...",
     "failed": "Could not load settings",
@@ -1302,7 +1354,7 @@
       },
       "sync": {
         "name": "Sync",
-        "hint": "Send the sync's snapshots of T3 threads and security checks."
+        "hint": "Send the sync's snapshots of T3 threads and security checks, and take the syncs you ask for here."
       }
     },
     "never": "Agents can never delete items, projects or notes, change a project's stage, or manage agents.",

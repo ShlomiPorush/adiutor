@@ -30,7 +30,8 @@ export const AREAS: Record<AgentArea, { kinds: Kind[]; sentence: string }> = {
   },
   sync: {
     kinds: ["act"],
-    sentence: "Push the T3 and security snapshots of the sync tool on the owner's computer.",
+    sentence:
+      "Push the T3 and security snapshots of the sync tool on the owner's computer, and check in to take the syncs the owner asks for.",
   },
 }
 
@@ -362,6 +363,27 @@ export const OPEN: OpenRoute[] = [
     ),
     parameters: [body("collectedAt", true), body("repos", true)],
   },
+  {
+    method: "POST",
+    path: "/api/v1/sync/checkin",
+    area: "sync",
+    kind: "act",
+    description: data(
+      "The sync's check-in, every minute: its state, the run going and the requests it finished. A state report: sending it again changes nothing more. Answers the sync request this connection holds, or claims the oldest waiting one when nothing runs and the sync is not paused (claim is null otherwise).",
+    ),
+    parameters: [
+      body("version", true, "The tray app's version."),
+      body("paused", true),
+      body("pausedUntil", true, "Null while paused: until resumed."),
+      body("nextRunAt", true),
+      body(
+        "running",
+        true,
+        'The run going: {"kind":"request","requestId":...}, {"kind":"local","startedAt":...} or null.',
+      ),
+      body("finished", true, 'Requests finished since the last answered check-in: [{"requestId", "result"}].'),
+    ],
+  },
 ]
 
 /** The Hono path of a template: {id} becomes :id. */
@@ -453,7 +475,11 @@ export const CLOSED: Record<string, string> = {
   "GET /api/v1/notes/:id/versions": "a note's earlier versions are for the owner, who alone restores them",
   "GET /api/v1/notes/:id/versions/:version": "a note's earlier versions are for the owner, who alone restores them",
   "POST /api/v1/notes/:id/restore": "only the owner restores a note's version",
-  "GET /api/v1/sync/runs": "the sync's runs, for the owner reading Settings; the sync only pushes",
+  "GET /api/v1/sync/runs": "the sync's runs, for the owner reading Settings; the sync pushes them and checks in",
+  "ALL /api/v1/sync/requests": MIDDLEWARE,
+  "GET /api/v1/sync/requests": "the owner's sync requests and the computer's state, for Settings and the sync card",
+  "POST /api/v1/sync/requests": "only the owner asks for a sync; the sync takes requests at its check-in",
+  "DELETE /api/v1/sync/requests/:id": "only the owner cancels a sync request",
   "GET /api/v1/settings": "settings are for people only",
   "PATCH /api/v1/settings": "settings are for people only",
   "GET /api/v1/suppressions": "suppressions are for people only",

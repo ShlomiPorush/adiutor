@@ -21,6 +21,8 @@ import type {
   Stage,
   SuppressionKind,
   SyncOutcome,
+  SyncPartResult,
+  SyncRequestState,
 } from "../../shared/enums.ts"
 
 /** Error codes the server sends as {error: {code, message, ...details}}. */
@@ -178,6 +180,9 @@ export type ThreadLink = {
   /** T3's own status word: running, waiting, completed, ... */
   lastStatus: string | null
   settled: boolean
+  /** Snoozed in T3, until snoozedUntil when T3 gave a time. */
+  snoozed: boolean
+  snoozedUntil: string | null
   lastActivityAt: string | null
   linkedAt: string
 }
@@ -466,6 +471,37 @@ export type SyncRun = {
   outcome: SyncOutcome | null
   counts: Record<string, number>
   errors: { record: string; code: string }[]
+}
+
+/** A sync asked for with Sync now (docs/api.md, "Sync requests"); a claim whose lease passed reads `unknown`. */
+export type SyncRequest = {
+  id: string
+  requestedAt: string
+  state: SyncRequestState
+  claimedAt: string | null
+  leaseUntil: string | null
+  finishedAt: string | null
+  /** What each part of the run that served it came to. */
+  result: { t3: SyncPartResult; security: SyncPartResult } | null
+}
+
+/** The computer that checked in last: the tray app's state, and whether it went silent (three missed check-ins). */
+export type SyncClient = {
+  lastCheckinAt: string
+  version: string
+  /** Paused now: until pausedUntil, or until resumed when that is null. */
+  paused: boolean
+  pausedUntil: string | null
+  nextRunAt: string | null
+  running: { kind: "request"; requestId: string } | { kind: "local"; startedAt: string } | null
+  silent: boolean
+}
+
+/** GET /sync/requests: the latest request, the computer, and why Sync now cannot be used (null: it can). */
+export type SyncRequests = {
+  request: SyncRequest | null
+  client: SyncClient | null
+  unavailable: "no_client" | "older_client" | null
 }
 
 /** GET /telegram/status (docs/api.md, Telegram). */

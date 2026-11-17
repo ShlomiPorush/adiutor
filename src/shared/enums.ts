@@ -26,6 +26,14 @@ export const SECURITY_COVERAGES = ["enabled", "not_enabled", "no_access", "error
 export const SUPPRESSION_KINDS = ["thread", "project"] as const
 export const SYNC_OUTCOMES = ["succeeded", "partial", "failed"] as const
 /**
+ * A sync requested from Adiutor ("Sync now"): `waiting` for the computer, `claimed` by the sync on it (under a lease),
+ * then `done`, `partial` or `failed` as its run reported, `unknown` when the lease passed without a check-in (a late
+ * result still lands), or `cancelled` by the owner while it waited. done, partial, failed and cancelled are final.
+ */
+export const SYNC_REQUEST_STATES = ["waiting", "claimed", "done", "partial", "failed", "unknown", "cancelled"] as const
+/** What one part of a sync run (T3, security) came to, as the sync reports it (src/sync/contract.ts PartResult). */
+export const SYNC_PART_RESULTS = ["accepted", "partial", "failed", "outcome_unknown", "not_run"] as const
+/**
  * A morning run: `sending` before the send, then `sent`; `failed` (Telegram refused it; retried until the
  * cutoff), `unknown` (it may have gone out; never resent) or `skipped` (the cutoff passed without a send).
  */
@@ -90,6 +98,8 @@ export const AUDIT_ACTIONS = [
   "proposal.accept",
   "proposal.reject",
   "security.update",
+  "sync_request.create",
+  "sync_request.cancel",
   "suppression.create",
   "suppression.delete",
   "settings.update",
@@ -148,6 +158,7 @@ export const AUDIT_ENTITY_TYPES = [
   "api_key",
   "device_code",
   "agent_connection",
+  "sync_request",
 ] as const
 
 export type Stage = (typeof STAGES)[number]
@@ -161,6 +172,8 @@ export type SecurityFamily = (typeof SECURITY_FAMILIES)[number]
 export type SecurityCoverage = (typeof SECURITY_COVERAGES)[number]
 export type SuppressionKind = (typeof SUPPRESSION_KINDS)[number]
 export type SyncOutcome = (typeof SYNC_OUTCOMES)[number]
+export type SyncRequestState = (typeof SYNC_REQUEST_STATES)[number]
+export type SyncPartResult = (typeof SYNC_PART_RESULTS)[number]
 export type JobState = (typeof JOB_STATES)[number]
 export type TelegramOutcome = (typeof TELEGRAM_OUTCOMES)[number]
 export type Language = (typeof LANGUAGES)[number]
@@ -182,6 +195,8 @@ export const securityFamilySchema = z.enum(SECURITY_FAMILIES)
 export const securityCoverageSchema = z.enum(SECURITY_COVERAGES)
 export const suppressionKindSchema = z.enum(SUPPRESSION_KINDS)
 export const syncOutcomeSchema = z.enum(SYNC_OUTCOMES)
+export const syncRequestStateSchema = z.enum(SYNC_REQUEST_STATES)
+export const syncPartResultSchema = z.enum(SYNC_PART_RESULTS)
 export const jobStateSchema = z.enum(JOB_STATES)
 export const telegramOutcomeSchema = z.enum(TELEGRAM_OUTCOMES)
 export const languageSchema = z.enum(LANGUAGES)

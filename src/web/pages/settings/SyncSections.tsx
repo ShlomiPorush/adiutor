@@ -6,6 +6,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { api, qk } from "../../api/endpoints.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
+import {
+  CancelRequestButton,
+  REQUEST_TONE,
+  SyncNowButton,
+  TRAY_RELEASES_URL,
+  useSyncNowBlocked,
+  useSyncRequests,
+} from "../../shell/syncNow.tsx"
 import { Copyable } from "../../ui/Copyable.tsx"
 import { confirmDialog } from "../../ui/confirm.tsx"
 import { EVERY, usePageQuery } from "../../ui/refresh.ts"
@@ -24,30 +32,129 @@ export function StatusSection() {
   const sync = morning.data?.sync
   const lastT3 = runs.data?.find((run) => run.kind === "t3" && run.outcome)
   return (
-    <Group id="settings-sync" title={t("settings.groupTitles.status")}>
-      <Facts>
-        <Fact label={t("settings.lastSync")}>
-          {sync?.lastSuccessAt ? <Time value={sync.lastSuccessAt} mode="full" /> : sync ? t("sync.never") : "-"}
-          {sync?.stale ? <Tag tone="warn">{t("security.stale")}</Tag> : null}
-        </Fact>
-        <Fact label={t("settings.lastOutcome")}>
-          {lastT3?.outcome ? (
-            <>
-              <Tag tone={OUTCOME_TONE[lastT3.outcome]}>{t(`settings.outcome.${lastT3.outcome}`)}</Tag>
-              <Time value={lastT3.finishedAt ?? lastT3.startedAt} />
-            </>
-          ) : (
-            "-"
-          )}
-        </Fact>
-        <Fact label={t("settings.securityAsOf")}>
-          {sync?.securityLastSuccessAt ? (
-            <Time value={sync.securityLastSuccessAt} mode="full" />
-          ) : (
-            t("security.asOfUnknown")
-          )}
-        </Fact>
-      </Facts>
+    <>
+      <Group id="settings-sync" title={t("settings.groupTitles.status")}>
+        <Facts>
+          <Fact label={t("settings.lastSync")}>
+            {sync?.lastSuccessAt ? <Time value={sync.lastSuccessAt} mode="full" /> : sync ? t("sync.never") : "-"}
+            {sync?.stale ? <Tag tone="warn">{t("security.stale")}</Tag> : null}
+          </Fact>
+          <Fact label={t("settings.lastOutcome")}>
+            {lastT3?.outcome ? (
+              <>
+                <Tag tone={OUTCOME_TONE[lastT3.outcome]}>{t(`settings.outcome.${lastT3.outcome}`)}</Tag>
+                <Time value={lastT3.finishedAt ?? lastT3.startedAt} />
+              </>
+            ) : (
+              "-"
+            )}
+          </Fact>
+          <Fact label={t("settings.securityAsOf")}>
+            {sync?.securityLastSuccessAt ? (
+              <Time value={sync.securityLastSuccessAt} mode="full" />
+            ) : (
+              t("security.asOfUnknown")
+            )}
+          </Fact>
+        </Facts>
+      </Group>
+      <ComputerGroup />
+    </>
+  )
+}
+
+/**
+ * The sync on the owner's computer (the tray app) and Sync now: its last check-in, pause and next scheduled sync, and
+ * the last sync asked for here with its result. Without a computer that checks in, Sync now stays in place, disabled,
+ * and the group says why and where the tray app comes from (v3 FB-1).
+ */
+function ComputerGroup() {
+  const { t } = useI18n()
+  const query = useSyncRequests()
+  const view = query.data
+  const blocked = useSyncNowBlocked()(view)
+  const client = view?.client
+  const request = view?.request
+  return (
+    <Group
+      id="settings-sync-computer"
+      title={t("settings.groupTitles.computer")}
+      extra={<SyncNowButton view={view} />}
+      intro={
+        blocked ? (
+          <>
+            {blocked} {t("syncNow.getTray")}{" "}
+            <a href={TRAY_RELEASES_URL} target="_blank" rel="noopener noreferrer">
+              {t("syncNow.releases")}
+            </a>
+          </>
+        ) : undefined
+      }
+    >
+      {query.isPending ? <Loading label={t("settings.loading")} /> : null}
+      {query.isError && !view ? (
+        <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
+      ) : null}
+      {view ? (
+        <Facts>
+          <Fact label={t("syncNow.computer")}>
+            {client ? (
+              <>
+                {client.silent ? (
+                  <span className="ui-text-warn">
+                    {t("syncNow.silentSince")} <Time value={client.lastCheckinAt} mode="full" />
+                  </span>
+                ) : (
+                  <Time value={client.lastCheckinAt} mode="full" />
+                )}
+                <span className="ui-muted">{t("syncNow.version", { version: client.version })}</span>
+              </>
+            ) : (
+              "-"
+            )}
+          </Fact>
+          <Fact label={t("syncNow.pause")}>
+            {!client ? (
+              "-"
+            ) : client.paused ? (
+              client.pausedUntil ? (
+                <>
+                  {t("syncNow.pausedUntil")} <Time value={client.pausedUntil} mode="full" />
+                </>
+              ) : (
+                t("syncNow.paused")
+              )
+            ) : (
+              t("syncNow.notPaused")
+            )}
+            {client?.running?.kind === "local" ? <Tag tone="info">{t("syncNow.runningLocal")}</Tag> : null}
+          </Fact>
+          <Fact label={t("syncNow.nextRun")}>
+            {client?.nextRunAt ? <Time value={client.nextRunAt} mode="full" /> : "-"}
+          </Fact>
+          <Fact label={t("syncNow.request")}>
+            {request ? (
+              <>
+                <Tag tone={REQUEST_TONE[request.state]}>{t(`syncNow.state.${request.state}`)}</Tag>
+                <span className="ui-muted">
+                  {t("syncNow.requestedAt")} <Time value={request.requestedAt} />
+                </span>
+                {request.result ? (
+                  <span>
+                    {t("syncNow.parts", {
+                      t3: t(`syncNow.part.${request.result.t3}`),
+                      security: t(`syncNow.part.${request.result.security}`),
+                    })}
+                  </span>
+                ) : null}
+                {request.state === "waiting" ? <CancelRequestButton request={request} /> : null}
+              </>
+            ) : (
+              t("syncNow.noRequest")
+            )}
+          </Fact>
+        </Facts>
+      ) : null}
     </Group>
   )
 }

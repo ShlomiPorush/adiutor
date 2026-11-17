@@ -12,7 +12,11 @@ type Tx = Parameters<Parameters<TestDatabase["ctx"]["db"]["transaction"]>[0]>[0]
  * for a lock (pg_blocking_pids), never on a timer. `release(last)` runs `last` in the holding transaction first, so a
  * change commits exactly when the lock goes.
  */
-export async function holdRow(t: TestDatabase, table: "items" | "notes" | "agent_connections", id: string) {
+export async function holdRow(
+  t: TestDatabase,
+  table: "items" | "notes" | "agent_connections" | "sync_requests",
+  id: string,
+) {
   let release: (last?: (tx: Tx) => Promise<unknown>) => void = () => {}
   const released = new Promise<((tx: Tx) => Promise<unknown>) | undefined>((resolve) => {
     release = resolve

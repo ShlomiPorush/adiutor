@@ -35,6 +35,8 @@ import {
   STAGES,
   SUPPRESSION_KINDS,
   SYNC_OUTCOMES,
+  SYNC_REQUEST_STATES,
+  type SyncPartResult,
   TELEGRAM_OUTCOMES,
 } from "../../shared/enums.ts"
 import { AGENT_IDLE_DAYS_MAX, AGENT_IDLE_DAYS_MIN, SETTINGS_DEFAULTS } from "../../shared/settings.ts"
@@ -142,6 +144,11 @@ export const itemThreads = pgTable(
     /** Last T3 status as T3 reports it (running, waiting, completed, ...). */
     lastStatus: text("last_status"),
     settled: boolean("settled").notNull().default(false),
+    /** Snoozed in T3 (D-T6), until `snoozed_until` when T3 gives a time. Shown on the item; no sync rule reads it. */
+    snoozed: boolean("snoozed").notNull().default(false),
+    snoozedUntil: at("snoozed_until"),
+    /** The newest collectedAt of a snapshot that held this thread: a snooze is taken only from one no older. */
+    snoozeAsOf: at("snooze_as_of"),
     lastActivityAt: at("last_activity_at"),
     linkedAt: at("linked_at").notNull().defaultNow(),
   },
@@ -310,6 +317,59 @@ export const syncRuns = pgTable(
     index("sync_runs_started_idx").on(t.startedAt),
   ],
 )
+
+/** What a sync run reported for each part of a request it served (src/sync/contract.ts PartResult). */
+export type SyncRequestResult = { t3: SyncPartResult; security: SyncPartResult }
+
+/**
+ * A sync the owner asked for from Adiutor ("Sync now"). The sync on the owner's computer claims it at a check-in, under
+ * a lease of SYNC_LEASE_MS that every check-in renews, and reports its result at a later one (services/sync-requests.ts).
+ * At most one is waiting or claimed at a time, which the partial unique index holds.
+ */
+export const syncRequests = pgTable(
+  "sync_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    requestedAt: at("requested_at").notNull(),
+    requestedBy: text("requested_by", { enum: ACTOR_KINDS }).notNull(),
+    state: text("state", { enum: SYNC_REQUEST_STATES }).notNull(),
+    /** The agent connection (the sync's) that claimed it; kept when the lease passes, so its late result still lands. */
+    claimedBy: uuid("claimed_by"),
+    claimedAt: at("claimed_at"),
+    leaseUntil: at("lease_until"),
+    finishedAt: at("finished_at"),
+    result: jsonb("result").$type<SyncRequestResult>(),
+  },
+  (t) => [
+    check("sync_requests_state_check", oneOf("state", SYNC_REQUEST_STATES)),
+    check("sync_requests_requested_by_check", oneOf("requested_by", ACTOR_KINDS)),
+    check(
+      "sync_requests_claimed_check",
+      sql`${t.state} in ('waiting', 'cancelled') or (${t.claimedBy} is not null and ${t.claimedAt} is not null and ${t.leaseUntil} is not null)`,
+    ),
+    uniqueIndex("sync_requests_one_open_idx").on(sql`(true)`).where(sql`${t.state} in ('waiting', 'claimed')`),
+    index("sync_requests_requested_idx").on(t.requestedAt),
+  ],
+)
+
+/** The run a sync reports at a check-in: one Adiutor asked for, one of its own, or none. */
+export type SyncRunning = { kind: "request"; requestId: string } | { kind: "local"; startedAt: string } | null
+
+/**
+ * The sync on the owner's computer as its last check-in reported it, one row per agent connection (one computer for
+ * now: the UI shows the row of the latest check-in).
+ */
+export const syncClient = pgTable("sync_client", {
+  connectionId: uuid("connection_id").primaryKey(),
+  lastCheckinAt: at("last_checkin_at").notNull(),
+  /** The tray app's version, as it reports it. */
+  version: text("version").notNull(),
+  paused: boolean("paused").notNull(),
+  /** Null while paused: until resumed. */
+  pausedUntil: at("paused_until"),
+  nextRunAt: at("next_run_at"),
+  running: jsonb("running").$type<SyncRunning>(),
+})
 
 // At most one run per job and local date: the morning message is sent once, never twice.
 export const jobRuns = pgTable(

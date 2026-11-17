@@ -4,7 +4,7 @@ import { HTTPException } from "hono/http-exception"
 import type { AgentArea, AgentResource } from "../../shared/enums.ts"
 import { authUser } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
-import { BODY_LIMITS, openRouteHandlers, type RouteHandler } from "../http/api.ts"
+import { BODY_LIMITS, isSnapshotPath, openRouteHandlers, type RouteHandler } from "../http/api.ts"
 import { agentLabel, type Env } from "../http/auth.ts"
 import { errorFacts, log } from "../log.ts"
 import type { ToolGuard, ToolResult } from "../mcp/server.ts"
@@ -430,8 +430,9 @@ export function createAgentChannel(options: AgentChannelOptions) {
           const status = c.res.status
           const answer = await c.res.clone().arrayBuffer()
           tooLarge = answer.byteLength > limits.answerBytes
-          // A 2xx answer that says it failed: a sync run whose records failed, in part or whole.
-          const failed = status >= 400 || tooLarge || (route.area === "sync" && syncFailed(answer))
+          // A 2xx answer that says it failed: a snapshot push whose records failed, in part or whole. The check-in's
+          // answer is not a sync run, so the rule holds for the two push routes alone.
+          const failed = status >= 400 || tooLarge || (isSnapshotPath(route.path) && syncFailed(answer))
           return {
             outcome: failed ? "error" : "ok",
             details: { status, ...(tooLarge ? { answerTooLarge: true } : {}) },
@@ -481,7 +482,7 @@ export function createAgentChannel(options: AgentChannelOptions) {
   for (const route of OPEN) {
     const handler = handlers[`${route.method} ${route.path}`]
     if (!handler) throw new Error(`no handler for the open route ${route.method} ${route.path}`)
-    const limit = route.area === "sync" ? syncLimit : defaultLimit
+    const limit = isSnapshotPath(route.path) ? syncLimit : defaultLimit
     rest.on(route.method, honoPath(route.path), policy(route), limit, agentUse(route), handler as never)
   }
   // Anything else is closed to agents: the router picked no open route. As for an open route: a slot, then the row.
@@ -626,7 +627,7 @@ function reservedSafe(res: Response, c: Context): Response {
   return new Response(res.body, { status: agentStatus(res.status), headers })
 }
 
-/** Whether a sync route's 2xx answer says its run failed, in part or whole (`data.outcome`, services/sync.ts). */
+/** Whether a snapshot push's 2xx answer says its run failed, in part or whole (`data.outcome`, services/sync.ts). */
 function syncFailed(answer: ArrayBuffer): boolean {
   try {
     const outcome = (JSON.parse(new TextDecoder().decode(answer)) as { data?: { outcome?: unknown } }).data?.outcome

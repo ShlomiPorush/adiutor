@@ -11,7 +11,7 @@ import { LIMITS } from "../../shared/api.ts"
 import { ITEM_STATUSES, ITEM_TYPES, SEVERITIES, type Severity } from "../../shared/enums.ts"
 import { ApiError } from "../api/client.ts"
 import { api, qk } from "../api/endpoints.ts"
-import type { Item, ItemDetail } from "../api/types.ts"
+import type { Item, ItemDetail, ThreadLink } from "../api/types.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { ITEM_PARAM, useCloseItem, useItemActions, useRefreshItems } from "../shell/items.ts"
 import { Copyable } from "../ui/Copyable.tsx"
@@ -481,6 +481,18 @@ function ItemBody({
                       ? t("thread.status", { status: thread.lastStatus })
                       : t("thread.unknown")}
                 </Tag>
+                {snoozedNow(thread) ? (
+                  <span className="ui-thread-snooze">
+                    <Tag tone="neutral" line>
+                      {t("thread.snoozed")}
+                    </Tag>
+                    {thread.snoozedUntil ? (
+                      <span className="ui-muted">
+                        {t("thread.snoozedUntil")} <Time value={thread.snoozedUntil} />
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
                 <Copyable value={thread.threadId} />
                 {thread.lastActivityAt ? (
                   <span className="ui-muted">
@@ -587,6 +599,11 @@ function ItemBody({
  * A text's direction by its first letter, as dir="auto" decides it on an input. Chromium does not follow a
  * textarea's current value for dir="auto", so an English title in the Hebrew UI would stand on the right.
  */
+/** A thread snoozed in T3 now: a snooze whose time passed is over, whatever the last sync said. */
+export function snoozedNow(thread: Pick<ThreadLink, "snoozed" | "snoozedUntil">, now = Date.now()): boolean {
+  return thread.snoozed && (thread.snoozedUntil === null || Date.parse(thread.snoozedUntil) > now)
+}
+
 export function textDirection(text: string): "rtl" | "ltr" | "auto" {
   const first = /\p{L}/u.exec(text)?.[0]
   if (!first) return "auto"

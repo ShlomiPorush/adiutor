@@ -227,6 +227,37 @@ describe("pushing", () => {
   })
 })
 
+describe("a push bound to its connection (run --request)", () => {
+  it("sends with the token another command refreshed meanwhile, and stops only for another connection", async () => {
+    const u = user()
+    const { client } = await connected(u)
+    const connection = (await client.identity()) as string
+    // Another command (a check-in) refreshes the same connection after the run's push read its token.
+    const other = syncClient(fake.issuer, { ...u.deps, now: () => Date.now() + 850_000 })
+    const refreshes = fake.counts.refresh
+    let raced = false
+    const run = syncClient(fake.issuer, {
+      ...u.deps,
+      beforeBind: async () => {
+        if (raced) return
+        raced = true
+        expect(await other.push("/api/v1/sync/t3", { other: 1 })).toMatchObject({ kind: "answer", status: 200 })
+      },
+    })
+    expect(await run.push("/api/v1/sync/t3", { run: 1 }, { connection })).toMatchObject({ kind: "answer", status: 200 })
+    expect(fake.counts.refresh - refreshes).toBe(1)
+    // The run's push went with the refreshed token, the other command's.
+    const sent = (key: string) => fake.pushes.find((p) => key in (p.body as object))?.auth
+    expect(sent("run")).toBe(sent("other"))
+    // Another connection kept: nothing is sent.
+    expect(await client.push("/api/v1/sync/t3", {}, { connection: `${connection}x` })).toMatchObject({
+      kind: "failed",
+      code: "connection_changed",
+    })
+    expect(fake.pushes).toHaveLength(2)
+  })
+})
+
 describe("the refresh", () => {
   it("reuses the access token until a minute before its end, then refreshes it once", async () => {
     const u = user()

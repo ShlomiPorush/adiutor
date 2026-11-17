@@ -17,6 +17,10 @@ export type RunOptions = {
   settings: Resolved
   /** Whether ADIUTOR_AGENT_TOKEN, the sync's agent key before agent approval, is still set (never its value). */
   oldToken: boolean
+  /** The sync request from Adiutor this run serves (`--request`): named in its report, for the tray's check-in. */
+  requestId?: string
+  /** The connection that holds the request (oauth.ts identity()): every push of the run goes over it, or none. */
+  connection?: string
 }
 
 export type Deps = {
@@ -157,6 +161,19 @@ export async function runSync(options: RunOptions, deps: Deps, out: Output): Pro
       : sent(report.t3) || sent(report.security)
         ? EXIT_OK
         : EXIT_NOTHING_PUSHED
+    // A run for a request whose connection changed meanwhile sends nothing more: it ends with connection_changed.
+    const changed = [report.t3, report.security].some((part) => part.reason === "connection_changed")
+    if (changed)
+      return {
+        exit,
+        body: {
+          report,
+          error: {
+            code: "connection_changed",
+            message: "The sync connected again during this run, so nothing more was sent for the request.",
+          },
+        },
+      }
     return { exit, body: { report } }
   } finally {
     held.release()
@@ -229,6 +246,7 @@ async function runLocked(
           startedAt,
           finishedAt,
           dryRun: false,
+          requestId: options.requestId ?? null,
           t3: { ...t3, reason },
           security: { ...security, reason },
           lastGoodSyncAt: null,
@@ -439,6 +457,7 @@ async function runLocked(
     startedAt,
     finishedAt: deps.now().toISOString(),
     dryRun: options.dryRun,
+    requestId: options.requestId ?? null,
     t3,
     security,
     lastGoodSyncAt: null,
@@ -463,7 +482,7 @@ async function runLocked(
 
   // 5. Push: T3 first, then security, over the sync's connection (src/sync/oauth.ts).
   const url = settings.url as string
-  let ended = false
+  let ended: string | null = null
   const pushOne = async (
     name: string,
     path: string,
@@ -473,15 +492,18 @@ async function runLocked(
   ) => {
     if (!client) return
     if (ended) {
-      say(`${name}: not sent (the sync is disconnected)`)
-      Object.assign(part, { result: "not_run", reason: "connection_ended" })
+      say(
+        `${name}: not sent (${ended === "connection_changed" ? "the sync connected again" : "the sync is disconnected"})`,
+      )
+      Object.assign(part, { result: "not_run", reason: ended })
       return
     }
-    const result = await client.push(path, payload)
+    const result = await client.push(path, payload, options.connection ? { connection: options.connection } : {})
     say(describeResult(name, result))
     Object.assign(part, partOf(result, incomplete))
+    if (result.kind === "failed" && result.code === "connection_changed") ended = "connection_changed"
     if (result.kind === "failed" && DISCONNECTED.has(result.code)) {
-      ended = true
+      ended = "connection_ended"
       say(disconnected(url, settings.envFile))
     }
   }

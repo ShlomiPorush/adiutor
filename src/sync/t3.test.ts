@@ -41,6 +41,8 @@ describe("mapThreads", () => {
         settledAt: null,
         parentThreadId: null,
         updatedAt: "2026-11-01T05:00:00.000Z",
+        snoozed: false,
+        snoozedUntil: null,
       },
       {
         threadId: "thread-w2",
@@ -51,6 +53,8 @@ describe("mapThreads", () => {
         settledAt: "2026-10-31T12:00:00.000Z",
         parentThreadId: "thread-w1",
         updatedAt: "2026-10-31T12:00:00.000Z",
+        snoozed: false,
+        snoozedUntil: null,
       },
       {
         threadId: "thread-w3",
@@ -61,6 +65,8 @@ describe("mapThreads", () => {
         settledAt: null,
         parentThreadId: null,
         updatedAt: "2026-10-30T09:30:00.000Z",
+        snoozed: false,
+        snoozedUntil: null,
       },
     ])
   })

@@ -6,7 +6,7 @@
 
 export const CONTRACT_VERSION = 1
 
-export type Command = "status" | "connect" | "disconnect" | "t3-connect" | "t3-disconnect" | "run"
+export type Command = "status" | "connect" | "disconnect" | "t3-connect" | "t3-disconnect" | "run" | "checkin"
 
 /** What one part of a run (T3 or security) came to. */
 export type PartResult = "accepted" | "partial" | "failed" | "outcome_unknown" | "not_run"
@@ -73,6 +73,8 @@ export type RunReport = {
   startedAt: string
   finishedAt: string
   dryRun: boolean
+  /** The sync request from Adiutor this run served (`run --request <id>`), or null. */
+  requestId: string | null
   t3: T3Part
   security: SecurityPart
   /** The last run in which both parts were accepted, this one included. */
@@ -80,6 +82,24 @@ export type RunReport = {
 }
 
 export type Pause = { until: string | null }
+
+/**
+ * The check-in report the tray gives `checkin` on stdin, as Adiutor takes it (POST /api/v1/sync/checkin): the tray's
+ * version, its pause, its next scheduled run, the run going and the requests finished since the last answered
+ * check-in, each with what its parts came to. Times are ISO 8601.
+ */
+export type CheckinReport = {
+  version: string
+  paused: boolean
+  /** Null while paused: until resumed. */
+  pausedUntil: string | null
+  nextRunAt: string | null
+  running: { kind: "request"; requestId: string } | { kind: "local"; startedAt: string } | null
+  finished: { requestId: string; result: { t3: PartResult; security: PartResult } }[]
+}
+
+/** A sync request Adiutor handed this computer, as the engine keeps it until a check-in reports it finished. */
+export type CheckinClaim = { requestId: string; receivedAt: string }
 
 /**
  * The one result of a command. `ok` is true when the command did what it was asked; when it is false, `error` says
@@ -95,6 +115,7 @@ export type Result = { type: "result"; v: typeof CONTRACT_VERSION } & (
   | ({ command: "t3-connect"; ok: boolean } & T3ConnectBody)
   | ({ command: "t3-disconnect"; ok: boolean } & DisconnectBody)
   | ({ command: "run"; ok: boolean } & RunBody)
+  | ({ command: "checkin"; ok: boolean } & CheckinBody)
 )
 
 export type StatusBody = {
@@ -105,7 +126,18 @@ export type StatusBody = {
   /** A run holds the run lock: when it started. */
   running: { startedAt: string } | null
   paused: Pause | null
+  /** A sync request Adiutor handed this computer that no answered check-in reported finished yet. */
+  claim: CheckinClaim | null
   settings: { problems: string[] }
+}
+
+export type CheckinBody = {
+  /**
+   * The request to run now: the one Adiutor answered (kept in the data folder before this answer), or null. With
+   * `ok` false, the claim kept from an earlier check-in, if any.
+   */
+  claim: CheckinClaim | null
+  error?: Failure
 }
 
 export type ConnectBody = {
