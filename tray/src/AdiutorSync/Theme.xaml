@@ -1,0 +1,15 @@
+<!-- Adiutor's accent (src/web/styles/ui.css, the ui-accent and ui-on-accent tokens): the ink colour, which is near black in the
+     light theme and near white in the dark one, with the background colour on it. Applied over the Fluent theme's
+     accent buttons, following Windows' light and dark through the theme's own colours. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <SolidColorBrush x:Key="AccentButtonBackground" Color="{DynamicResource TextFillColorPrimary}" />
+  <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="{DynamicResource TextFillColorSecondary}" />
+  <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="{DynamicResource TextFillColorTertiary}" />
+  <SolidColorBrush x:Key="AccentButtonBorderBrush" Color="{DynamicResource TextFillColorPrimary}" />
+  <SolidColorBrush x:Key="AccentButtonBorderBrushPointerOver" Color="{DynamicResource TextFillColorSecondary}" />
+  <SolidColorBrush x:Key="AccentButtonBorderBrushPressed" Color="{DynamicResource TextFillColorTertiary}" />
+  <SolidColorBrush x:Key="AccentButtonForeground" Color="{DynamicResource SolidBackgroundFillColorBase}" />
+  <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="{DynamicResource SolidBackgroundFillColorBase}" />
+  <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="{DynamicResource SolidBackgroundFillColorBase}" />
+</ResourceDictionary>

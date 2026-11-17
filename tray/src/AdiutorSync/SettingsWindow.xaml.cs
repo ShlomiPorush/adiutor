@@ -41,6 +41,8 @@ internal sealed partial class SettingsWindow : Window
     {
         _host = host;
         InitializeComponent();
+        // As tall as its content, within the screen; it scrolls on a small screen.
+        MaxHeight = SystemParameters.WorkArea.Height - 40;
         ApplyTexts();
         Fill(host.Loop.Snapshot.Settings);
         Render(host.Loop.Snapshot);
@@ -79,7 +81,7 @@ internal sealed partial class SettingsWindow : Window
         StartNote.Visibility = StartWithWindows.Available ? Visibility.Collapsed : Visibility.Visible;
         LanguageLabel.Text = t["settings.language"];
         SaveButton.Content = t["settings.save"];
-        VersionText.Text = t.Format("settings.version", ("version", _host.Version));
+        VersionText.Text = t.Format("settings.version", ("version", TrayView.LeftToRight(_host.Version, t)));
 
         var hours = (Schedule.SelectedItem as ComboBoxItem)?.Tag as int? ?? TraySettings.DefaultScheduleHours;
         Schedule.Items.Clear();

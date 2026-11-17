@@ -26,6 +26,9 @@ public static class TrayView
     /** NotifyIcon's limit for its tooltip. */
     public const int TooltipMax = 127;
 
+    /** The left-to-right mark: a strong left-to-right character that WPF honours (its embedding controls it ignores). */
+    public const string LeftToRightMark = "\u200E";
+
     public static PanelView Build(TraySnapshot s, Texts t, Func<DateTimeOffset, string> time)
     {
         var icon = IconStates.Map(s);
@@ -72,7 +75,7 @@ public static class TrayView
             lastGood is { } at ? time(at) : t["panel.never"],
             nextRun,
             notices,
-            CanSyncNow: !s.EngineMissing && s.Running is null && s.RunningElsewhereSince is null && !s.Quitting,
+            CanSyncNow: !s.EngineMissing && status?.Adiutor.State == ConnectionState.Connected && s.Running is null && s.RunningElsewhereSince is null && !s.Quitting,
             Paused: s.Paused,
             CanPause: !s.Quitting,
             AdiutorUrl: OpenableUrl(status?.Adiutor.Url ?? s.Settings.AdiutorUrl),
@@ -100,6 +103,19 @@ public static class TrayView
         _ when s.Status?.LastRun is null => t["state.noRunYet"],
         _ => t["state.synced"],
     };
+
+    /**
+     * Local time in Windows' own date and time format. In Hebrew the date and the time are kept left to right as one
+     * piece (between left-to-right marks), so a right-to-left line does not swap them.
+     */
+    public static string LocalTime(DateTimeOffset at, Texts t, System.Globalization.CultureInfo culture)
+    {
+        return LeftToRight(at.ToLocalTime().ToString("g", culture), t);
+    }
+
+    /** A left-to-right piece (a time, a version) kept in its order inside a right-to-left line. */
+    public static string LeftToRight(string text, Texts t) =>
+        t.RightToLeft ? LeftToRightMark + text + LeftToRightMark : text;
 
     /** Only an http or https address is opened in the browser. */
     public static string? OpenableUrl(string? url) =>

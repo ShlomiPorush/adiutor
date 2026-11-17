@@ -25,7 +25,10 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
     private TrayIcon? _tray;
     private PanelWindow? _panel;
     private SettingsWindow? _settingsWindow;
+    private readonly EventWaitHandle _showPanel;
     private bool _exiting;
+
+    public App(EventWaitHandle showPanel) => _showPanel = showPanel;
 
     public SyncLoop Loop { get; private set; } = null!;
 
@@ -38,6 +41,7 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
     {
         base.OnStartup(e);
         ThemeMode = ThemeMode.System;
+        Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("pack://application:,,,/AdiutorSync;component/Theme.xaml") });
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
         _log = new TrayLog(Path.Combine(_dataFolder, "tray.log"));
         _log.Info($"start {Version}");
@@ -54,6 +58,18 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
         Render(Loop.Snapshot);
         _ = RunLoopAsync();
         _ = RunUpdatesAsync();
+        _ = WaitForShowAsync();
+    }
+
+    /** Another start of the app asks this one to open its panel. */
+    private async Task WaitForShowAsync()
+    {
+        while (!_stop.IsCancellationRequested)
+        {
+            var signalled = await Task.Run(() => WaitHandle.WaitAny([_showPanel, _stop.Token.WaitHandle]) == 0);
+            if (signalled && !_exiting && _panel is not { IsVisible: true })
+                TogglePanel();
+        }
     }
 
     private NodeEngine? CreateEngine(TraySettings settings)
@@ -139,8 +155,7 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
         _settingsWindow?.Render(snapshot);
     }
 
-    /** Local time in Windows' own date and time format. */
-    private static string FormatTime(DateTimeOffset at) => at.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
+    private string FormatTime(DateTimeOffset at) => TrayView.LocalTime(at, Texts, CultureInfo.CurrentCulture);
 
     private void ShowNotice(Notice notice)
     {

@@ -118,6 +118,10 @@ public partial class ViewTests
         Assert.Equal("Finishing the run, then closing", view.State);
         Assert.False(view.CanSyncNow);
 
+        view = TrayView.Build(Snapshot("adiutor"), t, Time);
+        Assert.False(view.CanSyncNow);
+        Assert.True(TrayView.Build(Snapshot("synced"), t, Time).CanSyncNow);
+
         view = TrayView.Build(Snapshot("checkin"), t, Time);
         Assert.Contains("Could not report to Adiutor (outcome_unknown). It tries again in a minute.", view.Notices);
         view = TrayView.Build(Snapshot("never"), t, Time);
@@ -131,6 +135,17 @@ public partial class ViewTests
         var t = Texts.Load(Texts.Hebrew);
         var view = TrayView.Build(Snapshot("synced"), t, _ => new string('x', 200));
         Assert.Equal(TrayView.TooltipMax, view.Tooltip.Length);
+    }
+
+    [Fact]
+    public void Hebrew_keeps_a_date_and_time_in_order()
+    {
+        var culture = CultureInfo.GetCultureInfo("he-IL");
+        var he = TrayView.LocalTime(Now, Texts.Load(Texts.Hebrew), culture);
+        var en = TrayView.LocalTime(Now, Texts.Load(Texts.English), culture);
+        Assert.Equal('\u200E' + en + '\u200E', he);
+        Assert.DoesNotContain("\u200E", en, StringComparison.Ordinal);
+        Assert.Equal("\u200E", TrayView.LeftToRightMark);
     }
 
     [Theory]

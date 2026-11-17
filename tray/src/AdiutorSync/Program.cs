@@ -4,6 +4,9 @@ namespace AdiutorSync;
 
 public static class Program
 {
+    private const string MutexName = @"Local\AdiutorSync.Tray";
+    private const string ShowEventName = @"Local\AdiutorSync.ShowPanel";
+
     [STAThread]
     public static int Main()
     {
@@ -13,11 +16,15 @@ public static class Program
             .OnBeforeUninstallFastCallback(_ => StartWithWindows.Remove())
             .Run();
 
-        // One tray per Windows session: a second start ends at once.
-        using var single = new Mutex(initiallyOwned: true, @"Local\AdiutorSync.Tray", out var first);
+        // One tray per Windows session. Starting it again (from the Start menu) opens the running tray's panel.
+        using var show = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+        using var single = new Mutex(initiallyOwned: true, MutexName, out var first);
         if (!first)
+        {
+            show.Set();
             return 0;
-        var app = new App();
+        }
+        var app = new App(show);
         return app.Run();
     }
 }

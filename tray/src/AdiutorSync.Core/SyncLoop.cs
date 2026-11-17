@@ -610,7 +610,8 @@ public sealed class SyncLoop
         RunningElsewhereSince = _run is null ? _status?.RunningSince : null,
         Settings = _settings,
         Paused = _settings.IsPaused(now),
-        NextRunAt = NextRunAt(now),
+        // No scheduled run starts without the Adiutor connection, so none is shown.
+        NextRunAt = _status?.Adiutor.State == ConnectionState.Connected ? NextRunAt(now) : null,
         LastStartBusy = _lastStartBusy,
         ServerOlder = _serverOlder,
         CheckinProblem = _checkinProblem,

@@ -333,6 +333,7 @@ public class LoopTests
         await h.Advance(TimeSpan.FromHours(6));
         Assert.Empty(h.Runs);
         Assert.Equal(IconState.NotConnected, IconStates.Map(h.Loop.Snapshot));
+        Assert.Null(h.Loop.Snapshot.NextRunAt);
     }
 
     [Fact]
