@@ -188,13 +188,16 @@ case "$method $path" in
     ;;
   "GET /releases/"*)
     [ -f "$STATE/rel/$id/tag" ] || { echo "HTTP 404" >&2; exit 1; }
+    # MOCK_ASSETS_DOWN fails only the reads of a release's assets, after the list of releases was read.
+    [[ -n "${MOCK_ASSETS_DOWN:-}" && "$jq_expr" == *assets* ]] && { echo "HTTP 502: Bad Gateway" >&2; exit 1; }
     release_json "$STATE/rel/$id" | answer
     ;;
   "PATCH /releases/"*)
     r="$STATE/rel/$id"
-    { [ "$fields" = "draft=false" ] && [ -f "$r/tag" ]; } || { echo "unexpected publish: $fields" >&2; exit 2; }
+    { [[ "$fields" == draft=false* ]] && [ -f "$r/tag" ]; } || { echo "unexpected publish: $fields" >&2; exit 2; }
     [ "${MOCK_PUBLISH:-}" = fail ] && { echo "HTTP 500" >&2; exit 1; }
     rm -f "$r/draft"
+    [[ "$fields" == *prerelease=false* ]] && rm -f "$r/prerelease"
     # The repository's immutable releases are on: a published release is immutable unless MOCK_NOT_IMMUTABLE.
     [ -z "${MOCK_NOT_IMMUTABLE:-}" ] && : >"$r/immutable"
     [ "${MOCK_PUBLISH:-}" = lost ] && { echo "connection reset" >&2; exit 1; }
@@ -602,7 +605,7 @@ sandbox
 MOCK_NOT_IMMUTABLE=1 release
 check "a release GitHub did not make immutable when published: the run fails" [ $? -ne 0 ]
 check "  and says so" said "GitHub did not make it immutable"
-check "  and what to turn on" said "Turn on immutable releases in the repository's settings"
+check "  and how to recover: back to a draft and run again" said "gh release edit v0.1.0 --draft=true"
 check "  with the release published" is_published v0.1.0
 DIR="$(checkout)" tray
 check "  the tray step run again does not count it as finished" [ $? -ne 0 ]
@@ -614,6 +617,32 @@ release
 check "  a new run does not count it as finished either" [ $? -ne 0 ]
 check "  and says why" said "v0.1.0 is published with the tray, but GitHub did not make it immutable"
 check "  and starts no new version" lacks_tag v0.2.0
+MOCK_ASSETS_DOWN=1 release
+check "  nor when the read of its assets fails: the run fails" [ $? -ne 0 ]
+check "  and says why" said "cannot read the assets of the GitHub Release"
+check "  and still starts no new version" lacks_tag v0.2.0
+# The recovery: immutable releases on, the release moved back to a draft (gh release edit --draft=true).
+rm -f "$WORK/case/output"
+: >"$(rel v0.1.0)/draft"
+release
+check "  moved back to a draft with every tray asset, the next run finishes it" complete 0.1.0
+check "  republished immutable, as the same version" lacks_tag v0.2.0
+check "  without building the image again" [ "$(calls "buildx build")" = 1 ]
+
+# A published release with the tray marked as a pre-release, which the tray's updater skips.
+sandbox
+release
+check "the publish request clears the pre-release mark" grep -qE -e "-X PATCH .*-F draft=false -F prerelease=false" "$STATE/calls"
+: >"$(rel v0.1.0)/prerelease"
+DIR="$(checkout)" tray
+check "a published tray release marked as a pre-release: the tray step run again fails" [ $? -ne 0 ]
+check "  and says why" said "v0.1.0 is marked as a pre-release, which the tray's updater skips"
+dir="$(checkout)"
+sed -i 's/^## \[Unreleased\]$/## [Unreleased]\n\n### Fixed\n\n- A fix./' "$dir/CHANGELOG.md"
+git -C "$dir" commit --quiet -am "Fix" && git -C "$dir" push --quiet origin main
+release
+check "  and so does a new run" said "v0.1.0 is marked as a pre-release, which the tray's updater skips"
+check "  which starts no new version" lacks_tag v0.2.0
 
 # --- dry run ---------------------------------------------------------------------------------
 

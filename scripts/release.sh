@@ -146,7 +146,7 @@ release_flag() {
 # anything release.sh did not make is.
 require_full_release() {
   local flag
-  flag="$(release_flag "$1" prerelease)"
+  flag="$(release_flag "$1" prerelease)" || die "cannot read whether the GitHub Release $TAG is a pre-release"
   [ "$flag" = false ] ||
     die "the draft GitHub Release $TAG is marked as a pre-release, which installed trays never read. Clear its pre-release mark on GitHub, then run the release again."
 }
@@ -155,18 +155,23 @@ require_full_release() {
 # installer and feed, which installed trays update from, could still be replaced, so it never counts as
 # finished. GitHub's immutable releases are on for this repository and must stay on (owner's decision
 # D-T7); the job's token cannot read that setting, only each release's own mark, so the run fails here.
+# Turning the setting on does not change a release published before, so the way out is to publish it again.
 published_not_immutable() {
-  die "the GitHub Release $1 is published with the tray, but GitHub did not make it immutable, so its installer and feed could still be replaced. Turn on immutable releases in the repository's settings (Settings, Releases, Enable release immutability) and keep them on."
+  die "the GitHub Release $1 is published with the tray, but GitHub did not make it immutable, so its installer and feed could still be replaced. Immutable releases apply only to releases published while they are on: make sure they are on (the repository's Settings, Releases, Enable release immutability), move this release back to a draft (gh release edit $1 --draft=true) and run the Release workflow again, which publishes it again, immutable."
 }
 
 # Checks the state of a published GitHub Release (tag $1, id $2) before a run counts it as finished:
-# one that carries the tray must be immutable. One from before the tray carries none and is finished.
+# one that carries the tray must be immutable and a full release, since the tray's updater skips
+# pre-releases. One from before the tray carries none and is finished. A read that fails stops the run.
 check_published() {
-  local assets immutable
-  assets="$(tray_assets_of "$2")"
+  local assets immutable prerelease
+  assets="$(tray_assets_of "$2")" || die "cannot read the assets of the GitHub Release $1"
   [ -n "$assets" ] || return 0
-  immutable="$(release_flag "$2" immutable)"
+  immutable="$(release_flag "$2" immutable)" || die "cannot read whether the GitHub Release $1 is immutable"
   [ "$immutable" = true ] || published_not_immutable "$1" "$2"
+  prerelease="$(release_flag "$2" prerelease)" || die "cannot read whether the GitHub Release $1 is a pre-release"
+  [ "$prerelease" = false ] ||
+    die "the GitHub Release $1 is marked as a pre-release, which the tray's updater skips, so installed trays never see it. Clear the mark (gh release edit $1 --prerelease=false), then run the release again."
 }
 
 # The tray's assets on a GitHub Release: Velopack's packages and installer (pack id AdiutorSync) and the
@@ -183,10 +188,11 @@ tray_names() {
   done | sort
 }
 
-# Prints the tray assets of a GitHub Release, one name per line, sorted.
+# Prints the tray assets of a GitHub Release, one name per line, sorted. Fails when the assets cannot be
+# read: called inside $(...), where errexit is off, it must never answer "none" for an error.
 tray_assets_of() {
   local assets
-  assets="$(release_assets "$1")"
+  assets="$(release_assets "$1")" || return 1
   tray_names <<<"$assets"
 }
 
@@ -245,7 +251,7 @@ preflight() {
   # A version is finished once its GitHub Release is published, which happens only after the tray's
   # assets are all on it and read back, and the published release passes check_published. Releases from
   # before the tray carry none and are finished too.
-  local newest state
+  local newest state held
   newest="$(newest_tag)"
   if [ -n "$newest" ]; then
     state="$(release_state "$newest")"
@@ -257,7 +263,8 @@ preflight() {
       [ "$(git_ show "$TAG:package.json" | version_in)" = "$VERSION" ] || die "package.json at $TAG is not $VERSION"
       echo "    $TAG was not finished: this run finishes it and ignores --bump $BUMP. Run again for the next version."
       if [ "${state%% *}" = draft ]; then
-        echo "    its draft GitHub Release holds $(tray_assets_of "${state#* }" | grep -c . || true) tray asset(s); the tray is uploaded again"
+        held="$(tray_assets_of "${state#* }")" || die "cannot read the assets of the GitHub Release $TAG"
+        echo "    its draft GitHub Release holds $(grep -c . <<<"$held" || true) tray asset(s); the tray is uploaded again"
       fi
       return
     fi
@@ -484,7 +491,7 @@ verify_tray_assets() {
 }
 
 tray_release() {
-  local state draft repo
+  local state draft repo held
   [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--tag must be a release tag such as v1.2.3"
   [ -n "$EXPECT_SHA" ] || die "--tray needs --expect-sha of the commit the tray was built from"
   VERSION="${TAG#v}"
@@ -511,7 +518,8 @@ tray_release() {
   case "$state" in
     missing) die "$TAG has no GitHub Release. Run the release again." ;;
     published*)
-      [ "$(tray_assets_of "${state#* }")" = "$(expected_tray_assets)" ] ||
+      held="$(tray_assets_of "${state#* }")" || die "cannot read the assets of the GitHub Release $TAG"
+      [ "$held" = "$(expected_tray_assets)" ] ||
         die "the GitHub Release $TAG is published without the tray's assets of this build, and a published release is not changed"
       check_published "$TAG" "${state#* }"
       echo "    the GitHub Release $TAG is published with the tray"
@@ -535,19 +543,23 @@ tray_release() {
   verify_tray_assets "$draft"
 
   info "Publishing the GitHub Release $TAG"
-  if ! gh api -X PATCH "repos/{owner}/{repo}/releases/$draft" -F draft=false >/dev/null; then
+  # Published as a full release: the draft was checked to be one, and the tray's updater skips pre-releases.
+  if ! gh api -X PATCH "repos/{owner}/{repo}/releases/$draft" -F draft=false -F prerelease=false >/dev/null; then
     # The request may have succeeded with its answer lost.
     [ "$(release_state "$TAG")" = "published $draft" ] || die "publishing the GitHub Release $TAG failed. Run the release again to finish it."
   fi
   [ "$(release_state "$TAG")" = "published $draft" ] || die "the GitHub Release $TAG is not published"
   # The published release's own immutable mark, read a few times in case GitHub sets it a moment after
-  # the publish.
-  local tries=0
-  until [ "$(gh api "repos/{owner}/{repo}/releases/$draft" --jq .immutable)" = true ]; do
+  # the publish, then the whole check a later run makes.
+  local tries=0 immutable
+  while :; do
+    immutable="$(release_flag "$draft" immutable)" || die "cannot read whether the GitHub Release $TAG is immutable"
+    [ "$immutable" = true ] && break
     tries=$((tries + 1))
     [ $tries -lt 3 ] || published_not_immutable "$TAG" "$draft"
     sleep 5
   done
+  check_published "$TAG" "$draft"
 }
 
 main() {
