@@ -37,15 +37,56 @@ public class WriteFailureTests
         Assert.Single(h.Runs);
     }
 
-    [Theory]
-    // Before the first status (nothing shown yet): the value.
-    [InlineData("", null, "https://a.example.com", false, "https://a.example.com")]
-    // The owner typed B; a newer value of an editable field leaves the draft alone.
-    [InlineData("https://b.example.com", "", "https://a.example.com", false, "https://b.example.com")]
-    // The owner typed B, then the environment turns out to set A: the locked field shows A, the draft goes.
-    [InlineData("https://b.example.com", "", "https://a.example.com", true, "https://a.example.com")]
-    // Not edited since it was shown (or saved): the newer value.
-    [InlineData("https://b.example.com", "https://b.example.com", "https://c.example.com", false, "https://c.example.com")]
-    public void A_field_shows_what_commands_use(string current, string? lastShown, string value, bool locked, string shown) =>
-        Assert.Equal(shown, EffectiveSettings.FieldText(current, lastShown, value, locked));
+    private const string A = "https://a.example.com";
+    private const string B = "https://b.example.com";
+    private const string C = "https://c.example.com";
+
+    [Fact]
+    public void A_draft_survives_any_number_of_refreshes()
+    {
+        var field = new FieldState();
+        var text = field.Refresh("", A, locked: false);
+        Assert.Equal(A, text);
+        text = B; // the owner types
+        for (var i = 0; i < 3; i++)
+            text = field.Refresh(text, A, locked: false);
+        Assert.Equal(B, text);
+    }
+
+    [Fact]
+    public void A_draft_survives_refreshes_after_a_failed_save()
+    {
+        var field = new FieldState();
+        var text = field.Refresh("", A, locked: false);
+        text = B;
+        // The save failed: nothing marks the field saved, and the refresh the failure publishes keeps the draft.
+        text = field.Refresh(text, A, locked: false);
+        text = field.Refresh(text, A, locked: false);
+        Assert.Equal(B, text);
+        // Saved: the draft is the baseline, and later values show again.
+        field.Saved(text);
+        Assert.Equal(B, field.Refresh(text, B, locked: false));
+        Assert.Equal(C, field.Refresh(B, C, locked: false));
+    }
+
+    [Fact]
+    public void A_field_that_turns_out_locked_shows_the_value_commands_use()
+    {
+        var field = new FieldState();
+        var text = field.Refresh("", A, locked: false);
+        text = B;
+        text = field.Refresh(text, A, locked: true);
+        Assert.Equal(A, text);
+        Assert.Equal(A, field.Refresh(B, A, locked: true));
+    }
+
+    [Fact]
+    public void A_field_not_edited_follows_newer_values()
+    {
+        var field = new FieldState();
+        var text = field.Refresh("", A, locked: false);
+        text = field.Refresh(text, C, locked: false);
+        Assert.Equal(C, text);
+        Assert.Equal(A, field.Refresh(text, A, locked: false));
+    }
 }

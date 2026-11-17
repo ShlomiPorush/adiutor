@@ -111,8 +111,8 @@ internal sealed partial class SettingsWindow : Window
         SelectTag(LanguageBox, s.Language ?? T.Language);
     }
 
-    /** What each address field last showed: a field whose text differs is being edited, and is left alone. */
-    private readonly Dictionary<TextBox, string> _shown = [];
+    /** Each address field's baseline: a field whose text differs from it is being edited, and is left alone. */
+    private readonly Dictionary<TextBox, FieldState> _shown = [];
 
     /** Shows each setting as the engine uses it; called again when a newer status arrives. */
     private void ShowEffective(TraySettings s)
@@ -126,15 +126,19 @@ internal sealed partial class SettingsWindow : Window
 
     private void Show(TextBox box, string key, string value)
     {
-        box.Text = EffectiveSettings.FieldText(box.Text, _shown.TryGetValue(box, out var last) ? last : null, value, IsLocked(key));
-        _shown[box] = box.Text;
+        if (!_shown.TryGetValue(box, out var state))
+            _shown[box] = state = new FieldState();
+        box.Text = state.Refresh(box.Text, value, IsLocked(key));
     }
 
     /** After a save, what the fields show is no longer a draft. */
     private void MarkSaved()
     {
         foreach (var box in new[] { AdiutorUrl, T3Cli, T3Url, Overview })
-            _shown[box] = box.Text;
+        {
+            if (_shown.TryGetValue(box, out var state))
+                state.Saved(box.Text);
+        }
     }
 
     private EffectiveSetting? Effective(string key) =>

@@ -224,25 +224,6 @@ public class EngineRunnerTests
         Assert.Equal("start_failed", outcome.Failure);
     }
 
-    private static async Task WaitGone(int pid)
-    {
-        for (var i = 0; i < 100; i++)
-        {
-            try
-            {
-                using var p = Process.GetProcessById(pid);
-                if (p.HasExited)
-                    return;
-            }
-            catch (ArgumentException)
-            {
-                return;
-            }
-            await Task.Delay(100);
-        }
-        Assert.Fail($"process {pid} outlived its command");
-    }
-
     [Theory]
     [InlineData("plain", "plain")]
     [InlineData("a b", "\"a b\"")]
