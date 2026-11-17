@@ -30,7 +30,6 @@ internal sealed partial class SettingsWindow : Window
 #pragma warning restore CA1001
 {
     public const string DefaultT3Url = "http://127.0.0.1:3773";
-    private const int NameMax = 60;
 
     private readonly ISettingsHost _host;
     private CancellationTokenSource? _command;
@@ -224,10 +223,8 @@ internal sealed partial class SettingsWindow : Window
         }
         _host.Save(settings);
         var status = _host.Loop.Snapshot.Status?.Adiutor;
-        List<string> args = ["connect", "--name", ConnectionName(), "--url", url];
         // An ended connection for this address is connected again; the engine then ends the old one.
-        if (status is { State: ConnectionState.Ended } && Addresses.Origin(status.Url) == url)
-            args.Add("--replace");
+        var args = ConnectCommand.Args(Environment.MachineName, url, status is { State: ConnectionState.Ended } && Addresses.Origin(status.Url) == url);
         await RunAsync(args, AdiutorMessage, ok => ok.ConnectState is "connected" or "already_connected" ? T["settings.connectedNow"] : null);
     }
 
@@ -283,7 +280,11 @@ internal sealed partial class SettingsWindow : Window
         {
             if (_command is null)
                 return;
+            var first = _approvalLink is null;
             _approvalLink = TrayView.OpenableUrl(approval.Link);
+            // The tray opens the page itself, outside the job (ConnectCommand): once, when the code arrives.
+            if (first && _approvalLink is { } link)
+                _host.OpenInBrowser(link);
             ApprovalText.Text = T.Format("settings.approve", ("code", approval.UserCode));
             ApprovalCode.Text = approval.UserCode;
             OpenApproval.IsEnabled = _approvalLink is not null;
@@ -306,12 +307,5 @@ internal sealed partial class SettingsWindow : Window
             dialog.InitialDirectory = Overview.Text.Trim();
         if (dialog.ShowDialog(this) == true)
             Overview.Text = dialog.FolderName;
-    }
-
-    /** The name Adiutor's approval page and Settings, Agent access show for this connection. */
-    private static string ConnectionName()
-    {
-        var name = $"Adiutor Sync ({Environment.MachineName})";
-        return name.Length <= NameMax ? name : name[..NameMax];
     }
 }

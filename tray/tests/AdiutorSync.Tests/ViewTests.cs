@@ -171,3 +171,15 @@ public partial class ViewTests
     [InlineData(null, null)]
     public void Only_web_addresses_open(string? url, string? opened) => Assert.Equal(opened, TrayView.OpenableUrl(url));
 }
+
+public class ConnectCommandTests
+{
+    [Fact]
+    public void Connect_never_lets_the_engine_open_the_browser()
+    {
+        var args = ConnectCommand.Args("PC-1", "https://adiutor.example.com", replace: false);
+        Assert.Equal(["connect", "--name", "Adiutor Sync (PC-1)", "--url", "https://adiutor.example.com", "--no-open"], args);
+        Assert.Contains("--replace", ConnectCommand.Args("PC-1", "https://adiutor.example.com", replace: true));
+        Assert.Equal(ConnectCommand.NameMax, ConnectCommand.Args(new string('x', 80), "https://adiutor.example.com", false)[2].Length);
+    }
+}
