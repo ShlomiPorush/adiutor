@@ -61,6 +61,7 @@ The owner can ask for a sync from Adiutor ("Sync now" in Settings, Sync and on t
 
 ```
 node dist/sync/adiutor-sync.js checkin [--url <url>] [--env <file>] [--json] < report.json
+node dist/sync/adiutor-sync.js hold-run [--env <file>] [--json]
 ```
 
 - **The report** is one JSON object on stdin, written by the tray: `{version, paused, pausedUntil, nextRunAt, running, finished}`. `version` is the tray app's version (digits, letters, `.`, `+`, `-`); `paused` true or false; `pausedUntil` a time while paused, or null (until resumed; always null when not paused); `nextRunAt` a time or null; `running` `{"kind":"request","requestId":...}` while a run serves a request, `{"kind":"local","startedAt":...}` while a run of its own goes, or null; `finished` the requests whose run ended since the last answered check-in, at most 20, each `{"requestId":...,"result":{"t3":...,"security":...}}` with the parts' results of that run's report. Every field is required. A report that is not valid is refused (`invalid_report`, exit 2) and nothing is sent.
@@ -99,19 +100,21 @@ node dist/sync/adiutor-sync.js checkin [--url <url>] [--env <file>] [--json] < r
 - `--no-collect` uses the newest existing snapshot without running the collector.
 - `--dry-run` prints the payload sizes and a sample of ids and sends nothing; it needs no Adiutor address or connection, and still reads T3 with the session.
 - `--request <id>` names the sync request from Adiutor the run serves in its report (`requestId`), for the tray's next check-in. The pushes carry no request id: the check-in's `finished` reports the result.
+- `hold-run` takes the run lock (the same lock and takeover rules as `run`) and keeps it until its stdin ends, so no run starts meanwhile; with a run going it answers busy at once. The tray holds it while it checks for, downloads and installs an update. Exit code 0 when it held the lock, 1 when busy.
 - `run`'s exit code: 0 when at least one part was `accepted` or `partial` (or a dry run had something to send), 1 when nothing could be sent or another run is going, 2 for bad arguments or settings. `status` exits 0; `disconnect` and `t3-disconnect` exit 1 while a revocation is pending; `t3-connect` exits 0 when connected.
 
 ## Machine-readable output
 
 With `--json`, a command writes one JSON object per line on stdout and nothing else: events, then exactly one result, also after a failure. The types are in `src/sync/contract.ts`. No line holds a token. The sync names projects by id and puts no T3 title or path in a line; a failure's message can pass on the last error line the T3 CLI or the collector printed.
 
-- **Events:** `{"type":"event","event":"message","text":...}` for each human line, and for `connect` `{"type":"event","event":"approval","link":...,"userCode":"ABCD-EFGH"}`.
+- **Events:** `{"type":"event","event":"message","text":...}` for each human line, for `connect` `{"type":"event","event":"approval","link":...,"userCode":"ABCD-EFGH"}`, and for `hold-run` `{"type":"event","event":"held"}` once it holds the run lock.
 - **Result:** `{"type":"result","v":1,"command":...,"ok":...}` with, by command:
   - `status`: `adiutor` (`state`: `connected`, `not_connected` or `ended`; `url`, `label`, `scope`, `revocationPending`), `t3` (`state`: `connected`, `not_connected` or `ended`; `reason` `rejected` or `other_environment`; `environmentId`, `expiresAt`, `revocationPending`), `lastRun` (the last run's report), `lastGoodSyncAt`, `running` (`{startedAt}` while a run holds the lock), `paused` (the settings file's pause), `claim` (a sync request from Adiutor kept to run, or null), `settings.problems`, and `settings.values`: each setting as the engine uses it, by the settings file's key (`adiutorUrl`, `t3CliPath`, `t3Url`, `overviewDir`), as `{value, source}` with `source` one of `option`, `environment`, `envFile` (`--env`, or the default `sync.env`), `settingsFile` or `default`. The tray shows these values, and locks a field set by the environment or an env file.
   - `connect`: `state` (`connected`, `already_connected`, `not_connected`), `scope`.
   - `disconnect`, `t3-disconnect`: `wasConnected`, `revocationPending`.
   - `t3-connect`: `environmentId`, `expiresAt`.
   - `checkin`: `claim` ("Requests from Adiutor", above).
+  - `hold-run`: `busy` (`{startedAt}`) when a run held the lock.
   - `run`: `report` (`startedAt`, `finishedAt`, `dryRun`, `requestId`, `t3` and `security` each with `result`, `reason`, `message`, `httpStatus`; `t3` with `projectsFrom`, `projectsAt`, `projects`, `threads`, `failedProjects`; `security` with `snapshotRunId`, `snapshotAt`, `repos`; and `lastGoodSyncAt`), or `busy` (`{startedAt}`: another run holds the lock, nothing ran).
   - `ok` is true when the command did what it was asked. When it is false, `error` (`code`, `message`) always says why, with the command's own fields where it has them: `busy` for a run that did not start (code `busy`), `revocationPending` for a disconnect whose revocation is kept (code `revocation_pending`). Bad arguments have `command` null and the code `usage`.
 

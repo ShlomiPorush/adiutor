@@ -20,7 +20,7 @@ import { MCP_TARGETS, type McpTarget, setupMcp } from "./mcp-setup.ts"
 import { syncClient } from "./oauth.ts"
 import { type Deps, EXIT_NOTHING_PUSHED, EXIT_OK, EXIT_USAGE, runSync } from "./run.ts"
 import { DEFAULT_T3_URL, dataDir, envFileToRead, type Resolved, resolveSettings } from "./settings.ts"
-import { readStatus, runningSince } from "./state.ts"
+import { readStatus, runningSince, takeRunLock } from "./state.ts"
 import { t3Session } from "./t3-session.ts"
 
 export const USAGE = `Usage: node adiutor-sync.js run [--env <file>] [--overview <dir>] [--no-collect] [--dry-run] [--request <id>] [--json]
@@ -30,6 +30,7 @@ export const USAGE = `Usage: node adiutor-sync.js run [--env <file>] [--overview
        node adiutor-sync.js t3-connect [--env <file>] [--json]
        node adiutor-sync.js t3-disconnect [--env <file>] [--json]
        node adiutor-sync.js checkin [--url <url>] [--env <file>] [--json] < report.json
+       node adiutor-sync.js hold-run [--env <file>] [--json]
        node adiutor-sync.js setup-mcp --for <claude|codex> [--url <url>] [--env <file>]
 
 run: runs the overview collector, reads T3's projects with the sync's T3 session and every project's threads through
@@ -68,6 +69,9 @@ checkin: the tray's check-in. Reads its report, one JSON object, on stdin (versi
 running, finished; see docs/sync.md), sends it to Adiutor, and keeps a sync request Adiutor hands back in the data
 folder before it answers. Exit code: 0 when Adiutor answered, 1 when not, 2 for bad arguments or a bad report.
 
+hold-run: takes the run lock and keeps it until stdin ends, so no run starts meanwhile (the tray holds it while it
+installs an update). Answers busy at once when a run holds it. Exit code: 0 when it held the lock, 1 when busy.
+
 setup-mcp: sets up Claude Code or Codex to use Adiutor's MCP server with OAuth, replacing a setup with a key.
 
   --for <client>     claude: the adiutor entry of Claude Code's user scope (claude mcp remove, then add)
@@ -91,6 +95,7 @@ const COMMANDS: readonly string[] = [
   "t3-disconnect",
   "run",
   "checkin",
+  "hold-run",
   "setup-mcp",
 ]
 
@@ -175,6 +180,8 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
         return await t3DisconnectCommand(settings, deps, out)
       case "checkin":
         return await checkinCommand(settings, deps, out)
+      case "hold-run":
+        return await holdRunCommand(deps, out)
       case "run": {
         if (values.request !== undefined && !isRequestId(values.request)) return usage(out, "--request must be an id")
         // Only the claim kept for the connection and address of now: Adiutor takes a result from that connection alone.
@@ -530,6 +537,39 @@ async function checkinCommand(settings: Resolved, deps: MainDeps, out: Output): 
   if (!sent.ok) return fail({ code: sent.code, message: sent.message }, EXIT_NOTHING_PUSHED, claim)
   out.say(sent.claim ? `Adiutor asks for a sync: request ${sent.claim}` : "Checked in; no sync request waits.")
   out.result({ command: "checkin", ok: true, claim: sent.claim ? claim : null })
+  return EXIT_OK
+}
+
+// --- hold-run ---
+
+/**
+ * Takes the run lock (the same lock and takeover rules as `run`) and keeps it until stdin ends. The tray holds it while
+ * it installs an update, inside its Job Object: when the tray ends, this process ends with it, and its lock, whose
+ * holder died, is taken over as always.
+ */
+async function holdRunCommand(deps: MainDeps, out: Output): Promise<number> {
+  const all = connectDeps(deps)
+  const data = dataDir(all.platform, deps.env)
+  const held = await takeRunLock(data, { platform: all.platform, env: deps.env, now: all.now, sleep: all.sleep })
+  if (held.busy) {
+    const message = `a run is going (since ${held.startedAt ?? "an unknown time"})`
+    out.say(`hold-run: ${message}`)
+    out.result({
+      command: "hold-run",
+      ok: false,
+      busy: { startedAt: held.startedAt ?? null },
+      error: { code: "busy", message },
+    })
+    return EXIT_NOTHING_PUSHED
+  }
+  try {
+    out.event({ event: "held" })
+    out.say("hold-run: the run lock is held until stdin ends")
+    await (deps.stdin ?? readStdin)()
+  } finally {
+    held.release()
+  }
+  out.result({ command: "hold-run", ok: true })
   return EXIT_OK
 }
 

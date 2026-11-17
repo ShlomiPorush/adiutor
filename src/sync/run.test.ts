@@ -394,6 +394,29 @@ describe("run", () => {
     expect(t3.calls.filter((c) => c.args[0] === "thread")).toHaveLength(0)
   })
 
+  it("hold-run keeps the run lock until its stdin ends: a run meanwhile answers busy", async () => {
+    let end = () => {}
+    const stdinEnds = new Promise<string>((resolve) => {
+      end = () => resolve("")
+    })
+    const holder = deps({ stdin: () => stdinEnds })
+    const holding = json(["hold-run"], holder.deps, holder.lines)
+    for (let i = 0; i < 200 && !holder.lines.some((l) => l.includes('"held"')); i++)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(holder.lines.map((l) => JSON.parse(l))).toContainEqual({ type: "event", event: "held" })
+    const second = deps()
+    const busy = await json(["run"], second.deps, second.lines)
+    expect(busy.result).toMatchObject({ command: "run", ok: false, error: { code: "busy" } })
+    const twice = await json(["hold-run"], second.deps, second.lines)
+    expect(twice.result).toMatchObject({ command: "hold-run", ok: false, busy: { startedAt: expect.any(String) } })
+    end()
+    const held = await holding
+    expect(held.exit).toBe(0)
+    expect(held.result).toMatchObject({ command: "hold-run", ok: true })
+    // Released: a run goes again.
+    expect((await json(["run", "--dry-run"], second.deps, second.lines)).result).not.toHaveProperty("busy")
+  })
+
   it("one run at a time: a second run answers busy with the first one's start time", async () => {
     let open: () => void = () => {}
     const gate = new Promise<void>((resolve) => {

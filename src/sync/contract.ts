@@ -6,7 +6,15 @@
 
 export const CONTRACT_VERSION = 1
 
-export type Command = "status" | "connect" | "disconnect" | "t3-connect" | "t3-disconnect" | "run" | "checkin"
+export type Command =
+  | "status"
+  | "connect"
+  | "disconnect"
+  | "t3-connect"
+  | "t3-disconnect"
+  | "run"
+  | "checkin"
+  | "hold-run"
 
 /** What one part of a run (T3 or security) came to. */
 export type PartResult = "accepted" | "partial" | "failed" | "outcome_unknown" | "not_run"
@@ -15,6 +23,8 @@ export type PartResult = "accepted" | "partial" | "failed" | "outcome_unknown" |
 export type Event =
   | { type: "event"; event: "message"; text: string }
   | { type: "event"; event: "approval"; link: string; userCode: string }
+  /** `hold-run` holds the run lock now, until its stdin ends. */
+  | { type: "event"; event: "held" }
 
 export type Failure = { code: string; message: string }
 
@@ -125,6 +135,7 @@ export type Result = { type: "result"; v: typeof CONTRACT_VERSION } & (
   | ({ command: "t3-disconnect"; ok: boolean } & DisconnectBody)
   | ({ command: "run"; ok: boolean } & RunBody)
   | ({ command: "checkin"; ok: boolean } & CheckinBody)
+  | ({ command: "hold-run"; ok: boolean } & RunBody)
 )
 
 export type StatusBody = {
@@ -180,6 +191,10 @@ export type RunBody = {
   error?: Failure
 }
 
+/** The events other than a human line, each with its own fields. */
+type EventInput =
+  Exclude<Event, { event: "message" }> extends infer E ? (E extends unknown ? Omit<E, "type"> : never) : never
+
 /** Distributes Omit over a union, so each result keeps its own fields. */
 type ResultInput = Result extends infer R ? (R extends unknown ? Omit<R, "type" | "v"> : never) : never
 
@@ -194,8 +209,8 @@ export function output(json: boolean, out: (line: string) => void) {
       if (json) write({ type: "event", event: "message", text } satisfies Event)
       else out(text)
     },
-    event(value: Omit<Extract<Event, { event: "approval" }>, "type">) {
-      if (!done && json) write({ type: "event", ...value } satisfies Event)
+    event(value: EventInput) {
+      if (!done && json) write({ type: "event", ...value } as Event)
     },
     /** The one result; human output has printed its lines already. Later calls are ignored. */
     result(value: ResultInput) {
