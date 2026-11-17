@@ -87,8 +87,9 @@ release_json() {
     [ -e "$a" ] || continue
     assets="$assets${assets:+,}{\"id\":$(basename "$a" .name),\"name\":\"$(cat "$a")\"}"
   done
-  printf '{"id":%s,"tag_name":"%s","draft":%s,"immutable":%s,"assets":[%s]}\n' "${r##*/}" "$(cat "$r/tag")" \
-    "$([ -e "$r/draft" ] && echo true || echo false)" "$([ -e "$r/immutable" ] && echo true || echo false)" "$assets"
+  printf '{"id":%s,"tag_name":"%s","draft":%s,"prerelease":%s,"immutable":%s,"assets":[%s]}\n' "${r##*/}" "$(cat "$r/tag")" \
+    "$([ -e "$r/draft" ] && echo true || echo false)" "$([ -e "$r/prerelease" ] && echo true || echo false)" \
+    "$([ -e "$r/immutable" ] && echo true || echo false)" "$assets"
 }
 # The folder of the first release of a tag, if any.
 release_dir() {
@@ -794,6 +795,18 @@ cp -r "$(rel v0.1.0)" "$STATE/rel/999"
 DIR="$(checkout)" tray
 check "two GitHub Releases for the tag: the tray step stops" said "there are 2 GitHub Releases for v0.1.0"
 check "  before uploading" nothing_uploaded
+
+sandbox
+NO_TRAY=1 release
+: >"$(rel v0.1.0)/prerelease"
+DIR="$(checkout)" tray
+check "a draft marked as a pre-release: the tray step stops" [ $? -ne 0 ]
+check "  and says why" said "is marked as a pre-release"
+check "  before uploading" nothing_uploaded
+check "  and the release stays a draft" is_draft v0.1.0
+release
+check "  and so does the next run" said "is marked as a pre-release"
+check "  which uploads nothing either" nothing_uploaded
 
 sandbox
 MOCK_FAIL_BUILD=1 release

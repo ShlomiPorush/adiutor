@@ -128,6 +128,26 @@ release_assets() {
   printf '%s\n' "$out"
 }
 
+# Prints true or false: field $2 (prerelease or immutable) of the GitHub Release with id $1.
+release_flag() {
+  local out
+  out="$(gh api "repos/{owner}/{repo}/releases/$1" --jq ".$2" 2>&1)" || die "cannot read the GitHub Release $1: $out"
+  case "$out" in
+    true | false) echo "$out" ;;
+    *) die "cannot read $2 of the GitHub Release $1: $out" ;;
+  esac
+}
+
+# release.sh makes full releases only, and installed trays read only those (Velopack's GitHub source
+# without pre-releases). A draft someone marked as a pre-release is refused and left as it is, as
+# anything release.sh did not make is.
+require_full_release() {
+  local flag
+  flag="$(release_flag "$1" prerelease)"
+  [ "$flag" = false ] ||
+    die "the draft GitHub Release $TAG is marked as a pre-release, which installed trays never read. Clear its pre-release mark on GitHub, then run the release again."
+}
+
 # The tray's assets on a GitHub Release: Velopack's packages and installer (pack id AdiutorSync) and the
 # feed files `vpk upload github` writes for the win channel.
 is_tray_asset() {
@@ -323,6 +343,7 @@ create_draft() {
   case "$state" in
     draft*)
       echo "    the draft GitHub Release $TAG exists"
+      require_full_release "${state#* }"
       clear_tray_assets "${state#* }"
       return
       ;;
@@ -475,6 +496,7 @@ tray_release() {
       ;;
   esac
   draft="${state#* }"
+  require_full_release "$draft"
   clear_tray_assets "$draft"
 
   repo="$(gh api "repos/{owner}/{repo}" --jq .full_name)" || die "cannot read the repository's name"
