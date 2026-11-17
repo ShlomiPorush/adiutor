@@ -6,13 +6,17 @@ name: Release
 # green run never counts. Otherwise, or when its result cannot be read, the release runs the whole CI
 # on the commit itself. scripts/ci-result.sh decides. Then scripts/release.sh, which pushes the
 # release commit and tag together, publishes the image to GHCR (version, then :latest) and creates
-# the GitHub Release from the CHANGELOG section; a reused result is checked once more by this
-# workflow right before it, and the release stops if a newer CI run or attempt appeared meanwhile.
-# With dry_run, the same jobs and checks run and release.sh publishes nothing. A run that stopped
-# halfway is finished by the next run, which ignores the bump: start a new run, since "Re-run failed
-# jobs" keeps the old commit and stops once the release commit is on main. That commit has no CI run
-# of its own, so the next run runs the CI itself. Deploys nothing: the owner deploys
-# (docs/deployment.md).
+# the GitHub Release from the CHANGELOG section as a draft; a reused result is checked once more by
+# this workflow right before it, and the release stops if a newer CI run or attempt appeared
+# meanwhile. Then the sync tray, from the exact commit and version the Release job names: the engine
+# bundle built on Linux, the tray built and packed with Velopack on Windows with the pinned Node.js
+# (tray/node.json), and scripts/release.sh --tray, which uploads it to the draft, reads every asset
+# back and publishes the release; a published release that GitHub did not make immutable fails the run.
+# With dry_run, the same jobs and checks run, the tray is built and packed, and nothing is published
+# or uploaded. A run that stopped halfway is finished by the next run, which ignores the bump: start
+# a new run, since "Re-run failed jobs" keeps the old commit and stops once the release commit is on
+# main. That commit has no CI run of its own, so the next run runs the CI itself. Deploys nothing:
+# the owner deploys (docs/deployment.md).
 on:
   workflow_dispatch:
     inputs:
@@ -90,6 +94,12 @@ jobs:
       contents: write
       packages: write
       actions: read
+    # The version and the commit the tray is built from, written by release.sh (see the Release step).
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+      tray: ${{ steps.release.outputs.tray }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -108,7 +118,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: scripts/ci-result.sh --sha "$VERIFIED_SHA" --expect-run "$RUN_ID"
       - name: Release
-        # Inputs reach the script through the environment, never through ${{ }} in the script.
+        id: release
+        # Inputs reach the script through the environment, never through ${{ }} in the script. The
+        # job's token (contents and packages write) pushes the release, the image and the draft.
         env:
           BUMP: ${{ inputs.bump }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -119,6 +131,132 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
-          args=(--target ghcr --bump "$BUMP" --skip-verify --expect-sha "$VERIFIED_SHA")
+          result="$RUNNER_TEMP/release-result"
+          args=(--target ghcr --bump "$BUMP" --skip-verify --expect-sha "$VERIFIED_SHA" --output "$result")
+          [ "$DRY_RUN" != true ] || args+=(--dry-run)
+          scripts/release.sh "${args[@]}"
+          grep -qxE 'tag=v[0-9]+\.[0-9]+\.[0-9]+' "$result" || { echo "No tag from release.sh"; exit 1; }
+          grep -qxE 'version=[0-9]+\.[0-9]+\.[0-9]+' "$result" || { echo "No version from release.sh"; exit 1; }
+          grep -qxE 'sha=[0-9a-f]{40}' "$result" || { echo "No commit from release.sh"; exit 1; }
+          grep -qxE 'tray=(true|false)' "$result" || { echo "release.sh did not say whether there is a tray"; exit 1; }
+          cat "$result" >>"$GITHUB_OUTPUT"
+
+  # The sync tray's engine bundle (dist/sync/adiutor-sync.js), built in the repository's toolchain
+  # from the commit the Release job names. Read-only, and the checkout keeps no token. Skipped, with the
+  # tray jobs after it, for a tag from before releases carried the tray (tray=false from release.sh).
+  tray-engine:
+    name: Tray engine bundle
+    needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.tray == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+          persist-credentials: false
+      - name: Build the bundle
+        env:
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$SHA" ] || { echo "The checkout is not $SHA"; exit 1; }
+          source scripts/lib/common.sh
+          build_toolchain
+          install_deps
+          in_toolchain "pnpm build:sync"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tray-engine
+          path: dist/sync/adiutor-sync.js
+          if-no-files-found: error
+          retention-days: 7
+
+  # The tray built and packed with Velopack on Windows (scripts/pack-tray.ps1), from the same commit and
+  # with the version the Release job names, with the pinned Node.js checked against tray/node.json and
+  # the package checked (scripts/test-tray-package.ps1). Read-only, and the checkout keeps no token:
+  # the previous release, from which Velopack makes the delta package, is read as an installed tray
+  # reads it, without a token. Uploads only the workflow artifact.
+  tray-build:
+    name: Tray package (Windows)
+    needs: [release, tray-engine]
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.tray-engine.result == 'success' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: tray/global.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tray-engine
+          path: ${{ runner.temp }}/engine
+      - name: Previous release
+        env:
+          SHA: ${{ needs.release.outputs.sha }}
+          REPOSITORY: ${{ github.repository }}
+        working-directory: tray
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((git rev-parse HEAD) -ne $env:SHA) { throw "The checkout is not $env:SHA" }
+          dotnet tool restore
+          dotnet vpk download github --repoUrl "https://github.com/$env:REPOSITORY" --channel win --outputDir "$env:RUNNER_TEMP/tray-release"
+      - name: Pack
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          scripts/pack-tray.ps1 -Version $env:VERSION -Bundle "$env:RUNNER_TEMP/engine/adiutor-sync.js" `
+            -OutputDir "$env:RUNNER_TEMP/tray-release" -WorkDir "$env:RUNNER_TEMP/tray-work"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tray-release
+          path: ${{ runner.temp }}/tray-release
+          if-no-files-found: error
+          retention-days: 7
+
+  # The tray on the draft GitHub Release, read back, and the release published (scripts/release.sh
+  # --tray). The job's token (contents write) reaches gh as GH_TOKEN and vpk upload github through
+  # its environment. In a dry run it checks the build and uploads nothing.
+  tray-publish:
+    name: Publish with the tray
+    needs: [release, tray-build]
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.tray-build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: tray/global.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tray-release
+          path: ${{ runner.temp }}/tray-release
+      - name: Upload and publish
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          args=(--tray "$RUNNER_TEMP/tray-release" --tag "$TAG" --expect-sha "$SHA")
           [ "$DRY_RUN" != true ] || args+=(--dry-run)
           scripts/release.sh "${args[@]}"
