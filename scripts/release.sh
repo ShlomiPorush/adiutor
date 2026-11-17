@@ -483,8 +483,15 @@ tray_release() {
     [ "$(release_state "$TAG")" = "published $draft" ] || die "publishing the GitHub Release $TAG failed. Run the release again to finish it."
   fi
   [ "$(release_state "$TAG")" = "published $draft" ] || die "the GitHub Release $TAG is not published"
-  [ "$(gh api "repos/{owner}/{repo}/releases/$draft" --jq .immutable)" = true ] ||
-    die "the GitHub Release $TAG is published, but GitHub did not make it immutable: turn on immutable releases (the repository's Settings, Releases, Enable release immutability)"
+  # The one sign of the setting this job's token can read: the published release itself. Read a few times,
+  # in case GitHub marks it a moment after the publish.
+  local tries=0
+  until [ "$(gh api "repos/{owner}/{repo}/releases/$draft" --jq .immutable)" = true ]; do
+    tries=$((tries + 1))
+    [ $tries -lt 3 ] ||
+      die "the GitHub Release $TAG is published, but GitHub did not make it immutable: turn on immutable releases (the repository's Settings, Releases, Enable release immutability)"
+    sleep 5
+  done
 }
 
 main() {
