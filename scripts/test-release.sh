@@ -587,6 +587,16 @@ sandbox
 MOCK_NOT_IMMUTABLE=1 release
 check "a release GitHub did not make immutable when published: the run fails" [ $? -ne 0 ]
 check "  and says so" said "GitHub did not make it immutable"
+DIR="$(checkout)" tray
+check "  the tray step run again does not count it as finished" [ $? -ne 0 ]
+check "  and says why" said "v0.1.0 is published with the tray, but GitHub did not make it immutable"
+dir="$(checkout)"
+sed -i 's/^## \[Unreleased\]$/## [Unreleased]\n\n### Fixed\n\n- A fix./' "$dir/CHANGELOG.md"
+git -C "$dir" commit --quiet -am "Fix" && git -C "$dir" push --quiet origin main
+release
+check "  a new run does not count it as finished either" [ $? -ne 0 ]
+check "  and says why" said "v0.1.0 is published with the tray, but GitHub did not make it immutable"
+check "  and starts no new version" lacks_tag v0.2.0
 
 # --- dry run ---------------------------------------------------------------------------------
 

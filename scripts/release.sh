@@ -148,6 +148,24 @@ require_full_release() {
     die "the draft GitHub Release $TAG is marked as a pre-release, which installed trays never read. Clear its pre-release mark on GitHub, then run the release again."
 }
 
+# What a run does about a published GitHub Release (tag $1, id $2) that carries the tray but that GitHub
+# did not make immutable: its installer and feed, which installed trays update from, could still be
+# replaced, so it never counts as finished. The one place for the owner's decision on such a release;
+# until then the run stops and says so.
+published_not_immutable() {
+  die "the GitHub Release $1 is published with the tray, but GitHub did not make it immutable, so its installer and feed could still be replaced. Nothing more is released until the owner decides what to do with it."
+}
+
+# Checks the state of a published GitHub Release (tag $1, id $2) before a run counts it as finished:
+# one that carries the tray must be immutable. One from before the tray carries none and is finished.
+check_published() {
+  local assets immutable
+  assets="$(tray_assets_of "$2")"
+  [ -n "$assets" ] || return 0
+  immutable="$(release_flag "$2" immutable)"
+  [ "$immutable" = true ] || published_not_immutable "$1" "$2"
+}
+
 # The tray's assets on a GitHub Release: Velopack's packages and installer (pack id AdiutorSync) and the
 # feed files `vpk upload github` writes for the win channel.
 is_tray_asset() {
@@ -257,12 +275,15 @@ preflight() {
   require_immutable
 
   # A version is finished once its GitHub Release is published, which happens only after the tray's
-  # assets are all on it and read back. Releases from before the tray carry none and are finished too.
+  # assets are all on it and read back, and the published release passes check_published. Releases from
+  # before the tray carry none and are finished too.
   local newest state
   newest="$(newest_tag)"
   if [ -n "$newest" ]; then
     state="$(release_state "$newest")"
-    if [ "${state%% *}" != published ]; then
+    if [ "${state%% *}" = published ]; then
+      check_published "$newest" "${state#* }"
+    else
       RESUME=1 TAG="$newest" VERSION="${newest#v}"
       git_ merge-base --is-ancestor "$TAG" HEAD || die "$TAG is not on main"
       [ "$(git_ show "$TAG:package.json" | version_in)" = "$VERSION" ] || die "package.json at $TAG is not $VERSION"
@@ -491,6 +512,7 @@ tray_release() {
     published*)
       [ "$(tray_assets_of "${state#* }")" = "$(expected_tray_assets)" ] ||
         die "the GitHub Release $TAG is published without the tray's assets of this build, and a published release is not changed"
+      check_published "$TAG" "${state#* }"
       echo "    the GitHub Release $TAG is published with the tray"
       return 0
       ;;
