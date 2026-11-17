@@ -87,6 +87,8 @@ public sealed class SyncLoop
     private long _nextCheckinAt = long.MinValue;
     private long _retryAt = long.MinValue;
     private int _commands;
+    private bool _runLockHeld;
+    private bool _closed;
     private bool _lastStartBusy;
     private bool _serverOlder;
     private string? _checkinProblem;
@@ -139,16 +141,7 @@ public sealed class SyncLoop
         }
     }
 
-    private bool IdleCore() => _run is null && _commands == 0 && _status?.RunningSince is null;
-
-    public bool IsRunning
-    {
-        get
-        {
-            lock (_gate)
-                return _run is not null;
-        }
-    }
+    private bool IdleCore() => _run is null && _commands == 0 && (_runLockHeld || _status?.RunningSince is null);
 
     // --- Called from the windows ---
 
@@ -231,26 +224,69 @@ public sealed class SyncLoop
         });
     }
 
-    /**
-     * Holds everything for an install, then reads the engine's status once more (allowed while held) so a run started
-     * from the command line meanwhile is seen. Null, with nothing held, when anything runs.
-     */
-    public async Task<IDisposable?> HoldForInstallAsync(CancellationToken cancellationToken)
+    /** Holds every engine command of the tray for an install; null, with nothing held, when one runs. */
+    public IDisposable? HoldForInstall()
     {
         var hold = HoldAll();
         bool idle;
         lock (_gate)
-            idle = IdleCore();
-        if (idle)
-        {
-            await RefreshStatusAsync(cancellationToken, duringInstallHold: true).ConfigureAwait(false);
-            lock (_gate)
-                idle = IdleCore() && _statusProblem is null;
-        }
+            idle = _run is null && _commands == 0;
         if (idle)
             return hold;
         hold.Dispose();
         return null;
+    }
+
+    /**
+     * Takes the engine's own run lock (`hold-run`) and keeps it until the lease is disposed, so no run starts, from the
+     * tray or the command line, while an update is checked, downloaded or installed. Null when a run holds it (or the
+     * engine cannot). The holding engine is in the tray's job: if the tray ends, it ends, and its lock is taken over.
+     */
+    public async Task<IAsyncDisposable?> HoldRunLockAsync(CancellationToken cancellationToken)
+    {
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var command = new EngineCommand(["hold-run"], HoldRunLimit, OnEvent: e =>
+        {
+            if (e is HeldEvent)
+                held.TrySetResult();
+        }, InputOpenUntil: release.Task);
+        var holding = RunEngineAsync(command, cancellationToken, duringInstallHold: true, counts: false);
+        if (await Task.WhenAny(held.Task, holding).ConfigureAwait(false) != held.Task)
+            return null;
+        lock (_gate)
+            _runLockHeld = true;
+        return new AsyncRelease(async () =>
+        {
+            release.TrySetResult();
+            await holding.ConfigureAwait(false);
+            lock (_gate)
+                _runLockHeld = false;
+            Wake();
+        });
+    }
+
+    /** Longer than an update's check, download and install may take; the lock is released before. */
+    public static readonly TimeSpan HoldRunLimit = TimeSpan.FromMinutes(15);
+
+    /**
+     * Ends the tray's use of the engine before its job closes: no command starts any more, and this waits (up to the
+     * limit) for those under way to end.
+     */
+    public async Task CloseAsync(TimeSpan limit)
+    {
+        lock (_gate)
+            _closed = true;
+        var until = DateTime.UtcNow + limit;
+        while (DateTime.UtcNow < until)
+        {
+            lock (_gate)
+            {
+                if (_commands == 0 && _run is null)
+                    return;
+            }
+            await Task.Delay(50).ConfigureAwait(false);
+        }
     }
 
     public void SetUpdateReady(bool ready)
@@ -407,12 +443,12 @@ public sealed class SyncLoop
         }
     }
 
-    private async Task RefreshStatusAsync(CancellationToken cancellationToken, bool duringInstallHold = false)
+    private async Task RefreshStatusAsync(CancellationToken cancellationToken)
     {
         if (_engine is null)
             return;
-        var outcome = await RunEngineAsync(new EngineCommand(["status"], CommandLimit), cancellationToken, duringInstallHold).ConfigureAwait(false);
-        if (outcome.Failure == Updating)
+        var outcome = await RunEngineAsync(new EngineCommand(["status"], CommandLimit), cancellationToken).ConfigureAwait(false);
+        if (outcome.Failure is Updating or Closed)
             return;
         var notices = new List<Notice>();
         lock (_gate)
@@ -461,7 +497,7 @@ public sealed class SyncLoop
             report = BuildReport(now, finished);
         }
         var outcome = await RunEngineAsync(new EngineCommand(["checkin"], CommandLimit, report), cancellationToken).ConfigureAwait(false);
-        if (outcome.Failure == Updating)
+        if (outcome.Failure is Updating or Closed)
             return;
         lock (_gate)
         {
@@ -554,7 +590,7 @@ public sealed class SyncLoop
     /** The run that should start now, if any: Sync now, then a claim, then the schedule. The caller executes it. */
     private RunningRun? TryStartRun(DateTimeOffset now)
     {
-        if (_engine is null || _run is not null || _quitRequested || _holdAll || _holdRuns > 0 || !_recovered)
+        if (_engine is null || _run is not null || _quitRequested || _closed || _holdAll || _holdRuns > 0 || !_recovered)
             return null;
         var paused = _settings.IsPaused(now);
         if (_manualRequested)
@@ -670,7 +706,7 @@ public sealed class SyncLoop
     /** The shortest wait: the check-in and a retry on the monotonic clock, a pause's end and the schedule on the wall clock. */
     private TimeSpan NextWake(DateTimeOffset now)
     {
-        var wait = Until(_nextCheckinAt);
+        var wait = _holdAll ? CheckinEvery : Until(_nextCheckinAt);
         if (_retryAt > Timestamp() && Until(_retryAt) < wait)
             wait = Until(_retryAt);
         if (_settings.Pause?.Until is { } until && until > now && until - now < wait)
@@ -692,21 +728,25 @@ public sealed class SyncLoop
     }
 
     private const string Updating = "updating";
+    private const string Closed = "closed";
 
     /**
      * Every engine command but a run goes through here: whether an install holds everything and the registration of
      * the command are decided in one step under the lock, so an install never starts while a command is starting.
      * Only the install's own status read passes the hold.
      */
-    private async Task<EngineOutcome> RunEngineAsync(EngineCommand command, CancellationToken cancellationToken, bool duringInstallHold = false)
+    private async Task<EngineOutcome> RunEngineAsync(EngineCommand command, CancellationToken cancellationToken, bool duringInstallHold = false, bool counts = true)
     {
         if (_engine is null)
             return EngineOutcome.Failed("engine_missing");
         lock (_gate)
         {
+            if (_closed)
+                return EngineOutcome.Failed(Closed);
             if (_holdAll && !duringInstallHold)
                 return EngineOutcome.Failed(Updating);
-            _commands++;
+            if (counts)
+                _commands++;
         }
         try
         {
@@ -714,8 +754,11 @@ public sealed class SyncLoop
         }
         finally
         {
-            lock (_gate)
-                _commands--;
+            if (counts)
+            {
+                lock (_gate)
+                    _commands--;
+            }
         }
     }
 
@@ -771,6 +814,13 @@ public sealed class SyncLoop
         a is null ? b : b is null ? a : a > b ? a : b;
 
     private static DateTimeOffset Max(DateTimeOffset a, DateTimeOffset b) => a > b ? a : b;
+
+    private sealed class AsyncRelease(Func<Task> action) : IAsyncDisposable
+    {
+        private Func<Task>? _action = action;
+
+        public ValueTask DisposeAsync() => Interlocked.Exchange(ref _action, null) is { } act ? new ValueTask(act()) : ValueTask.CompletedTask;
+    }
 
     private sealed class Release(Action action) : IDisposable
     {

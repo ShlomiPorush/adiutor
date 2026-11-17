@@ -78,6 +78,9 @@ public abstract record EngineEvent;
 
 public sealed record MessageEvent(string Text) : EngineEvent;
 
+/** `hold-run` holds the engine's run lock now, until its input ends. */
+public sealed record HeldEvent : EngineEvent;
+
 /** `connect`'s approval: the link with the code in it, and the code. */
 public sealed record ApprovalEvent(string Link, string UserCode) : EngineEvent;
 
@@ -113,6 +116,7 @@ public static class EngineOutput
             {
                 "message" when data.Text is not null => new MessageEvent(data.Text),
                 "approval" when data.Link is not null && data.UserCode is not null => new ApprovalEvent(data.Link, data.UserCode),
+                "held" => new HeldEvent(),
                 _ => null,
             };
         }

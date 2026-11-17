@@ -67,6 +67,10 @@ public sealed class UpdateCoordinator(SyncLoop loop, IAppUpdater updater, TimePr
         using var hold = loop.HoldRuns();
         if (!loop.IsIdle)
             return RetryWhenBusy;
+        // The engine's run lock: no run from the command line starts while the update is checked and downloaded.
+        await using var runLock = await loop.HoldRunLockAsync(cancellationToken).ConfigureAwait(false);
+        if (runLock is null)
+            return RetryWhenBusy;
         using var limit = new CancellationTokenSource(HoldLimit, time);
         using var both = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, limit.Token);
         try
@@ -98,17 +102,20 @@ public sealed class UpdateCoordinator(SyncLoop loop, IAppUpdater updater, TimePr
     }
 
     /**
-     * Installs the downloaded update when nothing runs (no run or command of the tray, and no run from the command line
-     * by a fresh status read under the hold); false to try again later. An install that cannot start leaves the tray
-     * running as it was, and is tried again at the next check.
+     * Installs the downloaded update when nothing runs: no run or command of the tray (held), and no run from the
+     * command line (the engine's run lock, held by the tray until the install ends this process). False to try again
+     * later. An install that cannot start leaves the tray running as it was, and is tried again at the next check.
      */
     internal async Task<bool> TryApplyAsync(CancellationToken cancellationToken)
     {
         _applyFailed = false;
         if (_ready is null || !loop.IsIdle)
             return false;
-        using var hold = await loop.HoldForInstallAsync(cancellationToken).ConfigureAwait(false);
+        using var hold = loop.HoldForInstall();
         if (hold is null)
+            return false;
+        await using var runLock = await loop.HoldRunLockAsync(cancellationToken).ConfigureAwait(false);
+        if (runLock is null)
             return false;
         log.Info("updates: installing");
         try

@@ -112,7 +112,7 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
         {
             _log.Info($"loop stopped ({e.GetType().Name})");
         }
-        ExitTray();
+        await ExitTrayAsync();
     }
 
     private async Task RunUpdatesAsync()
@@ -144,16 +144,19 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
         }
     }
 
-    private void ExitTray()
+    private async Task ExitTrayAsync()
     {
         if (_exiting)
             return;
         _exiting = true;
         _stop.Cancel();
+        // Closing the settings window cancels its command (connect waits for an approval); no command starts after
+        // this, and those under way end before the job closes.
         _settingsWindow?.Close();
         _panel?.Close();
         _tray?.Dispose();
         _tray = null;
+        await Loop.CloseAsync(TimeSpan.FromSeconds(15));
         _job?.Dispose();
         _log.Info("exit");
         Shutdown();

@@ -44,7 +44,7 @@ public class InstallGateTests
     {
         using var h = new Harness();
         await h.Tick();
-        using var hold = await h.Loop.HoldForInstallAsync(CancellationToken.None);
+        using var hold = h.Loop.HoldForInstall();
         Assert.NotNull(hold);
         var calls = h.Engine.Calls.Count;
         Assert.Equal("updating", (await h.Loop.RunCommandAsync(["connect"], null, CancellationToken.None)).Failure);
@@ -68,20 +68,70 @@ public class InstallGateTests
     }
 
     [Fact]
-    public async Task A_run_from_the_command_line_that_started_since_the_last_status_stops_the_install()
+    public async Task A_run_from_the_command_line_that_holds_the_run_lock_stops_the_install()
     {
         using var h = new Harness();
         await h.Tick();
         var updater = new FakeUpdater();
         var updates = new UpdateCoordinator(h.Loop, updater, h.Time, NoLog.Instance);
         await updates.CheckAndDownloadAsync(CancellationToken.None);
-        // The owner starts `run` by hand; the tray's last status does not show it yet.
-        h.Engine.Status = () => Lines.Status(lastRun: Lines.Report(Harness.T0.AddHours(-1)), runningSince: "2026-11-17T09:00:30.000Z");
+        // The owner started `run` by hand since the last status: the engine's run lock says so, not the cached status.
+        h.Engine.RunLockBusy = true;
         Assert.True(h.Loop.IsIdle);
         Assert.False(await updates.TryApplyAsync(CancellationToken.None));
         Assert.Empty(updater.Applied);
         // Nothing stays held.
         Assert.Null((await h.Loop.RunCommandAsync(["t3-connect"], null, CancellationToken.None)).Failure);
+    }
+
+    [Fact]
+    public async Task The_run_lock_is_held_through_the_download_and_the_install()
+    {
+        using var h = new Harness();
+        await h.Tick();
+        var updater = new FakeUpdater { DownloadGate = new TaskCompletionSource() };
+        var updates = new UpdateCoordinator(h.Loop, updater, h.Time, NoLog.Instance);
+        var download = updates.CheckAndDownloadAsync(CancellationToken.None);
+        await WaitFor(() => updater.Downloads == 1);
+        Assert.Equal(1, h.Engine.RunLockHolders);
+        updater.DownloadGate.SetResult();
+        await download;
+        Assert.Equal(0, h.Engine.RunLockHolders);
+        updater.ApplyThrows = new InvalidOperationException("Update.exe blocked");
+        Assert.False(await updates.TryApplyAsync(CancellationToken.None));
+        // Held during the install, released when it did not start.
+        Assert.Equal(2, h.Engine.Of("hold-run").Count());
+        Assert.Equal(0, h.Engine.RunLockHolders);
+    }
+
+    [Fact]
+    public async Task While_an_install_holds_everything_the_loop_waits_instead_of_spinning()
+    {
+        using var h = new Harness();
+        await h.Tick();
+        using var hold = h.Loop.HoldForInstall();
+        Assert.NotNull(hold);
+        h.Time.Advance(TimeSpan.FromMinutes(2));
+        var (_, wait) = await h.Loop.TickAsync(CancellationToken.None);
+        Assert.True(wait > TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task Close_stops_new_commands_and_waits_for_those_under_way()
+    {
+        using var h = new Harness();
+        await h.Tick();
+        h.Engine.CheckinGate = new TaskCompletionSource();
+        h.Time.Advance(SyncLoop.CheckinEvery);
+        var tick = h.Tick();
+        await WaitFor(() => h.Engine.Of("checkin").Count() == 2);
+        var close = h.Loop.CloseAsync(TimeSpan.FromSeconds(30));
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        Assert.False(close.IsCompleted);
+        Assert.Equal("closed", (await h.Loop.RunCommandAsync(["connect"], null, CancellationToken.None)).Failure);
+        h.Engine.CheckinGate.SetResult();
+        await tick;
+        await close.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
     }
 
     [Fact]

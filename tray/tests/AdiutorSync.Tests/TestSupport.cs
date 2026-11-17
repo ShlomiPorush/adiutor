@@ -104,8 +104,6 @@ public static class Lines
 /// </summary>
 public sealed class FakeEngine : IEngine
 {
-    private int _active;
-
     public ConcurrentQueue<EngineCommand> Calls { get; } = new();
 
     public Func<string> Status { get; set; } = () => Lines.Status();
@@ -120,15 +118,19 @@ public sealed class FakeEngine : IEngine
     /** When set, a check-in waits for it before it answers. */
     public TaskCompletionSource? CheckinGate { get; set; }
 
-    public int Active => Volatile.Read(ref _active);
+    /** When true, `hold-run` answers busy: a run holds the engine's run lock. */
+    public bool RunLockBusy { get; set; }
+
+    /** How many `hold-run` commands hold the run lock now. */
+    public int RunLockHolders => Volatile.Read(ref _holders);
+
+    private int _holders;
 
     public IEnumerable<EngineCommand> Of(string name) => Calls.Where(c => c.Name == name);
 
     public async Task<EngineOutcome> RunAsync(EngineCommand command, CancellationToken cancellationToken)
     {
         Calls.Enqueue(command);
-        Interlocked.Increment(ref _active);
-        try
         {
             string line;
             switch (command.Name)
@@ -141,6 +143,25 @@ public sealed class FakeEngine : IEngine
                         await checkinGate.Task.WaitAsync(cancellationToken);
                     line = Checkin();
                     break;
+                case "hold-run":
+                    if (RunLockBusy)
+                    {
+                        line = """{"type":"result","v":1,"command":"hold-run","ok":false,"busy":{"startedAt":"2026-11-17T08:59:00.000Z"},"error":{"code":"busy","message":"m"}}""";
+                        break;
+                    }
+                    Interlocked.Increment(ref _holders);
+                    command.OnEvent?.Invoke(new HeldEvent());
+                    try
+                    {
+                        if (command.InputOpenUntil is { } until)
+                            await until.WaitAsync(cancellationToken);
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _holders);
+                    }
+                    line = """{"type":"result","v":1,"command":"hold-run","ok":true}""";
+                    break;
                 case "run":
                     if (RunGate is { } gate)
                         await gate.Task.WaitAsync(cancellationToken);
@@ -151,10 +172,6 @@ public sealed class FakeEngine : IEngine
                     break;
             }
             return new EngineOutcome(EngineOutput.ParseLine(line) as EngineResult, null);
-        }
-        finally
-        {
-            Interlocked.Decrement(ref _active);
         }
     }
 }
