@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import type { MainDeps } from "./cli.ts"
 import { main } from "./cli.ts"
-import type { Result, RunReport } from "./contract.ts"
+import type { Result, RunReport, StatusBody } from "./contract.ts"
 import type { Runner } from "./exec.ts"
 import { type FakeAdiutor, startFakeAdiutor } from "./fake-adiutor.ts"
 import { type FakeT3, startFakeT3 } from "./fake-t3.ts"
@@ -572,13 +572,9 @@ describe("the machine-readable output", () => {
       settings: { problems: [] },
     })
     // Each setting as the engine uses it, with its source, for the tray to show.
-    expect(status.result.settings.values.adiutorUrl).toMatchObject({ value: fake.issuer })
-    expect(Object.keys(status.result.settings.values).sort()).toEqual([
-      "adiutorUrl",
-      "overviewDir",
-      "t3CliPath",
-      "t3Url",
-    ])
+    const values = (status.result.settings as StatusBody["settings"]).values
+    expect(values.adiutorUrl).toMatchObject({ value: fake.issuer })
+    expect(Object.keys(values).sort()).toEqual(["adiutorUrl", "overviewDir", "t3CliPath", "t3Url"])
     expect((await json(["run"], d, lines)).result).toMatchObject({ command: "run", ok: true })
     expect((await json(["t3-disconnect"], d, lines)).result).toMatchObject({
       command: "t3-disconnect",
