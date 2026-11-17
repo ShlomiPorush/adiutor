@@ -9,7 +9,17 @@ const result = (fields) => line({ type: "result", v: 1, ok: true, ...fields })
 if (command === "status") {
   process.stderr.write("a line on stderr that the tray drops\n")
   line({ type: "event", event: "message", text: "hello" })
-  result({ command: "status", adiutor: { state: "connected", url: null, revocationPending: false }, t3: { state: "not_connected", revocationPending: false }, lastRun: null, lastGoodSyncAt: null, running: null, paused: null, claim: null, settings: { problems: [] } })
+  result({
+    command: "status",
+    adiutor: { state: "connected", url: null, revocationPending: false },
+    t3: { state: "not_connected", revocationPending: false },
+    lastRun: null,
+    lastGoodSyncAt: null,
+    running: null,
+    paused: null,
+    claim: null,
+    settings: { problems: [] },
+  })
 } else if (command === "echo") {
   let input = ""
   process.stdin.setEncoding("utf8")
