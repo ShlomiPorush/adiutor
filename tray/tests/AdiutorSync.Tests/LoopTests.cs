@@ -446,7 +446,7 @@ public class LoopTests
     }
 
     [Fact]
-    public async Task A_request_run_without_a_result_is_reported_failed()
+    public async Task A_request_run_without_a_result_is_not_reported_and_not_run_again()
     {
         using var h = new Harness();
         var id = Fixture.RequestId();
@@ -454,11 +454,36 @@ public class LoopTests
         h.Engine.Run = _ => "not a result";
         await h.Tick();
         await h.Loop.CurrentRun;
+        // The engine still keeps the claim, and its last run is not this request's.
+        h.Engine.Status = () => Lines.Status(lastRun: Lines.Report(Harness.T0.AddHours(-1)), claim: id);
+        h.Engine.Checkin = () => Lines.Checkin(null);
+        await h.Tick();
+        await h.Advance(TimeSpan.FromMinutes(1));
+        // Nothing made up: Adiutor times the request out to unknown, as for a computer that stopped.
+        Assert.All(h.Reports, r => Assert.Empty(r["finished"]!.AsArray()));
+        Assert.Single(h.Runs);
+    }
+
+    [Fact]
+    public async Task A_request_run_without_a_result_is_recovered_from_the_status()
+    {
+        using var h = new Harness();
+        var id = Fixture.RequestId();
+        h.Engine.Checkin = () => Lines.Checkin(id);
+        // The engine wrote its report, then ended before its result line (a crash, or the limit).
+        h.Engine.Run = _ =>
+        {
+            h.Engine.Status = () => Lines.Status(lastRun: Lines.Report(Harness.T0, t3: "accepted", security: "partial", requestId: id), claim: id);
+            return "not a result";
+        };
+        await h.Tick();
+        await h.Loop.CurrentRun;
         h.Engine.Checkin = () => Lines.Checkin(null);
         await h.Tick();
         var finished = Assert.Single(h.Reports[^1]["finished"]!.AsArray())!.AsObject();
-        Assert.Equal("failed", finished["result"]!["t3"]!.GetValue<string>());
-        Assert.Equal("failed", finished["result"]!["security"]!.GetValue<string>());
+        Assert.Equal(id, finished["requestId"]!.GetValue<string>());
+        Assert.Equal("accepted", finished["result"]!["t3"]!.GetValue<string>());
+        Assert.Equal("partial", finished["result"]!["security"]!.GetValue<string>());
     }
 
     [Fact]

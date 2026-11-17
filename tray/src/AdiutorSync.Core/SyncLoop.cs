@@ -95,6 +95,9 @@ public sealed class SyncLoop
     private bool _holdAll;
     private bool _updateReady;
     private readonly HashSet<string> _expectingDisconnect = [];
+
+    /** Requests whose run ended in this tray (reported, refused by the engine, or without a result): never run again. */
+    private readonly HashSet<string> _ended = new(StringComparer.OrdinalIgnoreCase);
     private TaskCompletionSource _wake = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public SyncLoop(IEngine? engine, string dataFolder, TimeProvider time, string version, ITrayLog log)
@@ -312,10 +315,7 @@ public sealed class SyncLoop
     public async Task<(bool Done, TimeSpan Wait)> TickAsync(CancellationToken cancellationToken)
     {
         if (!_recovered)
-        {
-            await RecoverAsync(cancellationToken).ConfigureAwait(false);
-            _recovered = true;
-        }
+            _recovered = await RecoverAsync(cancellationToken).ConfigureAwait(false);
         bool quitNow, checkinDue, statusDue, holdAll;
         var now = _time.GetUtcNow();
         lock (_gate)
@@ -377,7 +377,11 @@ public sealed class SyncLoop
 
     // --- Inside the loop ---
 
-    private async Task RecoverAsync(CancellationToken cancellationToken)
+    /**
+     * Finishes what a tray that stopped during a request's run left: true once decided. Without a status it can trust,
+     * the request's id stays in the state file and the next round tries again; no run starts meanwhile.
+     */
+    private async Task<bool> RecoverAsync(CancellationToken cancellationToken)
     {
         await RefreshStatusAsync(cancellationToken).ConfigureAwait(false);
         lock (_gate)
@@ -385,13 +389,21 @@ public sealed class SyncLoop
             // A run that served a request ended while the tray was gone: its report is the engine's last run.
             if (_state.RunningRequestId is { } id)
             {
-                var last = _status?.LastRun;
-                if (last?.RequestId == id && _state.Finished.All(f => f.RequestId != id))
-                    _state = _state with { Finished = [.. _state.Finished, new FinishedRequest(id, last.T3.Result, last.Security.Result)] };
+                if (_status is null || _statusProblem is not null)
+                    return false;
+                var last = _status.LastRun;
+                if (last?.RequestId == id)
+                {
+                    // Its run ended: it is reported, never run again.
+                    _ended.Add(id);
+                    if (_state.Finished.All(f => f.RequestId != id))
+                        _state = _state with { Finished = [.. _state.Finished, new FinishedRequest(id, last.T3.Result, last.Security.Result)] };
+                }
                 _state = _state with { RunningRequestId = null };
                 SaveState();
                 _log.Info(last?.RequestId == id ? "recovered a finished request" : "a request run did not finish; Adiutor hands it again");
             }
+            return true;
         }
     }
 
@@ -462,8 +474,11 @@ public sealed class SyncLoop
                     _state = _state with { Finished = [.. _state.Finished.Where(f => !sent.Contains(f.RequestId))] };
                     SaveState();
                 }
-                var claim = result.Claim?.RequestId;
-                _pendingClaim = claim is null || claim == _run?.RequestId || _state.Finished.Any(f => f.RequestId == claim) ? null : claim;
+                // An answer without a claim does not drop one the tray holds: Adiutor stops answering a claim whose lease
+                // passed (while paused, or behind a long local run), but the engine keeps it, runs it, and Adiutor takes
+                // its late result (docs/api.md, "Sync requests").
+                if (result.Claim?.RequestId is { } claim && IsOpen(claim))
+                    _pendingClaim = claim;
             }
             else
             {
@@ -523,10 +538,23 @@ public sealed class SyncLoop
         return due < now ? now : due;
     }
 
+    /** A request this tray has not run yet, and is not running. */
+    private bool IsOpen(string requestId) =>
+        !string.Equals(requestId, _run?.RequestId, StringComparison.OrdinalIgnoreCase) && !_ended.Contains(requestId) &&
+        _state.Finished.All(f => !string.Equals(f.RequestId, requestId, StringComparison.OrdinalIgnoreCase));
+
+    /** The claim to run: the last one Adiutor answered, or else the one the engine keeps (its status). */
+    private string? OpenClaim()
+    {
+        if (_pendingClaim is { } answered && IsOpen(answered))
+            return answered;
+        return _status?.Claim?.RequestId is { } kept && IsOpen(kept) ? kept : null;
+    }
+
     /** The run that should start now, if any: Sync now, then a claim, then the schedule. The caller executes it. */
     private RunningRun? TryStartRun(DateTimeOffset now)
     {
-        if (_engine is null || _run is not null || _quitRequested || _holdAll || _holdRuns > 0)
+        if (_engine is null || _run is not null || _quitRequested || _holdAll || _holdRuns > 0 || !_recovered)
             return null;
         var paused = _settings.IsPaused(now);
         if (_manualRequested)
@@ -537,7 +565,7 @@ public sealed class SyncLoop
         if (Timestamp() < _retryAt || _status?.RunningSince is not null)
             return null;
         // A claim, also one recovered after a restart, never starts a run while paused (docs/sync.md, "While paused").
-        if (_pendingClaim is { } claim && !paused)
+        if (OpenClaim() is { } claim && !paused)
         {
             _pendingClaim = null;
             return StartRun(RunKind.Request, claim, now);
@@ -574,6 +602,16 @@ public sealed class SyncLoop
         {
             outcome = EngineOutcome.Failed("no_result");
         }
+        // Without a report (the engine crashed, timed out or printed no result), the engine's last run may still be this
+        // request's: its status says so. Otherwise the result is not known, and nothing is made up.
+        RunReport? recovered = null;
+        if (run.RequestId is { } served && outcome.Result is not { Busy: true } && outcome.Result?.Report is null &&
+            outcome.Result?.Error?.Code != "request_not_claimed")
+        {
+            await RefreshStatusAsync(CancellationToken.None).ConfigureAwait(false);
+            lock (_gate)
+                recovered = _status?.LastRun is { } last && string.Equals(last.RequestId, served, StringComparison.OrdinalIgnoreCase) ? last : null;
+        }
         var notify = false;
         lock (_gate)
         {
@@ -588,14 +626,25 @@ public sealed class SyncLoop
             }
             else
             {
-                var report = result?.Report;
-                if (run.RequestId is { } requestId && result?.Error?.Code != "request_not_claimed")
+                var report = result?.Report ?? recovered;
+                if (run.RequestId is { } requestId)
                 {
-                    var t3 = report?.T3.Result ?? PartResult.Failed;
-                    var security = report?.Security.Result ?? PartResult.Failed;
-                    _state = _state with { Finished = [.. _state.Finished.Where(f => f.RequestId != requestId), new FinishedRequest(requestId, t3, security)] };
-                    // Report it now rather than at the next minute.
-                    _nextCheckinAt = Timestamp();
+                    _ended.Add(requestId);
+                    if (result?.Error?.Code == "request_not_claimed")
+                    {
+                        // The engine does not hold it: nothing ran, nothing is reported.
+                    }
+                    else if (report is not null)
+                    {
+                        _state = _state with { Finished = [.. _state.Finished.Where(f => f.RequestId != requestId), new FinishedRequest(requestId, report.T3.Result, report.Security.Result)] };
+                        // Report it now rather than at the next minute.
+                        _nextCheckinAt = Timestamp();
+                    }
+                    else
+                    {
+                        // Adiutor makes the request unknown when its lease passes, as for a computer that stopped.
+                        _log.Info("a request run ended without a result; it is not reported");
+                    }
                 }
                 if (run.Kind == RunKind.Scheduled)
                 {
