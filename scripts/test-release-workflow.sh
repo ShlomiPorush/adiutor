@@ -116,7 +116,7 @@ const env = process.env
 const needs = {
   find: { result: find, outputs: { reuse, "run-id": "100" } },
   verify: { result: verify },
-  release: { result: env.RELEASE || "success" },
+  release: { result: env.RELEASE || "success", outputs: { tray: env.RELEASE_TRAY || "true" } },
   "tray-engine": { result: env.ENGINE || "success" },
   "tray-build": { result: env.BUILD || "success" },
 }
@@ -184,10 +184,11 @@ for dry in false true; do
     check "reuse=$reuse (dry_run=$dry): the tray is uploaded and published after it" runs job "$PUBLISH_IF" success "$reuse" "$verify" "$dry"
   done
 done
-# skips_after NEED RESULT IF: the job of IF is skipped when its need NEED (RELEASE, ENGINE or BUILD) ended so.
+# skips_after NEED RESULT IF [DRY_RUN]: the job of IF is skipped when NEED (RELEASE, ENGINE or BUILD: a job's
+# result; RELEASE_TRAY: the Release job's tray output) is RESULT.
 skips_after() {
   local need="$1" result="$2" expr="$3"
-  (export "$need=$result" && skips job "$expr" success true skipped false)
+  (export "$need=$result" && skips job "$expr" success true skipped "${4:-false}")
 }
 for result in failure cancelled skipped; do
   check "release $result: no engine bundle" skips_after RELEASE "$result" "$ENGINE_IF"
@@ -195,6 +196,11 @@ for result in failure cancelled skipped; do
   check "release $result: nothing published" skips_after RELEASE "$result" "$PUBLISH_IF"
   check "engine bundle $result: no tray package" skips_after ENGINE "$result" "$BUILD_IF"
   check "tray package $result: nothing published" skips_after BUILD "$result" "$PUBLISH_IF"
+done
+# A tag from before releases carried the tray: release.sh names no tray, and no tray job runs (the later ones
+# follow the engine bundle, skipped).
+for dry in false true; do
+  check "release names no tray (dry_run=$dry): no engine bundle" skips_after RELEASE_TRAY false "$ENGINE_IF" "$dry"
 done
 for job in engine build publish; do
   check "the run was cancelled: no tray $job job" skips job "$(cat "$WORK/$job-if")" success true skipped false true
@@ -247,7 +253,7 @@ cat >"$WORK/repo/scripts/release.sh" <<'EOF'
 echo "release.sh $*" >>"$CALLS"
 while [ $# -gt 0 ]; do
   if [ "$1" = --output ] && [ -z "${NO_RESULT:-}" ]; then
-    printf 'tag=v1.2.3\nversion=1.2.3\nsha=%s\n' 2222222222222222222222222222222222222222 >"$2"
+    printf 'tag=v1.2.3\nversion=1.2.3\nsha=%s\ntray=%s\n' 2222222222222222222222222222222222222222 "${TRAY:-true}" >"$2"
   fi
   shift
 done
@@ -276,13 +282,19 @@ release_step true
 check "dry_run=true: the step succeeds" [ $RC -eq 0 ]
 check "  and passes --dry-run" called "release.sh --target ghcr --bump minor --skip-verify --expect-sha $SHA --output $WORK/runner/release-result --dry-run"
 check "  and hands on the tag, the version and the commit" \
-  [ "$(cat "$WORK/runner/output")" = "$(printf 'tag=v1.2.3\nversion=1.2.3\nsha=2222222222222222222222222222222222222222')" ]
+  [ "$(cat "$WORK/runner/output")" = "$(printf 'tag=v1.2.3\nversion=1.2.3\nsha=2222222222222222222222222222222222222222\ntray=true')" ]
 
 release_step false
 check "dry_run=false: the step succeeds" [ $RC -eq 0 ]
 check "  and releases without --dry-run" called "release.sh --target ghcr --bump minor --skip-verify --expect-sha $SHA --output $WORK/runner/release-result"
 check "  after logging in to GHCR" called "docker login ghcr.io --username actor --password-stdin"
 check "  and hands on the tag, the version and the commit" grep -qxF "sha=2222222222222222222222222222222222222222" "$WORK/runner/output"
+
+TRAY=false release_step false
+check "a tag without the tray: the step succeeds" [ $RC -eq 0 ]
+check "  and hands on tray=false" grep -qxF "tray=false" "$WORK/runner/output"
+TRAY=maybe release_step false
+check "release.sh gives no clear answer about the tray: the step fails" [ $RC -ne 0 ]
 
 NO_RESULT=1 release_step false
 check "release.sh names no version: the step fails" [ $RC -ne 0 ]

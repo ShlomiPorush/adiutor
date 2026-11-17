@@ -99,6 +99,7 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
       sha: ${{ steps.release.outputs.sha }}
+      tray: ${{ steps.release.outputs.tray }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -137,14 +138,16 @@ jobs:
           grep -qxE 'tag=v[0-9]+\.[0-9]+\.[0-9]+' "$result" || { echo "No tag from release.sh"; exit 1; }
           grep -qxE 'version=[0-9]+\.[0-9]+\.[0-9]+' "$result" || { echo "No version from release.sh"; exit 1; }
           grep -qxE 'sha=[0-9a-f]{40}' "$result" || { echo "No commit from release.sh"; exit 1; }
+          grep -qxE 'tray=(true|false)' "$result" || { echo "release.sh did not say whether there is a tray"; exit 1; }
           cat "$result" >>"$GITHUB_OUTPUT"
 
   # The sync tray's engine bundle (dist/sync/adiutor-sync.js), built in the repository's toolchain
-  # from the commit the Release job names. Read-only, and the checkout keeps no token.
+  # from the commit the Release job names. Read-only, and the checkout keeps no token. Skipped, with the
+  # tray jobs after it, for a tag from before releases carried the tray (tray=false from release.sh).
   tray-engine:
     name: Tray engine bundle
     needs: release
-    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.tray == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

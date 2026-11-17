@@ -299,6 +299,7 @@ sandbox() {
   cp "$REPO/scripts/lib/common.sh" "$seed/scripts/lib/"
   : >"$seed/docker/adiutor.Dockerfile"
   : >"$seed/tray/dotnet-tools.json"
+  : >"$seed/scripts/pack-tray.ps1"
   printf '{\n  "name": "adiutor",\n  "version": "0.0.0",\n  "private": true\n}\n' >"$seed/package.json"
   printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- The first feature.\n' >"$seed/CHANGELOG.md"
   git -C "$seed" add -A
@@ -361,14 +362,16 @@ tray() {
 }
 
 # Runs a release as the workflow does, in a new checkout verified at origin's current main unless EXPECT
-# is set: release.sh, then, unless NO_TRAY is set, the tray built from the commit it names.
+# is set: release.sh, then, unless NO_TRAY is set or release.sh says tray=false, the tray built from the
+# commit it names.
 release() {
   local dir
   dir="${DIR:-$(checkout)}"
   rm -f "$WORK/case/output"
   DIR="$dir" run_in --target ghcr --bump "${BUMP:-minor}" --skip-verify --expect-sha "${EXPECT:-$(origin_head)}" \
     --output "$WORK/case/output" || return 1
-  [ -n "${NO_TRAY:-}" ] || DIR="$dir" tray
+  if [ -n "${NO_TRAY:-}" ] || grep -qx "tray=false" "$WORK/case/output"; then return 0; fi
+  DIR="$dir" tray
 }
 
 has_tag() { git -C "$WORK/case/origin.git" rev-parse -q --verify "refs/tags/$1" >/dev/null; }
@@ -424,6 +427,11 @@ draft_with_tray() { is_draft "v$1" && tray_on "$1"; }
 upload_stop_once() {
   lacks_tag v0.2.0 && [ "$(calls "buildx build") $(calls "release create")" = "1 1" ] && [ "$(calls "-X PATCH")" = 1 ]
 }
+# The version's image and :latest are from the commit $2.
+image_from() { [ "$(image_rev "$1") $(image_rev latest)" = "$2 $2" ]; }
+# A published GitHub Release with no assets.
+published_bare() { is_published "$1" && [ -z "$(asset_names "$1")" ]; }
+not_called() { ! grep -qF -e "$1" "$STATE/calls"; }
 # The calls of the upload, the removals and the publish.
 upload_calls() { [ "$(calls "vpk \[win\] upload") $(calls "-X DELETE") $(calls "-X PATCH")" = "$1" ]; }
 
@@ -451,7 +459,7 @@ check "the GitHub Release has the title and the section's notes" \
   [ "$(release_text v0.1.0)" = "$(printf 'Adiutor 0.1.0\n### Added\n\n- The first feature.')" ]
 check "the image is built with provenance and an SBOM" grep -q "buildx build --push --provenance=mode=max --sbom=true" "$STATE/calls"
 check "the release step names the tag, the version and the tag's commit for the tray" \
-  [ "$(cat "$WORK/case/output")" = "$(printf 'tag=v0.1.0\nversion=0.1.0\nsha=%s' "$(tag_rev v0.1.0)")" ]
+  [ "$(cat "$WORK/case/output")" = "$(printf 'tag=v0.1.0\nversion=0.1.0\nsha=%s\ntray=true' "$(tag_rev v0.1.0)")" ]
 check "the GitHub Release is created as a draft" grep -q "gh release create v0.1.0 --verify-tag --draft" "$STATE/calls"
 check "the tray goes to the draft through vpk upload github, never published by vpk" \
   grep -qE "^dotnet vpk \[win\] upload github .*--channel win .*--tag v0.1.0 --merge$" "$STATE/calls"
@@ -481,6 +489,31 @@ release
 check "a published release without tray assets (from before the tray) is finished: the next version is released" complete 0.2.0
 check "  and the older release is not touched" [ -z "$(asset_names v0.1.0)" ]
 check "  nor called unfinished" not_said "v0.1.0 was not finished"
+
+# A release that stopped before releases carried the tray: its tag has no scripts/pack-tray.ps1. The next
+# run finishes it as runs did then, the image and a published GitHub Release, and skips the tray.
+sandbox
+dir="$(checkout)"
+git -C "$dir" rm --quiet scripts/pack-tray.ps1
+sed -i 's/"version": "0.0.0"/"version": "0.1.0"/' "$dir/package.json"
+sed -i 's/^## \[Unreleased\]$/## [Unreleased]\n\n## [0.1.0] - 2026-01-01/' "$dir/CHANGELOG.md"
+git -C "$dir" commit --quiet -am "Release v0.1.0" && git -C "$dir" tag -a v0.1.0 -m v0.1.0
+: >"$dir/scripts/pack-tray.ps1"
+sed -i 's/^## \[Unreleased\]$/## [Unreleased]\n\n### Added\n\n- The tray./' "$dir/CHANGELOG.md"
+git -C "$dir" add -A && git -C "$dir" commit --quiet -m "The tray's release"
+git -C "$dir" push --quiet origin main v0.1.0
+tagged="$(tag_rev v0.1.0)"
+release
+check "a stopped release from before the tray: the next run finishes it" [ $? -eq 0 ]
+check "  and says it has no tray" said "v0.1.0 has no tray packaging"
+check "  with the image and :latest from its tag" image_from 0.1.0 "$tagged"
+check "  and a published GitHub Release without tray assets" published_bare v0.1.0
+check "  created published, not as a draft" not_called "release create v0.1.0 --verify-tag --draft"
+check "  and it names no tray for the workflow" grep -qx "tray=false" "$WORK/case/output"
+check "  nor uploads one" nothing_uploaded
+check "  and does not move the tag" [ "$(tag_rev v0.1.0)" = "$tagged" ]
+release
+check "  the run after it releases 0.2.0 with the tray" complete 0.2.0
 
 # --- refusals before anything changes --------------------------------------------------------
 
@@ -608,7 +641,7 @@ check "a dry run succeeds" [ $? -eq 0 ]
 check "  and names the version and the image" said "ghcr.io/shlomiporush/adiutor:0.1.0 and :latest"
 check "  and prints the release notes" said "The first feature."
 check "  and names the version and the verified commit for the tray" \
-  [ "$(cat "$WORK/case/output")" = "$(printf 'tag=v0.1.0\nversion=0.1.0\nsha=%s' "$(origin_head)")" ]
+  [ "$(cat "$WORK/case/output")" = "$(printf 'tag=v0.1.0\nversion=0.1.0\nsha=%s\ntray=true' "$(origin_head)")" ]
 check "  and changes nothing in the checkout" [ "$(git -C "$dir" rev-parse HEAD) $(git -C "$dir" status --porcelain | wc -l)" = "$before" ]
 check "  nor on origin" lacks_tag v0.1.0
 check "  nor in the registry or Releases" nothing_published

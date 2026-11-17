@@ -26,6 +26,8 @@ VERSION=""
 TAG=""
 OUTPUT=""
 TRAY_DIR=""
+# 0 for a tag from before releases carried the tray (no scripts/pack-tray.ps1): no tray is built for it.
+TRAY=1
 # The files of the tray's build (assets.win.json), set by read_tray_build.
 TRAY_FILES=()
 
@@ -39,7 +41,8 @@ Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verif
   --expect-sha SHA  Refuse unless main is exactly this commit (the one the workflow verified). With
                     --tray: the commit the tray was built from, which the tag must name.
   --skip-verify     Do not run scripts/verify.sh. Only with --expect-sha.
-  --output FILE     Write tag=, version= and sha= (the commit to build the tray from) to FILE.
+  --output FILE     Write tag=, version=, sha= (the commit to build the tray from) and tray= (false
+                    for a tag from before releases carried the tray) to FILE.
   --tray DIR        Upload the tray packed in DIR (scripts/pack-tray.ps1) to the draft of --tag, read
                     every asset back and publish the release.
   --dry-run         Check everything and print the plan without changing anything.
@@ -382,17 +385,51 @@ create_draft() {
   rm -f "$notes"
 }
 
-# Writes the version and the commit to build the tray from: the tag's commit, or in a dry run of a new
-# version the verified commit the release commit would follow.
-write_output() {
-  local sha
-  [ -n "$OUTPUT" ] || return 0
-  if git_ rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-    sha="$(git_ rev-parse "$TAG^{commit}")"
-  else
-    sha="$(git_ rev-parse HEAD)"
+# The GitHub Release of a tag made before releases carried the tray, from the CHANGELOG section, published
+# at once as runs did then: such a tag has no tray to build, and is never moved or built from elsewhere.
+publish_release_without_tray() {
+  local notes state
+  state="$(release_state "$TAG")"
+  case "$state" in
+    published*)
+      echo "    the GitHub Release $TAG exists"
+      return
+      ;;
+    draft*) die "the GitHub Release $TAG is a draft, but $TAG has no tray to put on it. Publish or delete the draft on GitHub, then run the release again." ;;
+  esac
+  notes="$(mktemp)"
+  git_ show "$TAG:CHANGELOG.md" | release_notes "$VERSION" >"$notes"
+  info "Creating the GitHub Release $TAG"
+  if ! gh release create "$TAG" --verify-tag --title "Adiutor $VERSION" --notes-file "$notes"; then
+    # The request may have succeeded with its answer lost.
+    state="$(release_state "$TAG")"
+    [ "${state%% *}" = published ] || die "creating the GitHub Release $TAG failed. Run the release again to finish it."
+    echo "    the GitHub Release $TAG exists"
   fi
-  printf 'tag=%s\nversion=%s\nsha=%s\n' "$TAG" "$VERSION" "$sha" >"$OUTPUT"
+  rm -f "$notes"
+}
+
+# The commit the tray is built from: the tag's, or in a dry run of a new version the verified commit the
+# release commit would follow.
+build_commit() {
+  if git_ rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+    git_ rev-parse "$TAG^{commit}"
+  else
+    git_ rev-parse HEAD
+  fi
+}
+
+# Whether a commit carries the tray's packaging: tags made before releases carried the tray do not.
+has_tray_packaging() {
+  git_ cat-file -e "$1:scripts/pack-tray.ps1" 2>/dev/null
+}
+
+# Writes the version, the commit to build the tray from and whether there is a tray to build (tray=true
+# or tray=false, for a tag from before releases carried it).
+write_output() {
+  [ -n "$OUTPUT" ] || return 0
+  printf 'tag=%s\nversion=%s\nsha=%s\ntray=%s\n' "$TAG" "$VERSION" "$(build_commit)" \
+    "$([ $TRAY -eq 1 ] && echo true || echo false)" >"$OUTPUT"
 }
 
 # --- the tray (--tray) ----------------------------------------------------------------------------
@@ -608,8 +645,16 @@ main() {
   [ $SKIP_VERIFY -eq 0 ] || [ -n "$EXPECT_SHA" ] || die "--skip-verify needs --expect-sha of the verified commit"
 
   preflight
+  # A release commit only changes package.json and CHANGELOG.md, so the commit the tray is built from
+  # tells for a new version too.
+  if ! has_tray_packaging "$(build_commit)"; then
+    TRAY=0
+    echo "    $TAG has no tray packaging (scripts/pack-tray.ps1): it is from before releases carried the tray, so it is finished as runs did then, with the image and a published GitHub Release, and the tray is skipped"
+  fi
   if [ $DRY_RUN -eq 1 ]; then
-    if [ $RESUME -eq 1 ]; then
+    if [ $RESUME -eq 1 ] && [ $TRAY -eq 0 ]; then
+      info "Dry run. Would finish $TAG: the image if missing, :latest and the GitHub Release, without the tray."
+    elif [ $RESUME -eq 1 ]; then
       info "Dry run. Would finish $TAG: the image if missing, :latest, the draft GitHub Release and the tray."
     else
       info "Dry run. Release notes for $TAG:"
@@ -623,6 +668,12 @@ main() {
 
   [ $RESUME -eq 1 ] || create_tag
   publish_image
+  if [ $TRAY -eq 0 ]; then
+    publish_release_without_tray
+    write_output
+    info "Released $TAG without the tray. Deploying is a separate step: see docs/deployment.md."
+    return 0
+  fi
   create_draft
   write_output
   info "The image is published and the GitHub Release $TAG is a draft. Next: the tray, packed from $TAG on Windows (scripts/pack-tray.ps1), with scripts/release.sh --tray <dir> --tag $TAG --expect-sha <its commit>, which publishes the release."
