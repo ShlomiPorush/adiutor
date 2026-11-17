@@ -25,7 +25,6 @@ public class EngineRunnerTests
         Assert.Equal("status", outcome.Result!.Command);
         Assert.Equal(ConnectionState.NotConnected, outcome.Result.Status!.T3.State);
         Assert.Equal("hello", Assert.IsType<MessageEvent>(Assert.Single(events)).Text);
-        Assert.Equal(0, engine.Active);
     }
 
     [Fact]
@@ -63,7 +62,6 @@ public class EngineRunnerTests
         var outcome = await engine.RunAsync(new EngineCommand(["hang"], TimeSpan.FromSeconds(2)), CancellationToken.None);
         Assert.Equal("timeout", outcome.Failure);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(20));
-        Assert.Equal(0, engine.Active);
     }
 
     [Fact]
@@ -116,10 +114,128 @@ public class EngineRunnerTests
             TestContext.Current.CancellationToken);
         var child = await childPid.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         Assert.Equal(1, threadsWhileStalled);
-        Assert.False(inJobWhileSuspended);
+        // Created in the job (PROC_THREAD_ATTRIBUTE_JOB_LIST): in it before it ran anything.
+        Assert.True(inJobWhileSuspended);
         Assert.True(job.Contains(child), "the engine's child is outside the job");
         var outcome = await run.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         Assert.Equal("timeout", outcome.Failure);
+    }
+
+    [Fact]
+    public async Task The_output_ends_when_the_engine_ended_though_a_child_holds_it_open()
+    {
+        using var job = new EngineJob();
+        var engine = new NodeEngine(Location(), job, NoLog.Instance);
+        var leaked = 0;
+        var watch = Stopwatch.StartNew();
+        var outcome = await engine.RunAsync(new EngineCommand(["leak"], TimeSpan.FromSeconds(60), OnEvent: e =>
+        {
+            if (e is MessageEvent m && int.TryParse(m.Text, out var pid))
+                leaked = pid;
+        }), TestContext.Current.CancellationToken);
+        // The child holds the pipe for 30 seconds; the command ends soon after the engine did.
+        Assert.True(outcome.Result?.Ok, outcome.Failure);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(15), $"took {watch.Elapsed}");
+        // The command's own job ended the child it left.
+        Assert.NotEqual(0, leaked);
+        await WaitGone(leaked);
+    }
+
+    [Fact]
+    public async Task A_process_started_meanwhile_with_inherited_handles_does_not_hold_up_a_command()
+    {
+        using var job = new EngineJob();
+        var engine = new NodeEngine(Location(), job, NoLog.Instance);
+        var node = Location().NodePath;
+        var others = new List<Process>();
+        using var stop = new CancellationTokenSource();
+        // As Velopack's Process.Start does: a child that inherits every inheritable handle of the tray.
+        var starter = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                var info = new ProcessStartInfo(node, ["-e", "setTimeout(() => {}, 20000)"]) { RedirectStandardInput = true, UseShellExecute = false, CreateNoWindow = true };
+                lock (others)
+                    others.Add(Process.Start(info)!);
+                await Task.Delay(20);
+            }
+        }, TestContext.Current.CancellationToken);
+        try
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                var watch = Stopwatch.StartNew();
+                var outcome = await engine.RunAsync(new EngineCommand(["status"], TimeSpan.FromSeconds(60)), TestContext.Current.CancellationToken);
+                Assert.True(outcome.Result?.Ok, outcome.Failure);
+                Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"took {watch.Elapsed}");
+            }
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await starter;
+            lock (others)
+            {
+                foreach (var p in others)
+                {
+                    try
+                    {
+                        p.Kill();
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                    p.Dispose();
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_process_created_and_not_handed_back_is_ended()
+    {
+        using var job = new EngineJob();
+        var engine = new NodeEngine(Location(), job, NoLog.Instance);
+        Process? created = null;
+        engine.BeforeResume = pid =>
+        {
+            created = Process.GetProcessById(pid);
+            throw new InvalidOperationException("a failure after the process was created");
+        };
+        var outcome = await engine.RunAsync(new EngineCommand(["status"], TimeSpan.FromSeconds(30)), TestContext.Current.CancellationToken);
+        Assert.Equal("start_failed", outcome.Failure);
+        Assert.NotNull(created);
+        Assert.True(created!.WaitForExit(TimeSpan.FromSeconds(10)), "the created process was left alive");
+        created.Dispose();
+    }
+
+    [Fact]
+    public async Task Nothing_starts_once_the_tray_job_closed()
+    {
+        var job = new EngineJob();
+        var engine = new NodeEngine(Location(), job, NoLog.Instance);
+        job.Dispose();
+        var outcome = await engine.RunAsync(new EngineCommand(["status"], TimeSpan.FromSeconds(30)), TestContext.Current.CancellationToken);
+        Assert.Equal("start_failed", outcome.Failure);
+    }
+
+    private static async Task WaitGone(int pid)
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            try
+            {
+                using var p = Process.GetProcessById(pid);
+                if (p.HasExited)
+                    return;
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+            await Task.Delay(100);
+        }
+        Assert.Fail($"process {pid} outlived its command");
     }
 
     [Theory]

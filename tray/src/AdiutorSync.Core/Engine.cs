@@ -1,10 +1,15 @@
-using System.Diagnostics;
 using System.Text;
 
 namespace AdiutorSync.Core;
 
-/// <summary>One engine command: its arguments (without --json, which is always added), the input and the limit.</summary>
-public sealed record EngineCommand(IReadOnlyList<string> Args, TimeSpan Timeout, string? Stdin = null, Action<EngineEvent>? OnEvent = null)
+/// <summary>One engine command: its arguments (without --json, which is always added), the input (kept open until
+/// InputOpenUntil completes, for hold-run) and the limit.</summary>
+public sealed record EngineCommand(
+    IReadOnlyList<string> Args,
+    TimeSpan Timeout,
+    string? Stdin = null,
+    Action<EngineEvent>? OnEvent = null,
+    Task? InputOpenUntil = null)
 {
     public string Name => Args.Count > 0 ? Args[0] : "";
 }
@@ -21,9 +26,6 @@ public sealed record EngineOutcome(EngineResult? Result, string? Failure)
 public interface IEngine
 {
     Task<EngineOutcome> RunAsync(EngineCommand command, CancellationToken cancellationToken);
-
-    /** Engine processes of this tray that are running now. */
-    int Active { get; }
 }
 
 /// <summary>Where the engine is: node.exe and adiutor-sync.js.</summary>
@@ -70,48 +72,42 @@ public static class EngineLocator
 /// </summary>
 public sealed class NodeEngine(EngineLocation location, EngineJob job, ITrayLog log) : IEngine
 {
-    private int _active;
+    /** How long output may go on after the engine ended: a process that inherited its pipe would hold it open. */
+    internal static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(2);
 
-    public int Active => Volatile.Read(ref _active);
-
-    /** A test seam: runs while the engine process exists, suspended and not yet in the job. */
+    /** A test seam: runs while the engine process exists, suspended, already in its jobs. */
     internal Action<int>? BeforeResume { get; set; }
 
     public async Task<EngineOutcome> RunAsync(EngineCommand command, CancellationToken cancellationToken)
     {
         List<string> args = [location.ScriptPath, .. command.Args, "--json"];
-        Interlocked.Increment(ref _active);
+        JobProcess? process;
         try
         {
-            JobProcess? process;
-            try
-            {
-                process = JobProcess.Start(location.NodePath, args, Path.GetDirectoryName(location.ScriptPath)!, job, BeforeResume);
-            }
-            catch (System.ComponentModel.Win32Exception)
-            {
-                process = null;
-            }
-            if (process is null)
-                return Fail(command, "start_failed");
-            using var owned = process;
+            process = JobProcess.Start(location.NodePath, args, Path.GetDirectoryName(location.ScriptPath)!, job, BeforeResume);
+        }
+#pragma warning disable CA1031 // Whatever failed, the process was ended with its job; the command did not start.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            process = null;
+        }
+        if (process is null)
+            return Fail(command, "start_failed");
+        using var owned = process;
 
-            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            limit.CancelAfter(command.Timeout);
-            // The pipes are read without overlapped I/O, so a limit ends the process; the reads then end too.
-            using var stop = limit.Token.Register(process.Kill);
-            var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
-            EngineResult? result = null;
-            try
-            {
-                await process.StandardInput.WriteAsync(command.Stdin ?? "").ConfigureAwait(false);
-                process.StandardInput.Close();
-            }
-            catch (IOException)
-            {
-                // The engine closed its input early; its result, if any, still decides.
-            }
-            while (await process.StandardOutput.ReadLineAsync(CancellationToken.None).ConfigureAwait(false) is { } line)
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(command.Timeout);
+        using var stop = limit.Token.Register(process.Kill);
+        // The output ends when the engine has ended (after a short grace), not only at the pipe's end.
+        using var reading = CancellationTokenSource.CreateLinkedTokenSource(limit.Token);
+        _ = process.Exited.ContinueWith(_ => CancelAfter(reading, ExitGrace), TaskScheduler.Default);
+        var input = WriteInputAsync(process, command);
+        var stderr = DrainAsync(process.StandardError, reading.Token);
+        EngineResult? result = null;
+        try
+        {
+            while (await process.StandardOutput.ReadLineAsync(reading.Token).ConfigureAwait(false) is { } line)
             {
                 switch (EngineOutput.ParseLine(line))
                 {
@@ -123,18 +119,66 @@ public sealed class NodeEngine(EngineLocation location, EngineJob job, ITrayLog 
                         break;
                 }
             }
-            await process.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            await stderr.ConfigureAwait(false);
-            if (limit.IsCancellationRequested)
-                return Fail(command, cancellationToken.IsCancellationRequested ? "cancelled" : "timeout");
-            if (result is null)
-                return Fail(command, "no_result");
-            log.Info($"engine {command.Name}: ok={result.Ok}{(result.Error is { } f ? $" code={SafeCode(f.Code)}" : "")}");
-            return new EngineOutcome(result, null);
         }
-        finally
+        catch (OperationCanceledException) when (!limit.IsCancellationRequested)
         {
-            Interlocked.Decrement(ref _active);
+            // The engine ended and its output was held open by another process: what was read decides.
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        if (limit.IsCancellationRequested)
+        {
+            await process.Exited.ConfigureAwait(false);
+            return Fail(command, cancellationToken.IsCancellationRequested ? "cancelled" : "timeout");
+        }
+        await process.Exited.ConfigureAwait(false);
+        await input.ConfigureAwait(false);
+        await stderr.ConfigureAwait(false);
+        if (result is null)
+            return Fail(command, "no_result");
+        log.Info($"engine {command.Name}: ok={result.Ok}{(result.Error is { } f ? $" code={SafeCode(f.Code)}" : "")}");
+        return new EngineOutcome(result, null);
+    }
+
+    /** Writes the command's input; keeps it open until the command says (hold-run) or the engine ended. */
+    private static async Task WriteInputAsync(JobProcess process, EngineCommand command)
+    {
+        try
+        {
+            await process.StandardInput.WriteAsync(command.Stdin ?? "").ConfigureAwait(false);
+            if (command.InputOpenUntil is { } until)
+                await Task.WhenAny(until, process.Exited).ConfigureAwait(false);
+            process.StandardInput.Close();
+        }
+        catch (IOException)
+        {
+            // The engine closed its input early; its result, if any, still decides.
+        }
+    }
+
+    private static async Task DrainAsync(StreamReader reader, CancellationToken token)
+    {
+        try
+        {
+            await reader.ReadToEndAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    private static void CancelAfter(CancellationTokenSource source, TimeSpan delay)
+    {
+        try
+        {
+            source.CancelAfter(delay);
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 

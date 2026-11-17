@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -6,39 +5,59 @@ using Microsoft.Win32.SafeHandles;
 namespace AdiutorSync.Core;
 
 /// <summary>
-/// A process started inside the tray's Job Object before it runs any code (documented Win32: CreateProcessW with
-/// CREATE_SUSPENDED, AssignProcessToJobObject, then ResumeThread). .NET's Process cannot start a process suspended, so
-/// the standard streams are anonymous pipes made here, as Process makes them: the child's ends are inheritable only
-/// while the process is created, under one lock, so a second engine started at the same time never holds them.
+/// One engine process, in the tray's Job Object and in a job of its own from the moment it exists (documented Win32:
+/// CreateProcessW with STARTUPINFOEX, PROC_THREAD_ATTRIBUTE_JOB_LIST and PROC_THREAD_ATTRIBUTE_HANDLE_LIST). It inherits
+/// only its three standard handles, which are inheritable just for the call. The handle CreateProcessW returned is kept
+/// for the command's whole life: waiting and ending go through it and through the command's job, never through a
+/// process id, which Windows may give to another process once this one has ended. Ending the command's job ends this
+/// process and every child it started, and nothing else.
 /// </summary>
 public sealed partial class JobProcess : IDisposable
 {
     private const uint CreateSuspended = 0x00000004;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint CreateNoWindow = 0x08000000;
+    private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const int StartfUseStdHandles = 0x00000100;
     private const uint HandleFlagInherit = 0x00000001;
+    private static readonly IntPtr AttributeHandleList = 0x00020002;
+    private static readonly IntPtr AttributeJobList = 0x0002000D;
     private static readonly Lock CreateLock = new();
 
-    private JobProcess(Process process, StreamWriter input, StreamReader output, StreamReader error)
+    private readonly SafeProcessHandle _process;
+    private readonly EngineJob _job;
+    private readonly RegisteredWaitHandle _registration;
+    private readonly ExitHandle _exitHandle;
+
+    private JobProcess(SafeProcessHandle process, EngineJob job, StreamWriter input, StreamReader output, StreamReader error)
     {
-        Process = process;
+        _process = process;
+        _job = job;
         StandardInput = input;
         StandardOutput = output;
         StandardError = error;
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _exitHandle = new ExitHandle(process);
+        _registration = ThreadPool.RegisterWaitForSingleObject(_exitHandle, (_, _) => exited.TrySetResult(), null, Timeout.Infinite, executeOnlyOnce: true);
+        Exited = exited.Task;
     }
 
-    public Process Process { get; }
     public StreamWriter StandardInput { get; }
+
+    /** Read with overlapped I/O, so a read can be cancelled. */
     public StreamReader StandardOutput { get; }
+
     public StreamReader StandardError { get; }
 
+    /** Completes when the process has ended (its own handle is signalled). */
+    public Task Exited { get; }
+
     /**
-     * Starts the program suspended, puts it in the job and only then lets it run. Null when Windows refuses to create
-     * it or to put it in the job (the process is then ended before it ran). `beforeResume` is a test seam: it runs while
-     * the process exists but has run nothing.
+     * Starts the program in the tray's job and a job of its own, suspended, then lets it run. Null when it could not be
+     * created; whatever was created and not handed back is ended with its job. `beforeResume` is a test seam: it runs
+     * while the process exists but has run no code.
      */
-    public static unsafe JobProcess? Start(string program, IReadOnlyList<string> args, string workingDirectory, EngineJob job, Action<int>? beforeResume = null)
+    public static unsafe JobProcess? Start(string program, IReadOnlyList<string> args, string workingDirectory, EngineJob trayJob, Action<int>? beforeResume = null)
     {
         var commandLine = new StringBuilder();
         AppendArgument(commandLine, program);
@@ -50,90 +69,118 @@ public sealed partial class JobProcess : IDisposable
         commandLine.Append('\0');
         var line = commandLine.ToString().ToCharArray();
 
-        SafeFileHandle? inRead = null, inWrite = null, outRead = null, outWrite = null, errRead = null, errWrite = null;
-        ProcessInformation info;
-        lock (CreateLock)
+        var job = new EngineJob();
+        SafeFileHandle? inChild = null, inParent = null, outParent = null, outChild = null, errParent = null, errChild = null;
+        IntPtr attributes = IntPtr.Zero;
+        SafeProcessHandle? process = null;
+        var handedBack = false;
+        var trayJobHeld = false;
+        try
         {
+            // The tray's job stays open during the call; once Quit closed it, nothing starts.
             try
             {
-                Pipe(out inRead, out inWrite, parentReads: false);
-                Pipe(out outRead, out outWrite, parentReads: true);
-                Pipe(out errRead, out errWrite, parentReads: true);
-                var startup = new StartupInfo
+                trayJob.Handle.DangerousAddRef(ref trayJobHeld);
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+            if (!CreatePipe(out inChild, out inParent, IntPtr.Zero, 0))
+                return null;
+            OutputPipe(out outParent, out outChild);
+            OutputPipe(out errParent, out errChild);
+
+            var handles = stackalloc IntPtr[3] { inChild.DangerousGetHandle(), outChild.DangerousGetHandle(), errChild.DangerousGetHandle() };
+            var jobs = stackalloc IntPtr[2] { trayJob.Handle.DangerousGetHandle(), job.Handle.DangerousGetHandle() };
+            nuint size = 0;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref size);
+            attributes = Marshal.AllocHGlobal((nint)size);
+            if (!InitializeProcThreadAttributeList(attributes, 2, 0, ref size) ||
+                !UpdateProcThreadAttribute(attributes, 0, AttributeHandleList, (IntPtr)handles, (nuint)(3 * IntPtr.Size), IntPtr.Zero, IntPtr.Zero) ||
+                !UpdateProcThreadAttribute(attributes, 0, AttributeJobList, (IntPtr)jobs, (nuint)(2 * IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
+                return null;
+            var startup = new StartupInfoEx
+            {
+                StartupInfo = new StartupInfo
                 {
-                    Cb = Marshal.SizeOf<StartupInfo>(),
+                    Cb = Marshal.SizeOf<StartupInfoEx>(),
                     Flags = StartfUseStdHandles,
-                    StdInput = inRead.DangerousGetHandle(),
-                    StdOutput = outWrite.DangerousGetHandle(),
-                    StdError = errWrite.DangerousGetHandle(),
-                };
-                bool created;
+                    StdInput = handles[0],
+                    StdOutput = handles[1],
+                    StdError = handles[2],
+                },
+                AttributeList = attributes,
+            };
+            ProcessInformation info;
+            bool created;
+            // The child's ends are inheritable only during this call; the handle list keeps every other handle out.
+            lock (CreateLock)
+            {
+                Inherit(true, inChild, outChild, errChild);
                 fixed (char* cmd = line)
                 fixed (char* cwd = workingDirectory)
                 {
                     created = CreateProcessW(null, cmd, IntPtr.Zero, IntPtr.Zero, true,
-                        CreateSuspended | CreateNoWindow | CreateUnicodeEnvironment, IntPtr.Zero, cwd, ref startup, out info);
+                        CreateSuspended | CreateNoWindow | CreateUnicodeEnvironment | ExtendedStartupInfoPresent,
+                        IntPtr.Zero, cwd, ref startup, out info);
                 }
-                if (!created)
-                {
-                    DisposeAll(inWrite, outRead, errRead);
-                    return null;
-                }
+                Inherit(false, inChild, outChild, errChild);
             }
-            finally
+            if (!created)
+                return null;
+            process = new SafeProcessHandle(info.Process, ownsHandle: true);
+            using var thread = new SafeProcessHandle(info.Thread, ownsHandle: true);
+            beforeResume?.Invoke(info.ProcessId);
+            if (ResumeThread(thread) == uint.MaxValue)
+                return null;
+            var utf8 = new UTF8Encoding(false);
+            var result = new JobProcess(
+                process,
+                job,
+                new StreamWriter(new FileStream(inParent, FileAccess.Write, 4096, false), utf8) { AutoFlush = true },
+                new StreamReader(new FileStream(outParent, FileAccess.Read, 4096, true), utf8),
+                new StreamReader(new FileStream(errParent, FileAccess.Read, 4096, true), utf8));
+            handedBack = true;
+            return result;
+        }
+        finally
+        {
+            if (trayJobHeld)
+                trayJob.Handle.DangerousRelease();
+            if (attributes != IntPtr.Zero)
             {
-                // The child's ends belong to the child now (or to nobody).
-                DisposeAll(inRead, outWrite, errWrite);
+                DeleteProcThreadAttributeList(attributes);
+                Marshal.FreeHGlobal(attributes);
+            }
+            inChild?.Dispose();
+            outChild?.Dispose();
+            errChild?.Dispose();
+            if (!handedBack)
+            {
+                // Closing the command's job ends a process that was created but not handed back, whatever failed.
+                job.Dispose();
+                process?.Dispose();
+                inParent?.Dispose();
+                outParent?.Dispose();
+                errParent?.Dispose();
             }
         }
-
-        using var processHandle = new SafeProcessHandle(info.Process, ownsHandle: true);
-        using var threadHandle = new SafeProcessHandle(info.Thread, ownsHandle: true);
-        beforeResume?.Invoke(info.ProcessId);
-        if (!job.Assign(processHandle))
-        {
-            // Never let the engine run outside the job: it has run no code yet.
-            TerminateProcess(processHandle, 1);
-            DisposeAll(inWrite, outRead, errRead);
-            return null;
-        }
-        // The process handle stays open until here, so the id cannot name another process yet.
-        var process = Process.GetProcessById(info.ProcessId);
-        if (ResumeThread(threadHandle) == uint.MaxValue)
-        {
-            TerminateProcess(processHandle, 1);
-            process.Dispose();
-            DisposeAll(inWrite, outRead, errRead);
-            return null;
-        }
-        var utf8 = new UTF8Encoding(false);
-        return new JobProcess(
-            process,
-            new StreamWriter(new FileStream(inWrite!, FileAccess.Write, 4096, false), utf8) { AutoFlush = true },
-            new StreamReader(new FileStream(outRead!, FileAccess.Read, 4096, false), utf8),
-            new StreamReader(new FileStream(errRead!, FileAccess.Read, 4096, false), utf8));
     }
 
-    public void Kill()
-    {
-        try
-        {
-            Process.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-        }
-    }
+    /** Ends the process and every child it started (its own job). */
+    public void Kill() => TerminateJobObject(_job.Handle, 1);
 
     public void Dispose()
     {
+        _registration.Unregister(null);
         StandardInput.Dispose();
         StandardOutput.Dispose();
         StandardError.Dispose();
-        Process.Dispose();
+        // A child the engine left running ends with the command's job.
+        _job.Dispose();
+        _exitHandle.Dispose();
+        _process.Dispose();
     }
 
     /** One argument as the Microsoft C runtime reads a command line (the rules node.exe's argv follows). */
@@ -166,28 +213,29 @@ public sealed partial class JobProcess : IDisposable
         line.Append('"');
     }
 
-    private static void Pipe(out SafeFileHandle read, out SafeFileHandle write, bool parentReads)
+    /** A pipe the tray reads with overlapped I/O (a named pipe of one instance, local only) and the child writes to. */
+    private static void OutputPipe(out SafeFileHandle parent, out SafeFileHandle child)
     {
-        var attributes = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>(), InheritHandle = 1 };
-        if (!CreatePipe(out read, out write, ref attributes, 0))
+        var name = $@"\\.\pipe\adiutor-sync-{Environment.ProcessId}-{Guid.NewGuid():N}";
+        parent = CreateNamedPipeW(name, 0x00000001 /* inbound */ | 0x40000000 /* overlapped */ | 0x00080000 /* first instance */,
+            0x00000008 /* reject remote clients; byte, wait */, 1, 4096, 4096, 0, IntPtr.Zero);
+        if (parent.IsInvalid)
             throw new System.ComponentModel.Win32Exception();
-        // The parent's end is never inherited.
-        if (!SetHandleInformation(parentReads ? read : write, HandleFlagInherit, 0))
+        child = CreateFileW(name, 0x40000000 /* write */, 0, IntPtr.Zero, 3 /* open existing */, 0x80, IntPtr.Zero);
+        if (child.IsInvalid)
             throw new System.ComponentModel.Win32Exception();
     }
 
-    private static void DisposeAll(params SafeFileHandle?[] handles)
+    private static void Inherit(bool on, params SafeFileHandle[] handles)
     {
         foreach (var handle in handles)
-            handle?.Dispose();
+            SetHandleInformation(handle, HandleFlagInherit, on ? HandleFlagInherit : 0);
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SecurityAttributes
+    /** The process handle as a wait handle, without owning it. */
+    private sealed class ExitHandle : WaitHandle
     {
-        public int Length;
-        public IntPtr SecurityDescriptor;
-        public int InheritHandle;
+        public ExitHandle(SafeProcessHandle process) => SafeWaitHandle = new SafeWaitHandle(process.DangerousGetHandle(), ownsHandle: false);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -214,6 +262,13 @@ public sealed partial class JobProcess : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct StartupInfoEx
+    {
+        public StartupInfo StartupInfo;
+        public IntPtr AttributeList;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ProcessInformation
     {
         public IntPtr Process;
@@ -224,7 +279,13 @@ public sealed partial class JobProcess : IDisposable
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool CreatePipe(out SafeFileHandle read, out SafeFileHandle write, ref SecurityAttributes attributes, int size);
+    private static partial bool CreatePipe(out SafeFileHandle read, out SafeFileHandle write, IntPtr attributes, int size);
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial SafeFileHandle CreateNamedPipeW(string name, uint openMode, uint pipeMode, uint maxInstances, uint outSize, uint inSize, uint timeout, IntPtr attributes);
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr attributes, uint disposition, uint flags, IntPtr template);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -232,14 +293,25 @@ public sealed partial class JobProcess : IDisposable
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref nuint size);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, nuint size, IntPtr previous, IntPtr returnSize);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial void DeleteProcThreadAttributeList(IntPtr list);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static unsafe partial bool CreateProcessW(char* application, char* commandLine, IntPtr processAttributes, IntPtr threadAttributes,
         [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags, IntPtr environment, char* currentDirectory,
-        ref StartupInfo startup, out ProcessInformation information);
+        ref StartupInfoEx startup, out ProcessInformation information);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial uint ResumeThread(SafeProcessHandle thread);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool TerminateProcess(SafeProcessHandle process, uint exitCode);
+    private static partial bool TerminateJobObject(SafeFileHandle job, uint exitCode);
 }

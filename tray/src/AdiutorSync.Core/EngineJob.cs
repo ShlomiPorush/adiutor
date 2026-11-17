@@ -6,8 +6,8 @@ namespace AdiutorSync.Core;
 
 /// <summary>
 /// One Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (documented Win32: CreateJobObjectW,
-/// SetInformationJobObject, AssignProcessToJobObject). Every engine process is put in it while it is still suspended
-/// (JobProcess), before it runs any code, and its children (the T3 CLI, the collector) are created inside it. When the
+/// SetInformationJobObject). Every engine process is created in it (JobProcess:
+/// PROC_THREAD_ATTRIBUTE_JOB_LIST), before it runs any code, and its children (the T3 CLI, the collector) are created inside it. When the
 /// tray ends, however it ends, Windows closes the job's last handle and ends every process in it, so no engine or
 /// child of the engine outlives the tray (the plan, "Process tree").
 /// </summary>
@@ -32,8 +32,8 @@ public sealed partial class EngineJob : IDisposable
         }
     }
 
-    /** Puts a process in the job; false when Windows refuses, and the caller then ends the process. */
-    public bool Assign(SafeHandle process) => AssignProcessToJobObject(_handle, process.DangerousGetHandle());
+    /** The job's handle, for a process created in it (JobProcess). */
+    internal SafeFileHandle Handle => _handle;
 
     /** Whether a running process is in this job (for the tests). */
     internal bool Contains(int processId)
@@ -88,9 +88,6 @@ public sealed partial class EngineJob : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetInformationJobObject(SafeFileHandle job, int infoClass, ref ExtendedLimitInformation info, uint length);
 
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

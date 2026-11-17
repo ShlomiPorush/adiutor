@@ -33,6 +33,13 @@ if (command === "status") {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
   line({ type: "event", event: "message", text: String(child.pid) })
   setInterval(() => {}, 1000)
+} else if (command === "leak") {
+  // A child that keeps the engine's output open after the engine has ended.
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: ["ignore", "inherit", "ignore"] })
+  line({ type: "event", event: "message", text: String(child.pid) })
+  result({ command: "checkin", claim: null })
+  child.unref()
+  process.exit(0)
 } else if (command === "hang") {
   setInterval(() => {}, 1000)
 } else {
