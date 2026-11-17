@@ -267,7 +267,9 @@ while IFS= read -r name; do
       sha256="$(sha256sum "$dir/$name" | cut -d' ' -f1 | tr a-f A-F)"
       [ "${MOCK_FEED:-}" = wrong ] && sha256="$(printf '0%.0s' {1..64})"
       size="$(wc -c <"$dir/$name" | tr -d ' ')"
-      feed="$feed${feed:+,}{\"PackageId\":\"AdiutorSync\",\"Version\":\"$version\",\"Type\":\"$kind\",\"FileName\":\"$name\",\"SHA1\":\"$sha1\",\"SHA256\":\"$sha256\",\"Size\":$size}"
+      listed="$kind"
+      [ "${MOCK_FEED:-}" = wrong-type ] && listed=Delta
+      feed="$feed${feed:+,}{\"PackageId\":\"AdiutorSync\",\"Version\":\"$version\",\"Type\":\"$listed\",\"FileName\":\"$name\",\"SHA1\":\"$sha1\",\"SHA256\":\"$sha256\",\"Size\":$size}"
       # RELEASES holds the newest full package only, the one of this build.
       [ $kind = Full ] && legacy="$sha1 $name $size"
       ;;
@@ -726,6 +728,12 @@ check "  with a clear reason" said "releases.win.json on the draft v0.1.0 does n
 check "  and does not publish" is_draft v0.1.0
 release
 check "  and the next run finishes 0.1.0" complete 0.1.0
+
+sandbox
+MOCK_FEED=wrong-type release
+check "a feed that lists the full package as a delta: the run stops" [ $? -ne 0 ]
+check "  with a clear reason" said "releases.win.json on the draft v0.1.0 does not list the local packages"
+check "  and does not publish" is_draft v0.1.0
 
 sandbox
 MOCK_FEED=legacy-extra release

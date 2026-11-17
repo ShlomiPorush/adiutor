@@ -359,19 +359,30 @@ sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 sha1_of() { sha1sum "$1" | cut -d' ' -f1; }
 size_of() { wc -c <"$1" | tr -d ' '; }
 
+# The package type Velopack gives a package file: Full or Delta.
+package_type() {
+  case "$1" in
+    *-full.nupkg) echo Full ;;
+    *-delta.nupkg) echo Delta ;;
+  esac
+}
+
 # Reads the tray's build from TRAY_DIR (scripts/pack-tray.ps1 for VERSION) into TRAY_FILES and checks it
-# is whole: the installer and the full package of VERSION, every file present and named as the tray's.
+# is whole: the installer and the full package of VERSION, every file present and named as the tray's,
+# and each package listed with the type its name gives.
 read_tray_build() {
-  local list file
+  local list file type
   [ -f "$TRAY_DIR/assets.win.json" ] || die "$TRAY_DIR has no assets.win.json: pack the tray first (scripts/pack-tray.ps1)"
-  list="$(jq -r '.[].RelativeFileName' "$TRAY_DIR/assets.win.json")" || die "cannot read $TRAY_DIR/assets.win.json"
-  mapfile -t TRAY_FILES <<<"$list"
-  for file in "${TRAY_FILES[@]}"; do
+  list="$(jq -r '.[] | .RelativeFileName + " " + .Type' "$TRAY_DIR/assets.win.json")" || die "cannot read $TRAY_DIR/assets.win.json"
+  TRAY_FILES=()
+  while read -r file type; do
+    TRAY_FILES+=("$file")
     [[ "$file" =~ ^AdiutorSync-[A-Za-z0-9.-]+$ ]] || die "the tray build names an unexpected file: $file"
     [[ "$file" != *.nupkg || "$file" =~ ^AdiutorSync-${VERSION//./\\.}-(full|delta)\.nupkg$ ]] ||
       die "the tray build holds $file, a package of another version than $VERSION"
+    [[ "$file" != *.nupkg || "$type" = "$(package_type "$file")" ]] || die "the tray build lists $file as $type"
     [ -f "$TRAY_DIR/$file" ] || die "the tray build lists $file, which is not in $TRAY_DIR"
-  done
+  done <<<"$list"
   for file in "AdiutorSync-$VERSION-full.nupkg" AdiutorSync-win-Setup.exe; do
     [[ " ${TRAY_FILES[*]} " == *" $file "* ]] || die "the tray build has no $file"
   done
@@ -384,7 +395,7 @@ expected_tray_assets() {
 
 # Reads every tray asset of the draft back from GitHub. The build's files must match the local ones by
 # SHA-256. vpk writes the feed files at upload, so there is no local copy: releases.win.json must list
-# exactly the build's packages of VERSION with their real SHA-256 and size, and RELEASES (Velopack's
+# exactly the build's packages of VERSION with their types, real SHA-256 and size, and RELEASES (Velopack's
 # older feed, which vpk 1.2.161 writes as UTF-8 with a byte order mark and only the full package) only
 # those packages, with their real SHA-1 and size, the full one included.
 verify_tray_assets() {
@@ -405,10 +416,10 @@ verify_tray_assets() {
   done
   want="$(for file in "${TRAY_FILES[@]}"; do
     if [[ "$file" == *.nupkg ]]; then
-      echo "AdiutorSync $VERSION $file $(sha256_of "$TRAY_DIR/$file" | tr a-f A-F) $(size_of "$TRAY_DIR/$file")"
+      echo "AdiutorSync $VERSION $(package_type "$file") $file $(sha256_of "$TRAY_DIR/$file" | tr a-f A-F) $(size_of "$TRAY_DIR/$file")"
     fi
   done | sort)"
-  have="$(jq -r '.Assets[] | "\(.PackageId) \(.Version) \(.FileName) \(.SHA256 | ascii_upcase) \(.Size)"' "$dir/releases.win.json" | sort)" ||
+  have="$(jq -r '.Assets[] | "\(.PackageId) \(.Version) \(.Type) \(.FileName) \(.SHA256 | ascii_upcase) \(.Size)"' "$dir/releases.win.json" | sort)" ||
     die "releases.win.json on the draft $TAG cannot be read"
   [ "$have" = "$want" ] || die "releases.win.json on the draft $TAG does not list the local packages. Run the release again."
   want="$(for file in "${TRAY_FILES[@]}"; do
