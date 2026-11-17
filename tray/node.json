@@ -1,0 +1,7 @@
+{
+  "version": "24.22.3",
+  "zip": "node-v24.22.3-win-x64.zip",
+  "zipSha256": "e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f",
+  "nodeExeSha256": "86fc4785327db5f5c7558dc6156c543b433c313e813a222e088086222ab4afa6",
+  "source": "https://nodejs.org/dist/v24.22.3/SHASUMS256.txt, lines node-v24.22.3-win-x64.zip and win-x64/node.exe; its signature SHASUMS256.txt.sig checked against Node.js release key 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356"
+}
