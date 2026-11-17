@@ -182,4 +182,21 @@ public class ConnectCommandTests
         Assert.Contains("--replace", ConnectCommand.Args("PC-1", "https://adiutor.example.com", replace: true));
         Assert.Equal(ConnectCommand.NameMax, ConnectCommand.Args(new string('x', 80), "https://adiutor.example.com", false)[2].Length);
     }
+
+    [Theory]
+    [InlineData(SettingSource.Environment, "https://old.example.com", null)]
+    [InlineData(SettingSource.Option, "https://old.example.com", null)]
+    [InlineData(SettingSource.EnvFile, "https://new.example.com", "https://new.example.com")]
+    [InlineData(SettingSource.SettingsFile, "https://new.example.com", "https://new.example.com")]
+    [InlineData(SettingSource.Default, null, null)]
+    public void An_address_the_environment_sets_is_never_passed_over_it(SettingSource source, string? saved, string? passed) =>
+        Assert.Equal(passed, ConnectCommand.UrlArgument(source, saved));
+
+    [Fact]
+    public void Without_an_address_to_pass_connect_leaves_it_to_the_engine()
+    {
+        var args = ConnectCommand.Args("PC-1", null, replace: false);
+        Assert.DoesNotContain("--url", args);
+        Assert.Contains("--no-open", args);
+    }
 }

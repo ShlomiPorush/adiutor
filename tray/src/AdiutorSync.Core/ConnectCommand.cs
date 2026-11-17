@@ -9,12 +9,22 @@ public static class ConnectCommand
 {
     public const int NameMax = 60;
 
-    public static List<string> Args(string machineName, string url, bool replace)
+    /**
+     * The address to pass with --url: the one the owner saved, unless the environment sets it (a locked field), when
+     * none is passed and the engine uses its own effective address.
+     */
+    public static string? UrlArgument(SettingSource? source, string? saved) =>
+        EffectiveSettings.Mode(EffectiveSettings.AdiutorUrl, source) == FieldMode.LockedByEnvironment ? null : saved;
+
+    public static List<string> Args(string machineName, string? url, bool replace)
     {
         var name = $"Adiutor Sync ({machineName})";
         if (name.Length > NameMax)
             name = name[..NameMax];
-        List<string> args = ["connect", "--name", name, "--url", url, "--no-open"];
+        List<string> args = ["connect", "--name", name];
+        if (url is not null)
+            args.AddRange(["--url", url]);
+        args.Add("--no-open");
         if (replace)
             args.Add("--replace");
         return args;

@@ -105,14 +105,31 @@ internal sealed partial class SettingsWindow : Window
     /** Each setting as the engine uses it (its status), falling back to the settings file before a status was read. */
     private void Fill(TraySettings s)
     {
-        AdiutorUrl.Text = Effective(EffectiveSettings.AdiutorUrl)?.Value ?? s.AdiutorUrl ?? _host.Loop.Snapshot.Status?.Adiutor.Url ?? "";
-        T3Cli.Text = Effective(EffectiveSettings.T3CliPath)?.Value ?? s.T3CliPath ?? DefaultT3Cli;
-        T3Url.Text = Effective(EffectiveSettings.T3Url)?.Value ?? s.T3Url ?? DefaultT3Url;
-        Overview.Text = Effective(EffectiveSettings.OverviewDir)?.Value ?? s.OverviewDir ?? "";
-        ApplyModes();
+        ShowEffective(s);
         SelectTag(Schedule, s.ScheduleHours);
         StartBox.IsChecked = s.StartWithWindows;
         SelectTag(LanguageBox, s.Language ?? T.Language);
+    }
+
+    /** What each address field last showed: a field whose text differs is being edited, and is left alone. */
+    private readonly Dictionary<TextBox, string> _shown = [];
+
+    /** Shows each setting as the engine uses it; called again when a newer status arrives. */
+    private void ShowEffective(TraySettings s)
+    {
+        Show(AdiutorUrl, Effective(EffectiveSettings.AdiutorUrl)?.Value ?? s.AdiutorUrl ?? _host.Loop.Snapshot.Status?.Adiutor.Url ?? "");
+        Show(T3Cli, Effective(EffectiveSettings.T3CliPath)?.Value ?? s.T3CliPath ?? DefaultT3Cli);
+        Show(T3Url, Effective(EffectiveSettings.T3Url)?.Value ?? s.T3Url ?? DefaultT3Url);
+        Show(Overview, Effective(EffectiveSettings.OverviewDir)?.Value ?? s.OverviewDir ?? "");
+        ApplyModes();
+    }
+
+    private void Show(TextBox box, string value)
+    {
+        if (_shown.TryGetValue(box, out var last) && box.Text != last)
+            return;
+        box.Text = value;
+        _shown[box] = value;
     }
 
     private EffectiveSetting? Effective(string key) =>
@@ -165,6 +182,9 @@ internal sealed partial class SettingsWindow : Window
     public void Render(TraySnapshot snapshot)
     {
         _snapshot = snapshot;
+        // A status that arrived after the window opened brings the values the engine uses, and their locks.
+        if (_shown.Count > 0)
+            ShowEffective(snapshot.Settings);
         var t = T;
         var busy = _command is not null;
         var adiutor = snapshot.Status?.Adiutor;
@@ -258,7 +278,10 @@ internal sealed partial class SettingsWindow : Window
     {
         if (Collect() is not { } settings)
             return;
-        if (settings.AdiutorUrl is not { } url)
+        // Set by the environment: no --url, the engine uses its own address. Otherwise the address the owner saved.
+        var url = ConnectCommand.UrlArgument(Effective(EffectiveSettings.AdiutorUrl)?.Source, settings.AdiutorUrl);
+        var effective = url ?? Addresses.Origin(Effective(EffectiveSettings.AdiutorUrl)?.Value);
+        if (effective is null)
         {
             AdiutorMessage.Text = T["settings.addressFirst"];
             return;
@@ -266,14 +289,14 @@ internal sealed partial class SettingsWindow : Window
         _host.Save(settings);
         var status = _host.Loop.Snapshot.Status?.Adiutor;
         // An ended connection for this address is connected again; the engine then ends the old one.
-        var args = ConnectCommand.Args(Environment.MachineName, url, status is { State: ConnectionState.Ended } && Addresses.Origin(status.Url) == url);
+        var args = ConnectCommand.Args(Environment.MachineName, url, status is { State: ConnectionState.Ended } && Addresses.Origin(status.Url) == effective);
         await RunAsync(args, AdiutorMessage, ok => ok.ConnectState is "connected" or "already_connected" ? T["settings.connectedNow"] : null);
     }
 
     private async void AdiutorDisconnect_Click(object sender, RoutedEventArgs e)
     {
         List<string> args = ["disconnect"];
-        if (Addresses.Origin(_host.Loop.Snapshot.Status?.Adiutor.Url) is { } url)
+        if (ConnectCommand.UrlArgument(Effective(EffectiveSettings.AdiutorUrl)?.Source, Addresses.Origin(_host.Loop.Snapshot.Status?.Adiutor.Url)) is { } url)
             args.AddRange(["--url", url]);
         await RunAsync(args, AdiutorMessage, _ => T["settings.disconnectedNow"]);
     }
