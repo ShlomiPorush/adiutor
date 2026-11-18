@@ -27,10 +27,14 @@ const PERMISSION: Record<AlertFamily | "issues", (typeof READ_PERMISSIONS)[numbe
   issues: "issues",
 }
 
+/**
+ * Each family's list, by the repository's id (GitHub's own paging links use this form), so a name that another
+ * repository takes while a pull reads never leads to that repository.
+ */
 const ROUTES = {
-  dependabot: "GET /repos/{owner}/{repo}/dependabot/alerts",
-  code_scanning: "GET /repos/{owner}/{repo}/code-scanning/alerts",
-  secret_scanning: "GET /repos/{owner}/{repo}/secret-scanning/alerts",
+  dependabot: "GET /repositories/{repository_id}/dependabot/alerts",
+  code_scanning: "GET /repositories/{repository_id}/code-scanning/alerts",
+  secret_scanning: "GET /repositories/{repository_id}/secret-scanning/alerts",
 } as const
 
 const PER_PAGE = 100
@@ -78,7 +82,6 @@ export type ProjectRead = {
   projectId: string
   /** The repository binding version the pull read the project under (github/apply.ts skips a changed one). */
   version: number
-  repo: string
   /** GitHub's id of the repository from the inventory that matched, to keep on the project; null when none did. */
   repoId: number | null
   families: Record<AlertFamily, FamilyRead>
@@ -351,7 +354,6 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
     const project: ProjectRead = {
       projectId: p.id,
       version: p.githubRepoVersion,
-      repo: p.githubRepo,
       repoId: null,
       families: errorAll("not_read"),
       issues: { kind: "error", code: "not_read" },
@@ -401,27 +403,17 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
     }
   }
 
-  /** Null when the repository's name still leads to the id the inventory gave; else why not, as a code. */
-  const sameRepository = async (plan: Planned): Promise<string | null> => {
-    try {
-      const { data } = await ((plan.installation as Usable).client as Octokit).request("GET /repos/{owner}/{repo}", {
-        owner: plan.owner,
-        repo: plan.name,
-      })
-      return isObject(data) && data.id === plan.project.repoId ? null : "moved"
-    } catch (error) {
-      const failure = describeFailure(error, now())
-      return stopOn(failure) ?? failureCode(failure)
-    }
-  }
+  type ListRead = { counts: Counts; numbers: Set<number>; pages: number; asOf: Date }
 
-  const readFamily = async (plan: Planned, family: AlertFamily): Promise<FamilyRead> => {
+  /**
+   * One read of a family's whole list, by the repository's id, so a name another repository takes meanwhile is never
+   * read: each page asked with explicit parameters, the next page from the `Link` header on the same list only.
+   */
+  const readList = async (plan: Planned, family: AlertFamily): Promise<ListRead | FamilyRead> => {
     const installation = plan.installation as Usable
-    if (installation.granted[PERMISSION[family]] !== "read") return { coverage: "no_access", asOf: now() }
     const client = installation.client as Octokit
     const base = {
-      owner: plan.owner,
-      repo: plan.name,
+      repository_id: plan.project.repoId as number,
       state: "open",
       per_page: PER_PAGE,
       ...(family === "secret_scanning" ? { hide_secret: true } : {}),
@@ -429,7 +421,7 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
     const counts = zero()
     const seen = new Set<string>()
     // Page-number paging can show an alert twice when another opens meanwhile: each alert counts once, by its number.
-    const counted = new Set<number>()
+    const numbers = new Set<number>()
     let cursor: Record<string, string> = {}
     let path: string | null = null
     for (let page = 0; page < MAX_PAGES; page++) {
@@ -470,23 +462,21 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       if (!Array.isArray(response.data)) return { coverage: "error", code: "malformed" }
       for (const alert of response.data) {
         if (!isOpenAlert(alert)) return { coverage: "error", code: "malformed" }
-        if (counted.has(alert.number as number)) continue
-        counted.add(alert.number as number)
+        if (numbers.has(alert.number as number)) continue
+        numbers.add(alert.number as number)
         counts[severity[family](alert)]++
       }
-      const asOf = now()
       const current = URL.canParse(response.url) ? new URL(response.url) : null
       if (current === null) return { coverage: "error", code: "malformed" }
       path ??= current.pathname
       const next = nextLink(response.headers.link)
-      if (!next) return { coverage: "enabled", counts, asOf }
-      // The next page must stay on this list: the same origin, the same path (or the same list addressed by the
-      // repository's id, as GitHub's links may be), and a cursor not seen before.
+      if (!next) return { counts, numbers, pages: page + 1, asOf: now() }
+      // The next page must stay on this list: the same origin, the same list (by the repository's id, or by its name
+      // as GitHub may write it), and a cursor not seen before.
       const url = URL.canParse(next) ? new URL(next) : null
-      const byRepositoryId = `/repositories/${plan.project.repoId}/${ROUTES[family].split("/{repo}/")[1]}`
-      const samePath =
-        url !== null && [path, byRepositoryId].some((p) => p.toLowerCase() === url.pathname.toLowerCase())
-      if (!url || url.origin !== options.origin || !samePath) return { coverage: "error", code: "malformed" }
+      const byName = `/repos/${plan.owner}/${plan.name}/${ROUTES[family].split("/{repository_id}/")[1]}`
+      const sameList = url !== null && [path, byName].some((p) => p.toLowerCase() === url.pathname.toLowerCase())
+      if (!url || url.origin !== options.origin || !sameList) return { coverage: "error", code: "malformed" }
       const key = url.searchParams.has("after") ? "after" : url.searchParams.has("page") ? "page" : null
       const value = key ? url.searchParams.get(key) : null
       if (!key || !value || seen.has(`${key}=${value}`)) return { coverage: "error", code: "malformed" }
@@ -496,15 +486,27 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
     return { coverage: "error", code: "too_many_pages" }
   }
 
+  const isList = (read: ListRead | FamilyRead): read is ListRead => "numbers" in read
+
+  const readFamily = async (plan: Planned, family: AlertFamily): Promise<FamilyRead> => {
+    const installation = plan.installation as Usable
+    if (installation.granted[PERMISSION[family]] !== "read") return { coverage: "no_access", asOf: now() }
+    const first = await readList(plan, family)
+    if (!isList(first)) return first
+    if (first.pages === 1) return { coverage: "enabled", counts: first.counts, asOf: first.asOf }
+    // A list of more pages can shift while it is read (an alert closed on a page already read moves the next one back
+    // unseen): it is read again, and counted only when both reads found the same alerts.
+    const second = await readList(plan, family)
+    if (!isList(second)) return second
+    const same = second.numbers.size === first.numbers.size && [...second.numbers].every((n) => first.numbers.has(n))
+    return same
+      ? { coverage: "enabled", counts: second.counts, asOf: second.asOf }
+      : { coverage: "error", code: "changed_while_read" }
+  }
+
   // 4. Alerts, four repositories at a time.
   await pool(planned, REPOS_AT_ONCE, async (plan) => {
     for (const family of ALERT_FAMILIES) plan.project.families[family] = await readFamily(plan, family)
-    if (ALERT_FAMILIES.every((family) => plan.project.families[family].coverage === "error")) return
-    // The lists are read by name: the name must still be the repository the inventory gave, or another repository
-    // that took it meanwhile was read. Asked after the lists (Metadata comes with every installation).
-    const problem = await sameRepository(plan)
-    if (problem)
-      for (const family of ALERT_FAMILIES) plan.project.families[family] = { coverage: "error", code: problem }
   })
 
   // 5. Open Issues counts, by GraphQL per installation, up to 25 repositories a query. A repository renamed since the

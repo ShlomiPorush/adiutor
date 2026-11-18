@@ -50,16 +50,17 @@ export function restRateLimit(
   now: Date,
 ): Date | null {
   if (status !== 403 && status !== 429) return null
+  // Every end the answer gives counts, and the latest holds: a reset and a retry-after may both come.
+  const ends: Date[] = []
   if (headers["x-ratelimit-remaining"] === "0") {
     const reset = Number(headers["x-ratelimit-reset"])
-    return Number.isFinite(reset) && reset > 0
-      ? waitUntil(now, reset * 1000 - now.getTime())
-      : waitUntil(now, SECONDARY_WAIT_MS)
+    if (Number.isFinite(reset) && reset > 0) ends.push(waitUntil(now, reset * 1000 - now.getTime()))
   }
   const retry = headers["retry-after"]
-  if (retry !== undefined && /^\d{1,6}$/.test(retry.trim())) return waitUntil(now, Number(retry.trim()) * 1000)
-  if (SECONDARY.test(message) || status === 429) return waitUntil(now, SECONDARY_WAIT_MS)
-  return null
+  if (retry !== undefined && /^\d{1,6}$/.test(retry.trim())) ends.push(waitUntil(now, Number(retry.trim()) * 1000))
+  if (ends.length === 0 && (headers["x-ratelimit-remaining"] === "0" || SECONDARY.test(message) || status === 429))
+    ends.push(waitUntil(now, SECONDARY_WAIT_MS))
+  return ends.length === 0 ? null : new Date(Math.max(...ends.map((d) => d.getTime())))
 }
 
 /**
@@ -73,12 +74,8 @@ export function graphqlRateLimit(errors: unknown, headers: Record<string, string
     return err?.type === "RATE_LIMITED" || (typeof err?.message === "string" && SECONDARY.test(err.message))
   })
   if (!limited) return null
-  const retry = headers["retry-after"]
-  if (retry !== undefined && /^\d{1,6}$/.test(retry.trim())) return waitUntil(now, Number(retry.trim()) * 1000)
-  const reset = Number(headers["x-ratelimit-reset"])
-  return headers["x-ratelimit-remaining"] === "0" && Number.isFinite(reset) && reset > 0
-    ? waitUntil(now, reset * 1000 - now.getTime())
-    : waitUntil(now, SECONDARY_WAIT_MS)
+  // The same answer as REST gives it: the latest of its ends, or a minute.
+  return restRateLimit(429, headers, "", now)
 }
 
 /** What a thrown error of an Octokit request comes to. */

@@ -13,6 +13,10 @@ export type FamilyMode = {
   body?: unknown
   /** Another path for the next page's link (a list that tries to leave its own address). */
   nextPath?: string
+  /** The alerts from the second whole read of the list on (a list that changes while it is read). */
+  secondRead?: Record<string, unknown>[]
+  /** How many whole reads started (the stand-in counts them). */
+  reads?: number
 }
 
 export type StandInInstallation = {
@@ -32,8 +36,6 @@ export type StandInRepo = {
   issues?: number | "error"
   /** The database id GraphQL answers, when it differs from the inventory's. */
   graphqlId?: number
-  /** The id GET /repos/{owner}/{repo} answers, when the name now leads to another repository. */
-  restId?: number
   /** The installation GitHub names for the repository (null: none). */
   appInstallation?: number | null
   dependabot?: FamilyMode

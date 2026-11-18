@@ -647,7 +647,10 @@ function useSettingsDraft(
       return refuse("githubAppId", t("githubSettings.appId"), t("githubSettings.appIdInvalid"))
     if (typeof githubPatch.privateKey === "string" && !PEM_KEY.test(githubPatch.privateKey)) {
       // A paste that is not a key leaves the draft at once: it may be another secret.
-      setDraft(({ githubKey: _key, ...rest }) => rest)
+      // The pasted text leaves the draft; with no App field left, so does the generation it was based on.
+      setDraft(({ githubKey: _key, githubBasedOn, ...rest }) =>
+        rest.githubAppId === undefined ? rest : { ...rest, githubBasedOn },
+      )
       return refuse("githubKey", t("githubSettings.key"), t("githubSettings.keyInvalid"))
     }
     // A save that ends agent connections (agents off, fewer idle days) asks first; Cancel keeps the draft.
@@ -708,8 +711,13 @@ function useSettingsDraft(
           })
         } catch (failure) {
           // The pasted key never stays in the draft after a refusal either; the App id stays for another try.
-          // The refusal was shown; a new save is based on the settings as they are read now.
-          setDraft(({ githubKey: _key, githubBasedOn: _basedOn, ...current }) => current)
+          // The pasted key never stays. After a conflict the App's fields leave the draft too: the settings changed
+          // elsewhere, and the page shows them as they are now. After another refusal the App id stays, still based on
+          // the generation it was typed on.
+          const conflict = failure instanceof ApiError && failure.code === "conflict"
+          setDraft(({ githubKey: _key, githubBasedOn, githubAppId, ...current }) =>
+            conflict || githubAppId === undefined ? current : { ...current, githubAppId, githubBasedOn },
+          )
           throw failure
         }
         await queryClient.invalidateQueries({ queryKey: qk.morning })

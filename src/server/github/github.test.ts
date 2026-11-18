@@ -110,6 +110,13 @@ describe("GitHub's rate limits", () => {
     )
   })
 
+  it("takes the later end when one answer gives both a reset and a retry-after", () => {
+    const soon = String(now.getTime() / 1000 + 30)
+    expect(
+      restRateLimit(429, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": soon, "retry-after": "600" }, "", now),
+    ).toEqual(new Date(now.getTime() + 600_000))
+  })
+
   it("waits as long as a GraphQL answer's retry-after says", () => {
     expect(graphqlRateLimit([{ type: "RATE_LIMITED" }], { "retry-after": "120" }, now)).toEqual(
       new Date(now.getTime() + 120_000),

@@ -231,21 +231,15 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
       return json(res, 200, errors.length > 0 ? { data, errors } : { data })
     }
 
-    const repoMatch = /^\/repos\/([^/]+)\/([^/]+)$/.exec(path)
-    if (repoMatch && req.method === "GET") {
-      const fullName = `${repoMatch[1]}/${repoMatch[2]}`
-      const key = inst.repositories.find((r) => r.toLowerCase() === fullName.toLowerCase())
-      const repo = key ? s.repos[key] : undefined
-      if (!repo) return json(res, 404, { message: "Not Found" })
-      // A test may say the name now leads to another repository (renamed, then reused, while a pull reads).
-      return json(res, 200, { id: repo.restId ?? repo.id, full_name: key })
-    }
-
+    // A family's list, by the repository's id (as Adiutor asks and GitHub's paging links write it) or by its name.
     const familyMatch =
-      /^\/repos\/([^/]+)\/([^/]+)\/(dependabot\/alerts|code-scanning\/alerts|secret-scanning\/alerts)$/.exec(path)
+      /^\/(?:repositories\/(\d+)|repos\/([^/]+\/[^/]+))\/(dependabot\/alerts|code-scanning\/alerts|secret-scanning\/alerts)$/.exec(
+        path,
+      )
     if (familyMatch && req.method === "GET") {
-      const fullName = `${familyMatch[1]}/${familyMatch[2]}`
-      const key = inst.repositories.find((r) => r.toLowerCase() === fullName.toLowerCase())
+      const key = familyMatch[1]
+        ? inst.repositories.find((r) => s.repos[r]?.id === Number(familyMatch[1]))
+        : inst.repositories.find((r) => r.toLowerCase() === familyMatch[2].toLowerCase())
       const repo = key ? s.repos[key] : undefined
       if (!repo) return json(res, 404, { message: "Not Found" })
       const family = Object.entries(FAMILY_PATHS).find(([, p]) => p === familyMatch[3])[0]
@@ -268,12 +262,15 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
             ? Number(Buffer.from(cursor, "base64url").toString())
             : Number(cursor)
       if (mode.failPage === page) return json(res, mode.failStatus ?? 500, { message: "failed" })
+      // A test may change the list between whole reads: each first page starts a read.
+      if (page === 1) mode.reads = (mode.reads ?? 0) + 1
+      const alerts = mode.secondRead && (mode.reads ?? 0) >= 2 ? mode.secondRead : mode.alerts
       // Alerts as GitHub lists them: each with its number and the state asked for, unless the test gives them.
-      const slice = mode.alerts
+      const slice = alerts
         .map((alert, i) => ({ number: i + 1, state: "open", ...alert }))
         .slice((page - 1) * perPage, page * perPage)
       const headers = {}
-      if (page * perPage < mode.alerts.length) {
+      if (page * perPage < alerts.length) {
         const next = new URL(`http://${req.headers.host}${path}`)
         next.searchParams.set("per_page", String(perPage))
         next.searchParams.set(

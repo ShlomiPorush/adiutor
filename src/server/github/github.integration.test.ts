@@ -310,10 +310,14 @@ describe("a pull", () => {
     await setUp()
     await project("Widget", "example-org/widget")
     await handle.runner.pull()
+    // A list of more than one page is read twice (it must not change while it is read).
     const pages = standIn.requests.filter((r) => r.family === "secret_scanning")
-    expect(pages).toHaveLength(3)
+    expect(pages).toHaveLength(6)
     for (const page of pages) expect(page.query).toMatchObject({ hide_secret: "true", state: "open", per_page: "100" })
-    expect(standIn.requests.filter((r) => r.family === "dependabot").map((r) => r.query.after ?? null)).toHaveLength(2)
+    expect(standIn.requests.filter((r) => r.family === "dependabot").map((r) => r.query.after ?? null)).toHaveLength(4)
+    // Every list is asked by the repository's id, never by its name.
+    for (const r of standIn.requests.filter((r) => r.family !== undefined))
+      expect(r.path.startsWith("/repositories/7001/")).toBe(true)
   })
 
   it("keeps the stored counts when a read fails, and records the attempt", async () => {
@@ -603,15 +607,35 @@ describe("review round 1", () => {
     expect(n).toBe(600)
   })
 
-  it("keeps the stored counts when the name led to another repository while the lists were read", async () => {
+  it("keeps the stored counts when a list of more pages changes while it is read", async () => {
     await setUp()
-    const widget = await project("Widget", "example-org/widget")
+    const gadget = await project("Gadget", "example-org/gadget")
+    const repo = standIn.scenario.repos["example-org/gadget"] as Scenario["repos"][string]
+    repo.code_scanning = {
+      alerts: [
+        { rule: { security_severity_level: "low" } },
+        { rule: {} },
+        { rule: { security_severity_level: "critical" } },
+      ],
+      pageSize: 2,
+    }
     await handle.runner.pull()
-    const repo = standIn.scenario.repos["example-org/widget"] as Scenario["repos"][string]
-    repo.dependabot = { alerts: [] }
-    repo.restId = 7999
+    expect(await family(gadget.id, "code_scanning")).toMatchObject({ critical: 1, attempt: "ok" })
+    // The low alert closes between the two reads: the critical one moves back a page.
+    repo.code_scanning = {
+      alerts: [
+        { rule: { security_severity_level: "low" } },
+        { rule: {} },
+        { rule: { security_severity_level: "critical" } },
+      ],
+      secondRead: [
+        { number: 2, rule: {} },
+        { number: 3, rule: { security_severity_level: "critical" } },
+      ],
+      pageSize: 2,
+    }
     await handle.runner.pull()
-    expect(await family(widget.id, "dependabot")).toMatchObject({ coverage: "enabled", critical: 1, attempt: "error" })
+    expect(await family(gadget.id, "code_scanning")).toMatchObject({ critical: 1, attempt: "error" })
   })
 
   it("counts an alert that a page-number list shows twice once", async () => {
