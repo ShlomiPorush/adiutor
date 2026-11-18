@@ -226,7 +226,13 @@ export function AttentionList({
   return (
     <div>
       {failed ? <p className="ui-list-end ui-text-warn">{t("bell.someFailed")}</p> : null}
-      {empty && !failed ? <Empty title={t("bell.allClear")} hint={t("bell.allClearHint")} /> : null}
+      {empty && !failed ? (
+        // Never an all clear while the security data is not current: the hint says so (the board says why).
+        <Empty
+          title={t("bell.allClear")}
+          hint={morning.github.state === "fine" ? t("bell.allClearHint") : t("bell.githubNotCurrent")}
+        />
+      ) : null}
       {critical.map((line) => (
         // biome-ignore lint/a11y/useSemanticElements: a whole row opens it (v3 TB-8); it holds block content and links, so it cannot be a <button>
         <div

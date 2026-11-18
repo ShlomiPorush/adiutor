@@ -322,6 +322,7 @@
       "cancelled": "Cancelled"
     },
     "parts": "T3: {t3}, security: {security}",
+    "partT3": "T3: {t3}",
     "part": {
       "accepted": "accepted",
       "partial": "partial",
@@ -359,6 +360,7 @@
     "someFailed": "The last check failed. This is what it showed before.",
     "allClear": "Nothing needs you right now.",
     "allClearHint": "Items waiting on you, stage proposals and critical security findings appear here.",
+    "githubNotCurrent": "Security data from GitHub is not current, so critical findings may be missing. The board says why.",
     "openMorning": "Open the overview"
   },
   "proposal": {
@@ -424,7 +426,17 @@
     "projectsTitle": "Projects",
     "projectsEmpty": "No project has open items.",
     "projectsEmptyHint": "A project shows here once it has an open item.",
-    "allProjects": "All projects"
+    "allProjects": "All projects",
+    "githubOff": "GitHub is not set up, so security data is not checked.",
+    "githubNotRead": "GitHub has not been read yet, so security data is not checked.",
+    "githubNotCovered": {
+      "one": "1 project has no current data from GitHub.",
+      "other": "{count} projects have no current data from GitHub."
+    },
+    "githubOldest": "Oldest good read:",
+    "githubNeverRead": "They were never read.",
+    "githubSetUp": "Set up GitHub",
+    "githubOpen": "Open GitHub settings"
   },
   "security": {
     "critical": {
@@ -555,7 +567,14 @@
     "deleteForever": "The sync will not create it again. This cannot be undone.",
     "deleted": "Project {name} deleted",
     "deleteConflict": "it still has items or notes. Move or delete them first",
-    "deleteFailed": "Could not delete {name}: {reason}"
+    "deleteFailed": "Could not delete {name}: {reason}",
+    "setRepo": "Set the GitHub repository",
+    "changeRepo": "Change the repository",
+    "repoLabel": "GitHub repository",
+    "repoHint": "As owner/name, or the repository's address on GitHub. The server reads its security alerts and open Issues. Leave it empty for none.",
+    "repoInvalid": "Write the repository as owner/name, for example example-owner/lantern.",
+    "repoSaved": "{name}: repository set to {repo}",
+    "repoRemoved": "{name}: repository removed"
   },
   "item": {
     "title": "Item",
@@ -837,7 +856,11 @@
       },
       "status": {
         "title": "Status",
-        "hint": "The last T3 sync and when security data came in. Read only: the sync runs on your PC."
+        "hint": "The last T3 sync, and when security data was last read from GitHub. Read only: the sync runs on your PC, and the server reads GitHub."
+      },
+      "github": {
+        "title": "GitHub",
+        "hint": "The server reads security alerts and open Issues counts from GitHub itself, every hour, through your own GitHub App: read only, and only the installations listed here. Sync now stays the T3 sync on your PC."
       },
       "suppressions": {
         "title": "Suppressions",
@@ -880,7 +903,8 @@
     "saveInvalid": "Settings were not saved: {reason}",
     "lastSync": "Last successful T3 sync",
     "lastOutcome": "Last T3 sync run",
-    "securityAsOf": "Security data synced",
+    "securityAsOf": "Security data read from GitHub",
+    "securityWhere": "GitHub settings",
     "outcome": {
       "succeeded": "Succeeded",
       "partial": "Partly failed",
@@ -1284,6 +1308,140 @@
     "testLocked": "The test message and the bot's details are not available",
     "needsTelegram": "Telegram is not on yet. To turn it on, set the bot token and the chat ID in Settings → Integrations → Telegram → Bot, then save.",
     "setUp": "Set up the bot"
+  },
+  "githubSettings": {
+    "loading": "Loading the GitHub settings...",
+    "failed": "Could not load the GitHub settings",
+    "refreshFailed": "Could not update. Showing what was loaded last.",
+    "conflict": "The GitHub settings changed meanwhile and were read again. Check them and try again.",
+    "waitUntil": "GitHub asked to wait until {time}",
+    "appTitle": "GitHub App",
+    "appIntro": "Give the App read access to Dependabot alerts, code scanning alerts, secret scanning alerts and Issues, and nothing more: an installation that grants more is never read.",
+    "appId": "App ID",
+    "appIdHint": "The number at the top of the App's settings page on GitHub (Settings, Developer settings, GitHub Apps).",
+    "appIdInvalid": "The App ID is a number, as GitHub shows it.",
+    "notSet": "Not set",
+    "key": "Private key",
+    "keyHint": "Generate a private key on the App's settings page and paste the whole .pem file. It is stored encrypted and never shown again; compare its fingerprint with the one GitHub lists.",
+    "keyInvalid": "This is not a private key. Paste the whole .pem file, from its first line to its last.",
+    "keyPlaceholder": "Paste the contents of the .pem file",
+    "fingerprint": "Fingerprint",
+    "keyAccepted": "Accepted by GitHub",
+    "keyNotVerified": "Not verified yet",
+    "keyNotVerifiedHint": "GitHub did not answer when the key was saved. The next read checks it.",
+    "keyStored": "Stored",
+    "keyReplace": "Replace",
+    "keyRemove": "Remove",
+    "keyKeep": "Keep",
+    "keyRemovedOnSave": "Removed when you save",
+    "keyUnreadable": "The stored key cannot be read. Paste it again.",
+    "keySetByEnv": "Set by the environment",
+    "keyEnvUnreadable": "The key the environment sets cannot be read",
+    "savedNotVerified": "Saved. GitHub did not answer, so the key is not verified yet: the next read checks it.",
+    "installationsTitle": "Installations",
+    "installationsIntro": "The accounts the App is installed on that the server may read. An installation not listed here is never read.",
+    "installationsLocked": "Set by the environment ({variable}). Change the list there.",
+    "installationsEmpty": "No installations yet.",
+    "installationsEmptyHint": "Install the App on your GitHub account, then add the installation's id below.",
+    "installation": "Installation",
+    "installationId": "Id",
+    "accountType": {
+      "User": "Personal account",
+      "Organization": "Organization"
+    },
+    "installationState": {
+      "usable": "Read",
+      "too_broad": "Too much access",
+      "suspended": "Suspended",
+      "uninstalled": "Uninstalled",
+      "other_account": "Another account",
+      "error": "Failed",
+      "not_read": "Not read yet"
+    },
+    "installationHint": {
+      "too_broad": "It grants more than read access, so it is never read. Reduce the App's permissions to read only.",
+      "suspended": "Suspended on GitHub. Resume it there to read it again.",
+      "uninstalled": "The App is no longer installed on this account. Install it again, or remove it here.",
+      "other_account": "This id now belongs to another account, so it is not read. Remove it and add the right one.",
+      "error": "The last read of this account failed. The next read tries again."
+    },
+    "repos": {
+      "one": "1 repository",
+      "other": "{count} repositories"
+    },
+    "reposIncomplete": {
+      "one": "1 repository so far, list not complete",
+      "other": "{count} repositories so far, list not complete"
+    },
+    "reposUnknown": "Repositories not read yet",
+    "addLabel": "Add an installation",
+    "addHint": "The number at the end of the installation's settings page address on GitHub (Settings, Applications, the App, Configure).",
+    "addPlaceholder": "Installation id",
+    "add": "Add",
+    "adding": "Adding...",
+    "added": "Installation {name} added",
+    "addFailed": "Could not add the installation: {reason}",
+    "installationIdInvalid": "The installation id is a number, from the end of the installation's address.",
+    "addLocked": "Adding an installation needs the App",
+    "addNeeds": "Set the App ID and its private key above first.",
+    "setUpApp": "Set up the App",
+    "remove": "Remove",
+    "removing": "Removing...",
+    "removeTitle": "Remove {name}?",
+    "removeMessage": "Adiutor stops reading {name} at once. Also uninstall the App from that account on GitHub (Settings, Applications, the App, Uninstall), so a database restored from before this removal cannot read it.",
+    "removed": "{name} removed. Uninstall the App from that account on GitHub too.",
+    "removeFailed": "Could not remove {name}: {reason}",
+    "pullTitle": "Reading GitHub",
+    "pullIntro": "GitHub is read every hour and when Adiutor starts. Read now reads it at once.",
+    "readNow": "Read now",
+    "reading": "Starting...",
+    "readStarted": "Reading GitHub now",
+    "readJoined": "A read is already running. Its result shows here when it ends.",
+    "readFailed": "Could not read GitHub: {reason}",
+    "readBlocked": {
+      "not_set_up": "Read now needs the App ID, its private key and at least one installation.",
+      "rate_limited": "GitHub asked to wait before the next read."
+    },
+    "rateLimited": "GitHub asked to wait until",
+    "dataState": "Security data",
+    "state": {
+      "off": "Not set up",
+      "not_read": "Not read yet",
+      "not_covered": {
+        "one": "1 project not current",
+        "other": "{count} projects not current"
+      },
+      "fine": "Current"
+    },
+    "oldestRead": "oldest good read",
+    "lastRead": "Last read",
+    "running": "Reading now",
+    "neverRead": "Not read yet",
+    "accountsRead": "Accounts read",
+    "reposRead": "Projects read",
+    "ofTotal": "{done} of {total}",
+    "families": "Alert types",
+    "familyCount": "{label}: {count}",
+    "failedAccounts": "Accounts not read",
+    "movedTitle": "Moved repositories",
+    "movedIntro": "GitHub knows these repositories under a new name. Update the project's repository.",
+    "movedFromTo": "{from} is now {to}",
+    "movedNow": "Now {to}",
+    "movedUpdate": "Update",
+    "movedSet": "{name}: repository set to {repo}",
+    "movedUndo": "Undo the repository change of {name}",
+    "movedFailed": "Could not update {name}: {reason}",
+    "notCoveredTitle": "Projects without current data",
+    "notCoveredIntro": "Their security data on the board may be missing or out of date.",
+    "reason": {
+      "no_access": "No access",
+      "stale": "Out of date",
+      "never": "Never read"
+    },
+    "lastGoodRead": "Last good read",
+    "neverGoodRead": "Never read from GitHub",
+    "withoutRepoTitle": "Projects without a repository",
+    "withoutRepoIntro": "GitHub is not read for them. Set the repository on the project's page."
   },
   "secretCheck": {
     "domains": "Private domains",

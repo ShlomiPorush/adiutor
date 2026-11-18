@@ -115,7 +115,8 @@ GITHUB_CID=""
 GITHUB_APP_ID=""
 github_stand_in() {
   local dir="$ADIUTOR_DATA_DIR/github"
-  mkdir -m 700 -p "$dir/public" "$dir/private"
+  mkdir -p "$dir/public" "$dir/private"
+  chmod 700 "$dir" "$dir/public" "$dir/private"
   GITHUB_APP_ID="$((100000 + RANDOM * 20 + RANDOM % 20))"
   # shellcheck disable=SC2016 # JavaScript, not shell
   docker run --rm --user "$(id -u):$(id -g)" -v "$dir:/keys" "$SKILL_NODE_IMAGE" node -e '

@@ -3888,6 +3888,22 @@ button.ui-item-title {
   color: var(--ui-muted);
   font-size: var(--ui-fs-meta);
 }
+/* Settings, GitHub: the pasted key reads as code; the stored key's state and its fingerprint on one line. */
+.ui-github-key {
+  font-family: var(--ui-mono);
+}
+.ui-github-key-state,
+.ui-github-fingerprint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  font-size: var(--ui-fs-meta);
+}
+.ui-github-fingerprint .ui-copy {
+  max-width: 100%;
+}
 
 /* ---------- Sign-in: other second factors, backup codes ---------- */
 

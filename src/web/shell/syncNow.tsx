@@ -18,6 +18,19 @@ import type { Tone } from "../ui/tags.tsx"
 /** Where the tray app comes from: the repository's releases (the installer is attached to each release). */
 export const TRAY_RELEASES_URL = "https://github.com/ShlomiPorush/adiutor/releases"
 
+/**
+ * What each part of a request's run came to. New syncs report T3 alone (the server reads GitHub itself, so their
+ * security part is `not_run`); an older sync's security part is still shown.
+ */
+export function requestParts(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  result: NonNullable<SyncRequest["result"]>,
+): string {
+  const t3 = t(`syncNow.part.${result.t3}`)
+  if (result.security === "not_run") return t("syncNow.partT3", { t3 })
+  return t("syncNow.parts", { t3, security: t(`syncNow.part.${result.security}`) })
+}
+
 /** One tone per request state (v3 FB-14): running is information, a finish says how it went. */
 export const REQUEST_TONE: Record<SyncRequestState, Tone> = {
   waiting: "info",
@@ -153,12 +166,7 @@ export function useSyncCardLines(): (view: SyncRequests | undefined) => CardLine
     const request = view?.request
     if (request) {
       const state = t(`syncNow.state.${request.state}`)
-      const parts = request.result
-        ? t("syncNow.parts", {
-            t3: t(`syncNow.part.${request.result.t3}`),
-            security: t(`syncNow.part.${request.result.security}`),
-          })
-        : null
+      const parts = request.result ? requestParts(t, request.result) : null
       const tone = REQUEST_TONE[request.state]
       lines.push({
         key: "request",

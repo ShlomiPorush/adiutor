@@ -23,7 +23,7 @@ import { Bell } from "./Bell.tsx"
 import { MoreSheet } from "./MoreSheet.tsx"
 import { NAV_KEY, useNavFolded } from "./navFold.ts"
 import { AccountMenu, NavToggle, nextTheme, SyncStatus, ThemeButton } from "./ShellTools.tsx"
-import { askedMessage } from "./syncNow.tsx"
+import { askedMessage, requestParts } from "./syncNow.tsx"
 
 const signOut = vi.fn<() => Promise<{ data: unknown; error: { status?: number; message?: string } | null }>>()
 vi.mock("../api/auth.ts", async (importOriginal) => {
@@ -408,11 +408,22 @@ describe("the account menu is a layer of ui/layers.ts (R4)", () => {
       <SyncStatus morning={undefined} failed={false} requests={{ request: finished, client, unavailable: null }} />,
     )
     const line = document.querySelector("[data-sync-line=request]")
-    const parts = translate("en", "syncNow.parts", { t3: "accepted", security: "not run" })
+    // A new sync reports T3 alone: the server reads GitHub, so its security part did not run and is not shown.
+    const parts = translate("en", "syncNow.partT3", { t3: "accepted" })
     expect(line?.textContent).toBe(`${en.syncNow.state.partial} · ${parts}`)
     expect(line?.getAttribute("title")).toBe(`${en.syncNow.state.partial}: ${parts}`)
     expect(line?.className).toBe("ui-text-warn")
     expect(button(en.syncNow.cancel)).toBeUndefined()
+  })
+
+  it("still shows the security part an older sync reports", () => {
+    const t = (key: string, vars?: Record<string, string | number>) => translate("en", key, vars)
+    expect(requestParts(t, { t3: "accepted", security: "failed" })).toBe(
+      translate("en", "syncNow.parts", { t3: "accepted", security: "failed" }),
+    )
+    expect(requestParts(t, { t3: "failed", security: "not_run" })).toBe(
+      translate("en", "syncNow.partT3", { t3: "failed" }),
+    )
   })
 })
 

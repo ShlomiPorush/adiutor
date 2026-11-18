@@ -1,5 +1,6 @@
-// One project: its stage (the owner sets it; agents only propose), its near goal with progress,
-// "where we are", its items grouped by status, where its security data comes from, and deleting it.
+// One project: its stage (the owner sets it; agents only propose), its GitHub repository (which the server reads for
+// security data), its near goal with progress, "where we are", its items grouped by status, where its security data
+// comes from, and deleting it.
 
 import { useQueryClient } from "@tanstack/react-query"
 import { ChevronRight, Plus } from "lucide-react"
@@ -69,7 +70,7 @@ export function ProjectPage() {
 function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refreshFailed: boolean }) {
   const project = detail.project
   const { t, tc } = useI18n()
-  const [editing, setEditing] = useState<"goal" | "where" | "add" | null>(null)
+  const [editing, setEditing] = useState<"goal" | "where" | "repo" | "add" | null>(null)
   const openItems = detail.items.filter((item) => !(CLOSED_STATUSES as readonly string[]).includes(item.status))
   const closedItems = detail.items.filter((item) => (CLOSED_STATUSES as readonly string[]).includes(item.status))
   const openProposals = detail.proposals
@@ -101,6 +102,9 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
                   ) : null}
                 </>
               ) : null}
+              <button type="button" className="ui-link-btn" onClick={() => setEditing("repo")}>
+                {project.githubRepo ? t("project.changeRepo") : t("project.setRepo")}
+              </button>
             </p>
           }
           actions={
@@ -190,6 +194,7 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
         <GoalDialog project={project} goal={detail.goal?.text ?? null} onClose={() => setEditing(null)} />
       ) : null}
       {editing === "where" ? <WhereDialog project={project} onClose={() => setEditing(null)} /> : null}
+      {editing === "repo" ? <RepoDialog project={project} onClose={() => setEditing(null)} /> : null}
       {editing === "add" ? <QuickAdd projectId={project.id} onClose={() => setEditing(null)} /> : null}
     </div>
   )
@@ -283,6 +288,8 @@ function TextDialog({
   multiline,
   allowEmpty,
   maxLength,
+  ltr = false,
+  validate,
   onSave,
   onClose,
 }: {
@@ -293,6 +300,10 @@ function TextDialog({
   multiline: boolean
   allowEmpty: boolean
   maxLength: number
+  /** A value that reads left to right in every language (a repository). */
+  ltr?: boolean
+  /** The page's own check of the trimmed value, before it is sent: the problem, or null. */
+  validate?: (value: string) => string | null
   onSave: (value: string) => Promise<void>
   onClose: () => void
 }) {
@@ -306,6 +317,11 @@ function TextDialog({
     event.preventDefault()
     if (!allowEmpty && !value.trim()) {
       setError(t("project.textRequired", { field: label }))
+      return
+    }
+    const problem = validate?.(value.trim()) ?? null
+    if (problem) {
+      setError(problem)
       return
     }
     setBusy(true)
@@ -361,7 +377,7 @@ function TextDialog({
             <input
               id={fieldId}
               className="ui-input"
-              dir="auto"
+              dir={ltr ? "ltr" : "auto"}
               maxLength={maxLength}
               value={value}
               autoComplete="off"
@@ -397,6 +413,49 @@ function GoalDialog({ project, goal, onClose }: { project: Project; goal: string
       onSave={async (text) => {
         await changed(await api.updateProject(project.id, { goal: text }))
         showToast(t("project.goalSaved", { name: project.name }), "success")
+      }}
+    />
+  )
+}
+
+/** owner/name, as the server takes it. */
+const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+
+/** A repository as owner/name, also from its GitHub address (https://github.com/owner/name, with or without .git). */
+export function repoOf(typed: string): string {
+  return typed
+    .trim()
+    .replace(/^(https?:\/\/)?(www\.)?github\.com\//i, "")
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "")
+}
+
+function RepoDialog({ project, onClose }: { project: Project; onClose: () => void }) {
+  const { t } = useI18n()
+  const changed = useProjectChanged(project.id)
+  const queryClient = useQueryClient()
+  return (
+    <TextDialog
+      title={project.githubRepo ? t("project.changeRepo") : t("project.setRepo")}
+      label={t("project.repoLabel")}
+      hint={t("project.repoHint")}
+      initial={project.githubRepo ?? ""}
+      multiline={false}
+      allowEmpty
+      maxLength={200}
+      ltr
+      validate={(value) => (value === "" || REPO.test(repoOf(value)) ? null : t("project.repoInvalid"))}
+      onClose={onClose}
+      onSave={async (text) => {
+        const repo = repoOf(text)
+        await changed(await api.updateProject(project.id, { githubRepo: repo || null }))
+        await queryClient.invalidateQueries({ queryKey: qk.github })
+        showToast(
+          repo
+            ? t("project.repoSaved", { name: project.name, repo })
+            : t("project.repoRemoved", { name: project.name }),
+          "success",
+        )
       }}
     />
   )

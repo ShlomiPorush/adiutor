@@ -322,6 +322,7 @@
       "cancelled": "בוטל"
     },
     "parts": "T3: {t3}, אבטחה: {security}",
+    "partT3": "T3: {t3}",
     "part": {
       "accepted": "התקבל",
       "partial": "חלקי",
@@ -359,6 +360,7 @@
     "someFailed": "הבדיקה האחרונה נכשלה. זה מה שהיא הראתה לפני כן.",
     "allClear": "שום דבר לא מחכה לך כרגע.",
     "allClearHint": "פריטים שמחכים לך, הצעות שלב וממצאי אבטחה קריטיים יופיעו כאן.",
+    "githubNotCurrent": "נתוני האבטחה מ-GitHub אינם עדכניים, ולכן ייתכן שחסרים ממצאים קריטיים. בלוח מוסבר למה.",
     "openMorning": "פתיחת הסקירה"
   },
   "proposal": {
@@ -424,7 +426,17 @@
     "projectsTitle": "פרויקטים",
     "projectsEmpty": "לאף פרויקט אין פריטים פתוחים.",
     "projectsEmptyHint": "פרויקט מופיע כאן כשיש לו פריט פתוח.",
-    "allProjects": "כל הפרויקטים"
+    "allProjects": "כל הפרויקטים",
+    "githubOff": "GitHub לא מוגדר, ולכן נתוני האבטחה לא נבדקים.",
+    "githubNotRead": "GitHub עוד לא נקרא, ולכן נתוני האבטחה לא נבדקים.",
+    "githubNotCovered": {
+      "one": "לפרויקט אחד אין נתונים עדכניים מ-GitHub.",
+      "other": "ל-{count} פרויקטים אין נתונים עדכניים מ-GitHub."
+    },
+    "githubOldest": "הקריאה התקינה הישנה ביותר:",
+    "githubNeverRead": "הם מעולם לא נקראו.",
+    "githubSetUp": "הגדרת GitHub",
+    "githubOpen": "להגדרות GitHub"
   },
   "security": {
     "critical": {
@@ -555,7 +567,14 @@
     "deleteForever": "הסנכרון לא ייצור אותו מחדש. אי אפשר לבטל את זה.",
     "deleted": "הפרויקט {name} נמחק",
     "deleteConflict": "עדיין יש בו פריטים או הערות. קודם צריך להעביר או למחוק אותם",
-    "deleteFailed": "לא הצלחתי למחוק את {name}: {reason}"
+    "deleteFailed": "לא הצלחתי למחוק את {name}: {reason}",
+    "setRepo": "הגדרת מאגר GitHub",
+    "changeRepo": "שינוי המאגר",
+    "repoLabel": "מאגר GitHub",
+    "repoHint": "בצורה owner/name, או הכתובת של המאגר ב-GitHub. השרת קורא ממנו התראות אבטחה ו-Issues פתוחים. אפשר להשאיר ריק.",
+    "repoInvalid": "יש לכתוב את המאגר בצורה owner/name, למשל example-owner/lantern.",
+    "repoSaved": "{name}: המאגר הוגדר ל-{repo}",
+    "repoRemoved": "{name}: המאגר הוסר"
   },
   "item": {
     "title": "פריט",
@@ -837,7 +856,11 @@
       },
       "status": {
         "title": "מצב",
-        "hint": "סנכרון ה-T3 האחרון ומתי הגיעו נתוני האבטחה. לקריאה בלבד: הסנכרון רץ במחשב שלך."
+        "hint": "הסנכרון האחרון של T3, ומתי נתוני האבטחה נקראו לאחרונה מ-GitHub. לקריאה בלבד: הסנכרון רץ במחשב שלך, ו-GitHub נקרא בשרת."
+      },
+      "github": {
+        "title": "GitHub",
+        "hint": "השרת קורא בעצמו מ-GitHub התראות אבטחה ומספרי Issues פתוחים, כל שעה, דרך ה-GitHub App שלך: קריאה בלבד, ורק מההתקנות שברשימה כאן. \"סנכרון עכשיו\" נשאר הסנכרון של T3 במחשב שלך."
       },
       "suppressions": {
         "title": "השתקות",
@@ -880,7 +903,8 @@
     "saveInvalid": "ההגדרות לא נשמרו: {reason}",
     "lastSync": "סנכרון T3 מוצלח אחרון",
     "lastOutcome": "ריצת סנכרון T3 אחרונה",
-    "securityAsOf": "נתוני אבטחה סונכרנו",
+    "securityAsOf": "נתוני אבטחה נקראו מ-GitHub",
+    "securityWhere": "הגדרות GitHub",
     "outcome": {
       "succeeded": "הצליחה",
       "partial": "נכשלה בחלקה",
@@ -1284,6 +1308,140 @@
     "testLocked": "הודעת הבדיקה ונתוני הבוט אינם זמינים",
     "needsTelegram": "טלגרם עדיין לא פעיל. כדי להפעיל אותו, מגדירים את טוקן הבוט ואת מזהה הצ׳אט בהגדרות ← שילובים ← טלגרם ← בוט, ושומרים.",
     "setUp": "הגדרת הבוט"
+  },
+  "githubSettings": {
+    "loading": "טוען את הגדרות GitHub...",
+    "failed": "לא ניתן לטעון את הגדרות GitHub",
+    "refreshFailed": "לא ניתן לעדכן. מוצג מה שנטען לאחרונה.",
+    "conflict": "הגדרות GitHub השתנו בינתיים ונקראו מחדש. כדאי לבדוק אותן ולנסות שוב.",
+    "waitUntil": "GitHub ביקש להמתין עד {time}",
+    "appTitle": "GitHub App",
+    "appIntro": "יש לתת ל-App הרשאת קריאה להתראות Dependabot, להתראות code scanning, להתראות secret scanning ול-Issues, ולא יותר: התקנה שנותנת יותר לא נקראת לעולם.",
+    "appId": "מזהה App",
+    "appIdHint": "המספר בראש דף ההגדרות של ה-App ב-GitHub (Settings, Developer settings, GitHub Apps).",
+    "appIdInvalid": "מזהה ה-App הוא מספר, כפי ש-GitHub מציג אותו.",
+    "notSet": "לא מוגדר",
+    "key": "מפתח פרטי",
+    "keyHint": "יש ליצור מפתח פרטי בדף ההגדרות של ה-App ולהדביק כאן את כל קובץ ה-.pem. הוא נשמר מוצפן ולא מוצג שוב; אפשר להשוות את טביעת האצבע שלו לזו ש-GitHub מציג.",
+    "keyInvalid": "זה לא מפתח פרטי. יש להדביק את כל קובץ ה-.pem, מהשורה הראשונה ועד האחרונה.",
+    "keyPlaceholder": "הדבקת התוכן של קובץ ה-.pem",
+    "fingerprint": "טביעת אצבע",
+    "keyAccepted": "GitHub אישר",
+    "keyNotVerified": "עוד לא אומת",
+    "keyNotVerifiedHint": "GitHub לא ענה כשהמפתח נשמר. הקריאה הבאה תבדוק אותו.",
+    "keyStored": "שמור",
+    "keyReplace": "החלפה",
+    "keyRemove": "הסרה",
+    "keyKeep": "השארה",
+    "keyRemovedOnSave": "יוסר בשמירה",
+    "keyUnreadable": "לא ניתן לקרוא את המפתח השמור. יש להדביק אותו שוב.",
+    "keySetByEnv": "מוגדר בסביבה",
+    "keyEnvUnreadable": "לא ניתן לקרוא את המפתח שמוגדר בסביבה",
+    "savedNotVerified": "נשמר. GitHub לא ענה, ולכן המפתח עוד לא אומת: הקריאה הבאה תבדוק אותו.",
+    "installationsTitle": "התקנות",
+    "installationsIntro": "החשבונות שה-App מותקן בהם ושהשרת רשאי לקרוא. התקנה שלא מופיעה כאן לא נקראת לעולם.",
+    "installationsLocked": "מוגדר בסביבה ({variable}). את הרשימה משנים שם.",
+    "installationsEmpty": "עדיין אין התקנות.",
+    "installationsEmptyHint": "יש להתקין את ה-App בחשבון GitHub שלך, ואז להוסיף למטה את המזהה של ההתקנה.",
+    "installation": "התקנה",
+    "installationId": "מזהה",
+    "accountType": {
+      "User": "חשבון אישי",
+      "Organization": "ארגון"
+    },
+    "installationState": {
+      "usable": "נקראת",
+      "too_broad": "הרשאות רחבות מדי",
+      "suspended": "מושהית",
+      "uninstalled": "הוסרה",
+      "other_account": "חשבון אחר",
+      "error": "נכשלה",
+      "not_read": "עוד לא נקראה"
+    },
+    "installationHint": {
+      "too_broad": "היא נותנת יותר מהרשאת קריאה, ולכן לא נקראת. יש לצמצם את ההרשאות של ה-App לקריאה בלבד.",
+      "suspended": "מושהית ב-GitHub. יש לחדש אותה שם כדי שתיקרא שוב.",
+      "uninstalled": "ה-App כבר לא מותקן בחשבון הזה. אפשר להתקין אותו שוב, או להסיר אותו כאן.",
+      "other_account": "המזהה הזה שייך עכשיו לחשבון אחר, ולכן לא נקרא. יש להסיר אותו ולהוסיף את הנכון.",
+      "error": "הקריאה האחרונה של החשבון הזה נכשלה. הקריאה הבאה תנסה שוב."
+    },
+    "repos": {
+      "one": "מאגר אחד",
+      "other": "{count} מאגרים"
+    },
+    "reposIncomplete": {
+      "one": "מאגר אחד עד כה, הרשימה לא מלאה",
+      "other": "{count} מאגרים עד כה, הרשימה לא מלאה"
+    },
+    "reposUnknown": "המאגרים עוד לא נקראו",
+    "addLabel": "הוספת התקנה",
+    "addHint": "המספר בסוף הכתובת של דף ההגדרות של ההתקנה ב-GitHub (Settings, Applications, ה-App, Configure).",
+    "addPlaceholder": "מזהה התקנה",
+    "add": "הוספה",
+    "adding": "מוסיף...",
+    "added": "ההתקנה {name} נוספה",
+    "addFailed": "לא ניתן להוסיף את ההתקנה: {reason}",
+    "installationIdInvalid": "מזהה ההתקנה הוא מספר, מסוף הכתובת של ההתקנה.",
+    "addLocked": "הוספת התקנה דורשת את ה-App",
+    "addNeeds": "קודם יש להגדיר למעלה את מזהה ה-App ואת המפתח הפרטי שלו.",
+    "setUpApp": "הגדרת ה-App",
+    "remove": "הסרה",
+    "removing": "מסיר...",
+    "removeTitle": "להסיר את {name}?",
+    "removeMessage": "Adiutor מפסיק לקרוא את {name} מיד. כדאי גם להסיר את ה-App מהחשבון הזה ב-GitHub (Settings, Applications, ה-App, Uninstall), כדי שמסד נתונים ששוחזר מלפני ההסרה לא יוכל לקרוא אותו.",
+    "removed": "{name} הוסר. כדאי להסיר את ה-App מהחשבון הזה גם ב-GitHub.",
+    "removeFailed": "לא ניתן להסיר את {name}: {reason}",
+    "pullTitle": "קריאת GitHub",
+    "pullIntro": "GitHub נקרא כל שעה וכש-Adiutor עולה. \"קריאה עכשיו\" קוראת אותו מיד.",
+    "readNow": "קריאה עכשיו",
+    "reading": "מתחיל...",
+    "readStarted": "GitHub נקרא עכשיו",
+    "readJoined": "קריאה כבר רצה. התוצאה שלה תופיע כאן כשתסתיים.",
+    "readFailed": "לא ניתן לקרוא את GitHub: {reason}",
+    "readBlocked": {
+      "not_set_up": "\"קריאה עכשיו\" דורשת מזהה App, את המפתח הפרטי שלו והתקנה אחת לפחות.",
+      "rate_limited": "GitHub ביקש להמתין לפני הקריאה הבאה."
+    },
+    "rateLimited": "GitHub ביקש להמתין עד",
+    "dataState": "נתוני אבטחה",
+    "state": {
+      "off": "לא מוגדר",
+      "not_read": "עוד לא נקרא",
+      "not_covered": {
+        "one": "פרויקט אחד לא עדכני",
+        "other": "{count} פרויקטים לא עדכניים"
+      },
+      "fine": "עדכניים"
+    },
+    "oldestRead": "הקריאה התקינה הישנה ביותר",
+    "lastRead": "קריאה אחרונה",
+    "running": "נקרא עכשיו",
+    "neverRead": "עוד לא נקרא",
+    "accountsRead": "חשבונות שנקראו",
+    "reposRead": "פרויקטים שנקראו",
+    "ofTotal": "{done} מתוך {total}",
+    "families": "סוגי התראות",
+    "familyCount": "{label}: {count}",
+    "failedAccounts": "חשבונות שלא נקראו",
+    "movedTitle": "מאגרים שעברו",
+    "movedIntro": "GitHub מכיר את המאגרים האלה בשם חדש. יש לעדכן את המאגר של הפרויקט.",
+    "movedFromTo": "{from} נקרא עכשיו {to}",
+    "movedNow": "עכשיו {to}",
+    "movedUpdate": "עדכון",
+    "movedSet": "{name}: המאגר הוגדר ל-{repo}",
+    "movedUndo": "ביטול שינוי המאגר של {name}",
+    "movedFailed": "לא ניתן לעדכן את {name}: {reason}",
+    "notCoveredTitle": "פרויקטים בלי נתונים עדכניים",
+    "notCoveredIntro": "נתוני האבטחה שלהם בלוח עלולים לחסור או להיות לא עדכניים.",
+    "reason": {
+      "no_access": "אין גישה",
+      "stale": "לא עדכני",
+      "never": "לא נקרא"
+    },
+    "lastGoodRead": "קריאה תקינה אחרונה",
+    "neverGoodRead": "מעולם לא נקרא מ-GitHub",
+    "withoutRepoTitle": "פרויקטים בלי מאגר",
+    "withoutRepoIntro": "GitHub לא נקרא עבורם. את המאגר מגדירים בדף הפרויקט."
   },
   "secretCheck": {
     "domains": "דומיינים פרטיים",

@@ -109,6 +109,7 @@ const MORNING: Morning = {
   ],
   inboxCount: 0,
   sync: { connected: true, lastSuccessAt: AT, stale: false, lastPartialAt: null, securityLastSuccessAt: AT },
+  github: { state: "fine", notCovered: 0, oldestGoodReadAt: null },
 }
 
 let morning: Morning = MORNING
@@ -246,6 +247,62 @@ describe("the morning view's columns", () => {
         /(^|[\s;])(order|grid-row|grid-area|direction)\s*:|display:\s*contents/,
       )
     }
+  })
+})
+
+describe("the security panel and GitHub (never an all clear while GitHub is not fine)", () => {
+  const line = () => document.querySelector('#security [data-testid="github-line"]')
+  /** The text without the isolates that wrap each value (the i18n fill). */
+  const plain = (text: string | null | undefined) => (text ?? "").replace(/\p{Cf}/gu, "")
+  const allClear = () => document.querySelector("#security")?.textContent?.includes(en.morning.securityEmpty)
+
+  it("fine with no finding: the all clear, and no GitHub line", async () => {
+    morning = { ...MORNING, security: [] }
+    await render()
+    expect(line()).toBeNull()
+    expect(allClear()).toBe(true)
+  })
+
+  it("off with no finding: says GitHub is not set up, links to its settings, and no all clear", async () => {
+    morning = { ...MORNING, security: [], github: { state: "off", notCovered: 0, oldestGoodReadAt: null } }
+    await render()
+    expect(line()?.textContent).toContain(en.morning.githubOff)
+    expect(line()?.querySelector("a")?.getAttribute("href")).toBe("/settings/github")
+    expect(line()?.querySelector("a")?.textContent).toBe(en.morning.githubSetUp)
+    expect(allClear()).toBe(false)
+  })
+
+  it("not read yet: says so, with no all clear", async () => {
+    morning = { ...MORNING, security: [], github: { state: "not_read", notCovered: 0, oldestGoodReadAt: null } }
+    await render()
+    expect(line()?.textContent).toContain(en.morning.githubNotRead)
+    expect(line()?.querySelector("a")?.getAttribute("href")).toBe("/settings/github")
+    expect(allClear()).toBe(false)
+  })
+
+  it("not covered: counts the projects, gives the oldest good read, and keeps the findings", async () => {
+    morning = {
+      ...MORNING,
+      github: { state: "not_covered", notCovered: 2, oldestGoodReadAt: "2026-11-01T05:00:00.000Z" },
+    }
+    await render()
+    expect(plain(line()?.textContent)).toContain(en.morning.githubNotCovered.other.replace("{count}", "2"))
+    expect(line()?.textContent).toContain(en.morning.githubOldest)
+    expect(line()?.querySelector("time")).toBeTruthy()
+    expect(document.querySelectorAll("#security .ui-alert[data-row-open]")).toHaveLength(1)
+    expect(allClear()).toBe(false)
+  })
+
+  it("not covered, never read: says they were never read", async () => {
+    morning = {
+      ...MORNING,
+      security: [],
+      github: { state: "not_covered", notCovered: 1, oldestGoodReadAt: null },
+    }
+    await render()
+    expect(line()?.textContent).toContain(en.morning.githubNotCovered.one)
+    expect(line()?.textContent).toContain(en.morning.githubNeverRead)
+    expect(allClear()).toBe(false)
   })
 })
 

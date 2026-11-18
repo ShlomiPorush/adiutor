@@ -1,14 +1,16 @@
-// Settings, Sync: Status (the last T3 sync, its outcome and when security data came in; read only, the sync runs on
-// the owner's PC) as a facts grid (FS-8), and Suppressions (what the sync may not recreate): each removable after a
+// Settings, Sync: Status (the last T3 sync, its outcome, and when security data was last read from GitHub, which the
+// server does itself, Settings, GitHub; read only, the sync runs on the owner's PC) as a facts grid (FS-8), and Suppressions (what the sync may not recreate): each removable after a
 // question, and Remove all at the end of the list's head (S-12), which asks first and names the count (DS-20, FW-8).
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
+import { Link } from "react-router"
 import { api, qk } from "../../api/endpoints.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import {
   CancelRequestButton,
   REQUEST_TONE,
+  requestParts,
   SyncNowButton,
   TRAY_RELEASES_URL,
   useSyncNowBlocked,
@@ -55,6 +57,9 @@ export function StatusSection() {
             ) : (
               t("security.asOfUnknown")
             )}
+            <Link to="/settings/github" className="ui-link">
+              {t("settings.securityWhere")}
+            </Link>
           </Fact>
         </Facts>
       </Group>
@@ -139,14 +144,7 @@ function ComputerGroup() {
                 <span className="ui-muted">
                   {t("syncNow.requestedAt")} <Time value={request.requestedAt} />
                 </span>
-                {request.result ? (
-                  <span>
-                    {t("syncNow.parts", {
-                      t3: t(`syncNow.part.${request.result.t3}`),
-                      security: t(`syncNow.part.${request.result.security}`),
-                    })}
-                  </span>
-                ) : null}
+                {request.result ? <span>{requestParts(t, request.result)}</span> : null}
                 {request.state === "waiting" ? <CancelRequestButton request={request} /> : null}
               </>
             ) : (

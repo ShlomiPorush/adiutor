@@ -8,7 +8,7 @@ export const SETTINGS_GROUPS = [
   { id: "general", sections: ["general"] },
   { id: "security", sections: ["agents", "secret-check"] },
   { id: "integrations", sections: ["telegram"] },
-  { id: "sync", sections: ["status", "suppressions"] },
+  { id: "sync", sections: ["status", "github", "suppressions"] },
 ] as const
 
 export type SettingsSection = (typeof SETTINGS_GROUPS)[number]["sections"][number]
@@ -40,6 +40,9 @@ export type DraftField =
   /** Agent access by approval (saved to /api/v1/agents/settings, only where it is mounted). */
   | "agentsEnabled"
   | "agentIdleDays"
+  /** The GitHub App (saved to /api/v1/github/app with the generation of the view it was based on). */
+  | "githubAppId"
+  | "githubKey"
 
 export const FIELD_SECTION: Record<DraftField, SettingsSection> = {
   language: "general",
@@ -53,6 +56,8 @@ export const FIELD_SECTION: Record<DraftField, SettingsSection> = {
   privateDomains: "secret-check",
   agentsEnabled: "agents",
   agentIdleDays: "agents",
+  githubAppId: "github",
+  githubKey: "github",
 }
 
 /** The draft field a key of the save request comes from. */
@@ -73,6 +78,8 @@ const VARIABLE_FIELD: Record<string, DraftField> = {
   ADIUTOR_TELEGRAM_BOT_TOKEN: "botToken",
   ADIUTOR_TELEGRAM_CHAT_ID: "chatId",
   ADIUTOR_PRIVATE_DOMAINS: "privateDomains",
+  ADIUTOR_GITHUB_APP_ID: "githubAppId",
+  ADIUTOR_GITHUB_PRIVATE_KEY: "githubKey",
 }
 
 /** The sections that hold a change: a dot beside each in the sidebar and the picker. */
@@ -97,5 +104,23 @@ export function refusedField(code: string, details: Record<string, unknown>): Dr
     const head = String((issue as { path?: unknown } | null)?.path ?? "").split(".")[0]
     if (isPatchKey(head)) return PATCH_FIELD[head]
   }
+  return null
+}
+
+/** The GitHub field a refused save of the App names (PATCH /github/app). */
+export function refusedGitHubField(code: string, details: Record<string, unknown>): DraftField | null {
+  if (code === "setting_locked") return refusedField(code, details)
+  if (code === "github_key_invalid" || code === "github_key_required") return "githubKey"
+  // GitHub refused the pair: the key is what the owner pastes again.
+  if (code === "github_key_rejected" || code === "github_app_mismatch" || code === "github_unreachable")
+    return "githubKey"
+  if (code !== "validation_failed") return null
+  const issues = Array.isArray(details.issues) ? details.issues : []
+  const named = [
+    details.field,
+    ...issues.map((issue) => String((issue as { path?: unknown } | null)?.path ?? "").split(".")[0]),
+  ]
+  if (named.includes("appId")) return "githubAppId"
+  if (named.includes("privateKey")) return "githubKey"
   return null
 }
