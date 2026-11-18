@@ -1577,6 +1577,7 @@
       "version": "גרסה {version}",
       "addressFirst": "צריך להזין קודם את הכתובת של Adiutor.",
       "sync": "סנכרון",
+      "noOverview": "בלי נתוני אבטחה",
       "lockedEnvironment": "נקבע על ידי הסביבה ({name}); אפשר לשנות אותו שם.",
       "lockedEnvFile": "נקבע בקובץ sync.env ({name}); אפשר לשנות אותו שם.",
       "urlFromConnect": "הכתובת הזו נשמרה ב-sync.env בזמן החיבור. כתובת חדשה תיכנס לתוקף כשתתחבר.",

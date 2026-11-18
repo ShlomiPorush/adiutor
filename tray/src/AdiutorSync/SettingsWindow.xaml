@@ -5,10 +5,68 @@
         WindowStartupLocation="CenterScreen" ResizeMode="CanResize">
   <Window.Resources>
     <Style x:Key="Section" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="20" />
+      <Setter Property="FontSize" Value="18" />
       <Setter Property="FontWeight" Value="SemiBold" />
-      <Setter Property="Margin" Value="0,16,0,8" />
+      <Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+    </Style>
+    <Style x:Key="HeaderState" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+    </Style>
+    <!-- Each area of the window is a card: closed, with its state in its header; open when the owner clicks the header,
+         or when it needs the owner (SettingsSections). The Fluent theme has no Expander style of its own (its classic
+         template has a small round button and a header that does not stretch), so the card is drawn here. -->
+    <Style x:Key="Area" TargetType="Expander">
+      <Setter Property="Margin" Value="0,14,0,0" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Expander">
+            <Border CornerRadius="8" BorderThickness="1"
+                    Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+              <DockPanel>
+                <ToggleButton x:Name="HeaderSite" DockPanel.Dock="Top" Content="{TemplateBinding Header}" Cursor="Hand"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                              IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                  <ToggleButton.Template>
+                    <ControlTemplate TargetType="ToggleButton">
+                      <Border x:Name="HeaderBackground" Background="Transparent" CornerRadius="7" Padding="18,14">
+                        <DockPanel>
+                          <Path x:Name="Chevron" DockPanel.Dock="Right" Data="M 0,0 L 5,5 L 10,0" StrokeThickness="1.5"
+                                Stroke="{DynamicResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"
+                                Margin="14,0,0,0" RenderTransformOrigin="0.5,0.5" />
+                          <ContentPresenter VerticalAlignment="Center" />
+                        </DockPanel>
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="HeaderBackground" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                          <Setter TargetName="Chevron" Property="RenderTransform">
+                            <Setter.Value>
+                              <RotateTransform Angle="180" />
+                            </Setter.Value>
+                          </Setter>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </ToggleButton.Template>
+                </ToggleButton>
+                <ContentPresenter x:Name="ExpandSite" Margin="18,0,18,14" Visibility="Collapsed" />
+              </DockPanel>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsExpanded" Value="True">
+                <Setter TargetName="ExpandSite" Property="Visibility" Value="Visible" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
     <Style x:Key="Label" TargetType="TextBlock">
       <Setter Property="FontSize" Value="14" />
@@ -20,13 +78,6 @@
       <Setter Property="Margin" Value="0,8,0,0" />
       <Setter Property="TextWrapping" Value="Wrap" />
       <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
-    </Style>
-    <Style x:Key="Card" TargetType="Border">
-      <Setter Property="CornerRadius" Value="8" />
-      <Setter Property="Padding" Value="18,4,18,14" />
-      <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}" />
-      <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
     </Style>
   </Window.Resources>
   <DockPanel>
@@ -45,23 +96,25 @@
         <TextBlock x:Name="Heading" FontSize="26" FontWeight="SemiBold" Margin="0,10,0,0"
                    Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
 
-        <TextBlock x:Name="AdiutorHeading" Style="{StaticResource Section}" />
-        <Border Style="{StaticResource Card}">
-          <StackPanel>
+        <Expander x:Name="AdiutorSection" Style="{StaticResource Area}">
+          <Expander.Header>
+            <DockPanel LastChildFill="True">
+              <TextBlock x:Name="AdiutorHeading" DockPanel.Dock="Left" Style="{StaticResource Section}" Margin="0,0,16,0" />
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Ellipse x:Name="AdiutorDot" Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="AdiutorState" Style="{StaticResource HeaderState}" />
+              </StackPanel>
+            </DockPanel>
+          </Expander.Header>
+          <StackPanel Margin="0,0,0,4">
             <TextBlock x:Name="AdiutorUrlLabel" Style="{StaticResource Label}" />
             <TextBox x:Name="AdiutorUrl" FlowDirection="LeftToRight" FontSize="14" />
             <TextBlock x:Name="AdiutorUrlNote" Style="{StaticResource Note}" Visibility="Collapsed" />
-            <DockPanel Margin="0,14,0,0">
-              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button x:Name="AdiutorConnect" MinWidth="96" Padding="14,6" Click="AdiutorConnect_Click" />
-                <Button x:Name="AdiutorDisconnect" MinWidth="96" Padding="14,6" Margin="8,0,0,0" Click="AdiutorDisconnect_Click" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Ellipse x:Name="AdiutorDot" Width="10" Height="10" Margin="0,0,8,0" />
-                <TextBlock x:Name="AdiutorState" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
-                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
-              </StackPanel>
-            </DockPanel>
+            <TextBlock x:Name="AdiutorPending" Style="{StaticResource Note}" Visibility="Collapsed" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+              <Button x:Name="AdiutorConnect" MinWidth="96" Padding="14,6" Click="AdiutorConnect_Click" />
+              <Button x:Name="AdiutorDisconnect" MinWidth="96" Padding="14,6" Margin="8,0,0,0" Click="AdiutorDisconnect_Click" />
+            </StackPanel>
             <Border x:Name="ApprovalBox" Visibility="Collapsed" Margin="0,14,0,0" CornerRadius="6" Padding="14,10"
                     Background="{DynamicResource SubtleFillColorSecondaryBrush}">
               <StackPanel>
@@ -78,35 +131,42 @@
             </Border>
             <TextBlock x:Name="AdiutorMessage" Style="{StaticResource Note}" />
           </StackPanel>
-        </Border>
+        </Expander>
 
-        <TextBlock x:Name="T3Heading" Style="{StaticResource Section}" />
-        <Border Style="{StaticResource Card}">
-          <StackPanel>
+        <Expander x:Name="T3Section" Style="{StaticResource Area}">
+          <Expander.Header>
+            <DockPanel LastChildFill="True">
+              <TextBlock x:Name="T3Heading" DockPanel.Dock="Left" Style="{StaticResource Section}" Margin="0,0,16,0" />
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Ellipse x:Name="T3Dot" Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="T3State" Style="{StaticResource HeaderState}" />
+              </StackPanel>
+            </DockPanel>
+          </Expander.Header>
+          <StackPanel Margin="0,0,0,4">
             <TextBlock x:Name="T3CliLabel" Style="{StaticResource Label}" />
             <TextBox x:Name="T3Cli" FlowDirection="LeftToRight" FontSize="14" />
             <TextBlock x:Name="T3CliNote" Style="{StaticResource Note}" Visibility="Collapsed" />
             <TextBlock x:Name="T3UrlLabel" Style="{StaticResource Label}" />
             <TextBox x:Name="T3Url" FlowDirection="LeftToRight" FontSize="14" />
             <TextBlock x:Name="T3UrlNote" Style="{StaticResource Note}" Visibility="Collapsed" />
-            <DockPanel Margin="0,14,0,0">
-              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button x:Name="T3Connect" MinWidth="96" Padding="14,6" Click="T3Connect_Click" />
-                <Button x:Name="T3Disconnect" MinWidth="96" Padding="14,6" Margin="8,0,0,0" Click="T3Disconnect_Click" />
-              </StackPanel>
-              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Ellipse x:Name="T3Dot" Width="10" Height="10" Margin="0,0,8,0" />
-                <TextBlock x:Name="T3State" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
-                           Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
-              </StackPanel>
-            </DockPanel>
+            <TextBlock x:Name="T3Pending" Style="{StaticResource Note}" Visibility="Collapsed" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+              <Button x:Name="T3Connect" MinWidth="96" Padding="14,6" Click="T3Connect_Click" />
+              <Button x:Name="T3Disconnect" MinWidth="96" Padding="14,6" Margin="8,0,0,0" Click="T3Disconnect_Click" />
+            </StackPanel>
             <TextBlock x:Name="T3Message" Style="{StaticResource Note}" />
           </StackPanel>
-        </Border>
+        </Expander>
 
-        <TextBlock x:Name="SyncHeading" Style="{StaticResource Section}" />
-        <Border Style="{StaticResource Card}">
-          <StackPanel>
+        <Expander x:Name="SyncSection" Style="{StaticResource Area}">
+          <Expander.Header>
+            <DockPanel LastChildFill="True">
+              <TextBlock x:Name="SyncHeading" DockPanel.Dock="Left" Style="{StaticResource Section}" Margin="0,0,16,0" />
+              <TextBlock x:Name="SyncSummary" Style="{StaticResource HeaderState}" HorizontalAlignment="Right" />
+            </DockPanel>
+          </Expander.Header>
+          <StackPanel Margin="0,0,0,4">
             <TextBlock x:Name="OverviewLabel" Style="{StaticResource Label}" />
             <DockPanel>
               <Button x:Name="BrowseOverview" DockPanel.Dock="Right" Padding="12,5" Margin="8,0,0,0" Click="BrowseOverview_Click" />
@@ -120,7 +180,7 @@
             <TextBlock x:Name="LanguageLabel" Style="{StaticResource Label}" />
             <ComboBox x:Name="LanguageBox" MinWidth="180" HorizontalAlignment="Left" />
           </StackPanel>
-        </Border>
+        </Expander>
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - **A new mark**: a dot with a small satellite on its orbit replaces the ring and dot, in the app's top bar, on the sign-in pages and as the browser tab's icon. The tray app shows it too: in the notification area on a disc whose colour gives the sync's state, and on its program, Start menu shortcut, windows and installer.
+- **The tray app's settings open by area**: Adiutor, T3 and Sync each start closed, with the state in the header (connected or not, Adiutor's address, the schedule and whether security data is sent), and open with a click. An area opens on its own when its connection is missing or has ended, its disconnect is not finished, or it has something to tell you.
 - **The tray app is visible once installed**: on Windows 11 its icon shows on the taskbar instead of among the hidden icons (a choice you made in the taskbar settings stays), and the end of the install opens its panel.
 
 ## [0.3.0] - 2026-11-18
