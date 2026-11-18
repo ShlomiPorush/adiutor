@@ -8,9 +8,14 @@ namespace AdiutorSync.Core;
 /// </summary>
 public static class SettingsSections
 {
-    /** Whether a connection's section needs the owner. An unknown state (no status read yet) does not. */
-    public static bool NeedsAttention(ConnectionState? state, bool revocationPending) =>
-        state is ConnectionState.NotConnected or ConnectionState.Ended || revocationPending;
+    /**
+     * Why a connection's section needs the owner, or null when it does not. An unknown state (no status read yet) does
+     * not. Each different reason opens the section again (ended, then a disconnect pending), so none stays hidden.
+     */
+    public static string? Attention(ConnectionState? state, bool revocationPending) =>
+        state is ConnectionState.NotConnected or ConnectionState.Ended || revocationPending
+            ? $"{state}:{revocationPending}"
+            : null;
 
     /** The Sync section's header: the schedule, and that no security data is sent without the overview folder. */
     public static string SyncSummary(Texts t, int hours, string? overviewDir)
@@ -25,18 +30,18 @@ public static class SettingsSections
 }
 
 /// <summary>
-/// When a section opens on its own: once, at the moment it starts needing the owner, so a section the owner closed
-/// stays closed until its state changes again.
+/// When a section opens on its own: once for each new reason it needs the owner, so a section the owner closed stays
+/// closed while the same reason holds.
 /// </summary>
 public sealed class SectionAttention
 {
-    private bool _needed;
+    private string? _reason;
 
-    /** True when the section should open now: it needs the owner, and did not the last time. */
-    public bool Update(bool needed)
+    /** True when the section should open now: it needs the owner for a reason it did not have the last time. */
+    public bool Update(string? reason)
     {
-        var open = needed && !_needed;
-        _needed = needed;
+        var open = reason is not null && reason != _reason;
+        _reason = reason;
         return open;
     }
 }

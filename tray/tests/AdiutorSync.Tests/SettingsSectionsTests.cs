@@ -2,7 +2,7 @@ using AdiutorSync.Core;
 
 namespace AdiutorSync.Tests;
 
-// The settings window's areas: closed by default, open on their own when a connection needs the owner, once.
+// The settings window's areas: closed by default, open on their own when a connection needs the owner, once per reason.
 public class SettingsSectionsTests
 {
     [Theory]
@@ -13,24 +13,26 @@ public class SettingsSectionsTests
     [InlineData(ConnectionState.Ended, false, true)]
     [InlineData(ConnectionState.Connected, true, true)]
     public void A_connection_needs_the_owner_when_it_is_missing_ended_or_not_fully_disconnected(ConnectionState? state, bool revocationPending, bool expected) =>
-        Assert.Equal(expected, SettingsSections.NeedsAttention(state, revocationPending));
+        Assert.Equal(expected, SettingsSections.Attention(state, revocationPending) is not null);
 
     [Fact]
-    public void An_area_opens_once_when_it_starts_needing_the_owner()
+    public void An_area_opens_once_per_reason()
     {
         var attention = new SectionAttention();
-        Assert.False(attention.Update(false));
-        Assert.True(attention.Update(true));
-        // Still needed: the owner may have closed it, and it stays closed.
-        Assert.False(attention.Update(true));
-        Assert.False(attention.Update(false));
-        // Needed again later: it opens again.
-        Assert.True(attention.Update(true));
+        Assert.False(attention.Update(SettingsSections.Attention(ConnectionState.Connected, false)));
+        Assert.True(attention.Update(SettingsSections.Attention(ConnectionState.Ended, false)));
+        // The same reason again: the owner may have closed it, and it stays closed.
+        Assert.False(attention.Update(SettingsSections.Attention(ConnectionState.Ended, false)));
+        // A new reason while it still needs the owner (a disconnect now pending): it opens again.
+        Assert.True(attention.Update(SettingsSections.Attention(ConnectionState.Ended, true)));
+        Assert.True(attention.Update(SettingsSections.Attention(ConnectionState.NotConnected, false)));
+        Assert.False(attention.Update(SettingsSections.Attention(ConnectionState.Connected, false)));
+        Assert.True(attention.Update(SettingsSections.Attention(ConnectionState.Ended, false)));
     }
 
     [Fact]
     public void An_area_that_needs_the_owner_when_the_window_opens_starts_open() =>
-        Assert.True(new SectionAttention().Update(true));
+        Assert.True(new SectionAttention().Update(SettingsSections.Attention(ConnectionState.NotConnected, false)));
 
     [Fact]
     public void The_sync_header_names_the_schedule_and_a_missing_overview_folder()

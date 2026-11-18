@@ -30,6 +30,7 @@
               <DockPanel>
                 <ToggleButton x:Name="HeaderSite" DockPanel.Dock="Top" Content="{TemplateBinding Header}" Cursor="Hand"
                               HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                              AutomationProperties.Name="{Binding Path=(AutomationProperties.Name), RelativeSource={RelativeSource TemplatedParent}}"
                               IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
                   <ToggleButton.Template>
                     <ControlTemplate TargetType="ToggleButton">
@@ -100,10 +101,12 @@
           <Expander.Header>
             <DockPanel LastChildFill="True">
               <TextBlock x:Name="AdiutorHeading" DockPanel.Dock="Left" Style="{StaticResource Section}" Margin="0,0,16,0" />
-              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Ellipse x:Name="AdiutorDot" Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center" />
-                <TextBlock x:Name="AdiutorState" Style="{StaticResource HeaderState}" />
-              </StackPanel>
+              <DockPanel HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Ellipse x:Name="AdiutorDot" DockPanel.Dock="Left" Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="AdiutorState" DockPanel.Dock="Left" Style="{StaticResource HeaderState}" TextTrimming="None" />
+                <!-- Only the address gives way on a narrow window; the state always shows. -->
+                <TextBlock x:Name="AdiutorHost" Style="{StaticResource HeaderState}" Margin="6,0,0,0" />
+              </DockPanel>
             </DockPanel>
           </Expander.Header>
           <StackPanel Margin="0,0,0,4">
@@ -137,10 +140,10 @@
           <Expander.Header>
             <DockPanel LastChildFill="True">
               <TextBlock x:Name="T3Heading" DockPanel.Dock="Left" Style="{StaticResource Section}" Margin="0,0,16,0" />
-              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Ellipse x:Name="T3Dot" Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center" />
-                <TextBlock x:Name="T3State" Style="{StaticResource HeaderState}" />
-              </StackPanel>
+              <DockPanel HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Ellipse x:Name="T3Dot" DockPanel.Dock="Left" Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center" />
+                <TextBlock x:Name="T3State" DockPanel.Dock="Left" Style="{StaticResource HeaderState}" TextTrimming="None" />
+              </DockPanel>
             </DockPanel>
           </Expander.Header>
           <StackPanel Margin="0,0,0,4">

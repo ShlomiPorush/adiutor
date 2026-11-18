@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using AdiutorSync.Core;
@@ -52,6 +53,12 @@ internal sealed partial class SettingsWindow : Window
         Schedule.SelectionChanged += (_, _) => ShowSyncSummary();
         Overview.TextChanged += (_, _) => ShowSyncSummary();
         ShowSyncSummary();
+        // The approval code stays in view while the owner approves: the area does not close under it.
+        AdiutorSection.Collapsed += (_, _) =>
+        {
+            if (ApprovalBox.Visibility == Visibility.Visible)
+                AdiutorSection.IsExpanded = true;
+        };
         Closed += (_, _) => _command?.Cancel();
     }
 
@@ -203,12 +210,17 @@ internal sealed partial class SettingsWindow : Window
         var busy = _command is not null;
         var adiutor = snapshot.Status?.Adiutor;
         var t3 = snapshot.Status?.T3;
-        ShowState(AdiutorState, AdiutorDot, AdiutorPending, adiutor?.State, adiutor?.RevocationPending == true,
-            adiutor?.State == ConnectionState.Connected ? Addresses.Origin(adiutor.Url) : null);
-        ShowState(T3State, T3Dot, T3Pending, t3?.State, t3?.RevocationPending == true, null);
-        if (_adiutorAttention.Update(SettingsSections.NeedsAttention(adiutor?.State, adiutor?.RevocationPending == true)))
+        ShowState(AdiutorState, AdiutorDot, AdiutorPending, adiutor?.State, adiutor?.RevocationPending == true);
+        var host = adiutor?.State == ConnectionState.Connected && Addresses.Origin(adiutor.Url) is { } origin
+            ? "· " + TrayView.LeftToRight(new Uri(origin).Authority, t)
+            : "";
+        AdiutorHost.Text = host;
+        AutomationProperties.SetName(AdiutorSection, $"{AdiutorHeading.Text}, {AdiutorState.Text} {host}".TrimEnd());
+        ShowState(T3State, T3Dot, T3Pending, t3?.State, t3?.RevocationPending == true);
+        AutomationProperties.SetName(T3Section, $"{T3Heading.Text}, {T3State.Text}");
+        if (_adiutorAttention.Update(SettingsSections.Attention(adiutor?.State, adiutor?.RevocationPending == true)))
             AdiutorSection.IsExpanded = true;
-        if (_t3Attention.Update(SettingsSections.NeedsAttention(t3?.State, t3?.RevocationPending == true)))
+        if (_t3Attention.Update(SettingsSections.Attention(t3?.State, t3?.RevocationPending == true)))
             T3Section.IsExpanded = true;
         var engine = !snapshot.EngineMissing;
         AdiutorConnect.IsEnabled = engine && !busy && adiutor?.State != ConnectionState.Connected;
@@ -220,8 +232,8 @@ internal sealed partial class SettingsWindow : Window
             ApprovalBox.Visibility = Visibility.Collapsed;
     }
 
-    /** A connection's state in its area's header (with the address it is connected to), and an unfinished disconnect inside. */
-    private void ShowState(TextBlock text, System.Windows.Shapes.Ellipse dot, TextBlock pending, ConnectionState? state, bool revocationPending, string? address)
+    /** A connection's state in its area's header, and an unfinished disconnect inside. */
+    private void ShowState(TextBlock text, System.Windows.Shapes.Ellipse dot, TextBlock pending, ConnectionState? state, bool revocationPending)
     {
         var t = T;
         text.Text = state switch
@@ -230,7 +242,7 @@ internal sealed partial class SettingsWindow : Window
             ConnectionState.NotConnected => t["settings.notConnected"],
             ConnectionState.Ended => t["settings.ended"],
             _ => t["settings.unknown"],
-        } + (address is null ? "" : " · " + TrayView.LeftToRight(new Uri(address).Authority, t));
+        };
         pending.Text = revocationPending ? t["settings.revocationPending"] : "";
         pending.Visibility = revocationPending ? Visibility.Visible : Visibility.Collapsed;
         var colour = IconPainter.ColorOf(state switch
@@ -243,10 +255,13 @@ internal sealed partial class SettingsWindow : Window
     }
 
     /** The Sync area's header, from what its fields show now. */
-    private void ShowSyncSummary() =>
+    private void ShowSyncSummary()
+    {
         SyncSummary.Text = SettingsSections.SyncSummary(T, (Schedule.SelectedItem as ComboBoxItem)?.Tag as int? ?? TraySettings.DefaultScheduleHours, Overview.Text);
+        AutomationProperties.SetName(SyncSection, $"{SyncHeading.Text}, {SyncSummary.Text}");
+    }
 
-    /** A message of an area is never hidden: its area opens. */
+    /** A message of an area is never hidden: its area opens, and the message scrolls into view once laid out. */
     private void Say(TextBlock message, string text)
     {
         message.Text = text;
@@ -256,6 +271,7 @@ internal sealed partial class SettingsWindow : Window
             AdiutorSection.IsExpanded = true;
         else if (message == T3Message)
             T3Section.IsExpanded = true;
+        Dispatcher.BeginInvoke(() => message.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     /** The settings in the window, or null with the reason shown when an address is not one the engine accepts. */
