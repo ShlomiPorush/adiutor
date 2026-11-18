@@ -644,8 +644,8 @@ export type GitHubCreateForm = { action: string; manifest: string }
 /** POST /github/create/finish: the account that owns the new App, and the view with the App saved. */
 export type GitHubCreated = { owner: { login: string; type: string | null }; view: GitHubView }
 
-/** What adding an installation would come to: already_added when it is on the list. */
-export type GitHubPreviewState = "usable" | "too_broad" | "suspended" | "already_added"
+/** What adding an installation would come to: already_added when it is on the list; locked when the environment sets it. */
+export type GitHubPreviewState = "usable" | "too_broad" | "suspended" | "already_added" | "locked"
 
 /** GET /github/installations/:id/preview: an installation as GitHub answers it, before it is added. */
 export type GitHubInstallationPreview = {

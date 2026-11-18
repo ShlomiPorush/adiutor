@@ -44,7 +44,7 @@ const CLIENT_SECRET = randomBytes(20).toString("hex")
 const WEBHOOK_SECRET = randomBytes(20).toString("hex")
 /** A line of the key's body: it must appear in no answer, audit row or log line. */
 const KEY_BODY = keys.privateKey.split("\n")[5] as string
-const WEB = "https://github.example"
+const WEB = "https://github.com"
 const PUBLIC = new URL("https://adiutor.example/")
 
 const ALL_READ = {
@@ -115,7 +115,6 @@ const deps = (overrides: EnvOverrides = {}): GitHubCreateDeps => ({
   env: { ...env, overrides },
   gate: handle.gate,
   origin: handle.origin,
-  webOrigin: WEB,
   publicUrl: PUBLIC,
   pending: handle.pending,
 })
@@ -157,7 +156,7 @@ beforeEach(async () => {
   await t.reset()
   standIn.scenario = scenario()
   standIn.requests.length = 0
-  handle = createGitHubHandle({ ctx: t.ctx, env, generation: 0, origin: standIn.origin, webOrigin: WEB })
+  handle = createGitHubHandle({ ctx: t.ctx, env, generation: 0, origin: standIn.origin })
 })
 
 describe("starting the App's creation", () => {
@@ -405,6 +404,17 @@ describe("installing the App", () => {
     expect((await preview(USABLE)).state).toBe("already_added")
   })
 
+  it("previews an installation as locked while the environment sets the list, so no Add is offered", async () => {
+    await setUp()
+    const locked = deps({ githubInstallations: [USABLE] })
+    expect(await previewGitHubInstallation(t.ctx, owner, locked, BROAD)).toMatchObject({ state: "locked" })
+    expect(await previewGitHubInstallation(t.ctx, owner, locked, USABLE)).toMatchObject({ state: "already_added" })
+    expect(await previewGitHubInstallation(t.ctx, owner, locked, SUSPENDED)).toMatchObject({ state: "locked" })
+    await expect(
+      addGitHubInstallation(t.ctx, owner, locked, { generation: 1, installationId: SUSPENDED }),
+    ).rejects.toMatchObject({ code: "setting_locked" })
+  })
+
   it("refuses to add a suspended installation or one granted more than the read permissions", async () => {
     await setUp()
     await expect(
@@ -427,7 +437,7 @@ describe("over HTTP", () => {
     try {
       const core = testCore(t, {
         config: { publicUrl: new URL(TEST_ORIGIN), version: "test" },
-        github: { origin: standIn.origin, webOrigin: WEB },
+        github: { origin: standIn.origin },
       })
       const app = createApp({ checkDatabase: async () => true, core })
       const b = await ownerBrowser(t, app)

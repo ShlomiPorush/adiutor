@@ -1,7 +1,7 @@
 import type { Context, Hono } from "hono"
 import { z } from "zod"
 import { githubAppBody, githubCreateFinishBody, githubInstallationBody } from "../../shared/api.ts"
-import { DEFAULT_GITHUB_API_ORIGIN, DEFAULT_GITHUB_WEB_ORIGIN } from "../config.ts"
+import { DEFAULT_GITHUB_API_ORIGIN } from "../config.ts"
 import { invalid, notFound } from "../errors.ts"
 import { GitHubGate } from "../github/gate.ts"
 import { PendingCreation } from "../github/manifest.ts"
@@ -22,14 +22,13 @@ import {
 import { byOf, type Env, requireOwnerAuth } from "./auth.ts"
 
 /**
- * The server's GitHub reading: the gate of its settings saves, the runner of its pulls, the API origin, GitHub's web
- * origin (the App's creation and install pages) and the App's creation that waits for GitHub to send the browser back.
+ * The server's GitHub reading: the gate of its settings saves, the runner of its pulls, the API origin, and the App's
+ * creation that waits for GitHub to send the browser back.
  */
 export type GitHubHandle = {
   gate: GitHubGate
   runner: GitHubRunner
   origin: string
-  webOrigin: string
   pending: PendingCreation
 }
 
@@ -39,7 +38,6 @@ export function createGitHubHandle(options: {
   env: SettingsEnv
   generation: number
   origin?: string
-  webOrigin?: string
   beforeWrite?: () => Promise<void>
   afterLock?: () => Promise<void>
 }): GitHubHandle {
@@ -57,7 +55,6 @@ export function createGitHubHandle(options: {
     gate,
     runner,
     origin,
-    webOrigin: options.webOrigin ?? DEFAULT_GITHUB_WEB_ORIGIN,
     pending: new PendingCreation(),
   }
 }
@@ -99,7 +96,6 @@ export function githubRoutes(
     env: deps.env,
     gate: github.gate,
     origin: github.origin,
-    webOrigin: github.webOrigin,
     publicUrl: deps.publicUrl,
     pending: github.pending,
   }

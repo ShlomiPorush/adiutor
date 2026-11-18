@@ -16,6 +16,7 @@ import { Copyable } from "../../ui/Copyable.tsx"
 import { Banner, errorReason } from "../../ui/states.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
+import { useClearUnsaved, useConfirmLeave } from "../../ui/unsaved.tsx"
 import { Row } from "./parts.tsx"
 
 /** A GitHub refusal in the owner's language (the server's own sentence is English); others as usual. */
@@ -39,7 +40,7 @@ const RETURN_PARAMS = ["code", "state", "installation_id", "setup_action"] as co
 
 /** Where the page leaves for GitHub, in this tab (a seam for tests). */
 export const leaveFor = {
-  /** Posts the manifest to GitHub as a form: the UI's Content-Security-Policy allows GitHub's web origin as its action. */
+  /** Posts the manifest to GitHub as a form: the UI's Content-Security-Policy allows https://github.com as its action. */
   manifest(action: string, manifest: string): void {
     const form = document.createElement("form")
     form.method = "post"
@@ -116,32 +117,61 @@ export function useGitHubReturn() {
           void queryClient.invalidateQueries({ queryKey: qk.github })
         },
       )
-    } else if (installation && INSTALLATION_ID.test(installation)) {
-      if (action === "request") setState({ kind: "request" })
-      else preview(Number(installation))
-    }
+    } else if (action === "request") {
+      // An organization's owner must approve the install: GitHub may send no installation id yet.
+      setState({ kind: "request" })
+    } else if (installation && INSTALLATION_ID.test(installation)) preview(Number(installation))
   }, [location.search])
 
   return { state, dismiss: () => setState(null), retryPreview: preview }
 }
 
+/**
+ * Leaving this tab for GitHub: the unsaved question first (the app's own, so the browser does not ask again and a
+ * Stay leaves the button as it was), then the server's answer, then the page goes. The button is busy only from the
+ * decision to leave, and usable again when the browser shows this page again from its back-forward cache.
+ */
+function useLeaveForGitHub<T>(start: () => Promise<T>, go: (answer: T) => void, failed: (failure: unknown) => void) {
+  const confirmLeave = useConfirmLeave()
+  const clearUnsaved = useClearUnsaved()
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    const shown = (event: PageTransitionEvent) => {
+      if (event.persisted) setBusy(false)
+    }
+    window.addEventListener("pageshow", shown)
+    return () => window.removeEventListener("pageshow", shown)
+  }, [])
+  const leave = async () => {
+    if (!(await confirmLeave())) return
+    setBusy(true)
+    let answer: T
+    try {
+      answer = await start()
+    } catch (failure) {
+      failed(failure)
+      setBusy(false)
+      return
+    }
+    // The owner chose to leave: the browser must not ask a second time.
+    clearUnsaved()
+    go(answer)
+  }
+  return { busy, leave }
+}
+
 /** The App made from a manifest: the primary action while no App is set and nothing is locked. */
 export function CreateAppRow() {
   const { t, language } = useI18n()
-  const [busy, setBusy] = useState(false)
-  const create = async () => {
-    setBusy(true)
-    try {
-      const form = await api.startGitHubApp()
-      leaveFor.manifest(form.action, form.manifest)
-    } catch (failure) {
-      showToast(t("githubSettings.createStartFailed", { reason: githubErrorText(t, language, failure) }), "error")
-      setBusy(false)
-    }
-  }
+  const { busy, leave } = useLeaveForGitHub(
+    () => api.startGitHubApp(),
+    (form) => leaveFor.manifest(form.action, form.manifest),
+    (failure) =>
+      showToast(t("githubSettings.createStartFailed", { reason: githubErrorText(t, language, failure) }), "error"),
+  )
   return (
     <Row label={t("githubSettings.createLabel")} hint={t("githubSettings.createHint")}>
-      <button type="button" className="ui-btn ui-btn-primary" disabled={busy} onClick={() => void create()}>
+      <button type="button" className="ui-btn ui-btn-primary" disabled={busy} onClick={() => void leave()}>
         {busy ? t("githubSettings.creating") : t("githubSettings.create")}
       </button>
     </Row>
@@ -181,20 +211,15 @@ export function CreateResult({ result, onDismiss }: { result: GitHubReturn; onDi
 /** GitHub's install page, from the installations while the App is set and the list is not locked. */
 export function InstallRow() {
   const { t, language } = useI18n()
-  const [busy, setBusy] = useState(false)
-  const install = async () => {
-    setBusy(true)
-    try {
-      const { url } = await api.gitHubInstallLink()
-      leaveFor.page(url)
-    } catch (failure) {
-      showToast(t("githubSettings.installFailed", { reason: githubErrorText(t, language, failure) }), "error")
-      setBusy(false)
-    }
-  }
+  const { busy, leave } = useLeaveForGitHub(
+    () => api.gitHubInstallLink(),
+    ({ url }) => leaveFor.page(url),
+    (failure) =>
+      showToast(t("githubSettings.installFailed", { reason: githubErrorText(t, language, failure) }), "error"),
+  )
   return (
     <Row label={t("githubSettings.installLabel")} hint={t("githubSettings.installHint")}>
-      <button type="button" className="ui-btn ui-btn-primary" disabled={busy} onClick={() => void install()}>
+      <button type="button" className="ui-btn ui-btn-primary" disabled={busy} onClick={() => void leave()}>
         {busy ? t("githubSettings.installing") : t("githubSettings.install")}
       </button>
     </Row>
@@ -207,6 +232,7 @@ const PREVIEW_TONE: Record<GitHubPreviewState, Exclude<Tone, "neutral">> = {
   too_broad: "fail",
   suspended: "warn",
   already_added: "ok",
+  locked: "warn",
 }
 
 /**
@@ -298,7 +324,10 @@ export function InstallReturn({
       }
     >
       <Tag tone="neutral">{type}</Tag> <Tag tone={PREVIEW_TONE[state]}>{t(`githubSettings.previewState.${state}`)}</Tag>{" "}
-      {t(`githubSettings.previewHint.${state}`)}
+      {t(`githubSettings.previewHint.${state}`, {
+        variable: view.settings.installations.variable ?? "ADIUTOR_GITHUB_INSTALLATIONS",
+        id: String(result.id),
+      })}
     </Banner>
   )
 }

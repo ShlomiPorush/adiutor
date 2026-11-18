@@ -1467,13 +1467,15 @@
       "usable": "Ready to add",
       "too_broad": "Too much access",
       "suspended": "Suspended",
-      "already_added": "Already on the list"
+      "already_added": "Already on the list",
+      "locked": "Set by the environment"
     },
     "previewHint": {
       "usable": "Add it, and the server reads this account from the next read on.",
       "too_broad": "It grants more than read access, so it cannot be added. Reduce the App's permissions to read only on GitHub, then install again.",
       "suspended": "It is suspended on GitHub, so it cannot be added. Resume it there, then install again.",
-      "already_added": "This installation is already on the list."
+      "already_added": "This installation is already on the list.",
+      "locked": "The installations are set by {variable}, so Settings cannot add one. Add {id} to {variable} and restart Adiutor."
     },
     "dismiss": "Close"
   },

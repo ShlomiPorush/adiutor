@@ -319,7 +319,11 @@ export function githubRoute(
     const found = mockInstallation(id)
     if (!found) return notFound()
     const added = s.installations.some((installation) => installation.id === id)
-    return ok({ id, account: { login: found.login, type: found.type }, state: added ? "already_added" : found.state })
+    return ok({
+      id,
+      account: { login: found.login, type: found.type },
+      state: added ? "already_added" : settings.installations.locked ? "locked" : found.state,
+    })
   }
   if (sub === "installations" && !target && method === "POST") {
     if (body.generation !== s.generation) return stale()

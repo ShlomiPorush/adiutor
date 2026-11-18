@@ -1,8 +1,8 @@
 import { generateKeyPairSync } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { githubApiOrigin, githubMeantOn, githubWebOrigin, loadConfig } from "../config.ts"
+import { githubApiOrigin, githubMeantOn, loadConfig } from "../config.ts"
 import { testSecret } from "../testing/secrets.ts"
-import { contentSecurityPolicy } from "../web.ts"
+import { CONTENT_SECURITY_POLICY, UI_CONTENT_SECURITY_POLICY } from "../web.ts"
 import { GitHubRefused, guardedFetch } from "./client.ts"
 import { describeFailure, graphqlRateLimit, restRateLimit } from "./errors.ts"
 import { GitHubGate } from "./gate.ts"
@@ -82,13 +82,9 @@ describe("the configuration", () => {
     expect(() => githubApiOrigin(["--github-api-origin=file:///etc"])).toThrow()
   })
 
-  it("takes the web origin only from its own flag, and lets the UI's pages post a form there alone", () => {
-    expect(githubWebOrigin([])).toBe("https://github.com")
-    expect(githubWebOrigin(["--github-api-origin=http://github:8080"])).toBe("https://github.com")
-    expect(githubWebOrigin(["--github-web-origin=http://github-web:8081"])).toBe("http://github-web:8081")
-    expect(() => githubWebOrigin(["--github-web-origin=http://github-web:8081/x"])).toThrow(/github-web-origin/)
-    expect(contentSecurityPolicy("https://github.com")).toContain("form-action 'self' https://github.com;")
-    expect(contentSecurityPolicy()).toContain("form-action 'self';")
+  it("lets the UI's pages post forms to this origin and GitHub only, and the authorization server's to this origin", () => {
+    expect(UI_CONTENT_SECURITY_POLICY).toContain("form-action 'self' https://github.com;")
+    expect(CONTENT_SECURITY_POLICY).toContain("form-action 'self';")
   })
 })
 

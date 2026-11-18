@@ -42,8 +42,6 @@ export type TestCoreOptions = {
    */
   github?: {
     origin?: string
-    /** GitHub's web origin (the App's creation and install pages); GitHub's own when absent. */
-    webOrigin?: string
     generation?: number
     beforeWrite?: () => Promise<void>
     afterLock?: () => Promise<void>
@@ -105,7 +103,6 @@ export function testCore(t: TestDatabase, options: TestCoreOptions): TestCore {
       env,
       generation: options.github?.generation ?? 0,
       origin: options.github?.origin ?? "http://127.0.0.1:9",
-      webOrigin: options.github?.webOrigin,
       beforeWrite: options.github?.beforeWrite,
       afterLock: options.github?.afterLock,
     }),

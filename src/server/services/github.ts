@@ -1,5 +1,5 @@
 import { asc, desc, eq, isNull } from "drizzle-orm"
-import { GITHUB_ID } from "../config.ts"
+import { GITHUB_ID, GITHUB_WEB_ORIGIN } from "../config.ts"
 import { projects, type StoredInstallation, settings, syncRuns } from "../db/schema.ts"
 import { AppError, invalid } from "../errors.ts"
 import { GITHUB_RUN_KIND } from "../github/apply.ts"
@@ -26,7 +26,7 @@ const CHECK_TIMEOUT_MS = 10_000
 export type GitHubDeps = { env: SettingsEnv; gate: GitHubGate; origin: string }
 
 /** What creating the App from Settings needs besides: GitHub's web origin, the public URL and the pending creation. */
-export type GitHubCreateDeps = GitHubDeps & { webOrigin: string; publicUrl: URL; pending: PendingCreation }
+export type GitHubCreateDeps = GitHubDeps & { publicUrl: URL; pending: PendingCreation }
 
 const locked = (variable: string) =>
   new AppError(
@@ -278,7 +278,7 @@ export async function addGitHubInstallation(
 }
 
 /** What adding an installation would come to, as Settings shows it after GitHub's install page sent the browser back. */
-export type InstallationPreviewState = "usable" | "too_broad" | "suspended" | "already_added"
+export type InstallationPreviewState = "usable" | "too_broad" | "suspended" | "already_added" | "locked"
 
 /**
  * An installation before it is added: its account and whether adding it would be accepted. GitHub's return names the
@@ -298,11 +298,14 @@ export async function previewGitHubInstallation(
   const read = await readInstallation(app, installationId)
   const state: InstallationPreviewState = current.installations.some((i) => i.id === installationId)
     ? "already_added"
-    : read.suspended
-      ? "suspended"
-      : read.tooBroad
-        ? "too_broad"
-        : "usable"
+    : // The environment sets the list: Settings cannot add to it, so the preview offers no Add.
+      deps.env.overrides.githubInstallations !== undefined
+      ? "locked"
+      : read.suspended
+        ? "suspended"
+        : read.tooBroad
+          ? "too_broad"
+          : "usable"
   return { id: installationId, account: { login: read.account.login, type: read.account.type }, state }
 }
 
@@ -328,7 +331,7 @@ export async function gitHubInstallLink(ctx: Ctx, by: By, deps: GitHubCreateDeps
   if (!isObject(data) || typeof data.slug !== "string" || !APP_SLUG.test(data.slug)) throw unreachable()
   if (String(data.id) !== current.appId)
     throw new AppError("github_app_mismatch", "The key belongs to another GitHub App than the App id.")
-  return { url: `${deps.webOrigin}/apps/${encodeURIComponent(data.slug)}/installations/new` }
+  return { url: `${GITHUB_WEB_ORIGIN}/apps/${encodeURIComponent(data.slug)}/installations/new` }
 }
 
 const alreadySet = () =>
@@ -361,7 +364,7 @@ export async function startGitHubCreation(
   const row = await refuseCreation(ctx, deps)
   const state = deps.pending.start(row.githubGeneration, ctx.clock())
   return {
-    action: `${deps.webOrigin}/settings/apps/new?state=${state}`,
+    action: `${GITHUB_WEB_ORIGIN}/settings/apps/new?state=${state}`,
     manifest: JSON.stringify(appManifest(deps.publicUrl)),
   }
 }

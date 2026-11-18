@@ -30,7 +30,7 @@ vi.mock("../../api/auth.ts", async (importOriginal) => {
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const FINGERPRINT = `SHA256:${crypto.randomUUID()}`
-const WEB = "https://github.example"
+const WEB = "https://github.com"
 
 /** No App yet: nothing stored, nothing locked. */
 const EMPTY: GitHubView = {
@@ -152,6 +152,17 @@ async function click(element: Element | null | undefined): Promise<void> {
   await settle()
 }
 
+/** Types into a controlled field as the browser does: the value, then an input event. */
+async function type(field: HTMLInputElement | null | undefined, value: string): Promise<void> {
+  expect(field).toBeTruthy()
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value)
+    field?.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  await settle()
+}
+
+const question = () => document.querySelector<HTMLElement>('[role="alertdialog"]')
 const plain = (text: string | null | undefined) => (text ?? "").replace(/\p{Cf}/gu, "").trim()
 const button = (name: string, scope: ParentNode = document) =>
   Array.from(scope.querySelectorAll<HTMLButtonElement>("button")).find((element) => plain(element.textContent) === name)
@@ -322,5 +333,69 @@ describe("GitHub's return after an install", () => {
     expect(banners().join("\n")).toContain(en.githubSettings.requestTitle)
     expect(calls.some((call) => call.path.includes("/preview"))).toBe(false)
     expect(githubCalls("POST", "/github/installations")).toHaveLength(0)
+  })
+})
+
+describe("returns and leaves that change nothing", () => {
+  it("says an organization's owner must approve a request that names no installation yet", async () => {
+    view = structuredClone(SET_UP)
+    await render("/settings/github?setup_action=request")
+    expect(router.state.location.search).toBe("")
+    expect(banners().join("\n")).toContain(en.githubSettings.requestTitle)
+    expect(calls.some((call) => call.path.includes("/preview"))).toBe(false)
+  })
+
+  it("offers no Add while the environment sets the installations, and names the variable", async () => {
+    view = {
+      ...structuredClone(SET_UP),
+      settings: {
+        ...SET_UP.settings,
+        installations: { value: [], locked: true, variable: "ADIUTOR_GITHUB_INSTALLATIONS" },
+      },
+    }
+    preview = { ...preview, state: "locked" }
+    await render("/settings/github?installation_id=51234567&setup_action=install")
+    const banner = document.querySelector<HTMLElement>(".ui-banner")
+    const text = plain(banner?.textContent)
+    expect(text).toContain(en.githubSettings.previewState.locked)
+    expect(text).toContain("ADIUTOR_GITHUB_INSTALLATIONS")
+    expect(text).toContain("51234567")
+    expect(button(en.githubSettings.add, banner ?? document)).toBeUndefined()
+  })
+
+  it("Create asks about unsaved changes first; Stay keeps the button usable, Leave goes to GitHub", async () => {
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {})
+    await render()
+    await type(document.querySelector<HTMLInputElement>("#settings-github-app input"), "123456")
+    await click(button(en.githubSettings.create))
+    expect(question()).toBeTruthy()
+    await click(button(en.unsaved.stay, question() ?? document))
+    expect(question()).toBeNull()
+    expect(githubCalls("POST", "/github/create")).toHaveLength(0)
+    const create = button(en.githubSettings.create)
+    expect(create?.disabled).toBe(false)
+
+    await click(create)
+    await click(button(en.unsaved.leave, question() ?? document))
+    expect(githubCalls("POST", "/github/create")).toHaveLength(1)
+    expect(submit).toHaveBeenCalledTimes(1)
+    expect(button(en.githubSettings.creating)?.disabled).toBe(true)
+    // Back from GitHub to this page as the browser kept it: the button is usable again.
+    await act(async () => {
+      window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }))
+    })
+    expect(button(en.githubSettings.create)?.disabled).toBe(false)
+  })
+
+  it("Install asks about unsaved changes first, and Stay keeps the button usable", async () => {
+    view = structuredClone(SET_UP)
+    const go = vi.spyOn(leaveFor, "page").mockImplementation(() => {})
+    await render()
+    await type(document.querySelector<HTMLInputElement>("#settings-github-app input"), "123456")
+    await click(button(en.githubSettings.install))
+    await click(button(en.unsaved.stay, question() ?? document))
+    expect(githubCalls("POST", "/github/install")).toHaveLength(0)
+    expect(go).not.toHaveBeenCalled()
+    expect(button(en.githubSettings.install)?.disabled).toBe(false)
   })
 })

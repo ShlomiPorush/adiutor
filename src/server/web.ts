@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises"
 import { extname, join, normalize, resolve, sep } from "node:path"
 import type { Hono } from "hono"
+import { GITHUB_WEB_ORIGIN } from "./config.ts"
 
 // Serves the built web UI (dist/web): files as they are, and index.html for any other page address,
 // so a reload or a shared link of /projects/... opens the app. /api, /mcp and /healthz are never
@@ -39,6 +40,9 @@ export function contentSecurityPolicy(formOrigin?: string): string {
 /** The policy of the authorization server's own pages (oauth/routes.ts): forms to this origin only. */
 export const CONTENT_SECURITY_POLICY = contentSecurityPolicy()
 
+/** The policy of the UI's pages: forms to this origin, and to GitHub for the App's manifest (Settings, GitHub). */
+export const UI_CONTENT_SECURITY_POLICY = contentSecurityPolicy(GITHUB_WEB_ORIGIN)
+
 /**
  * Addresses that are never a page: the API, MCP, the health check, and the approval API under the consent page's
  * address (agent access answers it where it is mounted; elsewhere it is a 404, not the app).
@@ -53,10 +57,8 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
-/** Serves the UI from `root`; its pages may post a form to `githubWebOrigin` (the App's manifest), and nowhere else. */
-export function webRoutes(app: Hono, root: string, githubWebOrigin: string): void {
+export function webRoutes(app: Hono, root: string): void {
   const base = resolve(root)
-  const policy = contentSecurityPolicy(githubWebOrigin)
   app.on(["GET", "HEAD"], "*", async (c, next) => {
     const path = c.req.path
     if (RESERVED.test(path)) return next()
@@ -87,7 +89,7 @@ export function webRoutes(app: Hono, root: string, githubWebOrigin: string): voi
       "Cache-Control": file.includes(`${sep}assets${sep}`) ? "public, max-age=31536000, immutable" : "no-cache",
     }
     if (type.startsWith("text/html")) {
-      headers["Content-Security-Policy"] = policy
+      headers["Content-Security-Policy"] = UI_CONTENT_SECURITY_POLICY
       headers["Referrer-Policy"] = "no-referrer"
       headers["X-Frame-Options"] = "DENY"
     }
