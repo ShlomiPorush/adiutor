@@ -335,9 +335,10 @@ export function apiRoutes(
   api.post("/threads/start", h("POST /api/v1/threads/start"))
   api.post("/sync/t3", h("POST /api/v1/sync/t3"))
   api.post("/sync/checkin", h("POST /api/v1/sync/checkin"))
-  api.get("/sync/runs", async (c) =>
-    c.json({ data: await recentSyncRuns(ctx, query(c, z.object({ limit })).limit ?? 20) }),
-  )
+  api.get("/sync/runs", async (c) => {
+    const { limit: count, kind } = query(c, z.object({ limit, kind: z.enum(["t3", "security", "github"]).optional() }))
+    return c.json({ data: await recentSyncRuns(ctx, count ?? 20, kind) })
+  })
   // "Sync now": the owner asks the sync on the computer for a run; it takes the request at its next check-in.
   api.use("/sync/requests", noStore)
   api.get("/sync/requests", requireOwnerAuth, async (c) => c.json({ data: await syncRequestsView(ctx) }))

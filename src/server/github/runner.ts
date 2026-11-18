@@ -28,7 +28,7 @@ export type PullSummary =
 export type LastPull = {
   finishedAt: Date
   installations: InstallationRead[]
-  moved: { projectId: string; to: string }[]
+  moved: { projectId: string; from: string; to: string }[]
 }
 
 export type GitHubRunnerDeps = {
@@ -150,6 +150,8 @@ export class GitHubRunner {
       .from(projects)
       .where(isNotNull(projects.githubRepo))
 
+    // Shutdown may have come while the database was read: start nothing then.
+    if (this.stopped) return { result: "stopped", reason: "aborted" }
     const controller = new AbortController()
     this.controller = controller
     const deadline = setTimeout(() => controller.abort(), PULL_DEADLINE_MS)
@@ -197,7 +199,7 @@ export class GitHubRunner {
     this.last = {
       finishedAt: ctx.clock(),
       installations: read.installations,
-      moved: read.projects.flatMap((p) => (p.movedTo ? [{ projectId: p.projectId, to: p.movedTo }] : [])),
+      moved: read.projects.flatMap((p) => (p.movedTo ? [{ projectId: p.projectId, from: p.repo, to: p.movedTo }] : [])),
     }
     log.info("github pull", { outcome: applied.outcome, ...applied.counts })
     return { result: "written", runId: applied.runId, outcome: applied.outcome }

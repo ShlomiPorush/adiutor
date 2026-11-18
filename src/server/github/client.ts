@@ -10,7 +10,7 @@ import { Octokit } from "@octokit/core"
 export const GITHUB_API_VERSION = "2022-11-28"
 
 /** Why a request was not sent, or its answer not used: a stable code, never a message from GitHub. */
-export type RefusedCode = "origin" | "superseded" | "redirect"
+export type RefusedCode = "origin" | "superseded" | "stopped" | "redirect"
 
 export class GitHubRefused extends Error {
   override name = "GitHubRefused"
@@ -29,6 +29,8 @@ export type FetchGuard = {
   signal: AbortSignal
   /** Asked before every request: false refuses it (a GitHub settings save is in progress or committed). */
   maySend?: () => boolean
+  /** Asked before every request: true refuses it (the pull already stopped, at a rate limit for example). */
+  stopped?: () => boolean
 }
 
 /**
@@ -43,6 +45,7 @@ export function guardedFetch(guard: FetchGuard): typeof fetch {
     const url = new URL(input instanceof Request ? input.url : String(input))
     if (url.origin !== guard.origin) throw new GitHubRefused("origin")
     if (guard.maySend && !guard.maySend()) throw new GitHubRefused("superseded")
+    if (guard.stopped?.()) throw new GitHubRefused("stopped")
     const signal = init?.signal ? AbortSignal.any([init.signal, guard.signal]) : guard.signal
     const response = await fetch(url, { ...init, signal, redirect: "manual" })
     if (response.status >= 300 && response.status < 400) {

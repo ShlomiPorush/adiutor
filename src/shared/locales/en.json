@@ -1427,10 +1427,6 @@
     "movedIntro": "GitHub knows these repositories under a new name. Update the project's repository.",
     "movedFromTo": "{from} is now {to}",
     "movedNow": "Now {to}",
-    "movedUpdate": "Update",
-    "movedSet": "{name}: repository set to {repo}",
-    "movedUndo": "Undo the repository change of {name}",
-    "movedFailed": "Could not update {name}: {reason}",
     "notCoveredTitle": "Projects without current data",
     "notCoveredIntro": "Their security data on the board may be missing or out of date.",
     "reason": {

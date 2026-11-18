@@ -1,5 +1,5 @@
 import { appClient, type FetchGuard, installationClient, type Octokit } from "./client.ts"
-import { describeFailure, type Failure, failureCode, graphqlRateLimit } from "./errors.ts"
+import { describeFailure, type Failure, failureCode, graphqlRateLimit, lowerHeaders } from "./errors.ts"
 import type { AllowedInstallation } from "./settings.ts"
 
 // One pull's reading: everything is read into memory first, under the generation the pull started with; nothing is
@@ -110,11 +110,17 @@ export type PullRead = {
 const zero = (): Counts => ({ critical: 0, high: 0, medium: 0, low: 0 })
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v)
 
+const text = (value: unknown) => (typeof value === "string" ? value.toLowerCase() : "")
+
+/** An alert as each list documents it: a number, and the state the list was asked for. */
+const isOpenAlert = (alert: unknown): alert is Record<string, unknown> =>
+  isObject(alert) && typeof alert.number === "number" && Number.isInteger(alert.number) && alert.state === "open"
+
 /** Dependabot: the advisory's severity, else the vulnerability's; an unknown one counts as medium. */
 function dependabotSeverity(alert: Record<string, unknown>): keyof Counts {
-  const advisory = isObject(alert.security_advisory) ? alert.security_advisory.severity : undefined
-  const vulnerability = isObject(alert.security_vulnerability) ? alert.security_vulnerability.severity : undefined
-  const level = String(advisory ?? vulnerability ?? "").toLowerCase()
+  const advisory = isObject(alert.security_advisory) ? text(alert.security_advisory.severity) : ""
+  const vulnerability = isObject(alert.security_vulnerability) ? text(alert.security_vulnerability.severity) : ""
+  const level = advisory || vulnerability
   if (level === "critical" || level === "high" || level === "low") return level
   return "medium"
 }
@@ -122,7 +128,7 @@ function dependabotSeverity(alert: Record<string, unknown>): keyof Counts {
 /** Code scanning: the security severity, else the rule's severity: error and unknown are medium, warning and note low. */
 function codeScanningSeverity(alert: Record<string, unknown>): keyof Counts {
   const rule = isObject(alert.rule) ? alert.rule : {}
-  const level = String(rule.security_severity_level ?? rule.severity ?? "").toLowerCase()
+  const level = text(rule.security_severity_level) || text(rule.severity)
   if (level === "critical" || level === "high" || level === "medium" || level === "low") return level
   if (level === "warning" || level === "note" || level === "none") return "low"
   return "medium"
@@ -171,8 +177,10 @@ async function pool<T>(list: readonly T[], limit: number, work: (item: T) => Pro
 
 export async function readGitHub(input: PullInput, options: PullOptions): Promise<PullRead> {
   const now = () => options.clock()
-  const app = appClient(options, input.appId, input.privateKey)
   const result: PullRead = { keyAccepted: null, installations: [], projects: [], stopped: null }
+  // Once the pull stopped (a rate limit, a save, an abort), no request is sent, whichever read asks for it.
+  const guard = { ...options, stopped: () => result.stopped !== null }
+  const app = appClient(guard, input.appId, input.privateKey)
 
   /** Records a failure that stops the whole pull; answers the code to record for the read it ended. */
   const stopOn = (failure: Failure): string | null => {
@@ -266,7 +274,7 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
     )
     try {
       const auth = await app.auth({ type: "installation", installationId: read.id, permissions })
-      installation.client = installationClient(options, (auth as { token: string }).token)
+      installation.client = installationClient(guard, (auth as { token: string }).token)
     } catch (error) {
       const failure = describeFailure(error, now())
       read.state = "error"
@@ -303,12 +311,15 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       }
       total = data.total_count
       if (!nextLink(response.headers.link)) {
-        complete = seen.size === total
-        if (!complete) read.code = "inventory_count"
+        const names = new Set([...seen.values()].map((name) => name.toLowerCase()))
+        complete = seen.size === total && names.size === seen.size
+        if (!complete) read.code = names.size === seen.size ? "inventory_count" : "inventory_conflict"
         break
       }
     }
     read.inventory = { complete, repos: seen.size }
+    // Only a complete inventory places a repository: a name or an id from a partial one may be stale or missing.
+    if (!complete) continue
     for (const [id, fullName] of seen) {
       const key = fullName.toLowerCase()
       if (!byName.has(key)) byName.set(key, { installation, id })
@@ -349,7 +360,9 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       continue
     }
     const hit = byName.get(p.githubRepo.toLowerCase())
-    if (hit) {
+    // The repository the project was bound to (its GitHub id) stays its repository until the owner changes it: a name
+    // that now belongs to another repository (renamed, then reused) is never read in its place.
+    if (hit && (p.githubRepoId === null || hit.id === p.githubRepoId)) {
       project.repoId = hit.id
       planned.push({ project, installation: hit.installation, owner, name })
       continue
@@ -359,6 +372,9 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       project.movedTo = movedTo
       project.families = errorAll("moved")
       project.issues = { kind: "error", code: "moved" }
+    } else if (hit) {
+      project.families = errorAll("repo_replaced")
+      project.issues = { kind: "error", code: "repo_replaced" }
     } else if (allKnown) {
       const asOf = now()
       project.families = {
@@ -433,7 +449,7 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       }
       if (!Array.isArray(response.data)) return { coverage: "error", code: "malformed" }
       for (const alert of response.data) {
-        if (!isObject(alert)) return { coverage: "error", code: "malformed" }
+        if (!isOpenAlert(alert)) return { coverage: "error", code: "malformed" }
         counts[severity[family](alert)]++
       }
       const asOf = now()
@@ -442,10 +458,13 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       path ??= current.pathname
       const next = nextLink(response.headers.link)
       if (!next) return { coverage: "enabled", counts, asOf }
-      // The next page must stay on this list: the same origin and path, a cursor not seen before.
+      // The next page must stay on this list: the same origin, the same path (or the same list addressed by the
+      // repository's id, as GitHub's links may be), and a cursor not seen before.
       const url = URL.canParse(next) ? new URL(next) : null
-      if (!url || url.origin !== options.origin || url.pathname !== path)
-        return { coverage: "error", code: "malformed" }
+      const byRepositoryId = `/repositories/${plan.project.repoId}/${ROUTES[family].split("/{repo}/")[1]}`
+      const samePath =
+        url !== null && [path, byRepositoryId].some((p) => p.toLowerCase() === url.pathname.toLowerCase())
+      if (!url || url.origin !== options.origin || !samePath) return { coverage: "error", code: "malformed" }
       const key = url.searchParams.has("after") ? "after" : url.searchParams.has("page") ? "page" : null
       const value = key ? url.searchParams.get(key) : null
       if (!key || !value || seen.has(`${key}=${value}`)) return { coverage: "error", code: "malformed" }
@@ -483,37 +502,41 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       const fields = chunk.map((plan, i) => {
         variables[`o${i}`] = plan.owner
         variables[`n${i}`] = plan.name
-        return `r${i}: repository(owner: $o${i}, name: $n${i}, followRenames: false) { databaseId issues(states: [OPEN]) { totalCount } }`
+        return `r${i}: repository(owner: $o${i}, name: $n${i}, followRenames: false) { databaseId issues(first: 1, states: [OPEN]) { totalCount } }`
       })
       const query = `query(${chunk.map((_, i) => `$o${i}: String!, $n${i}: String!`).join(", ")}) { ${fields.join(" ")} }`
-      let body: unknown
-      let headers: Record<string, string> = {}
+      // `octokit.graphql` answers the data, or throws its documented GraphqlResponseError with the partial data, the
+      // errors and the headers; any other failure is a request error.
+      let data: Record<string, unknown> = {}
+      let errors: unknown[] = []
       try {
-        const response = await (installation.client as Octokit).request("POST /graphql", { query, variables })
-        body = response.data
-        headers = Object.fromEntries(Object.entries(response.headers).map(([k, v]) => [k.toLowerCase(), String(v)]))
+        const answer: unknown = await (installation.client as Octokit).graphql(query, variables)
+        data = isObject(answer) ? answer : {}
       } catch (error) {
+        const shaped = error as { name?: unknown; data?: unknown; errors?: unknown; headers?: unknown }
         const failure = describeFailure(error, now())
-        // A GraphQL rate limit can come with any status.
-        const data = (error as { response?: { data?: unknown } }).response?.data
-        const limit = isObject(data)
-          ? graphqlRateLimit(data.errors, failure.kind === "status" ? failure.headers : {}, now())
-          : null
-        const code = limit
-          ? (stopOn({ kind: "rate_limit", until: limit }) as string)
-          : (stopOn(failure) ?? failureCode(failure))
-        for (const plan of chunk) plan.project.issues = { kind: "error", code }
-        continue
+        const limit =
+          shaped.name === "GraphqlResponseError"
+            ? graphqlRateLimit(shaped.errors, lowerHeaders(shaped.headers), now())
+            : failure.kind === "status"
+              ? graphqlRateLimit(
+                  (error as { response?: { data?: { errors?: unknown } } }).response?.data?.errors,
+                  failure.headers,
+                  now(),
+                )
+              : null
+        if (limit || shaped.name !== "GraphqlResponseError") {
+          const code = limit
+            ? (stopOn({ kind: "rate_limit", until: limit }) as string)
+            : (stopOn(failure) ?? failureCode(failure))
+          for (const plan of chunk) plan.project.issues = { kind: "error", code }
+          continue
+        }
+        data = isObject(shaped.data) ? shaped.data : {}
+        errors = Array.isArray(shaped.errors) ? shaped.errors : []
       }
-      const limit = isObject(body) ? graphqlRateLimit(body.errors, headers, now()) : null
-      if (limit) {
-        const code = stopOn({ kind: "rate_limit", until: limit }) as string
-        for (const plan of chunk) plan.project.issues = { kind: "error", code }
-        continue
-      }
-      const data = isObject(body) && isObject(body.data) ? body.data : {}
       const failed = new Set(
-        (isObject(body) && Array.isArray(body.errors) ? body.errors : []).flatMap((e) =>
+        errors.flatMap((e) =>
           isObject(e) && Array.isArray(e.path) && typeof e.path[0] === "string" ? [e.path[0]] : [],
         ),
       )

@@ -146,16 +146,25 @@ export async function saveGitHubApp(ctx: Ctx, by: By, deps: GitHubDeps, patch: G
     by,
     deps,
     patch.generation,
-    () => ({
-      ...(patch.appId !== undefined ? { githubAppId: patch.appId } : {}),
-      ...(key !== undefined
-        ? {
-            githubPrivateKeyEnc: key ? cipher.encrypt(GITHUB_KEY_COLUMN, normalizeKey(key.pem)) : null,
-            githubKeyFingerprint: key?.fingerprint ?? null,
-          }
-        : {}),
-      ...(verified !== undefined ? { githubKeyVerified: verified } : key === null ? { githubKeyVerified: false } : {}),
-    }),
+    (before) => {
+      // Read again under the lock: a pull may have marked the stored key verified while GitHub was being asked.
+      if (key && verified === false && before.githubPrivateKeyEnc !== null && before.githubKeyVerified)
+        throw unreachable()
+      return {
+        ...(patch.appId !== undefined ? { githubAppId: patch.appId } : {}),
+        ...(key !== undefined
+          ? {
+              githubPrivateKeyEnc: key ? cipher.encrypt(GITHUB_KEY_COLUMN, normalizeKey(key.pem)) : null,
+              githubKeyFingerprint: key?.fingerprint ?? null,
+            }
+          : {}),
+        ...(verified !== undefined
+          ? { githubKeyVerified: verified }
+          : key === null
+            ? { githubKeyVerified: false }
+            : {}),
+      }
+    },
     key !== undefined ? { githubKeyChange: key ? "replaced" : "removed" } : undefined,
   )
 }
@@ -304,7 +313,8 @@ export async function gitHubView(ctx: Ctx, deps: GitHubDeps, runner: GitHubRunne
     /** Repositories the last pull found only by their id: renamed or moved, the owner updates the project. */
     moved: (pulls.last?.moved ?? []).flatMap((m) => {
       const p = named.find((row) => row.id === m.projectId)
-      return p ? [{ id: p.id, name: p.name, repo: p.repo, movedTo: m.to }] : []
+      // Only while the project is still bound to the repository the pull read: an edit since then answered it.
+      return p && p.repo === m.from ? [{ id: p.id, name: p.name, repo: p.repo, movedTo: m.to }] : []
     }),
     withoutRepo,
   }

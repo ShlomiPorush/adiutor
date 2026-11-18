@@ -542,3 +542,63 @@ describe("the settings row", () => {
     expect(row?.githubPrivateKeyEnc).toBeTruthy()
   })
 })
+
+describe("review round 1", () => {
+  it("never reads a reused name in place of the repository the project was bound to", async () => {
+    await setUp()
+    const widget = await project("Widget", "example-org/widget")
+    await handle.runner.pull()
+    expect(await projectRow(widget.id)).toMatchObject({ githubRepoId: 7001 })
+    // The repository was renamed, and a new one took its old name.
+    const main = standIn.scenario.installations[MAIN] as Scenario["installations"][number]
+    main.repositories = ["example-org/widget", "example-org/widget-old", "example-org/gadget"]
+    standIn.scenario.repos["example-org/widget-old"] = standIn.scenario.repos["example-org/widget"] as never
+    standIn.scenario.repos["example-org/widget"] = { id: 7999, issues: 50, dependabot: { alerts: [] } }
+    await handle.runner.pull()
+    expect(await family(widget.id, "dependabot")).toMatchObject({ coverage: "enabled", critical: 1, attempt: "error" })
+    expect(await projectRow(widget.id)).toMatchObject({ githubRepoId: 7001, openIssuesCount: 3 })
+    expect((await gitHubView(t.ctx, deps(), handle.runner)).moved[0]?.movedTo).toBe("example-org/widget-old")
+    // The old repository is gone too: the project is not read at all until the owner sets its repository again.
+    main.repositories = ["example-org/widget", "example-org/gadget"]
+    await handle.runner.pull()
+    expect(await family(widget.id, "dependabot")).toMatchObject({ critical: 1, attempt: "error" })
+    expect(await projectRow(widget.id)).toMatchObject({ githubRepoId: 7001, openIssuesCount: 3 })
+  })
+
+  it("reads no repository from an inventory that failed part way", async () => {
+    await setUp()
+    const widget = await project("Widget", "example-org/widget")
+    const main = standIn.scenario.installations[MAIN] as Scenario["installations"][number]
+    main.inventory = { pageSize: 1, failPage: 2 }
+    await handle.runner.pull()
+    expect(standIn.requests.some((r) => r.family !== undefined)).toBe(false)
+    expect(await family(widget.id, "dependabot")).toMatchObject({ coverage: "error", attempt: "error" })
+  })
+
+  it("keeps the stored counts when a list answers with alerts of another shape", async () => {
+    await setUp()
+    const widget = await project("Widget", "example-org/widget")
+    await handle.runner.pull()
+    ;(standIn.scenario.repos["example-org/widget"] as Scenario["repos"][string]).secret_scanning = { body: [{}] }
+    await handle.runner.pull()
+    expect(await family(widget.id, "secret_scanning")).toMatchObject({ coverage: "enabled", high: 3, attempt: "error" })
+  })
+
+  it("writes a pull of many projects in batches, in one transaction", async () => {
+    const names = Array.from({ length: 200 }, (_, i) => `example-org/many-${i}`)
+    standIn.scenario.installations[MAIN] = {
+      ...(standIn.scenario.installations[MAIN] as Scenario["installations"][number]),
+      repositories: names,
+    }
+    names.forEach((name, i) => {
+      standIn.scenario.repos[name] = { id: 8000 + i, issues: i, dependabot: { alerts: [] } }
+    })
+    await setUp()
+    await t.ctx.db.insert(projects).values(names.map((name, i) => ({ name, slug: `many-${i}`, githubRepo: name })))
+    expect(await handle.runner.pull()).toMatchObject({ result: "written", outcome: "succeeded" })
+    const [{ n } = { n: 0 }] = [
+      ...(await t.ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from security_sources`)),
+    ]
+    expect(n).toBe(600)
+  })
+})

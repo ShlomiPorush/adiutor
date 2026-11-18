@@ -103,10 +103,16 @@ describe("GitHub's rate limits", () => {
     expect(graphqlRateLimit([{ type: "NOT_FOUND" }], {}, now)).toBeNull()
   })
 
-  it("does not believe a reset more than two hours away", () => {
-    const far = String(now.getTime() / 1000 + 86_400)
+  it("does not believe a reset more than a day away", () => {
+    const far = String(now.getTime() / 1000 + 7 * 86_400)
     expect(restRateLimit(403, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": far }, "", now)).toEqual(
-      new Date(now.getTime() + 2 * 3600_000),
+      new Date(now.getTime() + 86_400_000),
+    )
+  })
+
+  it("waits as long as a GraphQL answer's retry-after says", () => {
+    expect(graphqlRateLimit([{ type: "RATE_LIMITED" }], { "retry-after": "120" }, now)).toEqual(
+      new Date(now.getTime() + 120_000),
     )
   })
 })
@@ -118,6 +124,8 @@ describe("the guarded fetch", () => {
     await expect(fetchOn("http://127.0.0.1:9/app")).rejects.toMatchObject({ code: "superseded" })
     const other = guardedFetch({ origin: "http://127.0.0.1:9", signal })
     await expect(other("https://api.github.com/app")).rejects.toMatchObject({ code: "origin" })
+    const stopped = guardedFetch({ origin: "http://127.0.0.1:9", signal, stopped: () => true })
+    await expect(stopped("http://127.0.0.1:9/app")).rejects.toMatchObject({ code: "stopped" })
   })
 
   it("is read back from Octokit's wrapped error", () => {

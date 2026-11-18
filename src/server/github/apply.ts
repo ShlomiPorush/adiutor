@@ -18,6 +18,13 @@ export const GITHUB_PULL: By = { actor: { kind: "system", label: "github" }, sou
 export const GITHUB_RUN_KIND = "github"
 /** A write waits at most this long for a lock (a project row the owner is changing): the next pull tries again. */
 const LOCK_TIMEOUT = "5s"
+/**
+ * Rows per statement: PostgreSQL takes at most 65,535 parameters in one statement, and a source row has 12, so a pull
+ * of many projects writes in batches, all in the one transaction.
+ */
+const BATCH = 500
+const batches = <T>(rows: readonly T[]): T[][] =>
+  Array.from({ length: Math.ceil(rows.length / BATCH) }, (_, i) => rows.slice(i * BATCH, (i + 1) * BATCH))
 /** A run row keeps at most this many errors. */
 const MAX_ERRORS = 500
 
@@ -243,11 +250,11 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
         })
     }
 
-    if (sourceRows.length > 0) {
-      const excluded = (column: string) => sql.raw(`excluded."${column}"`)
+    const excluded = (column: string) => sql.raw(`excluded."${column}"`)
+    for (const rows of batches(sourceRows)) {
       await tx
         .insert(securitySources)
-        .values(sourceRows)
+        .values(rows)
         .onConflictDoUpdate({
           target: [securitySources.projectId, securitySources.family],
           set: {
@@ -264,10 +271,10 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
           },
         })
     }
-    if (issueCases.length > 0) {
+    for (const cases of batches(issueCases)) {
       const when = (value: (c: (typeof issueCases)[number]) => SQL) =>
         sql.join(
-          [sql`case ${projects.id}`, ...issueCases.map((c) => sql`when ${c.id}::uuid then ${value(c)}`), sql`end`],
+          [sql`case ${projects.id}`, ...cases.map((c) => sql`when ${c.id}::uuid then ${value(c)}`), sql`end`],
           sql` `,
         )
       await tx
@@ -281,7 +288,7 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
         .where(
           inArray(
             projects.id,
-            issueCases.map((c) => c.id),
+            cases.map((c) => c.id),
           ),
         )
     }
@@ -319,7 +326,7 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
       before: null,
       after: plain({ outcome, counts, timeOnly, attempts, skipped }),
     })
-    await tx.insert(audit).values(audits)
+    for (const rows of batches(audits)) await tx.insert(audit).values(rows)
     return { written: true, runId, outcome, counts, errors } as const
   })
 }

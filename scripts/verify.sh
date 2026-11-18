@@ -217,7 +217,8 @@ run_integration() {
 
   info "Container: image, health, runtime user and hardening"
   build_image verify "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
-  github_stand_in
+  # Only the end-to-end tests read the stand-in GitHub API.
+  if [ $E2E -eq 1 ]; then github_stand_in; fi
   stack up -d --wait --wait-timeout 120 adiutor || fail_stack "the adiutor container did not become healthy"
   TOOLCHAIN_EXTRA_ARGS=(--network "${PROJECT}_default")
   # shellcheck disable=SC2016 # expands inside the container

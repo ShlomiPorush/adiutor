@@ -457,7 +457,12 @@ async function foldChildLink(
   })
 }
 
-/** The latest runs, newest first. */
-export function recentSyncRuns(ctx: Ctx, limit = 20): Promise<SyncRunRow[]> {
-  return ctx.db.select().from(syncRuns).orderBy(desc(syncRuns.startedAt)).limit(limit)
+/** The latest runs, newest first; of one kind only when `kind` is given (the PC's `t3`, the server's `github`). */
+export function recentSyncRuns(ctx: Ctx, limit = 20, kind?: string): Promise<SyncRunRow[]> {
+  return ctx.db
+    .select()
+    .from(syncRuns)
+    .where(kind ? eq(syncRuns.kind, kind) : undefined)
+    .orderBy(desc(syncRuns.startedAt))
+    .limit(limit)
 }

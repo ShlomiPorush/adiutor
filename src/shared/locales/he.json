@@ -1427,10 +1427,6 @@
     "movedIntro": "GitHub מכיר את המאגרים האלה בשם חדש. יש לעדכן את המאגר של הפרויקט.",
     "movedFromTo": "{from} נקרא עכשיו {to}",
     "movedNow": "עכשיו {to}",
-    "movedUpdate": "עדכון",
-    "movedSet": "{name}: המאגר הוגדר ל-{repo}",
-    "movedUndo": "ביטול שינוי המאגר של {name}",
-    "movedFailed": "לא ניתן לעדכן את {name}: {reason}",
     "notCoveredTitle": "פרויקטים בלי נתונים עדכניים",
     "notCoveredIntro": "נתוני האבטחה שלהם בלוח עלולים לחסור או להיות לא עדכניים.",
     "reason": {

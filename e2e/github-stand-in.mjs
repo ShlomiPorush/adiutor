@@ -190,9 +190,9 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
     const inst = s.installations[installationId]
 
     if (path === "/installation/repositories" && req.method === "GET") {
-      const perPage = Number(url.searchParams.get("per_page") ?? 30)
-      const page = Number(url.searchParams.get("page") ?? 1)
       const inventory = inst.inventory ?? {}
+      const perPage = inventory.pageSize ?? Number(url.searchParams.get("per_page") ?? 30)
+      const page = Number(url.searchParams.get("page") ?? 1)
       if (inventory.failPage === page) return json(res, 502, { message: "Server Error" })
       const all = inst.repositories.map((fullName) => ({ id: s.repos[fullName]?.id ?? 0, full_name: fullName }))
       const slice = all.slice((page - 1) * perPage, page * perPage)
@@ -206,6 +206,11 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
       const body = JSON.parse(raw || "{}")
       if (s.graphql?.rateLimited)
         return json(res, 200, { data: null, errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] })
+      // As GitHub: a connection asked for without `first` or `last` fails the whole query.
+      if (/issues\((?![^)]*\b(first|last):)/.test(String(body.query)))
+        return json(res, 200, {
+          errors: [{ type: "MISSING_PAGINATION_BOUNDARIES", message: "You must provide a `first` or `last` value." }],
+        })
       const data = {}
       const errors = []
       for (const m of String(body.query).matchAll(
@@ -253,7 +258,10 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
             ? Number(Buffer.from(cursor, "base64url").toString())
             : Number(cursor)
       if (mode.failPage === page) return json(res, mode.failStatus ?? 500, { message: "failed" })
-      const slice = mode.alerts.slice((page - 1) * perPage, page * perPage)
+      // Alerts as GitHub lists them: each with its number and the state asked for, unless the test gives them.
+      const slice = mode.alerts
+        .map((alert, i) => ({ number: i + 1, state: "open", ...alert }))
+        .slice((page - 1) * perPage, page * perPage)
       const headers = {}
       if (page * perPage < mode.alerts.length) {
         const next = new URL(`http://${req.headers.host}${path}`)

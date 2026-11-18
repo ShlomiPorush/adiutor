@@ -52,7 +52,11 @@ export function useGitHubView(every: number = EVERY.slow) {
 export type GitHubKeyDraft = { mode: "replace"; value: string } | { mode: "remove" }
 
 /** The GitHub fields of the Settings draft, as typed. */
-export type GitHubDraft = { githubAppId?: string; githubKey?: GitHubKeyDraft }
+/**
+ * The App's fields in the one draft, with the generation of the view the first edit was made on: a save is refused
+ * (409) when the settings changed since, even after the page refreshed underneath the draft.
+ */
+export type GitHubDraft = { githubAppId?: string; githubKey?: GitHubKeyDraft; githubBasedOn?: number }
 
 /** What a save of the App sends: only what differs from the settings in effect, never a locked field (SV-2). */
 export function githubChanges(view: GitHubView | undefined, draft: GitHubDraft): GitHubAppPatch {
@@ -180,6 +184,8 @@ function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
   const { t } = useI18n()
   const { draft, set, ids, fieldError, invalid } = form
   const { appId, key } = view.settings
+  const edit = (patch: GitHubDraft) =>
+    set(draft.githubBasedOn === undefined ? { ...patch, githubBasedOn: view.settings.generation } : patch)
   const appLock = appId.locked ? { variable: appId.variable } : null
   const keyLock = key.locked ? { variable: key.variable } : null
   // A locked field shows what the environment sets, never an edit made before it was locked.
@@ -191,7 +197,7 @@ function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
         hint={t("githubSettings.appIdHint")}
         htmlFor={ids.githubAppId}
         lock={appLock}
-        onClear={typedAppId.trim() ? () => set({ githubAppId: "" }) : null}
+        onClear={typedAppId.trim() ? () => edit({ githubAppId: "" }) : null}
       >
         <input
           id={ids.githubAppId}
@@ -204,7 +210,7 @@ function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
           placeholder={appLock ? t("settings.env.pill") : t("githubSettings.notSet")}
           value={typedAppId}
           {...invalid("githubAppId")}
-          onChange={(event) => set({ githubAppId: event.target.value })}
+          onChange={(event) => edit({ githubAppId: event.target.value })}
         />
         {fieldError("githubAppId")}
       </Row>
@@ -213,7 +219,7 @@ function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
           id={ids.githubKey}
           saved={key}
           draft={draft.githubKey}
-          onChange={(githubKey) => set({ githubKey })}
+          onChange={(githubKey) => edit({ githubKey })}
           invalidProps={invalid("githubKey")}
         />
         {fieldError("githubKey")}
@@ -660,45 +666,10 @@ function Repo({ value }: { value: string }) {
   )
 }
 
-/** Repositories GitHub knows under a new name: Update sets it on the project at once, with Undo (FB-16). */
+/** Repositories GitHub knows under a new name: the owner sets the new one on the project's page. */
 function MovedGroup({ view }: { view: GitHubView }) {
-  const { t, language } = useI18n()
-  const queryClient = useQueryClient()
-  const [busy, setBusy] = useState<string | null>(null)
+  const { t } = useI18n()
   if (view.moved.length === 0) return null
-  const changed = async (projectId: string) => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: qk.github }),
-      queryClient.invalidateQueries({ queryKey: qk.project(projectId) }),
-      queryClient.invalidateQueries({ queryKey: qk.projects }),
-      queryClient.invalidateQueries({ queryKey: qk.morning }),
-    ])
-  }
-  const update = async (entry: GitHubView["moved"][number]) => {
-    setBusy(entry.id)
-    try {
-      await api.updateProject(entry.id, { githubRepo: entry.movedTo })
-      await changed(entry.id)
-      showToast(t("githubSettings.movedSet", { name: entry.name, repo: entry.movedTo }), "success", {
-        action: {
-          label: t("common.undo"),
-          ariaLabel: t("githubSettings.movedUndo", { name: entry.name }),
-          onAction: async () => {
-            try {
-              await api.updateProject(entry.id, { githubRepo: entry.repo })
-              await changed(entry.id)
-            } catch (error) {
-              showToast(t("toast.undoFailed", { reason: errorReason(language, error) }), "error")
-            }
-          },
-        },
-      })
-    } catch (error) {
-      showToast(t("githubSettings.movedFailed", { name: entry.name, reason: errorReason(language, error) }), "error")
-    } finally {
-      setBusy(null)
-    }
-  }
   return (
     <Group
       id="settings-github-moved"
@@ -715,16 +686,6 @@ function MovedGroup({ view }: { view: GitHubView }) {
                 ? t("githubSettings.movedFromTo", { from: entry.repo, to: entry.movedTo })
                 : t("githubSettings.movedNow", { to: entry.movedTo })}
             </span>
-          </div>
-          <div className="ui-item-end">
-            <button
-              type="button"
-              className="ui-btn ui-btn-sm"
-              disabled={busy === entry.id}
-              onClick={() => void update(entry)}
-            >
-              {t("githubSettings.movedUpdate")}
-            </button>
           </div>
         </div>
       ))}

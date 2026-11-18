@@ -13,14 +13,14 @@ export type Failure =
 
 /** A secondary rate limit without a reset header: wait this long (GitHub's guidance is at least a minute). */
 const SECONDARY_WAIT_MS = 60_000
-/** A reset further away than this is not believed: the next hourly pull tries again. */
-const MAX_WAIT_MS = 2 * 60 * 60_000
+/** A reset further away than this is not believed (a clock far off): the pull waits this long at most. */
+const MAX_WAIT_MS = 24 * 60 * 60_000
 
 const SECONDARY = /secondary rate limit/i
 
 type Shaped = { status?: unknown; response?: { headers?: unknown; data?: unknown }; cause?: unknown; name?: unknown }
 
-const lower = (headers: unknown): Record<string, string> =>
+export const lowerHeaders = (headers: unknown): Record<string, string> =>
   Object.fromEntries(
     Object.entries(typeof headers === "object" && headers !== null ? headers : {}).map(([k, v]) => [
       k.toLowerCase(),
@@ -62,7 +62,10 @@ export function restRateLimit(
   return null
 }
 
-/** A GraphQL answer's rate limit, whatever its HTTP status: an error of type RATE_LIMITED or naming a secondary one. */
+/**
+ * A GraphQL answer's rate limit, whatever its HTTP status: an error of type RATE_LIMITED or naming a secondary one. It
+ * ends at `retry-after` when given, else at `x-ratelimit-reset` when none remain, else after a minute.
+ */
 export function graphqlRateLimit(errors: unknown, headers: Record<string, string>, now: Date): Date | null {
   if (!Array.isArray(errors)) return null
   const limited = errors.some((e) => {
@@ -70,6 +73,8 @@ export function graphqlRateLimit(errors: unknown, headers: Record<string, string
     return err?.type === "RATE_LIMITED" || (typeof err?.message === "string" && SECONDARY.test(err.message))
   })
   if (!limited) return null
+  const retry = headers["retry-after"]
+  if (retry !== undefined && /^\d{1,6}$/.test(retry.trim())) return waitUntil(now, Number(retry.trim()) * 1000)
   const reset = Number(headers["x-ratelimit-reset"])
   return headers["x-ratelimit-remaining"] === "0" && Number.isFinite(reset) && reset > 0
     ? waitUntil(now, reset * 1000 - now.getTime())
@@ -86,7 +91,7 @@ export function describeFailure(error: unknown, now: Date): Failure {
   const status = typeof shaped.status === "number" ? shaped.status : 0
   // Octokit answers a fetch that threw (DNS, connection, TLS) as a 500 without a response.
   if (!shaped.response || status === 0) return { kind: "network" }
-  const headers = lower(shaped.response.headers)
+  const headers = lowerHeaders(shaped.response.headers)
   const message = messageOf(shaped.response.data)
   const until = restRateLimit(status, headers, message, now)
   if (until) return { kind: "rate_limit", until }
@@ -101,7 +106,7 @@ export function failureCode(failure: Failure): string {
     case "rate_limit":
       return "rate_limited"
     case "refused":
-      return failure.code === "superseded" ? "superseded" : failure.code === "redirect" ? "moved" : "origin_refused"
+      return failure.code === "redirect" ? "moved" : failure.code === "origin" ? "origin_refused" : failure.code
     case "aborted":
       return "aborted"
     case "network":

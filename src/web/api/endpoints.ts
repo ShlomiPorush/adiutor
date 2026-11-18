@@ -107,7 +107,8 @@ export const api = {
   archive: (cursor: string | null) => page<ItemSummary>(`/archive${query({ cursor, limit: 50 })}`),
   /** The activity log narrowed by its filters; `lang` goes with `q` (the labels the search also matches). */
   audit: (filters: AuditFilters, cursor: string | null) => auditPage(filters, cursor),
-  syncRuns: () => data<SyncRun[]>("GET", "/sync/runs?limit=10"),
+  /** The PC's latest T3 runs: the server's hourly GitHub pulls would push them out of a mixed list. */
+  syncRuns: () => data<SyncRun[]>("GET", "/sync/runs?kind=t3&limit=10"),
   syncRequests: () => data<SyncRequests>("GET", "/sync/requests"),
   /** Sync now: a new request, or the one already waiting or running (`created` false). */
   requestSync: () => data<{ request: SyncRequest; created: boolean }>("POST", "/sync/requests", {}),

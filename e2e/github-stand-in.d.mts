@@ -23,7 +23,7 @@ export type StandInInstallation = {
   uninstalled?: boolean
   status?: number
   message?: string
-  inventory?: { failPage?: number; countDelta?: number }
+  inventory?: { failPage?: number; countDelta?: number; pageSize?: number }
 }
 
 export type StandInRepo = {

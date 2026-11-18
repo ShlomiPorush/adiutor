@@ -666,11 +666,12 @@ function useSettingsDraft(
         setFormatPrefs({ dateFormat: next.dateFormat, timeFormat: next.timeFormat })
         if (next.language !== language) setLanguage(next.language)
         // The agent and GitHub fields stay until their own saves below succeed.
-        setDraft(({ agentsEnabled, agentIdleDays, githubAppId, githubKey }) => ({
+        setDraft(({ agentsEnabled, agentIdleDays, githubAppId, githubKey, githubBasedOn }) => ({
           agentsEnabled,
           agentIdleDays,
           githubAppId,
           githubKey,
+          githubBasedOn,
         }))
         await queryClient.invalidateQueries({ queryKey: qk.morning })
         await queryClient.invalidateQueries({ queryKey: qk.telegram })
@@ -694,18 +695,21 @@ function useSettingsDraft(
         step = "github"
         const sentAppId = draft.githubAppId
         try {
-          const next = await api.updateGitHubApp(githubSaved.settings.generation, githubPatch)
+          // The generation the first edit was made on, not the one a refresh brought in since.
+          const next = await api.updateGitHubApp(draft.githubBasedOn ?? githubSaved.settings.generation, githubPatch)
           queryClient.setQueryData(qk.github, next)
           // A key GitHub did not answer for is kept as not verified yet (a first key only).
           githubWarning = typeof githubPatch.privateKey === "string" && next.settings.key.verified === false
           // Saved: the App id leaves the draft unless it was typed again meanwhile.
-          setDraft(({ githubKey: _key, ...current }) => {
+          setDraft(({ githubKey: _key, githubBasedOn: _basedOn, ...current }) => {
             if (current.githubAppId === sentAppId) delete current.githubAppId
-            return current
+            // An App id typed again meanwhile is an edit of the view just saved.
+            return current.githubAppId === undefined ? current : { ...current, githubBasedOn: next.settings.generation }
           })
         } catch (failure) {
           // The pasted key never stays in the draft after a refusal either; the App id stays for another try.
-          setDraft(({ githubKey: _key, ...current }) => current)
+          // The refusal was shown; a new save is based on the settings as they are read now.
+          setDraft(({ githubKey: _key, githubBasedOn: _basedOn, ...current }) => current)
           throw failure
         }
         await queryClient.invalidateQueries({ queryKey: qk.morning })
