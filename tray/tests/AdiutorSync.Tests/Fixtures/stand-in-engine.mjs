@@ -4,7 +4,7 @@ import { spawn } from "node:child_process"
 
 const [command] = process.argv.slice(2)
 const line = (value) => process.stdout.write(`${JSON.stringify(value)}\n`)
-const result = (fields) => line({ type: "result", v: 1, ok: true, ...fields })
+const result = (fields) => line({ type: "result", v: 2, ok: true, ...fields })
 
 if (command === "status") {
   process.stderr.write("a line on stderr that the tray drops\n")

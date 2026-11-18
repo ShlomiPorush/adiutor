@@ -1,1 +1,1 @@
-{"type":"result","v":1,"command":null,"ok":false,"error":{"code":"usage","message":"Unknown option --nope"}}
+{"type":"result","v":2,"command":null,"ok":false,"error":{"code":"usage","message":"Unknown option --nope"}}

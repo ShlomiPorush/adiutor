@@ -9,8 +9,8 @@ public class IconStateTests
     private static EngineStatus Status(ConnectionState adiutor = ConnectionState.Connected, ConnectionState t3 = ConnectionState.Connected, RunReport? last = null) =>
         new(new AdiutorConnection(adiutor, "https://adiutor.example.com", false), new T3Connection(t3, null, null, false), last, null, null, null, []);
 
-    private static RunReport Report(PartResult t3, PartResult security) =>
-        new(T, T, false, null, new RunPart(t3, null), new RunPart(security, null), null);
+    private static RunReport Report(PartResult t3) =>
+        new(T, T, false, null, new RunPart(t3, null), null);
 
     private static TraySnapshot Snap(EngineStatus? status, bool paused = false, RunningRun? running = null, bool update = false, DateTimeOffset? elsewhere = null) =>
         new() { Status = status, Settings = new TraySettings(), Paused = paused, Running = running, UpdateReady = update, RunningElsewhereSince = elsewhere };
@@ -21,6 +21,7 @@ public class IconStateTests
         { "never-run", IconState.Synced },
         { "partial", IconState.Problem },
         { "unknown", IconState.Problem },
+        { "t3-not-run", IconState.Problem },
         { "paused", IconState.Paused },
         { "paused-problem", IconState.Paused },
         { "adiutor-ended", IconState.NotConnected },
@@ -37,16 +38,17 @@ public class IconStateTests
     [MemberData(nameof(Cases))]
     public void Maps_each_state(string name, IconState expected)
     {
-        var good = Report(PartResult.Accepted, PartResult.Accepted);
+        var good = Report(PartResult.Accepted);
         var run = new RunningRun(RunKind.Scheduled, null, T);
         var snapshot = name switch
         {
             "synced" => Snap(Status(last: good)),
             "never-run" => Snap(Status()),
-            "partial" => Snap(Status(last: Report(PartResult.Accepted, PartResult.Partial))),
-            "unknown" => Snap(Status(last: Report(PartResult.OutcomeUnknown, PartResult.Accepted))),
+            "partial" => Snap(Status(last: Report(PartResult.Partial))),
+            "unknown" => Snap(Status(last: Report(PartResult.OutcomeUnknown))),
+            "t3-not-run" => Snap(Status(last: Report(PartResult.NotRun))),
             "paused" => Snap(Status(last: good), paused: true),
-            "paused-problem" => Snap(Status(last: Report(PartResult.Failed, PartResult.Failed)), paused: true),
+            "paused-problem" => Snap(Status(last: Report(PartResult.Failed)), paused: true),
             "adiutor-ended" => Snap(Status(adiutor: ConnectionState.Ended, last: good)),
             "t3-not-connected" => Snap(Status(t3: ConnectionState.NotConnected, last: good)),
             "no-status" => Snap(null),

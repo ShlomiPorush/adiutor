@@ -465,7 +465,7 @@ public sealed class SyncLoop
                     // Its run ended: it is reported, never run again.
                     _ended.Add(id);
                     if (_state.Finished.All(f => f.RequestId != id))
-                        _state = _state with { Finished = [.. _state.Finished, new FinishedRequest(id, last.T3.Result, last.Security.Result)] };
+                        _state = _state with { Finished = [.. _state.Finished, new FinishedRequest(id, last.T3.Result)] };
                 }
                 _state = _state with { RunningRequestId = null };
                 SaveState();
@@ -583,7 +583,8 @@ public sealed class SyncLoop
                 ["result"] = new JsonObject
                 {
                     ["t3"] = EngineOutput.PartName(f.T3),
-                    ["security"] = EngineOutput.PartName(f.Security),
+                    // Adiutor's check-in takes both parts; the server reads GitHub itself, so the sync never runs this one.
+                    ["security"] = EngineOutput.PartName(PartResult.NotRun),
                 },
             })]),
         };
@@ -704,7 +705,7 @@ public sealed class SyncLoop
                     }
                     else if (report is not null)
                     {
-                        _state = _state with { Finished = [.. _state.Finished.Where(f => f.RequestId != requestId), new FinishedRequest(requestId, report.T3.Result, report.Security.Result)] };
+                        _state = _state with { Finished = [.. _state.Finished.Where(f => f.RequestId != requestId), new FinishedRequest(requestId, report.T3.Result)] };
                         // Report it now rather than at the next minute.
                         _nextCheckinAt = Timestamp();
                     }
@@ -719,7 +720,7 @@ public sealed class SyncLoop
                     _scheduledNotGood = report?.IsGood == true ? 0 : _scheduledNotGood + 1;
                     notify = _scheduledNotGood == 2;
                 }
-                _log.Info($"run finished: t3={Name(report?.T3.Result)} security={Name(report?.Security.Result)}");
+                _log.Info($"run finished: t3={Name(report?.T3.Result)}");
             }
             if (run.RequestId is not null)
                 _state = _state with { RunningRequestId = null };

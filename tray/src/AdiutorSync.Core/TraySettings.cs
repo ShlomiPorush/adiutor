@@ -13,9 +13,9 @@ public sealed record Pause(DateTimeOffset? Until)
 
 /// <summary>
 /// The settings file settings.json in the engine's data folder (docs/sync.md, "Settings"). The tray writes it and the
-/// engine reads its own keys from it (adiutorUrl, t3CliPath, t3Url, overviewDir, pause). The other keys are the tray's
+/// engine reads its own keys from it (adiutorUrl, t3CliPath, t3Url, pause). The other keys are the tray's
 /// (scheduleHours, language, startWithWindows, enginePath). No secret is ever in it. Keys the tray does not know are
-/// kept as they are when it writes the file.
+/// kept as they are when it writes the file (an overviewDir an older tray wrote stays, and the engine ignores it).
 /// </summary>
 public sealed record TraySettings
 {
@@ -26,7 +26,6 @@ public sealed record TraySettings
     public string? AdiutorUrl { get; init; }
     public string? T3CliPath { get; init; }
     public string? T3Url { get; init; }
-    public string? OverviewDir { get; init; }
     public Pause? Pause { get; init; }
 
     /** Hours between scheduled runs (owner's decision D-T3: every 3 hours by default). */
@@ -88,7 +87,6 @@ public static class SettingsStore
         SetText(root, "adiutorUrl", settings.AdiutorUrl);
         SetText(root, "t3CliPath", settings.T3CliPath);
         SetText(root, "t3Url", settings.T3Url);
-        SetText(root, "overviewDir", settings.OverviewDir);
         if (settings.Pause is { } pause)
             root["pause"] = new JsonObject { ["until"] = pause.Until is { } until ? Times.Iso(until) : null };
         else
@@ -126,7 +124,6 @@ public static class SettingsStore
             AdiutorUrl = Text("adiutorUrl"),
             T3CliPath = Text("t3CliPath"),
             T3Url = Text("t3Url"),
-            OverviewDir = Text("overviewDir"),
             Pause = pause,
             ScheduleHours = hours,
             Language = language,

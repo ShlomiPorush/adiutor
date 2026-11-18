@@ -17,7 +17,7 @@ internal interface ITrayActions
 
 /// <summary>
 /// The panel a click on the icon opens, above the notification area (the plan, section 4, "Tray"): the state, the
-/// last run per part and its time, the last good sync, the next run, Sync now, Pause or Resume, Open Adiutor,
+/// last run's T3 result and its time, the last good sync, the next run, Sync now, Pause or Resume, Open Adiutor,
 /// Settings and Quit. It closes when it loses focus.
 /// </summary>
 internal sealed partial class PanelWindow : Window
@@ -44,7 +44,6 @@ internal sealed partial class PanelWindow : Window
         FlowDirection = t.RightToLeft ? FlowDirection.RightToLeft : FlowDirection.LeftToRight;
         AppName.Text = t["appName"];
         T3Label.Text = t["panel.t3"];
-        SecurityLabel.Text = t["panel.security"];
         LastRunLabel.Text = t["panel.lastRun"];
         LastGoodLabel.Text = t["panel.lastGood"];
         NextRunLabel.Text = t["panel.nextRun"];
@@ -66,7 +65,6 @@ internal sealed partial class PanelWindow : Window
         StateDot.Fill = new SolidColorBrush(Color.FromRgb(colour.R, colour.G, colour.B));
         StateText.Text = view.State;
         T3Value.Text = view.T3;
-        SecurityValue.Text = view.Security;
         LastRunValue.Text = view.LastRun;
         LastGoodValue.Text = view.LastGood;
         NextRunValue.Text = view.NextRun;

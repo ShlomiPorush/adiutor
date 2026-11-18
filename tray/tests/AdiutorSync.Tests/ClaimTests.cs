@@ -61,12 +61,12 @@ public class ClaimTests
     {
         var id = Fixture.RequestId();
         using var h = new Harness(state: new TrayState { RunningRequestId = id });
-        h.Engine.Status = () => """{"type":"result","v":1,"command":"status","ok":false,"error":{"code":"timeout","message":"m"}}""";
+        h.Engine.Status = () => """{"type":"result","v":2,"command":"status","ok":false,"error":{"code":"timeout","message":"m"}}""";
         await h.Tick();
         Assert.Equal(id, StateStore.Load(h.Dir.File(TrayState.FileName)).RunningRequestId);
         Assert.Empty(h.Runs);
 
-        h.Engine.Status = () => Lines.Status(lastRun: Lines.Report(Harness.T0.AddMinutes(-30), t3: "accepted", security: "accepted", requestId: id), claim: id);
+        h.Engine.Status = () => Lines.Status(lastRun: Lines.Report(Harness.T0.AddMinutes(-30), t3: "accepted", requestId: id), claim: id);
         await h.Advance(TimeSpan.FromMinutes(1));
         Assert.Null(StateStore.Load(h.Dir.File(TrayState.FileName)).RunningRequestId);
         var finished = Assert.Single(h.Reports[^1]["finished"]!.AsArray())!.AsObject();

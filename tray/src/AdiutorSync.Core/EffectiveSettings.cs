@@ -34,7 +34,6 @@ public static class EffectiveSettings
     public const string AdiutorUrl = "adiutorUrl";
     public const string T3CliPath = "t3CliPath";
     public const string T3Url = "t3Url";
-    public const string OverviewDir = "overviewDir";
 
     /** The environment variable the engine reads for a setting, for the note on a locked field. */
     public static string EnvironmentName(string key) => key switch
@@ -42,7 +41,7 @@ public static class EffectiveSettings
         AdiutorUrl => "ADIUTOR_URL",
         T3CliPath => "T3CODE_CLI_PATH",
         T3Url => "ADIUTOR_T3_URL",
-        _ => "ADIUTOR_OVERVIEW_DIR",
+        _ => throw new ArgumentOutOfRangeException(nameof(key), key, "not a setting the engine reads"),
     };
 
     public static FieldMode Mode(string key, SettingSource? source) => source switch

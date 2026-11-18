@@ -35,13 +35,12 @@ public class SettingsSectionsTests
         Assert.True(new SectionAttention().Update(SettingsSections.Attention(ConnectionState.NotConnected, false)));
 
     [Fact]
-    public void The_sync_header_names_the_schedule_and_a_missing_overview_folder()
+    public void The_sync_header_names_the_schedule_only()
     {
         var en = Texts.Load(Texts.English);
-        Assert.Equal("Sync every 4 hours", SettingsSections.SyncSummary(en, 4, @"C:\overview"));
-        Assert.Equal("Sync every 1 hour \u00B7 no security data", SettingsSections.SyncSummary(en, 1, " "));
+        Assert.Equal("Sync every 4 hours", SettingsSections.SyncSummary(en, 4));
+        Assert.Equal("Sync every 1 hour", SettingsSections.SyncSummary(en, 1));
         var he = Texts.Load(Texts.Hebrew);
-        Assert.Equal(he["settings.schedule"] + " " + he.Format("settings.hours", ("n", "2")) + " \u00B7 " + he["settings.noOverview"],
-            SettingsSections.SyncSummary(he, 2, null));
+        Assert.Equal(he["settings.schedule"] + " " + he.Format("settings.hours", ("n", "2")), SettingsSections.SyncSummary(he, 2));
     }
 }

@@ -17,12 +17,8 @@ public static class SettingsSections
             ? $"{state}:{revocationPending}"
             : null;
 
-    /** The Sync section's header: the schedule, and that no security data is sent without the overview folder. */
-    public static string SyncSummary(Texts t, int hours, string? overviewDir)
-    {
-        var every = t["settings.schedule"] + " " + ScheduleChoice(t, hours);
-        return string.IsNullOrWhiteSpace(overviewDir) ? every + " · " + t["settings.noOverview"] : every;
-    }
+    /** The Sync section's header: the schedule. */
+    public static string SyncSummary(Texts t, int hours) => t["settings.schedule"] + " " + ScheduleChoice(t, hours);
 
     /** One choice of the schedule list: "1 hour", "4 hours". */
     public static string ScheduleChoice(Texts t, int hours) =>

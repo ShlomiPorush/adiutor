@@ -1,2 +1,2 @@
 {"type":"event","event":"message","text":"A run is going since 2026-11-17T09:00:00.000Z"}
-{"type":"result","v":1,"command":"run","ok":false,"busy":{"startedAt":"2026-11-17T09:00:00.000Z"},"error":{"code":"busy","message":"Another run is going."}}
+{"type":"result","v":2,"command":"run","ok":false,"busy":{"startedAt":"2026-11-17T09:00:00.000Z"},"error":{"code":"busy","message":"Another run is going."}}

@@ -9,13 +9,16 @@ internal sealed class Harness : IDisposable
 {
     public static readonly DateTimeOffset T0 = DateTimeOffset.Parse("2026-11-17T09:00:00Z", CultureInfo.InvariantCulture);
 
-    public Harness(TraySettings? settings = null, TrayState? state = null, FakeTimeProvider? time = null)
+    public Harness(TraySettings? settings = null, TrayState? state = null, FakeTimeProvider? time = null, string? stateFile = null)
     {
         Time = time ?? new FakeTimeProvider(T0);
         if (settings is not null)
             SettingsStore.Save(Dir.File(TraySettings.FileName), settings);
         if (state is not null)
             StateStore.Save(Dir.File(TrayState.FileName), state);
+        // The state file as it is on disk, such as one an older tray wrote.
+        if (stateFile is not null)
+            File.WriteAllText(Dir.File(TrayState.FileName), stateFile);
         // By default the last run started an hour ago, so the schedule is not due yet.
         Engine.Status = () => Lines.Status(lastRun: Lines.Report(T0.AddHours(-1)));
         Loop = new SyncLoop(Engine, Dir.Root, Time, "1.2.3-dev", NoLog.Instance);
@@ -113,7 +116,7 @@ public class LoopTests
         var id = Fixture.RequestId();
         h.Engine.Checkin = () => Lines.Checkin(id);
         h.Engine.RunGate = new TaskCompletionSource();
-        h.Engine.Run = c => Lines.Run(Lines.Report(Harness.T0, security: "partial", requestId: id));
+        h.Engine.Run = c => Lines.Run(Lines.Report(Harness.T0, t3: "partial", requestId: id));
         await h.Tick();
         var run = Assert.Single(h.Runs);
         Assert.Equal(["run", "--request", id], run.Args);
@@ -134,8 +137,9 @@ public class LoopTests
         await h.Tick();
         var finished = Assert.Single(h.Reports[^1]["finished"]!.AsArray())!.AsObject();
         Assert.Equal(id, finished["requestId"]!.GetValue<string>());
-        Assert.Equal("accepted", finished["result"]!["t3"]!.GetValue<string>());
-        Assert.Equal("partial", finished["result"]!["security"]!.GetValue<string>());
+        Assert.Equal("partial", finished["result"]!["t3"]!.GetValue<string>());
+        // The server reads GitHub itself: the sync never runs security.
+        Assert.Equal("not_run", finished["result"]!["security"]!.GetValue<string>());
         var state = StateStore.Load(h.Dir.File(TrayState.FileName));
         Assert.Null(state.RunningRequestId);
         Assert.Empty(state.Finished);
@@ -154,7 +158,7 @@ public class LoopTests
         await h.Tick();
         await h.Loop.CurrentRun;
         // The answer is lost: the engine reports outcome_unknown without a result the tray can use.
-        h.Engine.Checkin = () => """{"type":"result","v":1,"command":"checkin","ok":false,"claim":{"requestId":"%ID%","receivedAt":"2026-11-17T08:00:00.000Z"},"error":{"code":"outcome_unknown","message":"m"}}""".Replace("%ID%", id, StringComparison.Ordinal);
+        h.Engine.Checkin = () => """{"type":"result","v":2,"command":"checkin","ok":false,"claim":{"requestId":"%ID%","receivedAt":"2026-11-17T08:00:00.000Z"},"error":{"code":"outcome_unknown","message":"m"}}""".Replace("%ID%", id, StringComparison.Ordinal);
         await h.Tick();
         Assert.Single(h.Reports[^1]["finished"]!.AsArray());
         Assert.Equal("outcome_unknown", h.Loop.Snapshot.CheckinProblem);
@@ -374,7 +378,7 @@ public class LoopTests
     {
         using var h = new Harness();
         h.Engine.Status = () => Lines.Status();
-        h.Engine.Run = _ => Lines.Run(Lines.Report(h.Time.GetUtcNow(), security: "failed"));
+        h.Engine.Run = _ => Lines.Run(Lines.Report(h.Time.GetUtcNow(), t3: "partial"));
         for (var i = 0; i < 3; i++)
         {
             await h.Advance(TimeSpan.FromHours(3));
@@ -473,7 +477,7 @@ public class LoopTests
         // The engine wrote its report, then ended before its result line (a crash, or the limit).
         h.Engine.Run = _ =>
         {
-            h.Engine.Status = () => Lines.Status(lastRun: Lines.Report(Harness.T0, t3: "accepted", security: "partial", requestId: id), claim: id);
+            h.Engine.Status = () => Lines.Status(lastRun: Lines.Report(Harness.T0, t3: "partial", requestId: id), claim: id);
             return "not a result";
         };
         await h.Tick();
@@ -482,8 +486,34 @@ public class LoopTests
         await h.Tick();
         var finished = Assert.Single(h.Reports[^1]["finished"]!.AsArray())!.AsObject();
         Assert.Equal(id, finished["requestId"]!.GetValue<string>());
-        Assert.Equal("accepted", finished["result"]!["t3"]!.GetValue<string>());
-        Assert.Equal("partial", finished["result"]!["security"]!.GetValue<string>());
+        Assert.Equal("partial", finished["result"]!["t3"]!.GetValue<string>());
+        Assert.Equal("not_run", finished["result"]!["security"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Finished_requests_an_older_tray_saved_are_reported_with_security_not_run()
+    {
+        var accepted = Fixture.RequestId();
+        var partial = Fixture.RequestId();
+        // tray-state.json as an older tray wrote it: each finished request with a security result.
+        var file = $$"""
+            {
+              "runningRequestId": null,
+              "finished": [
+                { "requestId": "{{accepted}}", "t3": "accepted", "security": "failed" },
+                { "requestId": "{{partial}}", "t3": "partial", "security": "accepted" }
+              ],
+              "lastAttemptAt": "2026-11-17T08:00:00+00:00"
+            }
+            """;
+        using var h = new Harness(stateFile: file);
+        await h.Tick();
+        var finished = h.Reports[0]["finished"]!.AsArray().Select(f => f!.AsObject()).ToList();
+        Assert.Equal([accepted, partial], finished.Select(f => f["requestId"]!.GetValue<string>()));
+        Assert.Equal(["accepted", "partial"], finished.Select(f => f["result"]!["t3"]!.GetValue<string>()));
+        Assert.All(finished, f => Assert.Equal("not_run", f["result"]!["security"]!.GetValue<string>()));
+        Assert.Equal(["requestId", "result"], finished.SelectMany(f => f.Select(p => p.Key)).Distinct());
+        Assert.Equal(["t3", "security"], finished.SelectMany(f => f["result"]!.AsObject().Select(p => p.Key)).Distinct());
     }
 
     [Fact]
@@ -492,7 +522,7 @@ public class LoopTests
         using var h = new Harness();
         var id = Fixture.RequestId();
         h.Engine.Checkin = () => Lines.Checkin(id);
-        h.Engine.Run = _ => """{"type":"result","v":1,"command":"run","ok":false,"error":{"code":"request_not_claimed","message":"m"}}""";
+        h.Engine.Run = _ => """{"type":"result","v":2,"command":"run","ok":false,"error":{"code":"request_not_claimed","message":"m"}}""";
         await h.Tick();
         await h.Loop.CurrentRun;
         h.Engine.Checkin = () => Lines.Checkin(null);
@@ -503,7 +533,7 @@ public class LoopTests
     [Fact]
     public async Task At_most_twenty_finished_requests_per_report()
     {
-        var finished = Enumerable.Range(0, 25).Select(_ => new FinishedRequest(Fixture.RequestId(), PartResult.Accepted, PartResult.Accepted)).ToList();
+        var finished = Enumerable.Range(0, 25).Select(_ => new FinishedRequest(Fixture.RequestId(), PartResult.Accepted)).ToList();
         using var h = new Harness(state: new TrayState { Finished = finished });
         await h.Tick();
         Assert.Equal(20, h.Reports[0]["finished"]!.AsArray().Count);

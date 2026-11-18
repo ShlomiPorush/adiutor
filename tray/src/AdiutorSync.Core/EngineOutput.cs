@@ -8,7 +8,10 @@ namespace AdiutorSync.Core;
 // field is ignored, so a newer engine that adds fields still parses. A line that is not one of these objects is
 // skipped, and the result decides the outcome, never the exit code.
 
-/** What one part of a run (T3 or security) came to. */
+/**
+ * What a part of a run came to. A run has one part, T3; a check-in still reports a security part for each finished
+ * request, always NotRun (Adiutor reads GitHub itself).
+ */
 public enum PartResult
 {
     Unknown,
@@ -41,11 +44,10 @@ public sealed record RunReport(
     bool DryRun,
     string? RequestId,
     RunPart T3,
-    RunPart Security,
     DateTimeOffset? LastGoodSyncAt)
 {
-    /** Both parts accepted in this run: a good sync (docs/sync.md, "The result of each part"). */
-    public bool IsGood => T3.Result == PartResult.Accepted && Security.Result == PartResult.Accepted;
+    /** T3 accepted in this run: a good sync (docs/sync.md, "The result of each part"). */
+    public bool IsGood => T3.Result == PartResult.Accepted;
 }
 
 public sealed record Claim(string RequestId, DateTimeOffset ReceivedAt);
@@ -86,7 +88,8 @@ public sealed record ApprovalEvent(string Link, string UserCode) : EngineEvent;
 
 public static class EngineOutput
 {
-    public const int ContractVersion = 1;
+    /** 2: a run has no security part, and `status` no overview folder. A result of any other version is skipped. */
+    public const int ContractVersion = 2;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -206,11 +209,11 @@ public static class EngineOutput
             r.DryRun ?? false,
             r.RequestId,
             new RunPart(Part(r.T3?.Result), r.T3?.Reason),
-            new RunPart(Part(r.Security?.Result), r.Security?.Reason),
             r.LastGoodSyncAt);
     }
 
-    // The wire shapes, as contract.ts writes them.
+    // The wire shapes, as contract.ts writes them. A security part that a run saved by an older engine still carries
+    // is not read: it no longer counts.
     private sealed class Line
     {
         public string? Type { get; set; }
@@ -293,7 +296,6 @@ public static class EngineOutput
         public bool? DryRun { get; set; }
         public string? RequestId { get; set; }
         public PartLine? T3 { get; set; }
-        public PartLine? Security { get; set; }
         public DateTimeOffset? LastGoodSyncAt { get; set; }
     }
 
