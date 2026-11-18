@@ -231,6 +231,16 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
       return json(res, 200, errors.length > 0 ? { data, errors } : { data })
     }
 
+    const repoMatch = /^\/repos\/([^/]+)\/([^/]+)$/.exec(path)
+    if (repoMatch && req.method === "GET") {
+      const fullName = `${repoMatch[1]}/${repoMatch[2]}`
+      const key = inst.repositories.find((r) => r.toLowerCase() === fullName.toLowerCase())
+      const repo = key ? s.repos[key] : undefined
+      if (!repo) return json(res, 404, { message: "Not Found" })
+      // A test may say the name now leads to another repository (renamed, then reused, while a pull reads).
+      return json(res, 200, { id: repo.restId ?? repo.id, full_name: key })
+    }
+
     // A family's list, by the repository's id (as Adiutor asks and GitHub's paging links write it) or by its name.
     const familyMatch =
       /^\/(?:repositories\/(\d+)|repos\/([^/]+\/[^/]+))\/(dependabot\/alerts|code-scanning\/alerts|secret-scanning\/alerts)$/.exec(

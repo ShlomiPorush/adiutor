@@ -315,9 +315,9 @@ describe("a pull", () => {
     expect(pages).toHaveLength(6)
     for (const page of pages) expect(page.query).toMatchObject({ hide_secret: "true", state: "open", per_page: "100" })
     expect(standIn.requests.filter((r) => r.family === "dependabot").map((r) => r.query.after ?? null)).toHaveLength(4)
-    // Every list is asked by the repository's id, never by its name.
+    // Every list is asked as GitHub documents it, by the repository's name.
     for (const r of standIn.requests.filter((r) => r.family !== undefined))
-      expect(r.path.startsWith("/repositories/7001/")).toBe(true)
+      expect(r.path.startsWith("/repos/example-org/widget/")).toBe(true)
   })
 
   it("keeps the stored counts when a read fails, and records the attempt", async () => {
@@ -605,6 +605,20 @@ describe("review round 1", () => {
       ...(await t.ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from security_sources`)),
     ]
     expect(n).toBe(600)
+  })
+
+  it("keeps the stored counts when the name leads to another repository before or after the lists", async () => {
+    await setUp()
+    const widget = await project("Widget", "example-org/widget")
+    await handle.runner.pull()
+    const repo = standIn.scenario.repos["example-org/widget"] as Scenario["repos"][string]
+    repo.dependabot = { alerts: [] }
+    repo.restId = 7999
+    await handle.runner.pull()
+    expect(await family(widget.id, "dependabot")).toMatchObject({ coverage: "enabled", critical: 1, attempt: "error" })
+    // The check before the lists already found another repository: no list was asked for it in that pull.
+    const second = standIn.requests.slice(standIn.requests.findLastIndex((r) => r.path === "/app/installations/4242"))
+    expect(second.filter((r) => r.family !== undefined)).toEqual([])
   })
 
   it("keeps the stored counts when a list of more pages changes while it is read", async () => {

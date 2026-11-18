@@ -697,6 +697,8 @@ function useSettingsDraft(
       if (githubSaved && Object.keys(githubPatch).length > 0) {
         step = "github"
         const sentAppId = draft.githubAppId
+        // A key pasted again while this save runs is a new edit: only the key sent leaves the draft.
+        const sentKey = draft.githubKey
         try {
           // The generation the first edit was made on, not the one a refresh brought in since.
           const next = await api.updateGitHubApp(draft.githubBasedOn ?? githubSaved.settings.generation, githubPatch)
@@ -704,10 +706,14 @@ function useSettingsDraft(
           // A key GitHub did not answer for is kept as not verified yet (a first key only).
           githubWarning = typeof githubPatch.privateKey === "string" && next.settings.key.verified === false
           // Saved: the App id leaves the draft unless it was typed again meanwhile.
-          setDraft(({ githubKey: _key, githubBasedOn: _basedOn, ...current }) => {
+          setDraft(({ githubKey, githubBasedOn: _basedOn, ...rest }) => {
+            const current: typeof rest & { githubKey?: typeof githubKey } =
+              githubKey === sentKey ? rest : { ...rest, githubKey }
             if (current.githubAppId === sentAppId) delete current.githubAppId
             // An App id typed again meanwhile is an edit of the view just saved.
-            return current.githubAppId === undefined ? current : { ...current, githubBasedOn: next.settings.generation }
+            return current.githubAppId === undefined && current.githubKey === undefined
+              ? current
+              : { ...current, githubBasedOn: next.settings.generation }
           })
         } catch (failure) {
           // The pasted key never stays in the draft after a refusal either; the App id stays for another try.
@@ -715,9 +721,16 @@ function useSettingsDraft(
           // elsewhere, and the page shows them as they are now. After another refusal the App id stays, still based on
           // the generation it was typed on.
           const conflict = failure instanceof ApiError && failure.code === "conflict"
-          setDraft(({ githubKey: _key, githubBasedOn, githubAppId, ...current }) =>
-            conflict || githubAppId === undefined ? current : { ...current, githubAppId, githubBasedOn },
-          )
+          setDraft(({ githubKey, githubBasedOn, githubAppId, ...current }) => {
+            const newer = githubKey === sentKey ? undefined : githubKey
+            if (conflict) return current
+            const kept = {
+              ...current,
+              ...(githubAppId === undefined ? {} : { githubAppId }),
+              ...(newer ? { githubKey: newer } : {}),
+            }
+            return githubAppId === undefined && !newer ? kept : { ...kept, githubBasedOn }
+          })
           throw failure
         }
         await queryClient.invalidateQueries({ queryKey: qk.morning })

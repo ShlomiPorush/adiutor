@@ -27,14 +27,11 @@ const PERMISSION: Record<AlertFamily | "issues", (typeof READ_PERMISSIONS)[numbe
   issues: "issues",
 }
 
-/**
- * Each family's list, by the repository's id (GitHub's own paging links use this form), so a name that another
- * repository takes while a pull reads never leads to that repository.
- */
+/** Each family's list, as GitHub documents it (by the repository's name). */
 const ROUTES = {
-  dependabot: "GET /repositories/{repository_id}/dependabot/alerts",
-  code_scanning: "GET /repositories/{repository_id}/code-scanning/alerts",
-  secret_scanning: "GET /repositories/{repository_id}/secret-scanning/alerts",
+  dependabot: "GET /repos/{owner}/{repo}/dependabot/alerts",
+  code_scanning: "GET /repos/{owner}/{repo}/code-scanning/alerts",
+  secret_scanning: "GET /repos/{owner}/{repo}/secret-scanning/alerts",
 } as const
 
 const PER_PAGE = 100
@@ -406,14 +403,15 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
   type ListRead = { counts: Counts; numbers: Set<number>; pages: number; asOf: Date }
 
   /**
-   * One read of a family's whole list, by the repository's id, so a name another repository takes meanwhile is never
-   * read: each page asked with explicit parameters, the next page from the `Link` header on the same list only.
+   * One read of a family's whole list: each page asked with explicit parameters, the next page from the `Link` header
+   * on the same list only.
    */
   const readList = async (plan: Planned, family: AlertFamily): Promise<ListRead | FamilyRead> => {
     const installation = plan.installation as Usable
     const client = installation.client as Octokit
     const base = {
-      repository_id: plan.project.repoId as number,
+      owner: plan.owner,
+      repo: plan.name,
       state: "open",
       per_page: PER_PAGE,
       ...(family === "secret_scanning" ? { hide_secret: true } : {}),
@@ -471,11 +469,11 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       path ??= current.pathname
       const next = nextLink(response.headers.link)
       if (!next) return { counts, numbers, pages: page + 1, asOf: now() }
-      // The next page must stay on this list: the same origin, the same list (by the repository's id, or by its name
-      // as GitHub may write it), and a cursor not seen before.
+      // The next page must stay on this list: the same origin, the same list (by its name, or by the repository's id
+      // as GitHub may write its links), and a cursor not seen before.
       const url = URL.canParse(next) ? new URL(next) : null
-      const byName = `/repos/${plan.owner}/${plan.name}/${ROUTES[family].split("/{repository_id}/")[1]}`
-      const sameList = url !== null && [path, byName].some((p) => p.toLowerCase() === url.pathname.toLowerCase())
+      const byId = `/repositories/${plan.project.repoId}/${ROUTES[family].split("/{repo}/")[1]}`
+      const sameList = url !== null && [path, byId].some((p) => p.toLowerCase() === url.pathname.toLowerCase())
       if (!url || url.origin !== options.origin || !sameList) return { coverage: "error", code: "malformed" }
       const key = url.searchParams.has("after") ? "after" : url.searchParams.has("page") ? "page" : null
       const value = key ? url.searchParams.get(key) : null
@@ -504,9 +502,33 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       : { coverage: "error", code: "changed_while_read" }
   }
 
-  // 4. Alerts, four repositories at a time.
+  /** Null when the repository's name leads to the id the inventory gave; else why not, as a code. */
+  const sameRepository = async (plan: Planned): Promise<string | null> => {
+    try {
+      const { data } = await ((plan.installation as Usable).client as Octokit).request("GET /repos/{owner}/{repo}", {
+        owner: plan.owner,
+        repo: plan.name,
+      })
+      return isObject(data) && data.id === plan.project.repoId ? null : "moved"
+    } catch (error) {
+      const failure = describeFailure(error, now())
+      return stopOn(failure) ?? failureCode(failure)
+    }
+  }
+
+  // 4. Alerts, four repositories at a time. The lists are read by name, as GitHub documents them: the name must lead
+  // to the repository the inventory gave both before and after them (Metadata comes with every installation), or
+  // nothing read is kept, so a name that another repository took meanwhile is not counted for this project.
   await pool(planned, REPOS_AT_ONCE, async (plan) => {
+    const errorAll = (code: string) => {
+      for (const family of ALERT_FAMILIES) plan.project.families[family] = { coverage: "error", code }
+    }
+    const before = await sameRepository(plan)
+    if (before) return errorAll(before)
     for (const family of ALERT_FAMILIES) plan.project.families[family] = await readFamily(plan, family)
+    if (ALERT_FAMILIES.every((family) => plan.project.families[family].coverage === "error")) return
+    const after = await sameRepository(plan)
+    if (after) errorAll(after)
   })
 
   // 5. Open Issues counts, by GraphQL per installation, up to 25 repositories a query. A repository renamed since the
