@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-18
+
 ### Added
 
 - **The tray app for Windows**: an icon in the notification area that runs the sync. A click shows the last sync of T3 and of security with its time, the last good sync and the next one, with Sync now, Pause (1 hour, 4 hours or until you resume) and Resume, Open Adiutor, Settings and Quit. It checks in with Adiutor every minute, so Sync now in Adiutor reaches it within a minute, and syncs every 3 hours by default. Settings connect Adiutor and T3 and hold the overview folder, the schedule, start with Windows (on by default) and the language, Hebrew or English; they show each value as the sync uses it, and one set by the environment is locked there. The theme follows Windows. It shows a Windows notification only when two scheduled syncs in a row did not complete, or a connection ended. It installs per user through Velopack, updates itself from this repository's GitHub Releases when no sync is running, and keeps the sync's data folder when it is uninstalled. Quit lets a running sync finish first.
