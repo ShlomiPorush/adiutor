@@ -8,7 +8,7 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 
 const id = () => randomBytes(24).toString("base64url")
-const SYNC_ROUTES = ["/api/v1/sync/t3", "/api/v1/sync/security"]
+const SYNC_ROUTES = ["/api/v1/sync/t3"]
 const CHECKIN = "/api/v1/sync/checkin"
 
 export type Push = { path: string; body: unknown; policy?: string; kind?: string; auth?: string }

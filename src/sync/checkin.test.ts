@@ -79,7 +79,6 @@ function deps(stdin: string) {
     fetch: (input, init) => fetch(input, init),
     out: (line) => lines.push(line),
     now: () => new Date(),
-    nodePath: "/fake/node",
     stdin: async () => stdin,
   }
   return { deps: value, lines }
@@ -380,18 +379,18 @@ describe("run --request", () => {
     const requestId = randomUUID()
     fake.claim = requestId
     await checkin()
-    const { result } = await json(["run", "--no-collect", "--request", requestId.toUpperCase()])
+    const { result } = await json(["run", "--request", requestId.toUpperCase()])
     const report = (result as { report?: RunReport }).report
     expect(report?.requestId).toBe(requestId)
     const status = JSON.parse(readFileSync(join(data(), "status.json"), "utf8"))
     expect(status.lastRun.requestId).toBe(requestId)
-    const plain = await json(["run", "--no-collect"])
+    const plain = await json(["run"])
     expect((plain.result as { report?: RunReport }).report?.requestId).toBeNull()
   })
 
   it("runs nothing for a request that is not this connection's kept claim", async () => {
     const other = randomUUID()
-    const refused = await json(["run", "--no-collect", "--request", other])
+    const refused = await json(["run", "--request", other])
     expect([refused.exit, refused.result.ok, (refused.result.error as { code: string }).code]).toEqual([
       1,
       false,
@@ -401,7 +400,7 @@ describe("run --request", () => {
     fake.claim = other
     await checkin()
     await connectSync()
-    const replaced = await json(["run", "--no-collect", "--request", other])
+    const replaced = await json(["run", "--request", other])
     expect((replaced.result.error as { code: string }).code).toBe("request_not_claimed")
     expect(existsSync(join(data(), "status.json"))).toBe(false)
     expect(fake.pushes).toHaveLength(0)

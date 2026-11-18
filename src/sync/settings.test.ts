@@ -30,6 +30,7 @@ describe("resolveSettings", () => {
       adiutorUrl: "https://from-settings.example.com",
       t3CliPath: "/settings/t3",
       t3Url: "http://127.0.0.1:4000",
+      // An older version's overview folder: no longer read.
       overviewDir: "/settings/overview",
     })
     const given = {
@@ -37,7 +38,6 @@ describe("resolveSettings", () => {
       env: { ...env, ADIUTOR_URL: "https://from-env.example.com", T3CODE_CLI_PATH: "/env/t3" },
       envFileVars: { ADIUTOR_URL: "https://from-file.example.com/" },
       now: NOW,
-      flags: { overviewDir: "/flag/overview" },
     }
     // The default sync.env, and any env file of connect, come after the environment, as before.
     expect(resolveSettings(given).url).toBe("https://from-env.example.com")
@@ -47,10 +47,10 @@ describe("resolveSettings", () => {
       url: "https://from-file.example.com",
       cliPath: "/env/t3",
       t3Url: "http://127.0.0.1:4000",
-      overviewDir: "/flag/overview",
       problems: [],
-      sources: { url: "envFile", cliPath: "environment", t3Url: "settingsFile", overviewDir: "option" },
+      sources: { url: "envFile", cliPath: "environment", t3Url: "settingsFile" },
     })
+    expect(resolved).not.toHaveProperty("overviewDir")
     expect(resolveSettings(given).sources.url).toBe("environment")
     expect(resolveSettings({ platform: "linux", env, now: NOW, flags: { url: "https://flag.example.com" } }).url).toBe(
       "https://flag.example.com",
@@ -63,10 +63,9 @@ describe("resolveSettings", () => {
       url: undefined,
       cliPath: join(env.HOME, ".t3", "bin", "t3"),
       t3Url: DEFAULT_T3_URL,
-      overviewDir: undefined,
       pause: null,
       problems: [],
-      sources: { url: "default", cliPath: "default", t3Url: "default", overviewDir: "default" },
+      sources: { url: "default", cliPath: "default", t3Url: "default" },
     })
     expect(defaultT3Cli("win32", { USERPROFILE: "C:\\Users\\dev" })).toBe("C:\\Users\\dev\\.t3\\bin\\t3.cmd")
   })

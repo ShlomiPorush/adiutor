@@ -3,8 +3,11 @@ using System.Text.Json.Serialization;
 
 namespace AdiutorSync.Core;
 
-/// <summary>A request from Adiutor whose run ended, kept until a check-in that listed it is answered.</summary>
-public sealed record FinishedRequest(string RequestId, PartResult T3, PartResult Security);
+/// <summary>
+/// A request from Adiutor whose run ended, kept until a check-in that listed it is answered. A security result that an
+/// older tray saved with it is not read: the check-in reports security as not run.
+/// </summary>
+public sealed record FinishedRequest(string RequestId, PartResult T3);
 
 /// <summary>
 /// The tray's state file, tray-state.json in the data folder (no secret): the request a run is serving, written before

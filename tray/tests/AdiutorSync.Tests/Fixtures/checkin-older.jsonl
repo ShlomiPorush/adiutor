@@ -1,1 +1,1 @@
-{"type":"result","v":1,"command":"checkin","ok":false,"claim":null,"error":{"code":"server_older","message":"Adiutor takes no check-in: requests from Adiutor are not available there."}}
+{"type":"result","v":2,"command":"checkin","ok":false,"claim":null,"error":{"code":"server_older","message":"Adiutor takes no check-in: requests from Adiutor are not available there."}}

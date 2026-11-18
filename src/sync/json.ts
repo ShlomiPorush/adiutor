@@ -1,4 +1,4 @@
-// Small readers for JSON from outside the process (the T3 CLI, the overview snapshot, files written by
+// Small readers for JSON from outside the process (the T3 CLI, files written by
 // an agent). Everything read is untrusted data: it is checked field by field and only ever passed on
 // as JSON, never into a command line.
 

@@ -56,7 +56,7 @@ public static class Lines
         new JsonObject
         {
             ["type"] = "result",
-            ["v"] = 1,
+            ["v"] = 2,
             ["command"] = "status",
             ["ok"] = true,
             ["adiutor"] = new JsonObject { ["state"] = adiutor, ["url"] = "https://adiutor.example.com", ["revocationPending"] = false },
@@ -69,7 +69,7 @@ public static class Lines
             ["settings"] = new JsonObject { ["problems"] = new JsonArray() },
         }.ToJsonString();
 
-    public static JsonObject Report(DateTimeOffset startedAt, string t3 = "accepted", string security = "accepted", string? requestId = null) =>
+    public static JsonObject Report(DateTimeOffset startedAt, string t3 = "accepted", string? requestId = null) =>
         new()
         {
             ["startedAt"] = Times.Iso(startedAt),
@@ -77,21 +77,28 @@ public static class Lines
             ["dryRun"] = false,
             ["requestId"] = requestId,
             ["t3"] = new JsonObject { ["result"] = t3, ["projectsFrom"] = "t3", ["projectsAt"] = Times.Iso(startedAt), ["projects"] = 3, ["threads"] = 9, ["failedProjects"] = 0 },
-            ["security"] = new JsonObject { ["result"] = security, ["snapshotRunId"] = "r", ["snapshotAt"] = Times.Iso(startedAt), ["repos"] = 2, ["projectsFrom"] = "t3", ["projectsAt"] = Times.Iso(startedAt) },
             ["lastGoodSyncAt"] = null,
         };
 
+    /** A run report as an engine of contract 1 saved it, with its security part. */
+    public static JsonObject OldReport(DateTimeOffset startedAt, string t3 = "accepted", string security = "failed", string? requestId = null)
+    {
+        var report = Report(startedAt, t3, requestId);
+        report["security"] = new JsonObject { ["result"] = security, ["reason"] = "push_failed", ["snapshotRunId"] = "r", ["snapshotAt"] = Times.Iso(startedAt), ["repos"] = 2, ["projectsFrom"] = "t3", ["projectsAt"] = Times.Iso(startedAt) };
+        return report;
+    }
+
     public static string Run(JsonObject report) =>
-        new JsonObject { ["type"] = "result", ["v"] = 1, ["command"] = "run", ["ok"] = true, ["report"] = report }.ToJsonString();
+        new JsonObject { ["type"] = "result", ["v"] = 2, ["command"] = "run", ["ok"] = true, ["report"] = report }.ToJsonString();
 
     public static string Busy() =>
-        """{"type":"result","v":1,"command":"run","ok":false,"busy":{"startedAt":"2026-11-17T09:00:00.000Z"},"error":{"code":"busy","message":"m"}}""";
+        """{"type":"result","v":2,"command":"run","ok":false,"busy":{"startedAt":"2026-11-17T09:00:00.000Z"},"error":{"code":"busy","message":"m"}}""";
 
     public static string Checkin(string? claim) =>
         new JsonObject
         {
             ["type"] = "result",
-            ["v"] = 1,
+            ["v"] = 2,
             ["command"] = "checkin",
             ["ok"] = true,
             ["claim"] = claim is null ? null : new JsonObject { ["requestId"] = claim, ["receivedAt"] = "2026-11-17T08:00:00.000Z" },
@@ -149,7 +156,7 @@ public sealed class FakeEngine : IEngine
                 case "hold-run":
                     if (RunLockBusy)
                     {
-                        line = """{"type":"result","v":1,"command":"hold-run","ok":false,"busy":{"startedAt":"2026-11-17T08:59:00.000Z"},"error":{"code":"busy","message":"m"}}""";
+                        line = """{"type":"result","v":2,"command":"hold-run","ok":false,"busy":{"startedAt":"2026-11-17T08:59:00.000Z"},"error":{"code":"busy","message":"m"}}""";
                         break;
                     }
                     Interlocked.Increment(ref _holders);
@@ -168,7 +175,7 @@ public sealed class FakeEngine : IEngine
                     {
                         Interlocked.Decrement(ref _holders);
                     }
-                    line = """{"type":"result","v":1,"command":"hold-run","ok":true}""";
+                    line = """{"type":"result","v":2,"command":"hold-run","ok":true}""";
                     break;
                 case "run":
                     if (RunGate is { } gate)
@@ -176,7 +183,7 @@ public sealed class FakeEngine : IEngine
                     line = Run(command);
                     break;
                 default:
-                    line = $$"""{"type":"result","v":1,"command":"{{command.Name}}","ok":true,"wasConnected":true,"revocationPending":false}""";
+                    line = $$"""{"type":"result","v":2,"command":"{{command.Name}}","ok":true,"wasConnected":true,"revocationPending":false}""";
                     break;
             }
             return new EngineOutcome(EngineOutput.ParseLine(line) as EngineResult, null);

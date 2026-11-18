@@ -64,15 +64,11 @@ describe("the last good project list", () => {
     const dir = folder()
     expect(readProjectList(dir)).toBeUndefined()
     const savedAt = "2026-11-16T10:00:00.000Z"
-    await saveProjectList(
-      dir,
-      { savedAt, environmentId: "env-1", projects: [{ id: "p-1", title: "One", workspaceRoot: "/w/one" }] },
-      deps,
-    )
+    await saveProjectList(dir, { savedAt, environmentId: "env-1", projects: [{ id: "p-1", title: "One" }] }, deps)
     expect(readProjectList(dir)).toEqual({
       savedAt,
       environmentId: "env-1",
-      projects: [{ id: "p-1", title: "One", workspaceRoot: "/w/one", repositoryIdentity: undefined }],
+      projects: [{ id: "p-1", title: "One", repositoryIdentity: undefined }],
     })
     writeFileSync(
       join(dir, "t3-projects.json"),

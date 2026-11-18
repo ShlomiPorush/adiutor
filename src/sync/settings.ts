@@ -1,8 +1,9 @@
-// The sync's settings: Adiutor's address, the T3 CLI, T3's address and the overview folder. Each comes from the first
+// The sync's settings: Adiutor's address, the T3 CLI and T3's address. Each comes from the first
 // of: a command-line option, the env file given with --env, the environment, the default sync.env (when it exists and
 // no --env was given), the settings file (settings.json in the data folder, which the tray writes), then the default.
 // As before, connect and setup-mcp let the environment win over any env file. The settings file holds
-// no secret and the engine never writes it. Error messages never include a value.
+// no secret and the engine never writes it. Error messages never include a value. The overview folder of older
+// versions (overviewDir, ADIUTOR_OVERVIEW_DIR) is no longer read: the Adiutor server reads GitHub itself.
 
 import { readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
@@ -34,7 +35,6 @@ export type SettingsFile = {
   adiutorUrl?: string
   t3CliPath?: string
   t3Url?: string
-  overviewDir?: string
   /** Set by the tray: paused until a time, or until resumed (null). */
   pause?: { until: string | null }
 }
@@ -64,25 +64,22 @@ export function readSettingsFile(path: string): { settings: SettingsFile; proble
     adiutorUrl: text_("adiutorUrl"),
     t3CliPath: text_("t3CliPath"),
     t3Url: text_("t3Url"),
-    overviewDir: text_("overviewDir"),
     ...(pauseData ? { pause: { until: asTime(pauseData.until) } } : {}),
   }
   return { settings }
 }
 
-/** The four settings by name: the env file's and the environment's names, then the settings file's keys. */
+/** The three settings by name: the env file's and the environment's names, then the settings file's keys. */
 const NAMES = {
   url: { env: "ADIUTOR_URL", file: "adiutorUrl" },
   cliPath: { env: "T3CODE_CLI_PATH", file: "t3CliPath" },
   t3Url: { env: "ADIUTOR_T3_URL", file: "t3Url" },
-  overviewDir: { env: "ADIUTOR_OVERVIEW_DIR", file: "overviewDir" },
 } as const
 
 export type Resolved = {
   url?: string
   cliPath: string
   t3Url?: string
-  overviewDir?: string
   pause: { until: string | null } | null
   /** Settings that cannot be used, without their values. */
   problems: string[]
@@ -114,7 +111,7 @@ export function resolveSettings(input: {
   /** Milliseconds since the epoch, for the pause. */
   now: number
   /** Command-line options, which win. */
-  flags?: { url?: string; overviewDir?: string }
+  flags?: { url?: string }
 }): Resolved {
   const { platform, env } = input
   const file = readSettingsFile(join(dataDir(platform, env), SETTINGS_FILE))
@@ -141,7 +138,6 @@ export function resolveSettings(input: {
     url: "default",
     cliPath: "default",
     t3Url: "default",
-    overviewDir: "default",
   }
   let url = pick("url", input.flags?.url)
   if (url !== undefined) {
@@ -164,7 +160,6 @@ export function resolveSettings(input: {
     url,
     cliPath: pick("cliPath") ?? defaultT3Cli(platform, env),
     t3Url,
-    overviewDir: pick("overviewDir", input.flags?.overviewDir),
     // A pause that ended is no pause.
     pause: pause && (pause.until === null || Date.parse(pause.until) > input.now) ? pause : null,
     problems,

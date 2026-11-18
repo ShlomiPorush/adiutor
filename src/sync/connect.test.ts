@@ -171,7 +171,6 @@ describe("connect: the command line", () => {
       fetch: async () => new Response("{}"),
       out: (line) => lines.push(line),
       now: () => new Date(),
-      nodePath: "/fake/node",
     })
     return { code, text: lines.join("\n") }
   }

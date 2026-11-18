@@ -8,5 +8,4 @@ process.exitCode = await main(process.argv.slice(2), {
   fetch: (input, init) => fetch(input, init),
   out: (line) => console.log(line),
   now: () => new Date(),
-  nodePath: process.execPath,
 })

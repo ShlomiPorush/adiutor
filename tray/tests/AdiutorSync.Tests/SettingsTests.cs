@@ -85,7 +85,6 @@ public class SettingsTests
         var settings = SettingsStore.Load(path).Settings with
         {
             AdiutorUrl = " https://adiutor.example.com ",
-            OverviewDir = "D:\\work\\overview with spaces",
             ScheduleHours = 6,
             Language = "he",
             StartWithWindows = false,
@@ -95,12 +94,30 @@ public class SettingsTests
         Assert.Equal(1, root["someday"]!["x"]!.GetValue<int>());
         Assert.Equal("https://adiutor.example.com", root["adiutorUrl"]!.GetValue<string>());
         Assert.Equal("http://127.0.0.1:3773", root["t3Url"]!.GetValue<string>());
-        Assert.Equal("D:\\work\\overview with spaces", root["overviewDir"]!.GetValue<string>());
         Assert.False(root.ContainsKey("t3CliPath"));
+        // The tray has no overview folder setting: it never writes one.
+        Assert.False(root.ContainsKey("overviewDir"));
         var back = SettingsStore.Load(path).Settings;
         Assert.Equal(6, back.ScheduleHours);
         Assert.Equal("he", back.Language);
         Assert.False(back.StartWithWindows);
+    }
+
+    [Fact]
+    public void An_overview_folder_an_older_tray_saved_is_left_as_it_is()
+    {
+        using var dir = new TempFolder();
+        var path = dir.File("settings.json");
+        File.WriteAllText(path, """{"adiutorUrl":"https://adiutor.example.com","overviewDir":"D:\\work\\overview","scheduleHours":4}""");
+        var loaded = SettingsStore.Load(path);
+        Assert.False(loaded.Damaged);
+        Assert.Equal(new TraySettings { AdiutorUrl = "https://adiutor.example.com", ScheduleHours = 4 }, loaded.Settings);
+
+        // Saved again: the key stays as it was (the engine ignores it), and every setting reads back the same.
+        SettingsStore.Save(path, loaded.Settings with { Language = "en" });
+        var root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        Assert.Equal("D:\\work\\overview", root["overviewDir"]!.GetValue<string>());
+        Assert.Equal(loaded.Settings with { Language = "en" }, SettingsStore.Load(path).Settings);
     }
 
     [Theory]
@@ -122,8 +139,8 @@ public class SettingsTests
         var folder = Path.Combine(dir.Root, "a b \u05EA\u05D9\u05E7\u05D9\u05D4");
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, "settings.json");
-        SettingsStore.Save(path, new TraySettings { OverviewDir = Path.Combine(folder, "overview") });
-        Assert.Equal(Path.Combine(folder, "overview"), SettingsStore.Load(path).Settings.OverviewDir);
+        SettingsStore.Save(path, new TraySettings { T3CliPath = Path.Combine(folder, "t3.cmd") });
+        Assert.Equal(Path.Combine(folder, "t3.cmd"), SettingsStore.Load(path).Settings.T3CliPath);
     }
 
     [Fact]

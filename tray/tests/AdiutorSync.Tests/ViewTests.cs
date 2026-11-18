@@ -45,8 +45,8 @@ public partial class ViewTests
     private static TraySnapshot Snapshot(string state)
     {
         var good = new RunReport(Now.AddHours(-1), Now.AddMinutes(-57), false, null,
-            new RunPart(PartResult.Accepted, null), new RunPart(PartResult.Accepted, null), Now.AddMinutes(-57));
-        var bad = good with { Security = new RunPart(PartResult.Failed, "push_failed"), LastGoodSyncAt = Now.AddDays(-1) };
+            new RunPart(PartResult.Accepted, null), Now.AddMinutes(-57));
+        var bad = good with { T3 = new RunPart(PartResult.Failed, "server_failed"), LastGoodSyncAt = Now.AddDays(-1) };
         EngineStatus Status(ConnectionState adiutor = ConnectionState.Connected, ConnectionState t3 = ConnectionState.Connected, RunReport? last = null) =>
             new(new AdiutorConnection(adiutor, "https://adiutor.example.com", false), new T3Connection(t3, null, null, false),
                 last ?? good, (last ?? good).LastGoodSyncAt, null, null, []);
@@ -81,7 +81,7 @@ public partial class ViewTests
         {
             var t = Texts.Load(language);
             var view = TrayView.Build(Snapshot(state), t, Time);
-            var shown = new[] { view.State, view.T3, view.Security, view.LastRun, view.LastGood, view.NextRun, view.Tooltip }.Concat(view.Notices);
+            var shown = new[] { view.State, view.T3, view.LastRun, view.LastGood, view.NextRun, view.Tooltip }.Concat(view.Notices);
             foreach (var text in shown)
             {
                 Assert.False(string.IsNullOrWhiteSpace(text));
@@ -100,8 +100,7 @@ public partial class ViewTests
         var view = TrayView.Build(Snapshot("problem"), t, Time);
         Assert.Equal(IconState.Problem, view.Icon);
         Assert.Equal("The last sync had a problem", view.State);
-        Assert.Equal("accepted", view.T3);
-        Assert.Equal("failed", view.Security);
+        Assert.Equal("failed", view.T3);
         Assert.Equal("08:03", view.LastRun);
         Assert.Equal("09:00", view.LastGood);
         Assert.Equal("11:00", view.NextRun);

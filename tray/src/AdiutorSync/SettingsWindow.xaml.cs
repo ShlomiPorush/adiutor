@@ -4,7 +4,6 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using AdiutorSync.Core;
-using Microsoft.Win32;
 
 namespace AdiutorSync;
 
@@ -23,7 +22,7 @@ internal interface ISettingsHost
 
 /// <summary>
 /// The settings window (the plan, section 4, "Settings window"): Adiutor's address and its connection, T3's command
-/// line, address and connection, the overview folder, the schedule, start with Windows and the language. Every
+/// line, address and connection, the schedule, start with Windows and the language. Every
 /// setting is written to settings.json in the data folder; the connections are the engine's commands. Each area starts
 /// closed with its state in its header, and opens when the owner clicks it or when it needs the owner
 /// (SettingsSections).
@@ -51,7 +50,6 @@ internal sealed partial class SettingsWindow : Window
         Fill(host.Loop.Snapshot.Settings);
         Render(host.Loop.Snapshot);
         Schedule.SelectionChanged += (_, _) => ShowSyncSummary();
-        Overview.TextChanged += (_, _) => ShowSyncSummary();
         ShowSyncSummary();
         // The approval code stays in view while the owner approves: the area does not close under it.
         AdiutorSection.Collapsed += (_, _) =>
@@ -86,8 +84,6 @@ internal sealed partial class SettingsWindow : Window
         T3Connect.Content = t["settings.connect"];
         T3Disconnect.Content = t["settings.disconnect"];
         SyncHeading.Text = t["settings.sync"];
-        OverviewLabel.Text = t["settings.overview"];
-        BrowseOverview.Content = t["settings.browse"];
         ScheduleLabel.Text = t["settings.schedule"];
         StartBox.Content = t["settings.startWithWindows"];
         StartNote.Text = StartWithWindows.Available ? "" : t["settings.startOnlyInstalled"];
@@ -132,7 +128,6 @@ internal sealed partial class SettingsWindow : Window
         Show(AdiutorUrl, EffectiveSettings.AdiutorUrl, Effective(EffectiveSettings.AdiutorUrl)?.Value ?? s.AdiutorUrl ?? _host.Loop.Snapshot.Status?.Adiutor.Url ?? "");
         Show(T3Cli, EffectiveSettings.T3CliPath, Effective(EffectiveSettings.T3CliPath)?.Value ?? s.T3CliPath ?? DefaultT3Cli);
         Show(T3Url, EffectiveSettings.T3Url, Effective(EffectiveSettings.T3Url)?.Value ?? s.T3Url ?? DefaultT3Url);
-        Show(Overview, EffectiveSettings.OverviewDir, Effective(EffectiveSettings.OverviewDir)?.Value ?? s.OverviewDir ?? "");
         ApplyModes();
     }
 
@@ -146,7 +141,7 @@ internal sealed partial class SettingsWindow : Window
     /** After a save, what the fields show is no longer a draft. */
     private void MarkSaved()
     {
-        foreach (var box in new[] { AdiutorUrl, T3Cli, T3Url, Overview })
+        foreach (var box in new[] { AdiutorUrl, T3Cli, T3Url })
         {
             if (_shown.TryGetValue(box, out var state))
                 state.Saved(box.Text);
@@ -168,8 +163,6 @@ internal sealed partial class SettingsWindow : Window
         ApplyMode(AdiutorUrl, AdiutorUrlNote, EffectiveSettings.AdiutorUrl);
         ApplyMode(T3Cli, T3CliNote, EffectiveSettings.T3CliPath);
         ApplyMode(T3Url, T3UrlNote, EffectiveSettings.T3Url);
-        ApplyMode(Overview, OverviewNote, EffectiveSettings.OverviewDir);
-        BrowseOverview.IsEnabled = !IsLocked(EffectiveSettings.OverviewDir);
     }
 
     private void ApplyMode(TextBox box, TextBlock note, string key)
@@ -257,7 +250,7 @@ internal sealed partial class SettingsWindow : Window
     /** The Sync area's header, from what its fields show now. */
     private void ShowSyncSummary()
     {
-        SyncSummary.Text = SettingsSections.SyncSummary(T, (Schedule.SelectedItem as ComboBoxItem)?.Tag as int? ?? TraySettings.DefaultScheduleHours, Overview.Text);
+        SyncSummary.Text = SettingsSections.SyncSummary(T, (Schedule.SelectedItem as ComboBoxItem)?.Tag as int? ?? TraySettings.DefaultScheduleHours);
         AutomationProperties.SetName(SyncSection, $"{SyncHeading.Text}, {SyncSummary.Text}");
     }
 
@@ -312,8 +305,6 @@ internal sealed partial class SettingsWindow : Window
             // The default is not written, so the engine keeps finding T3 where T3 installs it.
             T3CliPath = IsLocked(EffectiveSettings.T3CliPath) ? current.T3CliPath
                 : cli.Length == 0 || string.Equals(cli, DefaultT3Cli, StringComparison.OrdinalIgnoreCase) ? null : cli,
-            OverviewDir = IsLocked(EffectiveSettings.OverviewDir) ? current.OverviewDir
-                : Overview.Text.Trim().Length == 0 ? null : Overview.Text.Trim(),
             ScheduleHours = (Schedule.SelectedItem as ComboBoxItem)?.Tag as int? ?? TraySettings.DefaultScheduleHours,
             StartWithWindows = StartBox.IsChecked == true,
             Language = (LanguageBox.SelectedItem as ComboBoxItem)?.Tag as string,
@@ -435,13 +426,4 @@ internal sealed partial class SettingsWindow : Window
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => _command?.Cancel();
-
-    private void BrowseOverview_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFolderDialog { Title = T["settings.overview"] };
-        if (Directory.Exists(Overview.Text.Trim()))
-            dialog.InitialDirectory = Overview.Text.Trim();
-        if (dialog.ShowDialog(this) == true)
-            Overview.Text = dialog.FolderName;
-    }
 }

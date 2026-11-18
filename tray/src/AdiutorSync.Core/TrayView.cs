@@ -5,7 +5,6 @@ public sealed record PanelView(
     IconState Icon,
     string State,
     string T3,
-    string Security,
     string LastRun,
     string LastGood,
     string NextRun,
@@ -17,8 +16,7 @@ public sealed record PanelView(
     string Tooltip);
 
 /// <summary>
-/// The panel's content from a snapshot (the plan, section 4, "Tray"): the state, the last run per part (T3, security)
-/// and its time, the last good sync, the next scheduled run, and the notices. Times come through the caller's format
+/// The panel's content from a snapshot (the plan, section 4, "Tray"): the state, the last run's T3 result and its time, the last good sync, the next scheduled run, and the notices. Times come through the caller's format
 /// (local time in Windows' format in the app).
 /// </summary>
 public static class TrayView
@@ -72,7 +70,6 @@ public static class TrayView
             icon,
             state,
             last is null ? t["panel.noRun"] : PartText(last.T3.Result, t),
-            last is null ? t["panel.noRun"] : PartText(last.Security.Result, t),
             last is null ? t["panel.never"] : time(last.FinishedAt),
             lastGood is { } at ? time(at) : t["panel.never"],
             nextRun,

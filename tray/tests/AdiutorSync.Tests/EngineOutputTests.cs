@@ -17,9 +17,8 @@ public class EngineOutputTests
         Assert.Equal(ConnectionState.Connected, status.T3.State);
         Assert.Equal(DateTimeOffset.Parse("2026-12-16T08:00:00Z", CultureInfo.InvariantCulture), status.T3.ExpiresAt);
         var last = Assert.IsType<RunReport>(status.LastRun);
-        Assert.Equal(PartResult.Accepted, last.T3.Result);
-        Assert.Equal(PartResult.Partial, last.Security.Result);
-        Assert.Equal("repos_missing", last.Security.Reason);
+        Assert.Equal(PartResult.Partial, last.T3.Result);
+        Assert.Equal("server_partial", last.T3.Reason);
         Assert.False(last.IsGood);
         Assert.Equal(DateTimeOffset.Parse("2026-11-17T03:03:00Z", CultureInfo.InvariantCulture), status.LastGoodSyncAt);
         Assert.Equal(DateTimeOffset.Parse("2026-11-17T09:00:00Z", CultureInfo.InvariantCulture), status.RunningSince);
@@ -29,7 +28,7 @@ public class EngineOutputTests
         // Each setting as the engine uses it, with its source.
         Assert.Equal(new EffectiveSetting("https://adiutor.example.com", SettingSource.EnvFile), status.Settings![EffectiveSettings.AdiutorUrl]);
         Assert.Equal(SettingSource.Environment, status.Settings[EffectiveSettings.T3Url].Source);
-        Assert.Equal(new EffectiveSetting(null, SettingSource.Default), status.Settings[EffectiveSettings.OverviewDir]);
+        Assert.Equal(3, status.Settings.Count);
     }
 
     [Theory]
@@ -38,7 +37,7 @@ public class EngineOutputTests
     [InlineData("adiutorUrl", SettingSource.EnvFile, FieldMode.EditableUntilConnect)]
     [InlineData("adiutorUrl", SettingSource.Environment, FieldMode.LockedByEnvironment)]
     [InlineData("t3Url", SettingSource.Environment, FieldMode.LockedByEnvironment)]
-    [InlineData("overviewDir", SettingSource.EnvFile, FieldMode.LockedByEnvFile)]
+    [InlineData("t3CliPath", SettingSource.EnvFile, FieldMode.LockedByEnvFile)]
     [InlineData("t3CliPath", SettingSource.Option, FieldMode.LockedByEnvironment)]
     public void A_setting_the_environment_sets_is_locked(string key, SettingSource source, FieldMode mode) =>
         Assert.Equal(mode, EffectiveSettings.Mode(key, source));
@@ -65,8 +64,29 @@ public class EngineOutputTests
         var result = lines.OfType<EngineResult>().Single();
         Assert.True(result.Ok);
         Assert.False(result.Busy);
-        Assert.True(result.Report!.IsGood);
+        // A run of contract 2 has T3 alone: T3 accepted is a good sync.
+        Assert.Equal(PartResult.Accepted, result.Report!.T3.Result);
+        Assert.True(result.Report.IsGood);
         Assert.Null(result.Report.RequestId);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-17T09:04:00Z", CultureInfo.InvariantCulture), result.Report.LastGoodSyncAt);
+    }
+
+    [Theory]
+    [InlineData("accepted", "failed", true)]
+    [InlineData("accepted", "not_run", true)]
+    [InlineData("partial", "accepted", false)]
+    [InlineData("failed", "accepted", false)]
+    public void A_saved_run_with_a_security_part_counts_by_t3_alone(string t3, string security, bool good)
+    {
+        // A last run an older engine saved, with its security part: still read, and the security part ignored.
+        var at = DateTimeOffset.Parse("2026-11-17T06:00:00Z", CultureInfo.InvariantCulture);
+        var status = Assert.IsType<EngineResult>(EngineOutput.ParseLine(Lines.Status(lastRun: Lines.OldReport(at, t3, security)))).Status!;
+        var last = Assert.IsType<RunReport>(status.LastRun);
+        Assert.Equal(EngineOutput.Part(t3), last.T3.Result);
+        Assert.Equal(at, last.StartedAt);
+        Assert.Equal(good, last.IsGood);
+        var run = Assert.IsType<EngineResult>(EngineOutput.ParseLine(Lines.Run(Lines.OldReport(at, t3, security))));
+        Assert.Equal(good, run.Report!.IsGood);
     }
 
     [Fact]
@@ -86,7 +106,8 @@ public class EngineOutputTests
         var result = Fixture.Result("run-failed.jsonl");
         Assert.False(result.Ok);
         Assert.Equal(PartResult.NotRun, result.Report!.T3.Result);
-        Assert.Equal(PartResult.OutcomeUnknown, result.Report.Security.Result);
+        Assert.Equal("t3_ended", result.Report.T3.Reason);
+        Assert.False(result.Report.IsGood);
         Assert.Equal("0d2c9b4e-6a8f-4c1e-9d3b-7a5f2e1c0b9a", result.Report.RequestId);
     }
 
@@ -128,16 +149,17 @@ public class EngineOutputTests
     [InlineData("")]
     [InlineData("not json")]
     [InlineData("[1,2]")]
-    [InlineData("{\"type\":\"result\",\"v\":2,\"command\":\"status\",\"ok\":true}")]
-    [InlineData("{\"type\":\"result\",\"v\":1,\"command\":\"run\"}")]
+    [InlineData("{\"type\":\"result\",\"v\":1,\"command\":\"status\",\"ok\":true}")]
+    [InlineData("{\"type\":\"result\",\"v\":3,\"command\":\"status\",\"ok\":true}")]
+    [InlineData("{\"type\":\"result\",\"v\":2,\"command\":\"run\"}")]
     [InlineData("{\"type\":\"event\",\"event\":\"approval\",\"link\":\"x\"}")]
-    [InlineData("{\"type\":\"result\",\"v\":1,\"command\":\"run\",\"ok\":true,\"report\":{\"startedAt\":\"yesterday\"}}")]
+    [InlineData("{\"type\":\"result\",\"v\":2,\"command\":\"run\",\"ok\":true,\"report\":{\"startedAt\":\"yesterday\"}}")]
     public void Lines_that_are_not_the_contract_are_skipped(string line) => Assert.Null(EngineOutput.ParseLine(line));
 
     [Fact]
     public void Unknown_fields_and_values_are_tolerated()
     {
-        var line = """{"type":"result","v":1,"command":"run","ok":true,"future":1,"report":{"startedAt":"2026-11-17T09:00:00.000Z","finishedAt":"2026-11-17T09:01:00.000Z","dryRun":false,"requestId":null,"t3":{"result":"something_new"},"security":{"result":"accepted"},"lastGoodSyncAt":null}}""";
+        var line = """{"type":"result","v":2,"command":"run","ok":true,"future":1,"report":{"startedAt":"2026-11-17T09:00:00.000Z","finishedAt":"2026-11-17T09:01:00.000Z","dryRun":false,"requestId":null,"t3":{"result":"something_new"},"lastGoodSyncAt":null}}""";
         var result = Assert.IsType<EngineResult>(EngineOutput.ParseLine(line));
         Assert.Equal(PartResult.Unknown, result.Report!.T3.Result);
         Assert.False(result.Report.IsGood);

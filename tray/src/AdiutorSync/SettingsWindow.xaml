@@ -170,12 +170,6 @@
             </DockPanel>
           </Expander.Header>
           <StackPanel Margin="0,0,0,4">
-            <TextBlock x:Name="OverviewLabel" Style="{StaticResource Label}" />
-            <DockPanel>
-              <Button x:Name="BrowseOverview" DockPanel.Dock="Right" Padding="12,5" Margin="8,0,0,0" Click="BrowseOverview_Click" />
-              <TextBox x:Name="Overview" FlowDirection="LeftToRight" FontSize="14" />
-            </DockPanel>
-            <TextBlock x:Name="OverviewNote" Style="{StaticResource Note}" Visibility="Collapsed" />
             <TextBlock x:Name="ScheduleLabel" Style="{StaticResource Label}" />
             <ComboBox x:Name="Schedule" MinWidth="180" HorizontalAlignment="Left" />
             <CheckBox x:Name="StartBox" Margin="0,12,0,0" FontSize="14" />
