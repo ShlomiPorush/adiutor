@@ -83,7 +83,7 @@ for file in "${files[@]}"; do
 done
 if [ ${#env_examples[@]} -gt 0 ]; then
   secret_values="$(search -E \
-    '^[[:space:]]*(export[[:space:]]+)?(DATABASE_URL|POSTGRES_PASSWORD|[A-Z0-9_]*_(SECRET|SECRETS|KEYS|TOKEN))[[:space:]]*=[[:space:]]*[^[:space:]#]' \
+    '^[[:space:]]*(export[[:space:]]+)?(DATABASE_URL|POSTGRES_PASSWORD|[A-Z0-9_]*_(SECRET|SECRETS|KEY|KEYS|TOKEN))[[:space:]]*=[[:space:]]*[^[:space:]#]' \
     -- "${env_examples[@]}")"
   if [ -n "$secret_values" ]; then
     echo "Example environment files must leave secrets and connection strings empty:"
