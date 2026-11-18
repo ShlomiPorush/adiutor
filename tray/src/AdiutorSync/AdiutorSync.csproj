@@ -14,6 +14,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <StartupObject>AdiutorSync.Program</StartupObject>
+    <!-- Adiutor's mark for the exe, its Start menu shortcut, the taskbar and the windows; scripts/pack-tray.ps1 gives it
+         to the installer too. Drawn from src/web/public/favicon.svg at 16 to 64 pixels (32-bit) and 256 (PNG). -->
+    <ApplicationIcon>adiutor.ico</ApplicationIcon>
     <!-- WPF0001: ThemeMode (the Fluent theme that follows Windows' light and dark) is marked experimental. -->
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>

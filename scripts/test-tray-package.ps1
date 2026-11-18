@@ -1,11 +1,12 @@
-#Requires -Version 7
+#Requires -Version 7.4
 <#
 .SYNOPSIS
 Checks the tray package scripts/pack-tray.ps1 made, and that a Node.js zip off its pin is refused.
 
 .DESCRIPTION
 The full package of -Version must carry node.exe with the SHA-256 tray/node.json pins, Node's LICENSE (node-LICENSE),
-the engine bundle byte for byte, and AdiutorSync.exe; the build's asset list (assets.win.json) must name the installer
+the engine bundle byte for byte, and AdiutorSync.exe; AdiutorSync.exe and the installer must show Adiutor's icon
+(tray/src/AdiutorSync/adiutor.ico, as Windows loads it at 16 and 32 pixels); the build's asset list (assets.win.json) must name the installer
 and that package, and the local feed must give the package's real SHA-256 and size. Then scripts/get-tray-node.ps1 gets
 a copy of -NodeZip with one byte changed and must refuse it. Prints one line per check and fails on any failed check.
 #>
@@ -31,6 +32,25 @@ function Check([string] $What, [scriptblock] $Test) {
   if ($ok) { $script:passed++ } else { $script:failed++; Write-Host "FAIL: $What" }
 }
 function Sha256([string] $Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+# The icon Windows loads from an exe at a size, compared pixel by pixel with that size of adiutor.ico.
+$ico = Join-Path $PSScriptRoot '..' 'tray' 'src' 'AdiutorSync' 'adiutor.ico'
+Add-Type -AssemblyName System.Drawing
+function SameIcon([string] $Exe) {
+  foreach ($size in 16, 32) {
+    $want = New-Object Drawing.Icon $ico, $size, $size
+    $got = [Drawing.Icon]::ExtractIcon($Exe, 0, $size)
+    if ($null -eq $got) { $want.Dispose(); return $false }
+    $a = $want.ToBitmap(); $b = $got.ToBitmap()
+    try {
+      if ($a.Width -ne $size -or $b.Width -ne $size -or $b.Height -ne $size) { return $false }
+      for ($y = 0; $y -lt $size; $y++) {
+        for ($x = 0; $x -lt $size; $x++) { if ($a.GetPixel($x, $y) -ne $b.GetPixel($x, $y)) { return $false } }
+      }
+    }
+    finally { $a.Dispose(); $b.Dispose(); $want.Dispose(); $got.Dispose() }
+  }
+  $true
+}
 function EntrySha256($Entry) {
   $stream = $Entry.Open()
   try { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)).ToLowerInvariant() } finally { $stream.Dispose() }
@@ -39,6 +59,8 @@ function EntrySha256($Entry) {
 $full = Join-Path $OutputDir "AdiutorSync-$Version-full.nupkg"
 Check "the full package AdiutorSync-$Version-full.nupkg exists" { Test-Path -LiteralPath $full -PathType Leaf }
 Check 'the installer AdiutorSync-win-Setup.exe exists' { Test-Path -LiteralPath (Join-Path $OutputDir 'AdiutorSync-win-Setup.exe') -PathType Leaf }
+Check "the installer shows Adiutor's icon" { SameIcon (Join-Path $OutputDir 'AdiutorSync-win-Setup.exe') }
+New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 if (Test-Path -LiteralPath $full -PathType Leaf) {
@@ -52,6 +74,11 @@ if (Test-Path -LiteralPath $full -PathType Leaf) {
     }
     Check 'the package carries the engine bundle byte for byte' { (EntrySha256 (& $entry 'adiutor-sync.js')) -eq (Sha256 $Bundle) }
     Check 'the package carries AdiutorSync.exe' { $null -ne (& $entry 'AdiutorSync.exe') }
+    Check "AdiutorSync.exe shows Adiutor's icon" {
+      $exe = Join-Path $WorkDir 'AdiutorSync.exe'
+      [IO.Compression.ZipFileExtensions]::ExtractToFile((& $entry 'AdiutorSync.exe'), $exe, $true)
+      SameIcon $exe
+    }
     Check "the package's version is $Version" {
       $stream = $archive.GetEntry('AdiutorSync.nuspec').Open()
       try { ([xml](New-Object IO.StreamReader($stream)).ReadToEnd()).package.metadata.version -eq $Version } finally { $stream.Dispose() }
@@ -74,7 +101,6 @@ Check "the local feed gives the full package's SHA-256 and size" {
 }
 
 # A zip off its pin is refused, and its node.exe never reaches the output folder.
-New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 $bad = Join-Path $WorkDir 'changed.zip'
 Copy-Item -LiteralPath $NodeZip -Destination $bad -Force
 $bytes = [IO.File]::ReadAllBytes($bad)

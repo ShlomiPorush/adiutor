@@ -26,9 +26,16 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
     private PanelWindow? _panel;
     private SettingsWindow? _settingsWindow;
     private readonly EventWaitHandle _showPanel;
+    // The first start after the install opens the panel once the engine's first status is known (read, refused or no
+    // engine), so it never opens on "could not read the sync's state".
+    private bool _firstRunPanel;
     private bool _exiting;
 
-    public App(EventWaitHandle showPanel) => _showPanel = showPanel;
+    public App(EventWaitHandle showPanel, bool firstRun)
+    {
+        _showPanel = showPanel;
+        _firstRunPanel = firstRun;
+    }
 
     public SyncLoop Loop { get; private set; } = null!;
 
@@ -77,6 +84,8 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
             return;
         _tray = new TrayIcon(Texts["appName"]);
         _tray.Clicked += TogglePanel;
+        // A new icon (also the one put back after an update that did not start) can get a new key in Explorer.
+        TrayIconPromotion.PromoteInBackground(_log);
     }
 
     private NodeEngine? CreateEngine(TraySettings settings)
@@ -170,6 +179,11 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
         _tray?.Show(view.Icon, view.Tooltip);
         _panel?.Render(view);
         _settingsWindow?.Render(snapshot);
+        if (_firstRunPanel && (snapshot.Status is not null || snapshot.StatusProblem is not null || snapshot.EngineMissing))
+        {
+            _log.Info("first run after the install: panel opened");
+            TogglePanel();
+        }
     }
 
     private string FormatTime(DateTimeOffset at) => TrayView.LocalTime(at, Texts, CultureInfo.CurrentCulture);
@@ -187,6 +201,8 @@ internal sealed class App : Application, ITrayActions, ISettingsHost
 
     private void TogglePanel()
     {
+        // A panel the owner opened or closed already answers the first run's opening.
+        _firstRunPanel = false;
         if (_panel is { IsVisible: true })
         {
             _panel.Hide();

@@ -11,9 +11,13 @@ public static class Program
     public static int Main()
     {
         // First of all: Velopack's install, update and uninstall hooks run here and end the process (Velopack's
-        // documented start). Uninstalling removes the tray's start with Windows value; the data folder stays.
+        // documented start). Uninstalling removes the tray's start with Windows value; the data folder stays. The first
+        // start after the install (Velopack starts the app when Setup ends) opens the panel, so the install visibly
+        // ends somewhere.
+        var firstRun = false;
         VelopackApp.Build()
             .OnBeforeUninstallFastCallback(_ => StartWithWindows.Remove())
+            .OnFirstRun(_ => firstRun = true)
             .Run();
 
         // One tray per Windows session. Starting it again (from the Start menu) opens the running tray's panel.
@@ -24,7 +28,7 @@ public static class Program
             show.Set();
             return 0;
         }
-        var app = new App(show);
+        var app = new App(show, firstRun);
         return app.Run();
     }
 }
