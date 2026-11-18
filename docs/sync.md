@@ -22,11 +22,11 @@ The server refuses times more than 5 minutes ahead of its own clock ([api.md](ap
 
 The data folder is `%LOCALAPPDATA%\adiutor` on Windows and `$XDG_CONFIG_HOME/adiutor` (`~/.config/adiutor`) elsewhere. Each setting comes from the first of: an option (`--url`), the env file given with `--env`, the environment, `sync.env` in the data folder (when it exists and no `--env` was given), the settings file `settings.json` in the data folder, and the default. As before, `connect` and `setup-mcp` let the environment win over any env file:
 
-| Name                   | Settings file key | Purpose                                                                                                 |
-| ---------------------- | ----------------- | ------------------------------------------------------------------------------------------------------- |
-| `ADIUTOR_URL`          | `adiutorUrl`      | Adiutor's address alone, for example `https://adiutor.example.com` (https, or http on `localhost` only) |
-| `T3CODE_CLI_PATH`      | `t3CliPath`       | The T3 CLI; default `%USERPROFILE%\.t3\bin\t3.cmd` on Windows, `~/.t3/bin/t3` elsewhere                 |
-| `ADIUTOR_T3_URL`       | `t3Url`           | T3's address alone; default `http://127.0.0.1:3773` (https, or http on this computer only)              |
+| Name              | Settings file key | Purpose                                                                                                 |
+| ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------- |
+| `ADIUTOR_URL`     | `adiutorUrl`      | Adiutor's address alone, for example `https://adiutor.example.com` (https, or http on `localhost` only) |
+| `T3CODE_CLI_PATH` | `t3CliPath`       | The T3 CLI; default `%USERPROFILE%\.t3\bin\t3.cmd` on Windows, `~/.t3/bin/t3` elsewhere                 |
+| `ADIUTOR_T3_URL`  | `t3Url`           | T3's address alone; default `http://127.0.0.1:3773` (https, or http on this computer only)              |
 
 The overview folder of older versions (`ADIUTOR_OVERVIEW_DIR`, `overviewDir`, `--overview`) is no longer read; `--overview` and `--no-collect` are refused as unknown options. The settings file is the tray's: it writes it, and the engine only reads it. It also holds the tray's pause, `"pause": {"until": "<time>"}` or `{"until": null}` (until resumed), which `status` reports. Neither file holds a secret: `connect` writes `ADIUTOR_URL` into the env file (`%LOCALAPPDATA%\adiutor\sync.env` on Windows, `~/.config/adiutor/sync.env` elsewhere, readable only by the owner). `ADIUTOR_AGENT_TOKEN`, the agent key of the sync before agent access, is no longer read: when it is still set, each run says so once (never its value), and the owner deletes that line, and the key in Settings, Agent access, if it is still listed.
 
