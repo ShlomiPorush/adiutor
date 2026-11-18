@@ -1746,6 +1746,7 @@
       "version": "Version {version}",
       "addressFirst": "Enter Adiutor's address first.",
       "sync": "Sync",
+      "noOverview": "no security data",
       "lockedEnvironment": "Set by the environment ({name}); change it there.",
       "lockedEnvFile": "Set in sync.env ({name}); change it there.",
       "urlFromConnect": "Connect saved this address in sync.env. A new address takes effect when you connect.",

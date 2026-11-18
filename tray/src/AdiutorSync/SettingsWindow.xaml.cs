@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using AdiutorSync.Core;
@@ -23,7 +24,9 @@ internal interface ISettingsHost
 /// <summary>
 /// The settings window (the plan, section 4, "Settings window"): Adiutor's address and its connection, T3's command
 /// line, address and connection, the overview folder, the schedule, start with Windows and the language. Every
-/// setting is written to settings.json in the data folder; the connections are the engine's commands.
+/// setting is written to settings.json in the data folder; the connections are the engine's commands. Each area starts
+/// closed with its state in its header, and opens when the owner clicks it or when it needs the owner
+/// (SettingsSections).
 /// </summary>
 #pragma warning disable CA1001 // The command's token is disposed when its command ends (RunAsync).
 internal sealed partial class SettingsWindow : Window
@@ -35,6 +38,8 @@ internal sealed partial class SettingsWindow : Window
     private CancellationTokenSource? _command;
     private string? _approvalLink;
     private TraySnapshot? _snapshot;
+    private readonly SectionAttention _adiutorAttention = new();
+    private readonly SectionAttention _t3Attention = new();
 
     public SettingsWindow(ISettingsHost host)
     {
@@ -45,6 +50,15 @@ internal sealed partial class SettingsWindow : Window
         ApplyTexts();
         Fill(host.Loop.Snapshot.Settings);
         Render(host.Loop.Snapshot);
+        Schedule.SelectionChanged += (_, _) => ShowSyncSummary();
+        Overview.TextChanged += (_, _) => ShowSyncSummary();
+        ShowSyncSummary();
+        // The approval code stays in view while the owner approves: the area does not close under it.
+        AdiutorSection.Collapsed += (_, _) =>
+        {
+            if (ApprovalBox.Visibility == Visibility.Visible)
+                AdiutorSection.IsExpanded = true;
+        };
         Closed += (_, _) => _command?.Cancel();
     }
 
@@ -85,16 +99,14 @@ internal sealed partial class SettingsWindow : Window
         var hours = (Schedule.SelectedItem as ComboBoxItem)?.Tag as int? ?? TraySettings.DefaultScheduleHours;
         Schedule.Items.Clear();
         foreach (var n in TraySettings.ScheduleChoices)
-        {
-            var text = n == 1 ? t["settings.hour"] : t.Format("settings.hours", ("n", n.ToString(System.Globalization.CultureInfo.CurrentCulture)));
-            Schedule.Items.Add(new ComboBoxItem { Content = text, Tag = n });
-        }
+            Schedule.Items.Add(new ComboBoxItem { Content = SettingsSections.ScheduleChoice(t, n), Tag = n });
         SelectTag(Schedule, hours);
         var language = (LanguageBox.SelectedItem as ComboBoxItem)?.Tag as string ?? t.Language;
         LanguageBox.Items.Clear();
         LanguageBox.Items.Add(new ComboBoxItem { Content = t["settings.hebrew"], Tag = Texts.Hebrew });
         LanguageBox.Items.Add(new ComboBoxItem { Content = t["settings.english"], Tag = Texts.English });
         SelectTag(LanguageBox, language);
+        ShowSyncSummary();
         if (_snapshot is not null)
         {
             Render(_snapshot);
@@ -198,8 +210,18 @@ internal sealed partial class SettingsWindow : Window
         var busy = _command is not null;
         var adiutor = snapshot.Status?.Adiutor;
         var t3 = snapshot.Status?.T3;
-        ShowState(AdiutorState, AdiutorDot, adiutor?.State, adiutor?.RevocationPending == true);
-        ShowState(T3State, T3Dot, t3?.State, t3?.RevocationPending == true);
+        ShowState(AdiutorState, AdiutorDot, AdiutorPending, adiutor?.State, adiutor?.RevocationPending == true);
+        var host = adiutor?.State == ConnectionState.Connected && Addresses.Origin(adiutor.Url) is { } origin
+            ? "· " + TrayView.LeftToRight(new Uri(origin).Authority, t)
+            : "";
+        AdiutorHost.Text = host;
+        AutomationProperties.SetName(AdiutorSection, $"{AdiutorHeading.Text}, {AdiutorState.Text} {host}".TrimEnd());
+        ShowState(T3State, T3Dot, T3Pending, t3?.State, t3?.RevocationPending == true);
+        AutomationProperties.SetName(T3Section, $"{T3Heading.Text}, {T3State.Text}");
+        if (_adiutorAttention.Update(SettingsSections.Attention(adiutor?.State, adiutor?.RevocationPending == true)))
+            AdiutorSection.IsExpanded = true;
+        if (_t3Attention.Update(SettingsSections.Attention(t3?.State, t3?.RevocationPending == true)))
+            T3Section.IsExpanded = true;
         var engine = !snapshot.EngineMissing;
         AdiutorConnect.IsEnabled = engine && !busy && adiutor?.State != ConnectionState.Connected;
         AdiutorDisconnect.IsEnabled = engine && !busy && (adiutor?.State is ConnectionState.Connected or ConnectionState.Ended || adiutor?.RevocationPending == true);
@@ -210,7 +232,8 @@ internal sealed partial class SettingsWindow : Window
             ApprovalBox.Visibility = Visibility.Collapsed;
     }
 
-    private void ShowState(TextBlock text, System.Windows.Shapes.Ellipse dot, ConnectionState? state, bool revocationPending)
+    /** A connection's state in its area's header, and an unfinished disconnect inside. */
+    private void ShowState(TextBlock text, System.Windows.Shapes.Ellipse dot, TextBlock pending, ConnectionState? state, bool revocationPending)
     {
         var t = T;
         text.Text = state switch
@@ -219,7 +242,9 @@ internal sealed partial class SettingsWindow : Window
             ConnectionState.NotConnected => t["settings.notConnected"],
             ConnectionState.Ended => t["settings.ended"],
             _ => t["settings.unknown"],
-        } + (revocationPending ? "\n" + t["settings.revocationPending"] : "");
+        };
+        pending.Text = revocationPending ? t["settings.revocationPending"] : "";
+        pending.Visibility = revocationPending ? Visibility.Visible : Visibility.Collapsed;
         var colour = IconPainter.ColorOf(state switch
         {
             ConnectionState.Connected => IconState.Synced,
@@ -227,6 +252,26 @@ internal sealed partial class SettingsWindow : Window
             _ => IconState.Paused,
         });
         dot.Fill = new SolidColorBrush(Color.FromRgb(colour.R, colour.G, colour.B));
+    }
+
+    /** The Sync area's header, from what its fields show now. */
+    private void ShowSyncSummary()
+    {
+        SyncSummary.Text = SettingsSections.SyncSummary(T, (Schedule.SelectedItem as ComboBoxItem)?.Tag as int? ?? TraySettings.DefaultScheduleHours, Overview.Text);
+        AutomationProperties.SetName(SyncSection, $"{SyncHeading.Text}, {SyncSummary.Text}");
+    }
+
+    /** A message of an area is never hidden: its area opens, and the message scrolls into view once laid out. */
+    private void Say(TextBlock message, string text)
+    {
+        message.Text = text;
+        if (text.Length == 0)
+            return;
+        if (message == AdiutorMessage)
+            AdiutorSection.IsExpanded = true;
+        else if (message == T3Message)
+            T3Section.IsExpanded = true;
+        Dispatcher.BeginInvoke(() => message.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     /** The settings in the window, or null with the reason shown when an address is not one the engine accepts. */
@@ -241,7 +286,7 @@ internal sealed partial class SettingsWindow : Window
             adiutor = Addresses.Origin(AdiutorUrl.Text);
             if (adiutor is null)
             {
-                AdiutorMessage.Text = t["settings.badAdiutorUrl"];
+                Say(AdiutorMessage, t["settings.badAdiutorUrl"]);
                 return null;
             }
         }
@@ -251,7 +296,7 @@ internal sealed partial class SettingsWindow : Window
             t3Url = Addresses.Origin(T3Url.Text);
             if (t3Url is null)
             {
-                T3Message.Text = t["settings.badT3Url"];
+                Say(T3Message, t["settings.badT3Url"]);
                 return null;
             }
             if (t3Url == DefaultT3Url)
@@ -297,12 +342,12 @@ internal sealed partial class SettingsWindow : Window
         var effective = url ?? Addresses.Origin(Effective(EffectiveSettings.AdiutorUrl)?.Value);
         if (effective is null)
         {
-            AdiutorMessage.Text = T["settings.addressFirst"];
+            Say(AdiutorMessage, T["settings.addressFirst"]);
             return;
         }
         if (!_host.Save(settings))
         {
-            AdiutorMessage.Text = T["settings.notSaved"];
+            Say(AdiutorMessage, T["settings.notSaved"]);
             return;
         }
         MarkSaved();
@@ -326,7 +371,7 @@ internal sealed partial class SettingsWindow : Window
             return;
         if (!_host.Save(settings))
         {
-            T3Message.Text = T["settings.notSaved"];
+            Say(T3Message, T["settings.notSaved"]);
             return;
         }
         MarkSaved();
@@ -342,14 +387,14 @@ internal sealed partial class SettingsWindow : Window
         if (_command is not null)
             return;
         _command = new CancellationTokenSource();
-        message.Text = T["settings.working"];
+        Say(message, T["settings.working"]);
         Render(_host.Loop.Snapshot);
         try
         {
             var outcome = await _host.Loop.RunCommandAsync(args, OnEvent, _command.Token);
-            message.Text = outcome.Result is { Ok: true } ok && success(ok) is { } text
+            Say(message, outcome.Result is { Ok: true } ok && success(ok) is { } text
                 ? text
-                : T.Format("settings.failed", ("code", NodeEngine.SafeCode(outcome.Result?.Error?.Code ?? outcome.Failure ?? "no_result")));
+                : T.Format("settings.failed", ("code", NodeEngine.SafeCode(outcome.Result?.Error?.Code ?? outcome.Failure ?? "no_result"))));
         }
         finally
         {
@@ -378,6 +423,8 @@ internal sealed partial class SettingsWindow : Window
             ApprovalCode.Text = approval.UserCode;
             OpenApproval.IsEnabled = _approvalLink is not null;
             ApprovalBox.Visibility = Visibility.Visible;
+            AdiutorSection.IsExpanded = true;
+            Dispatcher.BeginInvoke(() => ApprovalBox.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
         });
     }
 
