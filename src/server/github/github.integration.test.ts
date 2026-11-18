@@ -685,4 +685,14 @@ describe("review round 1", () => {
     })
     expect(row.githubKeyVerified).toBe(false)
   })
+
+  it("binds a project to a repository only after its identity held", async () => {
+    await setUp()
+    const widget = await project("Widget", "example-org/widget")
+    // The inventory gives one repository under the name, and the name leads to another when it is checked.
+    ;(standIn.scenario.repos["example-org/widget"] as Scenario["repos"][string]).restId = 7999
+    await handle.runner.pull()
+    expect(await projectRow(widget.id)).toMatchObject({ githubRepoId: null, openIssuesCount: null })
+    expect(await family(widget.id, "dependabot")).toMatchObject({ coverage: "error", attempt: "error" })
+  })
 })

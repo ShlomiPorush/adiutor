@@ -520,8 +520,11 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
   // to the repository the inventory gave both before and after them (Metadata comes with every installation), or
   // nothing read is kept, so a name that another repository took meanwhile is not counted for this project.
   await pool(planned, REPOS_AT_ONCE, async (plan) => {
+    // A repository whose identity did not hold is not bound either: its id is never stored for the project, and the
+    // Issues count (checked against it) is not taken.
     const errorAll = (code: string) => {
       for (const family of ALERT_FAMILIES) plan.project.families[family] = { coverage: "error", code }
+      plan.project.repoId = null
     }
     const before = await sameRepository(plan)
     if (before) return errorAll(before)
