@@ -51,6 +51,7 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 test("the App and its key are saved in Settings, an installation is added, and Read now fills the board", async () => {
+  await page.goto("/")
   const project = await api<{ id: string }>("POST", "/projects", { name: PROJECT, githubRepo: REPO })
   projectId = project.id
 
