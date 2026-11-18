@@ -424,6 +424,7 @@ internal sealed partial class SettingsWindow : Window
             OpenApproval.IsEnabled = _approvalLink is not null;
             ApprovalBox.Visibility = Visibility.Visible;
             AdiutorSection.IsExpanded = true;
+            Dispatcher.BeginInvoke(() => ApprovalBox.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
         });
     }
 

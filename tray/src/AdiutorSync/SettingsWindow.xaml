@@ -142,7 +142,7 @@
               <TextBlock x:Name="T3Heading" DockPanel.Dock="Left" Style="{StaticResource Section}" Margin="0,0,16,0" />
               <DockPanel HorizontalAlignment="Right" VerticalAlignment="Center">
                 <Ellipse x:Name="T3Dot" DockPanel.Dock="Left" Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center" />
-                <TextBlock x:Name="T3State" DockPanel.Dock="Left" Style="{StaticResource HeaderState}" TextTrimming="None" />
+                <TextBlock x:Name="T3State" Style="{StaticResource HeaderState}" TextTrimming="None" />
               </DockPanel>
             </DockPanel>
           </Expander.Header>
