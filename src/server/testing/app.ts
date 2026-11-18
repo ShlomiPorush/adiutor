@@ -4,6 +4,7 @@ import { AuthHolder, type AuthOptions, type AuthSettings } from "../auth/auth.ts
 import type { EnvOverrides } from "../config.ts"
 import { authUser } from "../db/schema.ts"
 import type { RateLimiter } from "../http/auth.ts"
+import { createGitHubHandle, type GitHubHandle } from "../http/github.ts"
 import { ReloadableSecretScanner } from "../services/secrets.ts"
 import { createSettingsCipher } from "../settings/crypto.ts"
 import { SettingsRuntime } from "../settings/runtime.ts"
@@ -35,9 +36,19 @@ export type TestCoreOptions = {
   telegram?: TelegramRuntime
   /** Extra Better Auth options (trusted proxies, secrets, the passkey test pause, the identity-change hooks). */
   auth?: Partial<Pick<AuthOptions, "secrets" | "trustedProxies" | "afterPasskeyVerified" | "identityChanges">>
+  /**
+   * The server's GitHub reading: the stand-in's origin (e2e/github-stand-in.mjs), the generation the gate starts at
+   * (0 for a new database) and the write pause of a test. Without an origin it points at a closed local port.
+   */
+  github?: { origin?: string; generation?: number; beforeWrite?: () => Promise<void> }
 }
 
-export type TestCore = Core & { auth: AuthHolder; runtime: SettingsRuntime; telegramService: TelegramService }
+export type TestCore = Core & {
+  auth: AuthHolder
+  runtime: SettingsRuntime
+  telegramService: TelegramService
+  github: GitHubHandle
+}
 
 /** Better Auth's options for a test database, without the settings. */
 export function testAuthBase(t: TestDatabase, publicUrl: URL, extra: TestCoreOptions["auth"] = {}) {
@@ -82,6 +93,13 @@ export function testCore(t: TestDatabase, options: TestCoreOptions): TestCore {
     telegram: options.telegram ?? telegramService,
     limiter: options.limiter,
     clientIp: options.clientIp,
+    github: createGitHubHandle({
+      ctx: t.ctx,
+      env,
+      generation: options.github?.generation ?? 0,
+      origin: options.github?.origin ?? "http://127.0.0.1:9",
+      beforeWrite: options.github?.beforeWrite,
+    }),
   }
 }
 

@@ -236,6 +236,14 @@
       "rate_limited": "יותר מדי ניסיונות. צריך לחכות דקה",
       "telegram_failed": "Telegram לא קיבל את ההודעה",
       "telegram_uncertain": "לא התקבלה תשובה ברורה מ-Telegram, ייתכן שההודעה נשלחה",
+      "github_key_invalid": "זה לא מפתח פרטי של GitHub App",
+      "github_key_rejected": "GitHub לא קיבל את המפתח הזה עבור ה-App",
+      "github_app_mismatch": "המפתח שייך ל-GitHub App אחר",
+      "github_unreachable": "GitHub לא ענה. נסה שוב",
+      "github_installation_not_found": "אין ל-App התקנה עם המזהה הזה",
+      "github_key_required": "משתנה סביבה מפעיל את GitHub, ולכן חייב להיות מפתח",
+      "github_not_set_up": "קודם צריך להגדיר את מזהה ה-App ואת המפתח שלו",
+      "github_rate_limited": "GitHub ביקש להמתין. נסה שוב מאוחר יותר",
       "internal_error": "השרת נכשל",
       "totp_required": "האימות הדו-שלבי לא הושלם",
       "setting_locked": "משתנה סביבה מגדיר את זה"
@@ -979,6 +987,10 @@
       "syncStale": "סנכרון T3 אחרון: {time}",
       "syncNever": "עדיין אין סנכרון T3",
       "syncDisconnected": "הסנכרון מנותק: צריך לחבר אותו מחדש במחשב שמריץ אותו (הגדרות, גישת סוכנים).",
+      "githubOff": "GitHub לא מוגדר, ולכן נתוני האבטחה לא נבדקים (הגדרות, GitHub).",
+      "githubNotRead": "עדיין לא נקראו נתונים מ-GitHub, ולכן נתוני האבטחה לא נבדקו.",
+      "githubNotCovered": "פרויקטים בלי נתוני GitHub עדכניים: {count}",
+      "githubLastRead": "קריאה תקינה אחרונה: {time}",
       "openBoard": "פתח את הלוח"
     }
   },

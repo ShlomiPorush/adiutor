@@ -29,8 +29,10 @@ import {
   JOB_STATES,
   LANGUAGES,
   PROPOSAL_STATES,
+  SECURITY_ATTEMPTS,
   SECURITY_COVERAGES,
   SECURITY_FAMILIES,
+  SECURITY_ORIGINS,
   SEVERITIES,
   STAGES,
   SUPPRESSION_KINDS,
@@ -61,17 +63,30 @@ export const projects = pgTable(
     t3ProjectId: text("t3_project_id").unique(),
     /** GitHub repository as owner/name. */
     githubRepo: text("github_repo"),
+    /**
+     * Raised in the same transaction whenever github_repo changes: a pull from GitHub that read the project under an
+     * older version writes nothing for it (server/github/apply.ts).
+     */
+    githubRepoVersion: integer("github_repo_version").notNull().default(0),
+    /**
+     * GitHub's id of the repository, from an allowed installation's inventory when the name first matched; cleared
+     * when github_repo changes. A repository found again only by this id was renamed or moved.
+     */
+    githubRepoId: bigint("github_repo_id", { mode: "number" }),
     /** Unset until the owner sets it; agents only propose one. */
     stage: text("stage", { enum: STAGES }),
     whereWeAre: text("where_we_are"),
     openIssuesCount: integer("open_issues_count"),
     openIssuesAsOf: at("open_issues_as_of"),
+    /** Where the Issues count came from: `push` (the sync on the PC, before the server read GitHub) or `github`. */
+    openIssuesOrigin: text("open_issues_origin", { enum: SECURITY_ORIGINS }).notNull().default("push"),
     createdAt: createdAt(),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
     check("projects_stage_check", oneOf("stage", STAGES)),
     check("projects_open_issues_count_check", sql`${t.openIssuesCount} >= 0`),
+    check("projects_open_issues_origin_check", oneOf("open_issues_origin", SECURITY_ORIGINS)),
   ],
 )
 
@@ -286,12 +301,19 @@ export const securitySources = pgTable(
     low: integer("low").notNull().default(0),
     /** The source's last success, not the time of the sync that carried it. */
     asOf: at("as_of"),
+    /** Who wrote the stored result (coverage, counts, as_of): the sync's push from the PC, or the server's pull. */
+    origin: text("origin", { enum: SECURITY_ORIGINS }).notNull().default("push"),
+    /** The server's last attempt to read this source from GitHub, and how it ended; null before the first. */
+    attemptedAt: at("attempted_at"),
+    attempt: text("attempt", { enum: SECURITY_ATTEMPTS }),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
     unique("security_sources_project_family_unique").on(t.projectId, t.family),
     check("security_sources_family_check", oneOf("family", SECURITY_FAMILIES)),
     check("security_sources_coverage_check", oneOf("coverage", SECURITY_COVERAGES)),
+    check("security_sources_origin_check", oneOf("origin", SECURITY_ORIGINS)),
+    check("security_sources_attempt_check", oneOf("attempt", SECURITY_ATTEMPTS)),
     check(
       "security_sources_counts_check",
       sql`${t.critical} >= 0 and ${t.high} >= 0 and ${t.medium} >= 0 and ${t.low} >= 0`,
@@ -416,6 +438,12 @@ export const visits = pgTable(
   (t) => [index("visits_at_idx").on(t.at)],
 )
 
+/**
+ * An installation of the owner's GitHub App that the server may read, as GitHub answered when it was added: the
+ * account it is bound to (id and type), and the login for display only.
+ */
+export type StoredInstallation = { id: number; accountId: number; accountType: string; login: string }
+
 // A single row (id 1). The morning time and days are fixed, not settings.
 export const settings = pgTable(
   "settings",
@@ -442,6 +470,18 @@ export const settings = pgTable(
     agentsEnabled: boolean("agents_enabled").notNull().default(SETTINGS_DEFAULTS.agentsEnabled),
     /** A connection ends after this many days without a real API or MCP call. Not in the API or the UI yet. */
     agentIdleDays: integer("agent_idle_days").notNull().default(SETTINGS_DEFAULTS.agentIdleDays),
+    /**
+     * The owner's GitHub App (server/github/): its id, its private key encrypted with ADIUTOR_SETTINGS_KEYS (never
+     * returned or audited; the fingerprint stands for it), whether GitHub accepted the key, and the installations the
+     * server may read. ADIUTOR_GITHUB_APP_ID, ADIUTOR_GITHUB_PRIVATE_KEY and ADIUTOR_GITHUB_INSTALLATIONS override them.
+     */
+    githubAppId: text("github_app_id"),
+    githubPrivateKeyEnc: text("github_private_key_enc"),
+    githubKeyFingerprint: text("github_key_fingerprint"),
+    githubKeyVerified: boolean("github_key_verified").notNull().default(false),
+    githubInstallations: jsonb("github_installations").$type<StoredInstallation[]>().notNull().default([]),
+    /** Raised by every save of a GitHub field: a pull of an older generation sends and writes nothing more. */
+    githubGeneration: integer("github_generation").notNull().default(0),
     updatedAt: at("updated_at").notNull().defaultNow(),
   },
   (t) => [
@@ -453,6 +493,7 @@ export const settings = pgTable(
       sql.raw(`"session_idle_days" between ${SESSION_IDLE_DAYS_MIN} and ${SESSION_IDLE_DAYS_MAX}`),
     ),
     check("settings_telegram_chat_id_check", sql.raw(`"telegram_chat_id" ~ '^-?[0-9]{1,20}$'`)),
+    check("settings_github_app_id_check", sql.raw(`"github_app_id" ~ '^[0-9]{1,20}$'`)),
     check(
       "settings_agent_idle_days_check",
       sql.raw(`"agent_idle_days" between ${AGENT_IDLE_DAYS_MIN} and ${AGENT_IDLE_DAYS_MAX}`),

@@ -1,6 +1,6 @@
 import { and, eq, isNull, like, or } from "drizzle-orm"
 import type { Stage } from "../../shared/enums.ts"
-import { goals, items, notes, projects, stageProposals, suppressions } from "../db/schema.ts"
+import { goals, items, notes, projects, securitySources, stageProposals, suppressions } from "../db/schema.ts"
 import { AppError, forbidden, invalid, notFound } from "../errors.ts"
 import {
   type By,
@@ -150,25 +150,50 @@ export async function updateProject(ctx: Ctx, by: By, id: string, patch: Project
     const now = ctx.clock()
     let after = before
     const changed = Object.entries(next).filter(([k, v]) => before[k as keyof ProjectRow] !== v)
+    // Another repository: its security data and Issues count belong to the old one. They are cleared, and the binding
+    // version is raised, so a pull that read the old repository writes nothing for this project (github/apply.ts).
+    const repoChanged =
+      next.githubRepo !== undefined && (next.githubRepo?.toLowerCase() ?? null) !== (before.githubRepo?.toLowerCase() ?? null)
     if (changed.length > 0) {
       const [row] = await tx
         .update(projects)
-        .set({ ...Object.fromEntries(changed), updatedAt: now })
+        .set({
+          ...Object.fromEntries(changed),
+          ...(repoChanged ? repoReset(before) : {}),
+          updatedAt: now,
+        })
         .where(eq(projects.id, id))
         .returning()
       if (!row) throw notFound("The project")
       after = row
+      const cleared = repoChanged
+        ? await tx.delete(securitySources).where(eq(securitySources.projectId, id)).returning()
+        : []
       await writeAudit(ctx, tx, by, {
         action: "project.update",
         entityType: "project",
         entityId: after.id,
-        before,
+        before: repoChanged ? { ...before, securitySources: cleared } : before,
         after,
       })
     }
     if (patch.goal !== undefined) await setGoalTx(ctx, tx, by, before.id, patch.goal)
     return after
   })
+}
+
+/**
+ * What a change of a project's repository resets: the binding version moves on, and GitHub's id of the old repository
+ * and its Issues count go (the security rows are deleted beside it).
+ */
+export function repoReset(before: Pick<ProjectRow, "githubRepoVersion">): Partial<ProjectRow> {
+  return {
+    githubRepoVersion: before.githubRepoVersion + 1,
+    githubRepoId: null,
+    openIssuesCount: null,
+    openIssuesAsOf: null,
+    openIssuesOrigin: "push",
+  }
 }
 
 /** Closes the current goal and opens the new one (or none). The same text again changes nothing. */

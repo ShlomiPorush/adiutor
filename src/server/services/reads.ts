@@ -42,7 +42,10 @@ import {
 } from "../db/schema.ts"
 import { invalid, notFound } from "../errors.ts"
 import { syncConnected } from "../oauth/sync-status.ts"
-import { getSettings, previousVisit } from "./admin.ts"
+import type { Db } from "../db/client.ts"
+import { GITHUB_RUN_KIND } from "../github/apply.ts"
+import { gitHubCoverage } from "../github/status.ts"
+import { getSettings, previousVisit, readSettings } from "./admin.ts"
 import type { By, Ctx } from "./context.ts"
 import type { ItemRow } from "./items.ts"
 import type { ProjectRow } from "./projects.ts"
@@ -138,7 +141,7 @@ export async function syncStatus(ctx: Ctx) {
   const [t3, partial, security, connected] = await Promise.all([
     lastFinished(ctx, "t3", ["succeeded"]),
     lastFinished(ctx, "t3", ["partial"]),
-    lastFinished(ctx, "security", ["succeeded", "partial"]),
+    lastFinished(ctx, GITHUB_RUN_KIND, ["succeeded", "partial"]),
     syncConnected(ctx.db, ctx.clock()),
   ])
   return {
@@ -343,12 +346,22 @@ async function visibleItems(ctx: Ctx, closedItemDays: number): Promise<ItemRow[]
 
 /**
  * The home screen. `since` is the owner's previous visit in any browser, or 24 hours ago when there is none,
- * unless the caller gives one (the morning message, or the boundary the open page keeps).
+ * unless the caller gives one (the morning message, or the boundary the open page keeps). Its queries run in one
+ * read-only `repeatable read` transaction, so the security data and the GitHub status come from one pull, never a mix.
  */
 export async function morning(ctx: Ctx, options: { since?: Date } = {}) {
+  // The settings row is created before the read-only transaction, which could not insert it.
+  await getSettings(ctx.db)
+  return ctx.db.transaction((tx) => morningRead({ ...ctx, db: tx as unknown as Db }, options), {
+    isolationLevel: "repeatable read",
+    accessMode: "read only",
+  })
+}
+
+async function morningRead(ctx: Ctx, options: { since?: Date }) {
   // The time of this read, taken before anything is read: a visit recorded with it marks nothing newer seen.
   const now = ctx.clock()
-  const settingsRow = await getSettings(ctx.db)
+  const settingsRow = await readSettings(ctx.db)
   const since = options.since ?? (await previousVisit(ctx))
   const allProjects = await ctx.db.select().from(projects).orderBy(asc(projects.name))
   const names = new Map(allProjects.map((p) => [p.id, p.name]))
@@ -418,6 +431,7 @@ export async function morning(ctx: Ctx, options: { since?: Date } = {}) {
     projects: projectLines,
     inboxCount: open.filter((i) => !i.projectId).length,
     sync: await syncStatus(ctx),
+    github: (await gitHubCoverage(ctx.db, now, ctx.githubOn?.(settingsRow) ?? false)).status,
   }
 }
 

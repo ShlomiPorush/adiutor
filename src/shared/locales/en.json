@@ -236,6 +236,14 @@
       "rate_limited": "Too many attempts. Wait a minute",
       "telegram_failed": "Telegram did not take the message",
       "telegram_uncertain": "Telegram gave no clear answer; the message may have been sent",
+      "github_key_invalid": "This is not a GitHub App private key",
+      "github_key_rejected": "GitHub did not accept this key for the App",
+      "github_app_mismatch": "The key belongs to another GitHub App",
+      "github_unreachable": "GitHub did not answer. Try again",
+      "github_installation_not_found": "The App has no installation with this id",
+      "github_key_required": "An environment variable turns GitHub on, so a key is required",
+      "github_not_set_up": "Set the App id and its key first",
+      "github_rate_limited": "GitHub asked to wait. Try again later",
       "internal_error": "The server failed",
       "totp_required": "Two-factor authentication is not finished",
       "setting_locked": "An environment variable sets this"
@@ -979,6 +987,10 @@
       "syncStale": "Last T3 sync: {time}",
       "syncNever": "No T3 sync yet",
       "syncDisconnected": "The sync is disconnected: connect it again on the computer that runs it (Settings, Agent access).",
+      "githubOff": "GitHub is not set up, so security data is not checked (Settings, GitHub).",
+      "githubNotRead": "GitHub has not been read yet, so security data is not checked.",
+      "githubNotCovered": "Projects without current GitHub data: {count}",
+      "githubLastRead": "last good read {time}",
       "openBoard": "Open the board"
     }
   },

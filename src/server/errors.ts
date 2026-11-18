@@ -16,6 +16,14 @@ export const ERROR_CODES = [
   "setting_locked",
   "telegram_failed",
   "telegram_uncertain",
+  "github_key_invalid",
+  "github_key_rejected",
+  "github_app_mismatch",
+  "github_unreachable",
+  "github_installation_not_found",
+  "github_key_required",
+  "github_not_set_up",
+  "github_rate_limited",
   "internal_error",
 ] as const
 
@@ -36,6 +44,14 @@ export const ERROR_STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 422 |
   setting_locked: 409,
   telegram_failed: 502,
   telegram_uncertain: 502,
+  github_key_invalid: 400,
+  github_key_rejected: 422,
+  github_app_mismatch: 422,
+  github_unreachable: 502,
+  github_installation_not_found: 422,
+  github_key_required: 409,
+  github_not_set_up: 409,
+  github_rate_limited: 429,
   internal_error: 500,
 }
 

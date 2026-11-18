@@ -1,5 +1,6 @@
 import type { Language } from "../../shared/enums.ts"
 import { UI_ROUTES, uiUrl } from "../../shared/routes.ts"
+import type { GitHubStatus } from "../github/status.ts"
 import { fill, html, link, oneLine, TelegramHtml } from "../telegram/html.ts"
 import { telegramTexts } from "../telegram/texts.ts"
 import { formatLocal } from "./time.ts"
@@ -13,6 +14,8 @@ export type MorningSummary = {
   newCount: number
   security: { projectName: string; critical: number; high: number; asOf: Date | null; stale: boolean }[]
   sync: { connected: boolean; lastSuccessAt: Date | null; stale: boolean }
+  /** Whether the security data really comes from GitHub and is current (github/status.ts). */
+  github: GitHubStatus
 }
 
 export type MessageOptions = {
@@ -24,6 +27,7 @@ export type MessageOptions = {
 
 const MAX_TITLES = 2
 const MAX_SECURITY_LINES = 2
+const MAX_LINES = 6
 const SEPARATOR = " · "
 
 /**
@@ -33,7 +37,9 @@ const SEPARATOR = " · "
  * 3. up to two security lines (critical, or high in production), with the data's age when stale;
  * 4. that the sync is disconnected and must be connected again, with the last T3 sync time; else that time only when
  *    the sync is stale;
- * 5. a link to the board.
+ * 5. the GitHub status when it is not fine: not set up, not read yet, or how many projects lack current data;
+ * 6. a link to the board.
+ * At most six lines: the security lines give way first.
  * Every value is escaped and stripped of control and bidirectional characters. Pure: no clock, no I/O.
  */
 export function buildMorningMessage(summary: MorningSummary, options: MessageOptions): TelegramHtml {
@@ -43,7 +49,14 @@ export function buildMorningMessage(summary: MorningSummary, options: MessageOpt
   const board = link(url(UI_ROUTES.home), t.openBoard)
 
   const syncLine = !summary.sync.connected || summary.sync.stale
-  if (summary.waiting.length === 0 && summary.newCount === 0 && summary.security.length === 0 && !syncLine)
+  const githubLine = summary.github.state !== "fine"
+  if (
+    summary.waiting.length === 0 &&
+    summary.newCount === 0 &&
+    summary.security.length === 0 &&
+    !syncLine &&
+    !githubLine
+  )
     return html`${fill(t.allClear)} ${board}`
 
   const lines: TelegramHtml[] = []
@@ -64,7 +77,9 @@ export function buildMorningMessage(summary: MorningSummary, options: MessageOpt
 
   lines.push(fill(t.new, { count: summary.newCount }))
 
-  const security = summary.security.slice(0, MAX_SECURITY_LINES)
+  // Waiting, new, the board, and the sync and GitHub lines when shown: what is left of six goes to security.
+  const fixed = 3 + (syncLine ? 1 : 0) + (githubLine ? 1 : 0)
+  const security = summary.security.slice(0, Math.max(0, Math.min(MAX_SECURITY_LINES, MAX_LINES - fixed)))
   security.forEach((line, index) => {
     const counts: TelegramHtml[] = []
     if (line.critical > 0) counts.push(fill(t.critical, { count: line.critical }))
@@ -87,6 +102,14 @@ export function buildMorningMessage(summary: MorningSummary, options: MessageOpt
     lines.push(
       summary.sync.lastSuccessAt ? fill(t.syncStale, { time: time(summary.sync.lastSuccessAt) }) : fill(t.syncNever),
     )
+
+  if (summary.github.state === "off") lines.push(fill(t.githubOff))
+  else if (summary.github.state === "not_read") lines.push(fill(t.githubNotRead))
+  else if (summary.github.state === "not_covered") {
+    const count = fill(t.githubNotCovered, { count: summary.github.notCovered })
+    const last = summary.github.oldestGoodReadAt
+    lines.push(last ? html`${count} (${fill(t.githubLastRead, { time: time(last) })})` : count)
+  }
 
   lines.push(board)
   return TelegramHtml.join(lines)

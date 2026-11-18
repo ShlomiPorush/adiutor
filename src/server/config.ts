@@ -1,4 +1,5 @@
 import { hkdfSync } from "node:crypto"
+import { KEY_PROBLEM_TEXT, normalizeKey, readPrivateKey } from "./github/key.ts"
 
 export type VersionedKey = { version: number; value: string }
 
@@ -40,6 +41,12 @@ export type EnvOverrides = {
   telegramBotToken?: string
   telegramChatId?: string
   privateDomains?: string[]
+  /** The GitHub App's id, digits only. */
+  githubAppId?: string
+  /** The App's private key, normalized (github/key.ts) and checked locally. */
+  githubPrivateKey?: string
+  /** The installation ids the server may read; each is checked against GitHub at every pull. */
+  githubInstallations?: number[]
 }
 
 /** The environment variable behind each override, named by the UI when a field is locked. */
@@ -47,6 +54,9 @@ export const OVERRIDE_VARIABLES = {
   telegramBotToken: "ADIUTOR_TELEGRAM_BOT_TOKEN",
   telegramChatId: "ADIUTOR_TELEGRAM_CHAT_ID",
   privateDomains: "ADIUTOR_PRIVATE_DOMAINS",
+  githubAppId: "ADIUTOR_GITHUB_APP_ID",
+  githubPrivateKey: "ADIUTOR_GITHUB_PRIVATE_KEY",
+  githubInstallations: "ADIUTOR_GITHUB_INSTALLATIONS",
 } as const satisfies Record<keyof EnvOverrides, string>
 
 export const DEFAULT_TELEGRAM_API_URL = "https://api.telegram.org"
@@ -55,6 +65,11 @@ export const MIN_SECRET_BYTES = 32
 /** A bot token as BotFather issues it, and a numeric chat id: checked for the environment and the API alike. */
 export const TELEGRAM_BOT_TOKEN = /^\d{5,}:[A-Za-z0-9_-]{30,}$/
 export const TELEGRAM_CHAT_ID = /^-?\d{1,20}$/
+/** A GitHub App id or installation id: a positive integer. */
+export const GITHUB_ID = /^[1-9][0-9]{0,15}$/
+/** GitHub's API, which the server reads through the owner's App only; tests point it at a stand-in by a flag. */
+export const DEFAULT_GITHUB_API_ORIGIN = "https://api.github.com"
+
 /** One domain name, lowercased, without leading or trailing dots. */
 export const DOMAIN_NAME = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
 
@@ -256,5 +271,49 @@ function readOverrides(env: NodeJS.ProcessEnv, problems: string[]): EnvOverrides
       problems.push("ADIUTOR_PRIVATE_DOMAINS must be a comma-separated list of domain names")
     overrides.privateDomains = list
   }
+  const appId = env.ADIUTOR_GITHUB_APP_ID?.trim()
+  if (appId) {
+    if (!GITHUB_ID.test(appId)) problems.push("ADIUTOR_GITHUB_APP_ID must be the App's numeric id")
+    overrides.githubAppId = appId
+  }
+  const key = env.ADIUTOR_GITHUB_PRIVATE_KEY?.trim()
+  if (key) {
+    // Checked locally only: start never calls GitHub. The message never repeats the value.
+    const read = readPrivateKey(key)
+    if ("problem" in read) problems.push(`ADIUTOR_GITHUB_PRIVATE_KEY ${KEY_PROBLEM_TEXT[read.problem]}`)
+    overrides.githubPrivateKey = normalizeKey(key)
+  }
+  const installations = env.ADIUTOR_GITHUB_INSTALLATIONS?.trim()
+  if (installations) {
+    const ids = installations
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean)
+    if (ids.some((id) => !GITHUB_ID.test(id)))
+      problems.push("ADIUTOR_GITHUB_INSTALLATIONS must be a comma-separated list of installation ids")
+    overrides.githubInstallations = [...new Set(ids.filter((id) => GITHUB_ID.test(id)).map(Number))]
+  }
   return overrides
+}
+
+/**
+ * Whether the environment means GitHub to be on: it names the App or its installations. The server then refuses to
+ * start without a private key in effect (index.ts), rather than run with GitHub silently off.
+ */
+export const githubMeantOn = (overrides: EnvOverrides) =>
+  overrides.githubAppId !== undefined || overrides.githubInstallations !== undefined
+
+/**
+ * The GitHub API origin from the command line (`--github-api-origin=<origin>`), never from the environment: only the
+ * verification stack passes it, to point the server at a stand-in. Production's command has no such flag.
+ */
+export function githubApiOrigin(argv: readonly string[]): string {
+  const prefix = "--github-api-origin="
+  const flag = argv.find((arg) => arg.startsWith(prefix))
+  if (flag === undefined) return DEFAULT_GITHUB_API_ORIGIN
+  const value = flag.slice(prefix.length)
+  const url = URL.canParse(value) ? new URL(value) : undefined
+  if (!url || (url.protocol !== "https:" && url.protocol !== "http:") || url.origin !== value.replace(//+$/, ""))
+    throw new ConfigError("--github-api-origin must be an http or https origin, without a path")
+  return url.origin
 }

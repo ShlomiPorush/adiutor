@@ -5,9 +5,11 @@ import { fileURLToPath } from "node:url"
 import { serve } from "@hono/node-server"
 import { createApp, socketAddress } from "./app.ts"
 import { AuthHolder } from "./auth/auth.ts"
-import { ConfigError, loadConfig } from "./config.ts"
+import { ConfigError, githubApiOrigin, loadConfig } from "./config.ts"
 import { createDatabase, migrationFailure } from "./db/client.ts"
+import { effectiveGitHub } from "./github/settings.ts"
 import { clientAddress } from "./http/auth.ts"
+import { createGitHubHandle } from "./http/github.ts"
 import { errorFacts, log } from "./log.ts"
 import { createAgentAccess } from "./oauth/access.ts"
 import { agentOAuthMount } from "./oauth/routes.ts"
@@ -25,8 +27,11 @@ function fail(msg: string): never {
 }
 
 let config: ReturnType<typeof loadConfig>
+let githubOrigin: string
 try {
   config = loadConfig()
+  // Only the verification stack passes the flag, to point the server at a stand-in GitHub.
+  githubOrigin = githubApiOrigin(process.argv.slice(2))
 } catch (error) {
   if (error instanceof ConfigError) fail(error.message)
   throw error
@@ -44,8 +49,13 @@ try {
 }
 
 const scanner = new ReloadableSecretScanner()
-const ctx = { db: database.db, secrets: scanner, clock: () => new Date() }
 const env = { overrides: config.overrides, cipher: createSettingsCipher(config.settingsKeys) }
+const ctx = {
+  db: database.db,
+  secrets: scanner,
+  clock: () => new Date(),
+  githubOn: (row: Parameters<typeof effectiveGitHub>[0]) => effectiveGitHub(row, env.overrides, env.cipher).on,
+}
 const telegram = new TelegramService({ ctx, publicUrl: config.publicUrl, apiUrl: config.telegramApiUrl })
 
 // Agent access by approval (oauth/): the authorization server for agents on a small pool of its own (an approval holds
@@ -87,6 +97,19 @@ try {
 const pair = effectiveTelegram(settings, env.overrides, env.cipher)
 if (pair.state === "incomplete") log.warn("telegram is incomplete: the bot is off", { missing: pair.missing })
 
+// GitHub: the key in effect is checked locally (config.ts checked the environment's alone). When the environment means
+// GitHub to be on, a missing or unreadable key refuses to start rather than leave security data silently unchecked.
+const github = effectiveGitHub(settings, env.overrides, env.cipher)
+if (github.meantOn && !github.privateKey)
+  fail(
+    "GitHub is turned on by ADIUTOR_GITHUB_APP_ID or ADIUTOR_GITHUB_INSTALLATIONS, but no readable private key is in " +
+      "effect: set ADIUTOR_GITHUB_PRIVATE_KEY from your secret store, or remove the GitHub variables and paste the key " +
+      "in Settings, GitHub",
+  )
+if (github.view.key.set && !github.view.key.readable)
+  log.warn("the stored GitHub key cannot be read: GitHub is off until it is pasted again")
+const githubHandle = createGitHubHandle({ ctx, env, generation: settings.githubGeneration, origin: githubOrigin })
+
 // The image holds the built UI in dist/web next to the server bundle; a checkout without a UI build serves the API only.
 const webRoot = process.env.ADIUTOR_WEB_DIR ?? "dist/web"
 const web = existsSync(join(webRoot, "index.html")) ? { root: webRoot } : undefined
@@ -102,6 +125,7 @@ const app = createApp({
     settings: runtime,
     telegram,
     clientIp: clientAddress(config.trustedProxies, socketAddress),
+    github: githubHandle,
   },
   web,
   agentOAuth,
@@ -115,14 +139,19 @@ const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   log.info(`Adiutor ${config.version} listening`, { port })
 }) as Server
 
+// The hourly pull from GitHub, and one now when the last started more than an hour ago.
+githubHandle.runner.start().catch((error: unknown) => log.error("github pulls did not start", errorFacts(error)))
+
 const shutdown = (signal: string) => {
   log.info("shutting down", { signal })
   // The server stops taking requests at once, while Telegram stops: an agent call still open then writes its audit row
   // by its deadline, within the container's stop grace period (docker-compose.yml).
   const closed = new Promise<void>((resolve) => server.close(() => resolve()))
-  const stopped = telegram
-    .stop()
-    .catch((error: unknown) => log.error("telegram did not stop cleanly", errorFacts(error)))
+  const stopped = Promise.all([
+    telegram.stop().catch((error: unknown) => log.error("telegram did not stop cleanly", errorFacts(error))),
+    // A pull still reading is aborted and writes nothing.
+    githubHandle.runner.stop().catch((error: unknown) => log.error("github pulls did not stop cleanly", errorFacts(error))),
+  ])
   void Promise.all([closed, stopped]).then(() =>
     // The agent calls still running write their audit rows before the pools close.
     agentOAuth

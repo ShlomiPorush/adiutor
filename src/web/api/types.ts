@@ -41,6 +41,14 @@ export const API_ERROR_CODES = [
   "setting_locked",
   "telegram_failed",
   "telegram_uncertain",
+  "github_key_invalid",
+  "github_key_rejected",
+  "github_app_mismatch",
+  "github_unreachable",
+  "github_installation_not_found",
+  "github_key_required",
+  "github_not_set_up",
+  "github_rate_limited",
   "internal_error",
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]

@@ -355,16 +355,6 @@ export const OPEN: OpenRoute[] = [
   },
   {
     method: "POST",
-    path: "/api/v1/sync/security",
-    area: "sync",
-    kind: "act",
-    description: data(
-      "The sync tool's security snapshot: open Issues and security counts per repository. Answers the run's counts.",
-    ),
-    parameters: [body("collectedAt", true), body("repos", true)],
-  },
-  {
-    method: "POST",
     path: "/api/v1/sync/checkin",
     area: "sync",
     kind: "act",
@@ -422,6 +412,7 @@ const NOT_DECIDED = "not used by agents; owner decision pending"
 const NEVER_DELETE = "agents never delete"
 const AGENTS_ADMIN = "managing agent connections and their settings is for people only"
 const MIDDLEWARE = "middleware of the routes below it, not a route of its own"
+const GITHUB_ADMIN = "the GitHub App, its key and the installations the server reads are for people only"
 
 /**
  * Every route of the app closed to agents, as the router lists it (method and path), with the reason. Middleware of a
@@ -482,6 +473,13 @@ export const CLOSED: Record<string, string> = {
   "DELETE /api/v1/sync/requests/:id": "only the owner cancels a sync request",
   "GET /api/v1/settings": "settings are for people only",
   "PATCH /api/v1/settings": "settings are for people only",
+  "ALL /api/v1/github": MIDDLEWARE,
+  "ALL /api/v1/github/*": MIDDLEWARE,
+  "GET /api/v1/github": GITHUB_ADMIN,
+  "PATCH /api/v1/github/app": GITHUB_ADMIN,
+  "POST /api/v1/github/installations": GITHUB_ADMIN,
+  "DELETE /api/v1/github/installations/:id": GITHUB_ADMIN,
+  "POST /api/v1/github/pull": GITHUB_ADMIN,
   "GET /api/v1/suppressions": "suppressions are for people only",
   "DELETE /api/v1/suppressions/:id": "suppressions are for people only",
   "GET /api/v1/telegram/status": "settings are for people only",
@@ -546,6 +544,11 @@ export const NEVER_OPEN = [
   "GET /api/v1/audit",
   "GET /api/v1/agents/settings",
   "PATCH /api/v1/agents/settings",
+  "GET /api/v1/github",
+  "PATCH /api/v1/github/app",
+  "POST /api/v1/github/installations",
+  "DELETE /api/v1/github/installations/:id",
+  "POST /api/v1/github/pull",
   "GET /api/v1/agents/connections",
   "DELETE /api/v1/agents/connections/:id",
   "POST /api/v1/agents/connections/disconnect-all",

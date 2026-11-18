@@ -1,11 +1,11 @@
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
-import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
+import type { T3Snapshot } from "../../shared/api.ts"
 import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
 import { AppError, invalid } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
 import { type By, type Ctx, inLinkTx, inTx, writeAudit } from "./context.ts"
 import { createItemTx, type ItemRow, isSuppressed, type ThreadLinkRow, updateItemTx } from "./items.ts"
-import { createProjectTx } from "./projects.ts"
+import { createProjectTx, repoReset } from "./projects.ts"
 import { newItemStatus, rootThreadId, syncDecision, wantsItem } from "./sync-rules.ts"
 
 export type SyncRunRow = typeof syncRuns.$inferSelect
@@ -180,7 +180,7 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
             if (p.repo && !existing.githubRepo) {
               const [after] = await tx
                 .update(projects)
-                .set({ githubRepo: p.repo, updatedAt: ctx.clock() })
+                .set({ githubRepo: p.repo, ...repoReset(existing), updatedAt: ctx.clock() })
                 .where(eq(projects.id, existing.id))
                 .returning()
               await writeAudit(ctx, tx, SYNC, {
@@ -455,102 +455,6 @@ async function foldChildLink(
     }
     run.add("childLinksFolded")
   })
-}
-
-/**
- * Applies the security and Issues counts the overview collector gathered, per GitHub repository, to every
- * project linked to that repository. Families missing from the snapshot keep their last values.
- */
-export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot): Promise<SyncResult> {
-  const limit = latestAllowed(ctx)
-  await refuseFutureSnapshot(ctx, "security", snapshot.collectedAt, limit)
-  const runId = await startRun(ctx, "security")
-  const run = new Run("security")
-  return guarded(ctx, runId, run, async () => {
-    for (const repo of snapshot.repos) {
-      // Any time later than the server's clock allows refuses the whole repository record, before any write.
-      if (later(repo.issuesAsOf, limit) || repo.families.some((f) => later(f.asOf, limit))) {
-        run.refuse(`repo:${repo.repo}`, TIME_IN_FUTURE)
-        continue
-      }
-      await run.record(`repo:${repo.repo}`, async () => {
-        const matches = await ctx.db
-          .select({ id: projects.id })
-          .from(projects)
-          .where(sql`lower(${projects.githubRepo}) = ${repo.repo.toLowerCase()}`)
-        if (matches.length === 0) return run.add("reposUnmatched")
-        for (const { id } of matches) {
-          await inTx(ctx, async (tx) => {
-            const [project] = await tx.select().from(projects).where(eq(projects.id, id)).for("update")
-            if (!project) return
-            const sourcesBefore = await tx.select().from(securitySources).where(eq(securitySources.projectId, id))
-            const now = ctx.clock()
-            let changed = false
-            // What is stored after this record: the audit row records that, not the snapshot.
-            let issues = { openIssuesCount: project.openIssuesCount, openIssuesAsOf: project.openIssuesAsOf }
-            if (
-              !staleAgainst(repo.issuesAsOf, project.openIssuesAsOf) &&
-              (project.openIssuesCount !== repo.openIssues ||
-                project.openIssuesAsOf?.getTime() !== repo.issuesAsOf?.getTime())
-            ) {
-              await tx
-                .update(projects)
-                .set({ openIssuesCount: repo.openIssues, openIssuesAsOf: repo.issuesAsOf, updatedAt: now })
-                .where(eq(projects.id, id))
-              issues = { openIssuesCount: repo.openIssues, openIssuesAsOf: repo.issuesAsOf }
-              changed = true
-            }
-            for (const f of repo.families) {
-              const old = sourcesBefore.find((s) => s.family === f.family)
-              // An older snapshot applied after a newer one, or a failed read, never rolls the counts back.
-              if (old && staleAgainst(f.asOf, old.asOf)) continue
-              const values = { coverage: f.coverage, ...f.counts, asOf: f.asOf }
-              if (
-                old &&
-                old.coverage === values.coverage &&
-                old.critical === values.critical &&
-                old.high === values.high &&
-                old.medium === values.medium &&
-                old.low === values.low &&
-                old.asOf?.getTime() === values.asOf?.getTime()
-              )
-                continue
-              await tx
-                .insert(securitySources)
-                .values({ projectId: id, family: f.family, ...values, updatedAt: now })
-                .onConflictDoUpdate({
-                  target: [securitySources.projectId, securitySources.family],
-                  set: { ...values, updatedAt: now },
-                })
-              changed = true
-            }
-            if (!changed) return
-            const sourcesAfter = await tx.select().from(securitySources).where(eq(securitySources.projectId, id))
-            await writeAudit(ctx, tx, SYNC, {
-              action: "security.update",
-              entityType: "project",
-              entityId: id,
-              before: {
-                openIssuesCount: project.openIssuesCount,
-                openIssuesAsOf: project.openIssuesAsOf,
-                sources: sourcesBefore,
-              },
-              after: { ...issues, sources: sourcesAfter },
-            })
-            run.add("projectsUpdated")
-          })
-        }
-      })
-    }
-  })
-}
-
-/**
- * True when an incoming record must not replace the stored one: the stored record has a time and the
- * incoming one is older, or has no time at all (a failed or unknown read never overwrites a known one).
- */
-function staleAgainst(next: Date | null, stored: Date | null): boolean {
-  return stored !== null && (next === null || next.getTime() < stored.getTime())
 }
 
 /** The latest runs, newest first. */

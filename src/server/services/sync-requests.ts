@@ -36,12 +36,19 @@ function inRequestsTx<T>(ctx: Ctx, run: (tx: Tx) => Promise<T>): Promise<T> {
   })
 }
 
+/** The kinds of the runs the sync on the PC pushes (`security` only before the server read GitHub). */
+const PC_RUN_KINDS = ["t3", "security"]
+
 /** The states a request can still leave: at most one request is in one of them (sync_requests_one_open_idx). */
 const OPEN: SyncRequestState[] = ["waiting", "claimed"]
 
-/** The state a request ends in, from its parts: done when both were accepted, failed when neither got through. */
+/**
+ * The state a request ends in, from its parts: done when every part was accepted, failed when none got through. The
+ * server reads GitHub itself, so a sync that no longer collects security reports that part `not_run`: it is not this
+ * computer's part, and T3 alone decides.
+ */
 export function finishedState(result: SyncRequestResult): "done" | "partial" | "failed" {
-  const parts = [result.t3, result.security]
+  const parts = result.security === "not_run" ? [result.t3] : [result.t3, result.security]
   if (parts.every((p) => p === "accepted")) return "done"
   if (parts.some((p) => p === "accepted" || p === "partial")) return "partial"
   return "failed"
@@ -243,7 +250,8 @@ export async function syncRequestsView(ctx: Ctx) {
   let unavailable: "no_client" | "older_client" | null = null
   if (!client) {
     const [[run], connected] = await Promise.all([
-      ctx.db.select({ id: syncRuns.id }).from(syncRuns).limit(1),
+      // Only the PC's runs tell of a sync: the server's own GitHub pulls are not one.
+      ctx.db.select({ id: syncRuns.id }).from(syncRuns).where(inArray(syncRuns.kind, PC_RUN_KINDS)).limit(1),
       syncConnected(ctx.db, now),
     ])
     unavailable = run || connected ? "older_client" : "no_client"
