@@ -176,11 +176,20 @@ function Sidebar({
   )
 }
 
+/** The orbit: you at the centre, and the assistant on its path around you. The same mark as `public/favicon.svg`. */
 export function BrandIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
-      <circle cx="12" cy="12" r="7" />
-      <circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+      <path d="M19.73 9.93A8 8 0 1 1 14.07 4.27" />
+      <circle cx="17.66" cy="6.34" r="2.2" fill="currentColor" stroke="none" />
     </svg>
   )
 }

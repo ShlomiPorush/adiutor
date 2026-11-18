@@ -1,4 +1,4 @@
-#Requires -Version 7
+#Requires -Version 7.4
 <#
 .SYNOPSIS
 Builds and packs the sync tray app for a release with Velopack, then checks the package.
@@ -51,7 +51,8 @@ Push-Location $tray
 try {
   dotnet tool restore
   dotnet vpk pack --packId AdiutorSync --packVersion $Version --packDir $publish --mainExe AdiutorSync.exe `
-    --packTitle 'Adiutor Sync' --shortcuts StartMenuRoot --channel win --outputDir $OutputDir
+    --packTitle 'Adiutor Sync' --shortcuts StartMenuRoot --channel win --outputDir $OutputDir `
+    --icon (Join-Path $tray 'src' 'AdiutorSync' 'adiutor.ico')
 }
 finally {
   Pop-Location
