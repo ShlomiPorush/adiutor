@@ -5,7 +5,7 @@
 // code is then exchanged once, and an installation is only shown until the owner adds it with his own click.
 
 import { useQueryClient } from "@tanstack/react-query"
-import { useEffect, useId, useRef, useState } from "react"
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import { ApiError } from "../../api/client.ts"
 import { api, qk } from "../../api/endpoints.ts"
@@ -127,23 +127,33 @@ export function useGitHubReturn() {
 
 /**
  * Leaving this tab for GitHub: the server's answer, then the page goes. The buttons are disabled while the Settings
- * draft holds unsaved changes, so the page never leaves with a draft and the unsaved guards are never touched. An
- * answer that arrives after the section was left does nothing. The button is usable again when the browser shows
- * this page again from its back-forward cache.
+ * draft holds unsaved changes, and the draft is read again when the answer arrives, so the page never leaves with a
+ * draft and the unsaved guards are never touched. An answer that arrives after the button left the screen does
+ * nothing. The button is usable again when the browser shows this page again from its back-forward cache.
  */
-function useLeaveForGitHub<T>(start: () => Promise<T>, go: (answer: T) => void, failed: (failure: unknown) => void) {
+function useLeaveForGitHub<T>(
+  unsaved: boolean,
+  start: () => Promise<T>,
+  go: (answer: T) => void,
+  failed: (failure: unknown) => void,
+) {
   const [busy, setBusy] = useState(false)
   const mounted = useRef(false)
-  useEffect(() => {
+  const unsavedNow = useRef(unsaved)
+  unsavedNow.current = unsaved
+  // A layout effect: its cleanup runs as the button leaves the screen, before any passive cleanup.
+  useLayoutEffect(() => {
     mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  useEffect(() => {
     const shown = (event: PageTransitionEvent) => {
       if (event.persisted) setBusy(false)
     }
     window.addEventListener("pageshow", shown)
-    return () => {
-      mounted.current = false
-      window.removeEventListener("pageshow", shown)
-    }
+    return () => window.removeEventListener("pageshow", shown)
   }, [])
   const leave = async () => {
     setBusy(true)
@@ -156,7 +166,13 @@ function useLeaveForGitHub<T>(start: () => Promise<T>, go: (answer: T) => void, 
       setBusy(false)
       return
     }
-    if (mounted.current) go(answer)
+    if (!mounted.current) return
+    // Changes made while the request ran: stay, and the row says to save or discard them first.
+    if (unsavedNow.current) {
+      setBusy(false)
+      return
+    }
+    go(answer)
   }
   return { busy, leave }
 }
@@ -169,6 +185,7 @@ function LeaveRow({
   busyText,
   busy,
   unsaved,
+  blocked = false,
   onLeave,
 }: {
   label: string
@@ -177,6 +194,8 @@ function LeaveRow({
   busyText: string
   busy: boolean
   unsaved: boolean
+  /** Disabled for another reason the row already shows. */
+  blocked?: boolean
   onLeave: () => void
 }) {
   const { t } = useI18n()
@@ -186,7 +205,7 @@ function LeaveRow({
       <button
         type="button"
         className="ui-btn ui-btn-primary"
-        disabled={busy || unsaved}
+        disabled={busy || unsaved || blocked}
         aria-describedby={unsaved ? noteId : undefined}
         onClick={onLeave}
       >
@@ -202,9 +221,10 @@ function LeaveRow({
 }
 
 /** The App made from a manifest: the primary action while no App is set and nothing is locked. */
-export function CreateAppRow({ unsaved }: { unsaved: boolean }) {
+export function CreateAppRow({ unsaved, finishing }: { unsaved: boolean; finishing: boolean }) {
   const { t, language } = useI18n()
   const { busy, leave } = useLeaveForGitHub(
+    unsaved,
     () => api.startGitHubApp(),
     (form) => leaveFor.manifest(form.action, form.manifest),
     (failure) =>
@@ -217,6 +237,8 @@ export function CreateAppRow({ unsaved }: { unsaved: boolean }) {
       action={t("githubSettings.create")}
       busyText={t("githubSettings.creating")}
       busy={busy}
+      // While GitHub's return is being finished, no second creation starts.
+      blocked={finishing}
       unsaved={unsaved}
       onLeave={() => void leave()}
     />
@@ -257,6 +279,7 @@ export function CreateResult({ result, onDismiss }: { result: GitHubReturn; onDi
 export function InstallRow({ unsaved }: { unsaved: boolean }) {
   const { t, language } = useI18n()
   const { busy, leave } = useLeaveForGitHub(
+    unsaved,
     () => api.gitHubInstallLink(),
     ({ url }) => leaveFor.page(url),
     (failure) =>

@@ -69,10 +69,13 @@ let preview: GitHubInstallationPreview
 
 /** While set, the answers of Create and Install wait for it (an answer that arrives late). */
 let hold: Promise<void> | null
+/** While set, the answer of the return's finish waits for it. */
+let holdFinish: Promise<void> | null
 
 async function transport({ method, path, body }: TransportRequest) {
   if (path.startsWith("/github")) calls.push({ method, path, body })
   if (hold && method === "POST" && (path === "/github/create" || path === "/github/install")) await hold
+  if (holdFinish && method === "POST" && path === "/github/create/finish") await holdFinish
   if (path === "/github" && method === "GET") return { status: 200, body: { data: view } }
   if (path === "/github/create" && method === "POST")
     return {
@@ -142,12 +145,15 @@ async function render(entry = "/settings/github"): Promise<void> {
   await settle()
 }
 
-/** Leaves the page: the rendered app goes, as when the owner opens another page. */
-async function unmount(): Promise<void> {
+/** Leaves the page: the rendered app goes, as when the owner opens another page; `then` runs in the same act. */
+async function unmount(then?: () => void): Promise<void> {
   const current = mounted
   mounted = null
   if (!current) return
-  await act(async () => current.root.unmount())
+  await act(async () => {
+    current.root.unmount()
+    then?.()
+  })
   current.host.remove()
 }
 
@@ -190,6 +196,7 @@ beforeEach(() => {
   view = structuredClone(EMPTY)
   calls = []
   hold = null
+  holdFinish = null
   finishAnswer = { status: 200, body: { data: { owner: { login: "example-owner", type: "User" }, view: SET_UP } } }
   preview = { id: 51234567, account: { login: "example-org", type: "Organization" }, state: "usable" }
   setTransport(transport)
@@ -412,8 +419,7 @@ describe("returns and leaves that change nothing", () => {
     await render()
     await click(button(en.githubSettings.create))
     expect(githubCalls("POST", "/github/create")).toHaveLength(1)
-    await unmount()
-    release()
+    await unmount(release)
     await settle()
     expect(submit).not.toHaveBeenCalled()
     expect(document.querySelector("form[action]")).toBeNull()
@@ -425,9 +431,44 @@ describe("returns and leaves that change nothing", () => {
     await render()
     await click(button(en.githubSettings.install))
     expect(githubCalls("POST", "/github/install")).toHaveLength(1)
-    await unmount()
-    release()
+    await unmount(release)
     await settle()
     expect(go).not.toHaveBeenCalled()
+  })
+
+  it("stays when the draft gained changes while the request ran", async () => {
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {})
+    let release = () => {}
+    hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await render()
+    await click(button(en.githubSettings.create))
+    expect(button(en.githubSettings.creating)?.disabled).toBe(true)
+    await type(document.querySelector<HTMLInputElement>("#settings-github-app input"), "123456")
+    await act(async () => release())
+    await settle()
+    expect(submit).not.toHaveBeenCalled()
+    expect(button(en.githubSettings.creating)).toBeUndefined()
+    expect(document.body.textContent).toContain(en.githubSettings.saveFirst)
+    // Not busy: once the change is gone, Create is usable again.
+    await type(document.querySelector<HTMLInputElement>("#settings-github-app input"), "")
+    expect(button(en.githubSettings.create)?.disabled).toBe(false)
+  })
+
+  it("keeps Create off while GitHub's return is being finished", async () => {
+    let release = () => {}
+    holdFinish = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await render("/settings/github?code=c0de&state=st4te")
+    expect(banners().join("\n")).toContain(en.githubSettings.finishing)
+    expect(button(en.githubSettings.create)?.disabled).toBe(true)
+    await click(button(en.githubSettings.create))
+    expect(githubCalls("POST", "/github/create")).toHaveLength(0)
+    await act(async () => release())
+    await settle()
+    expect(banners().join("\n")).toContain(en.githubSettings.created)
+    expect(button(en.githubSettings.create)).toBeUndefined()
   })
 })

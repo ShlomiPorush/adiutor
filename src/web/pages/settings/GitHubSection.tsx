@@ -167,7 +167,7 @@ export function GitHubSection({ form }: { form: GitHubForm }) {
           onRetry={returned.retryPreview}
         />
       ) : null}
-      <AppGroup view={view} form={form} />
+      <AppGroup view={view} form={form} finishing={returned.state?.kind === "creating"} />
       <InstallationsGroup view={view} form={form} />
       <PullGroup view={view} />
       <MovedGroup view={view} />
@@ -190,7 +190,7 @@ function useStale() {
 }
 
 /** The App id and the private key: fields of the page's one draft, saved with the save bar. */
-function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
+function AppGroup({ view, form, finishing }: { view: GitHubView; form: GitHubForm; finishing: boolean }) {
   const { t } = useI18n()
   const { draft, set, ids, fieldError, invalid } = form
   const { appId, key } = view.settings
@@ -207,7 +207,7 @@ function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
   const typedAppId = (appLock ? undefined : draft.githubAppId) ?? appId.value ?? ""
   return (
     <Group id="settings-github-app" title={t("githubSettings.appTitle")} intro={t("githubSettings.appIntro")}>
-      {creatable ? <CreateAppRow unsaved={form.count > 0} /> : null}
+      {creatable ? <CreateAppRow unsaved={form.count > 0} finishing={finishing} /> : null}
       <Row
         label={t("githubSettings.appId")}
         hint={t("githubSettings.appIdHint")}
