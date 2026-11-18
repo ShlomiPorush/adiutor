@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-18
+
 ### Added
 
 - **The server reads GitHub security data itself**: every hour, Adiutor reads the Dependabot, code scanning and secret scanning alerts and the open Issues count of each project's repository, through your own GitHub App, read only, and only from the installations you allow. Settings, GitHub holds the App's id and private key (checked with GitHub when you save, stored encrypted and shown only by the fingerprint GitHub shows), the installations with their state, the last read, Read now, and the projects without a repository or without current data. Set it up once (`docs/deployment.md`, section 11). The board and the morning message now say when GitHub is not set up, not read yet, or some projects lack current data, so a quiet morning never means nothing was checked.
