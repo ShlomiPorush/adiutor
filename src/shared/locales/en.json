@@ -1477,7 +1477,8 @@
       "already_added": "This installation is already on the list.",
       "locked": "The installations are set by {variable}, so Settings cannot add one. Add {id} to {variable} and restart Adiutor."
     },
-    "dismiss": "Close"
+    "dismiss": "Close",
+    "saveFirst": "Save or discard your changes first."
   },
   "secretCheck": {
     "domains": "Private domains",

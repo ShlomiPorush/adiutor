@@ -67,8 +67,12 @@ let calls: { method: string; path: string; body?: unknown }[]
 let finishAnswer: { status: number; body: unknown }
 let preview: GitHubInstallationPreview
 
+/** While set, the answers of Create and Install wait for it (an answer that arrives late). */
+let hold: Promise<void> | null
+
 async function transport({ method, path, body }: TransportRequest) {
   if (path.startsWith("/github")) calls.push({ method, path, body })
+  if (hold && method === "POST" && (path === "/github/create" || path === "/github/install")) await hold
   if (path === "/github" && method === "GET") return { status: 200, body: { data: view } }
   if (path === "/github/create" && method === "POST")
     return {
@@ -138,6 +142,15 @@ async function render(entry = "/settings/github"): Promise<void> {
   await settle()
 }
 
+/** Leaves the page: the rendered app goes, as when the owner opens another page. */
+async function unmount(): Promise<void> {
+  const current = mounted
+  mounted = null
+  if (!current) return
+  await act(async () => current.root.unmount())
+  current.host.remove()
+}
+
 async function settle(ms = 40): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, ms))
@@ -176,6 +189,7 @@ beforeEach(() => {
   localStorage.setItem("adiutor.language", "en")
   view = structuredClone(EMPTY)
   calls = []
+  hold = null
   finishAnswer = { status: 200, body: { data: { owner: { login: "example-owner", type: "User" }, view: SET_UP } } }
   preview = { id: 51234567, account: { login: "example-org", type: "Organization" }, state: "usable" }
   setTransport(transport)
@@ -225,9 +239,7 @@ describe("Create the App on GitHub", () => {
     await render()
     expect(button(en.githubSettings.create)).toBeUndefined()
     expect(document.querySelector("#settings-github-app textarea, #settings-github-app input")).toBeTruthy()
-    await act(async () => mounted?.root.unmount())
-    mounted?.host.remove()
-    mounted = null
+    await unmount()
 
     view = {
       ...structuredClone(EMPTY),
@@ -363,39 +375,59 @@ describe("returns and leaves that change nothing", () => {
     expect(button(en.githubSettings.add, banner ?? document)).toBeUndefined()
   })
 
-  it("Create asks about unsaved changes first; Stay keeps the button usable, Leave goes to GitHub", async () => {
-    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {})
+  it("disables Create and Install while the Settings draft has changes, and enables them without", async () => {
     await render()
+    const create = () => button(en.githubSettings.create)
+    expect(create()?.disabled).toBe(false)
+    expect(document.body.textContent).not.toContain(en.githubSettings.saveFirst)
     await type(document.querySelector<HTMLInputElement>("#settings-github-app input"), "123456")
-    await click(button(en.githubSettings.create))
-    expect(question()).toBeTruthy()
-    await click(button(en.unsaved.stay, question() ?? document))
-    expect(question()).toBeNull()
+    expect(create()?.disabled).toBe(true)
+    const note = document.getElementById(create()?.getAttribute("aria-describedby") ?? "")
+    expect(plain(note?.textContent)).toBe(en.githubSettings.saveFirst)
+    await click(create())
     expect(githubCalls("POST", "/github/create")).toHaveLength(0)
-    const create = button(en.githubSettings.create)
-    expect(create?.disabled).toBe(false)
+    expect(question()).toBeNull()
+    await type(document.querySelector<HTMLInputElement>("#settings-github-app input"), "")
+    expect(create()?.disabled).toBe(false)
+    await unmount()
 
-    await click(create)
-    await click(button(en.unsaved.leave, question() ?? document))
-    expect(githubCalls("POST", "/github/create")).toHaveLength(1)
-    expect(submit).toHaveBeenCalledTimes(1)
-    expect(button(en.githubSettings.creating)?.disabled).toBe(true)
-    // Back from GitHub to this page as the browser kept it: the button is usable again.
-    await act(async () => {
-      window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }))
-    })
-    expect(button(en.githubSettings.create)?.disabled).toBe(false)
+    view = structuredClone(SET_UP)
+    await render()
+    const install = () => button(en.githubSettings.install)
+    expect(install()?.disabled).toBe(false)
+    await type(document.querySelector<HTMLInputElement>("#settings-github-app input"), "123456")
+    expect(install()?.disabled).toBe(true)
+    expect(plain(document.getElementById(install()?.getAttribute("aria-describedby") ?? "")?.textContent)).toBe(
+      en.githubSettings.saveFirst,
+    )
   })
 
-  it("Install asks about unsaved changes first, and Stay keeps the button usable", async () => {
-    view = structuredClone(SET_UP)
+  it("does nothing with an answer that arrives after the page was left", async () => {
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {})
     const go = vi.spyOn(leaveFor, "page").mockImplementation(() => {})
+    let release = () => {}
+    hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
     await render()
-    await type(document.querySelector<HTMLInputElement>("#settings-github-app input"), "123456")
+    await click(button(en.githubSettings.create))
+    expect(githubCalls("POST", "/github/create")).toHaveLength(1)
+    await unmount()
+    release()
+    await settle()
+    expect(submit).not.toHaveBeenCalled()
+    expect(document.querySelector("form[action]")).toBeNull()
+
+    view = structuredClone(SET_UP)
+    hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await render()
     await click(button(en.githubSettings.install))
-    await click(button(en.unsaved.stay, question() ?? document))
-    expect(githubCalls("POST", "/github/install")).toHaveLength(0)
+    expect(githubCalls("POST", "/github/install")).toHaveLength(1)
+    await unmount()
+    release()
+    await settle()
     expect(go).not.toHaveBeenCalled()
-    expect(button(en.githubSettings.install)?.disabled).toBe(false)
   })
 })

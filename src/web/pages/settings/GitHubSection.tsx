@@ -93,6 +93,8 @@ export type GitHubForm = {
   invalid(field: "githubAppId" | "githubKey"): Record<string, unknown>
   /** Opens a field's section and brings it into view with the focus. */
   focus(field: "githubAppId" | "githubKey"): void
+  /** Unsaved changes in the whole Settings draft: GitHub's pages are not opened while there are any. */
+  count: number
 }
 
 const STATE_TONE: Record<GitHubState, Tone> = { off: "neutral", not_read: "warn", not_covered: "warn", fine: "ok" }
@@ -205,7 +207,7 @@ function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
   const typedAppId = (appLock ? undefined : draft.githubAppId) ?? appId.value ?? ""
   return (
     <Group id="settings-github-app" title={t("githubSettings.appTitle")} intro={t("githubSettings.appIntro")}>
-      {creatable ? <CreateAppRow /> : null}
+      {creatable ? <CreateAppRow unsaved={form.count > 0} /> : null}
       <Row
         label={t("githubSettings.appId")}
         hint={t("githubSettings.appIdHint")}
@@ -493,7 +495,7 @@ function InstallationsGroup({ view, form }: { view: GitHubView; form: GitHubForm
           </div>
         )
       })}
-      {locked || !setUp ? null : <InstallRow />}
+      {locked || !setUp ? null : <InstallRow unsaved={form.count > 0} />}
       {locked ? null : setUp ? (
         <Row label={t("githubSettings.addLabel")} hint={t("githubSettings.addHint")} htmlFor={fieldId}>
           <form className="ui-domain-add" onSubmit={(event) => void add(event)} noValidate>

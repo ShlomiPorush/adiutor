@@ -5,7 +5,7 @@
 // code is then exchanged once, and an installation is only shown until the owner adds it with his own click.
 
 import { useQueryClient } from "@tanstack/react-query"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import { ApiError } from "../../api/client.ts"
 import { api, qk } from "../../api/endpoints.ts"
@@ -16,7 +16,6 @@ import { Copyable } from "../../ui/Copyable.tsx"
 import { Banner, errorReason } from "../../ui/states.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
-import { useClearUnsaved, useConfirmLeave } from "../../ui/unsaved.tsx"
 import { Row } from "./parts.tsx"
 
 /** A GitHub refusal in the owner's language (the server's own sentence is English); others as usual. */
@@ -127,41 +126,83 @@ export function useGitHubReturn() {
 }
 
 /**
- * Leaving this tab for GitHub: the unsaved question first (the app's own, so the browser does not ask again and a
- * Stay leaves the button as it was), then the server's answer, then the page goes. The button is busy only from the
- * decision to leave, and usable again when the browser shows this page again from its back-forward cache.
+ * Leaving this tab for GitHub: the server's answer, then the page goes. The buttons are disabled while the Settings
+ * draft holds unsaved changes, so the page never leaves with a draft and the unsaved guards are never touched. An
+ * answer that arrives after the section was left does nothing. The button is usable again when the browser shows
+ * this page again from its back-forward cache.
  */
 function useLeaveForGitHub<T>(start: () => Promise<T>, go: (answer: T) => void, failed: (failure: unknown) => void) {
-  const confirmLeave = useConfirmLeave()
-  const clearUnsaved = useClearUnsaved()
   const [busy, setBusy] = useState(false)
+  const mounted = useRef(false)
   useEffect(() => {
+    mounted.current = true
     const shown = (event: PageTransitionEvent) => {
       if (event.persisted) setBusy(false)
     }
     window.addEventListener("pageshow", shown)
-    return () => window.removeEventListener("pageshow", shown)
+    return () => {
+      mounted.current = false
+      window.removeEventListener("pageshow", shown)
+    }
   }, [])
   const leave = async () => {
-    if (!(await confirmLeave())) return
     setBusy(true)
     let answer: T
     try {
       answer = await start()
     } catch (failure) {
+      if (!mounted.current) return
       failed(failure)
       setBusy(false)
       return
     }
-    // The owner chose to leave: the browser must not ask a second time.
-    clearUnsaved()
-    go(answer)
+    if (mounted.current) go(answer)
   }
   return { busy, leave }
 }
 
+/** A leave for GitHub: its button, disabled with a line that says why while the Settings draft has changes. */
+function LeaveRow({
+  label,
+  hint,
+  action,
+  busyText,
+  busy,
+  unsaved,
+  onLeave,
+}: {
+  label: string
+  hint: string
+  action: string
+  busyText: string
+  busy: boolean
+  unsaved: boolean
+  onLeave: () => void
+}) {
+  const { t } = useI18n()
+  const noteId = useId()
+  return (
+    <Row label={label} hint={hint}>
+      <button
+        type="button"
+        className="ui-btn ui-btn-primary"
+        disabled={busy || unsaved}
+        aria-describedby={unsaved ? noteId : undefined}
+        onClick={onLeave}
+      >
+        {busy ? busyText : action}
+      </button>
+      {unsaved ? (
+        <span id={noteId} className="ui-hint">
+          {t("githubSettings.saveFirst")}
+        </span>
+      ) : null}
+    </Row>
+  )
+}
+
 /** The App made from a manifest: the primary action while no App is set and nothing is locked. */
-export function CreateAppRow() {
+export function CreateAppRow({ unsaved }: { unsaved: boolean }) {
   const { t, language } = useI18n()
   const { busy, leave } = useLeaveForGitHub(
     () => api.startGitHubApp(),
@@ -170,11 +211,15 @@ export function CreateAppRow() {
       showToast(t("githubSettings.createStartFailed", { reason: githubErrorText(t, language, failure) }), "error"),
   )
   return (
-    <Row label={t("githubSettings.createLabel")} hint={t("githubSettings.createHint")}>
-      <button type="button" className="ui-btn ui-btn-primary" disabled={busy} onClick={() => void leave()}>
-        {busy ? t("githubSettings.creating") : t("githubSettings.create")}
-      </button>
-    </Row>
+    <LeaveRow
+      label={t("githubSettings.createLabel")}
+      hint={t("githubSettings.createHint")}
+      action={t("githubSettings.create")}
+      busyText={t("githubSettings.creating")}
+      busy={busy}
+      unsaved={unsaved}
+      onLeave={() => void leave()}
+    />
   )
 }
 
@@ -209,7 +254,7 @@ export function CreateResult({ result, onDismiss }: { result: GitHubReturn; onDi
 }
 
 /** GitHub's install page, from the installations while the App is set and the list is not locked. */
-export function InstallRow() {
+export function InstallRow({ unsaved }: { unsaved: boolean }) {
   const { t, language } = useI18n()
   const { busy, leave } = useLeaveForGitHub(
     () => api.gitHubInstallLink(),
@@ -218,11 +263,15 @@ export function InstallRow() {
       showToast(t("githubSettings.installFailed", { reason: githubErrorText(t, language, failure) }), "error"),
   )
   return (
-    <Row label={t("githubSettings.installLabel")} hint={t("githubSettings.installHint")}>
-      <button type="button" className="ui-btn ui-btn-primary" disabled={busy} onClick={() => void leave()}>
-        {busy ? t("githubSettings.installing") : t("githubSettings.install")}
-      </button>
-    </Row>
+    <LeaveRow
+      label={t("githubSettings.installLabel")}
+      hint={t("githubSettings.installHint")}
+      action={t("githubSettings.install")}
+      busyText={t("githubSettings.installing")}
+      busy={busy}
+      unsaved={unsaved}
+      onLeave={() => void leave()}
+    />
   )
 }
 
