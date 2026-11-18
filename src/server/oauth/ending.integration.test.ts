@@ -74,7 +74,8 @@ describe("the sync shown as disconnected", () => {
     expect(first.status).toBe(200)
     expect((await refresh(h.issuer, CLI_CLIENT_ID, sync.tokens.body.refresh_token)).status).toBe(400)
     expect((await h.access.checkToken(first.body.access_token, "rest")).ok).toBe(false)
-    expect((await morning(t.ctx)).sync.connected).toBe(false)
+    // The connection ends right after the refusal; the read sees it once that end commits.
+    await expect.poll(async () => (await morning(t.ctx)).sync.connected).toBe(false)
   })
 
   it("past the idle days, before the sweep ends it, the morning read already says the sync is disconnected", async () => {
