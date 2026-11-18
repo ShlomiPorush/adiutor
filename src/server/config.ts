@@ -69,6 +69,8 @@ export const TELEGRAM_CHAT_ID = /^-?\d{1,20}$/
 export const GITHUB_ID = /^[1-9][0-9]{0,15}$/
 /** GitHub's API, which the server reads through the owner's App only; tests point it at a stand-in by a flag. */
 export const DEFAULT_GITHUB_API_ORIGIN = "https://api.github.com"
+/** GitHub's web pages: where the browser posts the App's manifest and installs the App (the UI's `form-action`). */
+export const GITHUB_WEB_ORIGIN = "https://github.com"
 
 /** One domain name, lowercased, without leading or trailing dots. */
 export const DOMAIN_NAME = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/

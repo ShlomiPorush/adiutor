@@ -24,6 +24,11 @@ export const ERROR_CODES = [
   "github_key_required",
   "github_not_set_up",
   "github_rate_limited",
+  "github_create_expired",
+  "github_code_rejected",
+  "github_app_invalid",
+  "github_installation_suspended",
+  "github_installation_too_broad",
   "internal_error",
 ] as const
 
@@ -52,6 +57,11 @@ export const ERROR_STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 422 |
   github_key_required: 409,
   github_not_set_up: 409,
   github_rate_limited: 429,
+  github_create_expired: 409,
+  github_code_rejected: 422,
+  github_app_invalid: 422,
+  github_installation_suspended: 422,
+  github_installation_too_broad: 422,
   internal_error: 500,
 }
 

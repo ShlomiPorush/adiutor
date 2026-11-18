@@ -24,7 +24,7 @@ import {
   uidOf,
   wideLimits,
 } from "../testing/oauth.ts"
-import { CONTENT_SECURITY_POLICY } from "../web.ts"
+import { UI_CONTENT_SECURITY_POLICY } from "../web.ts"
 import { WindowLimit } from "./limits.ts"
 
 /*
@@ -207,7 +207,8 @@ describe("the consent page's address", () => {
     expect(page.status).toBe(200)
     expect(page.text).toContain("the built UI")
     expectFlowHeaders(page, "consent page")
-    expect(page.headers.get("content-security-policy")).toBe(CONTENT_SECURITY_POLICY)
+    // The UI's pages: forms to this origin and to GitHub's web origin (the App's manifest) only.
+    expect(page.headers.get("content-security-policy")).toBe(UI_CONTENT_SECURITY_POLICY)
     // Its API keeps its own answers' policy.
     const details = await browserCall(h.owner, `/connect/approve/${uid}/details`)
     expectFlowHeaders(details, "details")

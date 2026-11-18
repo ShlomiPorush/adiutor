@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises"
 import { extname, join, normalize, resolve, sep } from "node:path"
 import type { Hono } from "hono"
+import { GITHUB_WEB_ORIGIN } from "./config.ts"
 
 // Serves the built web UI (dist/web): files as they are, and index.html for any other page address,
 // so a reload or a shared link of /projects/... opens the app. /api, /mcp and /healthz are never
@@ -17,19 +18,30 @@ const TYPES: Record<string, string> = {
   ".json": "application/json",
 }
 
-/** Only this origin's scripts, styles, fonts and requests; no inline script, no framing. */
-export const CONTENT_SECURITY_POLICY = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "font-src 'self'",
-  "connect-src 'self'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-].join("; ")
+/**
+ * Only this origin's scripts, styles, fonts and requests; no inline script, no framing. Forms go to this origin, and
+ * from the UI's pages also to `formOrigin`: GitHub's web origin, where Settings, GitHub posts the App's manifest.
+ */
+export function contentSecurityPolicy(formOrigin?: string): string {
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    formOrigin ? `form-action 'self' ${formOrigin}` : "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ")
+}
+
+/** The policy of the authorization server's own pages (oauth/routes.ts): forms to this origin only. */
+export const CONTENT_SECURITY_POLICY = contentSecurityPolicy()
+
+/** The policy of the UI's pages: forms to this origin, and to GitHub for the App's manifest (Settings, GitHub). */
+export const UI_CONTENT_SECURITY_POLICY = contentSecurityPolicy(GITHUB_WEB_ORIGIN)
 
 /**
  * Addresses that are never a page: the API, MCP, the health check, and the approval API under the consent page's
@@ -77,7 +89,7 @@ export function webRoutes(app: Hono, root: string): void {
       "Cache-Control": file.includes(`${sep}assets${sep}`) ? "public, max-age=31536000, immutable" : "no-cache",
     }
     if (type.startsWith("text/html")) {
-      headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+      headers["Content-Security-Policy"] = UI_CONTENT_SECURITY_POLICY
       headers["Referrer-Policy"] = "no-referrer"
       headers["X-Frame-Options"] = "DENY"
     }

@@ -81,6 +81,14 @@ export function appClient(guard: FetchGuard, appId: string, privateKey: string):
   return pinVersion(new Octokit({ ...common(guard), authStrategy: createAppAuth, auth: { appId, privateKey } }))
 }
 
+/**
+ * A client without credentials, for the one route GitHub documents without any: the conversion of a manifest's code
+ * into the new App (`POST /app-manifests/{code}/conversions`).
+ */
+export function anonymousClient(guard: FetchGuard): Octokit {
+  return pinVersion(new Octokit(common(guard)))
+}
+
 /** A client of one installation, with a token the App's auth gave. */
 export function installationClient(guard: FetchGuard, token: string): Octokit {
   return pinVersion(new Octokit({ ...common(guard), auth: token }))

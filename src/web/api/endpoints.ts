@@ -12,6 +12,9 @@ import type {
   AuditPage,
   Comment,
   GitHubAppPatch,
+  GitHubCreated,
+  GitHubCreateForm,
+  GitHubInstallationPreview,
   GitHubView,
   Item,
   ItemDetail,
@@ -152,6 +155,13 @@ export const api = {
     data<GitHubView>("POST", "/github/installations", { generation, installationId }),
   removeGitHubInstallation: (generation: number, installationId: number) =>
     data<GitHubView>("DELETE", `/github/installations/${installationId}${query({ generation })}`),
+  // The App made from a manifest, and GitHub's install page; GitHub sends the browser back to Settings, GitHub.
+  startGitHubApp: () => data<GitHubCreateForm>("POST", "/github/create", {}),
+  finishGitHubApp: (code: string, state: string) =>
+    data<GitHubCreated>("POST", "/github/create/finish", { code, state }),
+  gitHubInstallLink: () => data<{ url: string }>("POST", "/github/install", {}),
+  previewGitHubInstallation: (installationId: number) =>
+    data<GitHubInstallationPreview>("GET", `/github/installations/${installationId}/preview`),
   /** Read now: starts a pull, or joins the one running (`joined`); does not wait for it. */
   readGitHub: () => data<{ joined: boolean; view: GitHubView }>("POST", "/github/pull", {}),
 

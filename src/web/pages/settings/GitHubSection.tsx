@@ -2,10 +2,12 @@
 // App, read only, and only the installations listed here (GET /api/v1/github). The section refreshes by itself, every
 // few seconds while a read runs.
 //
-// Its groups: the App (its id and its private key, fields of the page's one draft and its save bar, SV-1, saved to
-// PATCH /github/app with the generation of the view; the key is a secret, FS-3: never shown back, a paste field only
-// while there is none or on Replace, and emptied from the draft after the save or a refusal); the installations
-// (added by id and removed after a question at once, outside the save bar, like the agent connections); the last
+// Its groups: the App (Create the App on GitHub while none is set and nothing is locked, GitHubSetup.tsx; its id and
+// its private key, fields of the page's one draft and its save bar, SV-1, saved to PATCH /github/app with the
+// generation of the view; the key is a secret, FS-3: never shown back, a paste field only while there is none or on
+// Replace, and emptied from the draft after the save or a refusal); the installations (Install on an account through
+// GitHub's install page, whose return shows the installation with Add; added by id and removed after a question at
+// once, outside the save bar, like the agent connections); the last
 // read with Read now (locked while GitHub is not set up or GitHub asked to wait, FB-1); and the projects GitHub
 // cannot read: repositories that moved, projects without current data and projects without a repository, each
 // opening its project.
@@ -23,16 +25,23 @@ import type {
   GitHubState,
   GitHubView,
 } from "../../api/types.ts"
-import { formatTime } from "../../format/datetime.ts"
 import { formatNumber } from "../../format/number.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Copyable } from "../../ui/Copyable.tsx"
 import { confirmDialog } from "../../ui/confirm.tsx"
 import { EVERY, usePageQuery } from "../../ui/refresh.ts"
-import { Banner, Empty, ErrorState, errorReason, Loading, Locked } from "../../ui/states.tsx"
+import { Banner, Empty, ErrorState, Loading, Locked } from "../../ui/states.tsx"
 import { Time } from "../../ui/Time.tsx"
 import { showToast } from "../../ui/Toast.tsx"
 import { Tag, type Tone } from "../../ui/tags.tsx"
+import {
+  CreateAppRow,
+  CreateResult,
+  githubErrorText,
+  InstallReturn,
+  InstallRow,
+  useGitHubReturn,
+} from "./GitHubSetup.tsx"
 import { Fact, Facts, Group, Row } from "./parts.tsx"
 
 /** The App id and an installation id: the numbers GitHub shows. */
@@ -73,19 +82,7 @@ export function githubChanges(view: GitHubView | undefined, draft: GitHubDraft):
   return patch
 }
 
-/** A GitHub refusal in the owner's language (the server's own sentence is English); others as usual. */
-export function githubErrorText(
-  t: (key: string, vars?: Record<string, string | number>) => string,
-  language: "he" | "en",
-  error: unknown,
-): string {
-  if (!(error instanceof ApiError)) return errorReason(language, error)
-  if (error.code === "github_rate_limited" && typeof error.details.until === "string")
-    return t("githubSettings.waitUntil", { time: formatTime(error.details.until, { seconds: false }) })
-  if (error.code.startsWith("github_") || error.code === "conflict" || error.code === "setting_locked")
-    return t(`errors.code.${error.code}`)
-  return errorReason(language, error)
-}
+export { githubErrorText }
 
 /** The parts of the Settings draft this section edits (SettingsPage's form). */
 export type GitHubForm = {
@@ -96,6 +93,8 @@ export type GitHubForm = {
   invalid(field: "githubAppId" | "githubKey"): Record<string, unknown>
   /** Opens a field's section and brings it into view with the focus. */
   focus(field: "githubAppId" | "githubKey"): void
+  /** Unsaved changes in the whole Settings draft: GitHub's pages are not opened while there are any. */
+  count: number
 }
 
 const STATE_TONE: Record<GitHubState, Tone> = { off: "neutral", not_read: "warn", not_covered: "warn", fine: "ok" }
@@ -132,6 +131,8 @@ export function GitHubSection({ form }: { form: GitHubForm }) {
   const running = queryClient.getQueryData<GitHubView>(qk.github)?.running ?? false
   const query = useGitHubView(running ? RUNNING_EVERY : EVERY.live)
   const view = query.data
+  // GitHub's return after it created or installed the App: read from the address before anything else.
+  const returned = useGitHubReturn()
   // A read that ended changed the board and the list of runs: read them again.
   const wasRunning = useRef(false)
   useEffect(() => {
@@ -157,7 +158,16 @@ export function GitHubSection({ form }: { form: GitHubForm }) {
           }
         />
       ) : null}
-      <AppGroup view={view} form={form} />
+      {returned.state ? <CreateResult result={returned.state} onDismiss={returned.dismiss} /> : null}
+      {returned.state ? (
+        <InstallReturn
+          result={returned.state}
+          view={view}
+          onDismiss={returned.dismiss}
+          onRetry={returned.retryPreview}
+        />
+      ) : null}
+      <AppGroup view={view} form={form} finishing={returned.state?.kind === "creating"} />
       <InstallationsGroup view={view} form={form} />
       <PullGroup view={view} />
       <MovedGroup view={view} />
@@ -180,7 +190,7 @@ function useStale() {
 }
 
 /** The App id and the private key: fields of the page's one draft, saved with the save bar. */
-function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
+function AppGroup({ view, form, finishing }: { view: GitHubView; form: GitHubForm; finishing: boolean }) {
   const { t } = useI18n()
   const { draft, set, ids, fieldError, invalid } = form
   const { appId, key } = view.settings
@@ -191,10 +201,13 @@ function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
   }
   const appLock = appId.locked ? { variable: appId.variable } : null
   const keyLock = key.locked ? { variable: key.variable } : null
+  // Created from Settings only as a first setup: no App id or key, and none of the GitHub variables set.
+  const creatable = !appId.value && !key.set && !appId.locked && !key.locked && !view.settings.installations.locked
   // A locked field shows what the environment sets, never an edit made before it was locked.
   const typedAppId = (appLock ? undefined : draft.githubAppId) ?? appId.value ?? ""
   return (
     <Group id="settings-github-app" title={t("githubSettings.appTitle")} intro={t("githubSettings.appIntro")}>
+      {creatable ? <CreateAppRow unsaved={form.count > 0} finishing={finishing} /> : null}
       <Row
         label={t("githubSettings.appId")}
         hint={t("githubSettings.appIdHint")}
@@ -482,6 +495,7 @@ function InstallationsGroup({ view, form }: { view: GitHubView; form: GitHubForm
           </div>
         )
       })}
+      {locked || !setUp ? null : <InstallRow unsaved={form.count > 0} />}
       {locked ? null : setUp ? (
         <Row label={t("githubSettings.addLabel")} hint={t("githubSettings.addHint")} htmlFor={fieldId}>
           <form className="ui-domain-add" onSubmit={(event) => void add(event)} noValidate>

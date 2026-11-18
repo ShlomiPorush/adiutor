@@ -1,23 +1,36 @@
 import type { Context, Hono } from "hono"
 import { z } from "zod"
-import { githubAppBody, githubInstallationBody } from "../../shared/api.ts"
+import { githubAppBody, githubCreateFinishBody, githubInstallationBody } from "../../shared/api.ts"
 import { DEFAULT_GITHUB_API_ORIGIN } from "../config.ts"
 import { invalid, notFound } from "../errors.ts"
 import { GitHubGate } from "../github/gate.ts"
+import { PendingCreation } from "../github/manifest.ts"
 import { GitHubRunner } from "../github/runner.ts"
 import type { SettingsEnv } from "../services/admin.ts"
 import type { Ctx } from "../services/context.ts"
 import {
   addGitHubInstallation,
-  type GitHubDeps,
+  finishGitHubCreation,
+  type GitHubCreateDeps,
+  gitHubInstallLink,
   gitHubView,
+  previewGitHubInstallation,
   removeGitHubInstallation,
   saveGitHubApp,
+  startGitHubCreation,
 } from "../services/github.ts"
 import { byOf, type Env, requireOwnerAuth } from "./auth.ts"
 
-/** The server's GitHub reading: the gate of its settings saves, the runner of its pulls and the API origin. */
-export type GitHubHandle = { gate: GitHubGate; runner: GitHubRunner; origin: string }
+/**
+ * The server's GitHub reading: the gate of its settings saves, the runner of its pulls, the API origin, and the App's
+ * creation that waits for GitHub to send the browser back.
+ */
+export type GitHubHandle = {
+  gate: GitHubGate
+  runner: GitHubRunner
+  origin: string
+  pending: PendingCreation
+}
 
 /** Builds the handle; index.ts starts its runner after the server listens. */
 export function createGitHubHandle(options: {
@@ -38,7 +51,12 @@ export function createGitHubHandle(options: {
     beforeWrite: options.beforeWrite,
     afterLock: options.afterLock,
   })
-  return { gate, runner, origin }
+  return {
+    gate,
+    runner,
+    origin,
+    pending: new PendingCreation(),
+  }
 }
 
 async function json<T>(c: Context, schema: z.ZodType<T>): Promise<T> {
@@ -56,15 +74,31 @@ async function json<T>(c: Context, schema: z.ZodType<T>): Promise<T> {
   return parsed.data
 }
 
+/** An installation id in the path: a positive integer, or the route has nothing there. */
+function installationParam(c: Context): number {
+  const id = Number(c.req.param("id"))
+  if (!Number.isSafeInteger(id) || id < 1) throw notFound("The installation")
+  return id
+}
+
 const generationQuery = z.object({ generation: z.coerce.number().int().min(0) })
 
 /**
  * The owner's GitHub routes under /api/v1/github (each closed to agents in agents/policy.ts). Every answer is
  * `Cache-Control: no-store`; none carries the private key.
  */
-export function githubRoutes(api: Hono<Env>, deps: { ctx: Ctx; env: SettingsEnv; github: GitHubHandle }) {
+export function githubRoutes(
+  api: Hono<Env>,
+  deps: { ctx: Ctx; env: SettingsEnv; github: GitHubHandle; publicUrl: URL },
+) {
   const { ctx, github } = deps
-  const service: GitHubDeps = { env: deps.env, gate: github.gate, origin: github.origin }
+  const service: GitHubCreateDeps = {
+    env: deps.env,
+    gate: github.gate,
+    origin: github.origin,
+    publicUrl: deps.publicUrl,
+    pending: github.pending,
+  }
   const view = () => gitHubView(ctx, service, github.runner)
 
   api.use("/github", async (c, next) => {
@@ -84,14 +118,27 @@ export function githubRoutes(api: Hono<Env>, deps: { ctx: Ctx; env: SettingsEnv;
     await addGitHubInstallation(ctx, byOf(c), service, await json(c, githubInstallationBody))
     return c.json({ data: await view() }, 201)
   })
+  api.get("/github/installations/:id/preview", requireOwnerAuth, async (c) =>
+    c.json({ data: await previewGitHubInstallation(ctx, byOf(c), service, installationParam(c)) }),
+  )
   api.delete("/github/installations/:id", requireOwnerAuth, async (c) => {
-    const id = Number(c.req.param("id"))
-    if (!Number.isSafeInteger(id) || id < 1) throw notFound("The installation")
+    const id = installationParam(c)
     const parsed = generationQuery.safeParse({ generation: c.req.query("generation") })
     if (!parsed.success) throw invalid("generation is required.", { field: "generation" })
     await removeGitHubInstallation(ctx, byOf(c), service, { generation: parsed.data.generation, installationId: id })
     return c.json({ data: await view() })
   })
+  // The App made from a manifest: the form Settings posts to GitHub, then GitHub's code on the way back.
+  api.post("/github/create", requireOwnerAuth, async (c) =>
+    c.json({ data: await startGitHubCreation(ctx, byOf(c), service) }),
+  )
+  api.post("/github/create/finish", requireOwnerAuth, async (c) => {
+    const { owner } = await finishGitHubCreation(ctx, byOf(c), service, await json(c, githubCreateFinishBody))
+    return c.json({ data: { owner, view: await view() } })
+  })
+  api.post("/github/install", requireOwnerAuth, async (c) =>
+    c.json({ data: await gitHubInstallLink(ctx, byOf(c), service) }),
+  )
   api.post("/github/pull", requireOwnerAuth, async (c) => {
     const { joined } = await github.runner.readNow()
     return c.json({ data: { joined, view: await view() } }, 202)

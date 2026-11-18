@@ -230,11 +230,12 @@ describe("the allow-list", () => {
   })
 
   it("never reads an installation granted more than the read permissions", async () => {
+    // Added while it held the read permissions only (an add refuses it otherwise); granted more since.
+    await setUp()
     standIn.scenario.installations[MAIN] = {
       ...(standIn.scenario.installations[MAIN] as Scenario["installations"][number]),
       permissions: { ...ALL_READ, contents: "write" },
     }
-    await setUp()
     await project("Widget", "example-org/widget")
     await handle.runner.pull()
     expect(standIn.requests.some((r) => r.path.endsWith("/access_tokens"))).toBe(false)
