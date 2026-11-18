@@ -4,8 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **The server reads GitHub security data itself**: every hour, Adiutor reads the Dependabot, code scanning and secret scanning alerts and the open Issues count of each project's repository, through your own GitHub App, read only, and only from the installations you allow. Settings, GitHub holds the App's id and private key (checked with GitHub when you save, stored encrypted and shown only by the fingerprint GitHub shows), the installations with their state, the last read, Read now, and the projects without a repository or without current data. Set it up once (`docs/deployment.md`, section 11). The board and the morning message now say when GitHub is not set up, not read yet, or some projects lack current data, so a quiet morning never means nothing was checked.
+
 ### Changed
 
+- **Security data no longer comes from your PC**: the sync stops sending it, and the server no longer accepts it (`POST /api/v1/sync/security` is gone). Deploy the server only once the release is published with its tray files, then set up the GitHub App (`docs/deployment.md`, section 11). Until the tray app updates itself, it shows its security part as failed; T3 keeps syncing.
+- **A Sync now request is done when T3 synced**: security is the server's own read now, so a request no longer ends as partly done for it.
 - **A new mark**: a dot with a small satellite on its orbit replaces the ring and dot, in the app's top bar, on the sign-in pages and as the browser tab's icon. The tray app shows it too: in the notification area on a disc whose colour gives the sync's state, and on its program, Start menu shortcut, windows and installer.
 - **The tray app is visible once installed**: on Windows 11 its icon shows on the taskbar instead of among the hidden icons (a choice you made in the taskbar settings stays), and the end of the install opens its panel.
 

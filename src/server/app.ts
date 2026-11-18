@@ -8,6 +8,7 @@ import type { ServerConfig } from "./config.ts"
 import { AppError, errorBody } from "./errors.ts"
 import { apiRoutes, type SettingsHandle } from "./http/api.ts"
 import { RateLimiter } from "./http/auth.ts"
+import type { GitHubHandle } from "./http/github.ts"
 import { setupRoutes } from "./http/setup.ts"
 import { errorFacts, log } from "./log.ts"
 import { mcpRoutes } from "./mcp/server.ts"
@@ -33,6 +34,8 @@ export type AppDeps = {
     clientIp?: (c: Context) => string
     /** The bot, for the status route; off when absent. */
     telegram?: TelegramRuntime
+    /** The server's GitHub reading (http/github.ts); the GitHub routes exist only with it. */
+    github?: GitHubHandle
   }
   /** The built web UI (dist/web); without it only the API, MCP and /healthz are served. */
   web?: { root: string }
@@ -141,6 +144,7 @@ export function createApp(deps: AppDeps) {
       version: config.version,
       telegram: deps.core.telegram,
       settings: deps.core.settings,
+      github: deps.core.github,
     }
     // Better Auth as it is: its own handler, read from the holder on each request (Settings may rebuild it).
     app.use(

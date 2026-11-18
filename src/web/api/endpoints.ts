@@ -11,6 +11,8 @@ import type {
   AuditEntry,
   AuditPage,
   Comment,
+  GitHubAppPatch,
+  GitHubView,
   Item,
   ItemDetail,
   ItemPatch,
@@ -105,7 +107,8 @@ export const api = {
   archive: (cursor: string | null) => page<ItemSummary>(`/archive${query({ cursor, limit: 50 })}`),
   /** The activity log narrowed by its filters; `lang` goes with `q` (the labels the search also matches). */
   audit: (filters: AuditFilters, cursor: string | null) => auditPage(filters, cursor),
-  syncRuns: () => data<SyncRun[]>("GET", "/sync/runs?limit=10"),
+  /** The PC's latest T3 runs: the server's hourly GitHub pulls would push them out of a mixed list. */
+  syncRuns: () => data<SyncRun[]>("GET", "/sync/runs?kind=t3&limit=10"),
   syncRequests: () => data<SyncRequests>("GET", "/sync/requests"),
   /** Sync now: a new request, or the one already waiting or running (`created` false). */
   requestSync: () => data<{ request: SyncRequest; created: boolean }>("POST", "/sync/requests", {}),
@@ -140,6 +143,17 @@ export const api = {
 
   suppressions: () => data<Suppression[]>("GET", "/suppressions"),
   deleteSuppression: (suppressionId: string) => request<null>("DELETE", `/suppressions/${id(suppressionId)}`),
+
+  // GitHub, read by the server through the owner's App. Each change names the generation of the view it was based on.
+  github: () => data<GitHubView>("GET", "/github"),
+  updateGitHubApp: (generation: number, patch: GitHubAppPatch) =>
+    data<GitHubView>("PATCH", "/github/app", { generation, ...patch }),
+  addGitHubInstallation: (generation: number, installationId: number) =>
+    data<GitHubView>("POST", "/github/installations", { generation, installationId }),
+  removeGitHubInstallation: (generation: number, installationId: number) =>
+    data<GitHubView>("DELETE", `/github/installations/${installationId}${query({ generation })}`),
+  /** Read now: starts a pull, or joins the one running (`joined`); does not wait for it. */
+  readGitHub: () => data<{ joined: boolean; view: GitHubView }>("POST", "/github/pull", {}),
 
   // Agent access by approval (/api/v1/agents): answered without the {data} wrapper.
   agentSettings: () => request<AgentSettings>("GET", "/agents/settings"),
@@ -183,4 +197,5 @@ export const qk = {
   agentSettings: ["agent-settings"] as const,
   agentConnections: ["agent-connections"] as const,
   suppressions: ["suppressions"] as const,
+  github: ["github"] as const,
 }

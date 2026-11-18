@@ -21,6 +21,13 @@ export async function getSettings(db: DbOrTx): Promise<SettingsRow> {
   return row
 }
 
+/** The settings row with a plain select, for a read-only transaction: the caller made sure it exists (getSettings). */
+export async function readSettings(db: DbOrTx): Promise<SettingsRow> {
+  const [row] = await db.select().from(settings).where(eq(settings.id, 1))
+  if (!row) throw new Error("settings row missing")
+  return row
+}
+
 export type SettingsPatch = {
   closedItemDays?: number
   dateFormat?: string
@@ -37,34 +44,50 @@ export type SettingsPatch = {
 /** What the settings that hold secrets or may be set by the environment need: the overrides and the cipher. */
 export type SettingsEnv = { overrides: EnvOverrides; cipher: SettingsCipher }
 
-/**
- * The agent settings: in the row, but out of the general settings API and its audit rows. Agent access shows and edits
- * them through /api/v1/agents/settings (oauth/routes.ts), with an audit row of its own.
- */
-function withoutAgentSettings(row: SettingsRow) {
-  const { agentsEnabled: _enabled, agentIdleDays: _idle, ...rest } = row
-  return rest
+/** The plain fields of the general settings API, named one by one: a new column is out of it until it is added here. */
+function plainFields(row: SettingsRow) {
+  return {
+    id: row.id,
+    closedItemDays: row.closedItemDays,
+    dateFormat: row.dateFormat,
+    timeFormat: row.timeFormat,
+    language: row.language,
+    sessionIdleDays: row.sessionIdleDays,
+    otpViaTelegram: row.otpViaTelegram,
+    updatedAt: row.updatedAt,
+  }
 }
 
-/** The settings as the API shows them: the bot token never leaves the server, only whether it is set. */
+/**
+ * The settings as the API shows them: the bot token never leaves the server, only whether it is set. The agent
+ * settings are read and saved through /api/v1/agents/settings (oauth/routes.ts) and the GitHub ones through
+ * /api/v1/github (http/github.ts), each with audit rows of their own.
+ */
 export function settingsView(row: SettingsRow, env: SettingsEnv) {
-  const {
-    telegramBotTokenEnc: _token,
-    telegramChatId: _chat,
-    privateDomains: _domains,
-    ...plain
-  } = withoutAgentSettings(row)
   return {
-    ...plain,
+    ...plainFields(row),
     telegram: effectiveTelegram(row, env.overrides, env.cipher).view,
     privateDomains: effectivePrivateDomains(row, env.overrides),
   }
 }
 
-/** A settings row for the audit: the encrypted token becomes "set" or "unset". */
-function auditable(row: SettingsRow) {
-  const { telegramBotTokenEnc, ...rest } = withoutAgentSettings(row)
-  return { ...rest, telegramBotToken: telegramBotTokenEnc ? "set" : "unset" }
+/**
+ * A settings row for the audit, field by field: the encrypted bot token becomes "set" or "unset", and the GitHub
+ * App's private key appears only as its fingerprint. Never the row itself.
+ */
+export function auditableSettings(row: SettingsRow) {
+  return {
+    ...plainFields(row),
+    telegramBotToken: row.telegramBotTokenEnc ? "set" : "unset",
+    telegramChatId: row.telegramChatId,
+    privateDomains: row.privateDomains,
+    githubAppId: row.githubAppId,
+    githubPrivateKey: row.githubPrivateKeyEnc ? "set" : "unset",
+    githubKeyFingerprint: row.githubKeyFingerprint,
+    githubKeyVerified: row.githubKeyVerified,
+    githubInstallations: row.githubInstallations,
+    githubGeneration: row.githubGeneration,
+  }
 }
 
 const locked = (variable: string) =>
@@ -110,8 +133,8 @@ export async function updateSettings(ctx: Ctx, by: By, patch: SettingsPatch, env
       action: "settings.update",
       entityType: "settings",
       entityId: "1",
-      before: auditable(before),
-      after: { ...auditable(after), ...(token ? { telegramBotTokenChange: token } : {}) },
+      before: auditableSettings(before),
+      after: { ...auditableSettings(after), ...(token ? { telegramBotTokenChange: token } : {}) },
     })
     return after
   })

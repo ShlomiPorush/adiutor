@@ -3,6 +3,7 @@ import type { ActorKind, AuditSource } from "../../shared/enums.ts"
 import type { Db } from "../db/client.ts"
 import { audit } from "../db/schema.ts"
 import { AppError, forbidden } from "../errors.ts"
+import type { SettingsRow } from "./admin.ts"
 import type { SecretScanner } from "./secrets.ts"
 
 /** What every service needs. `clock` is injectable so tests can move time. */
@@ -10,6 +11,11 @@ export type Ctx = {
   db: Db
   secrets: SecretScanner
   clock: () => Date
+  /**
+   * Whether the server reads GitHub with these settings (github/settings.ts `effectiveGitHub`), for the GitHub status of
+   * the board and the morning message. index.ts sets it; absent, GitHub counts as off.
+   */
+  githubOn?: (row: SettingsRow) => boolean
 }
 
 export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0]

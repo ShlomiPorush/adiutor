@@ -4,10 +4,11 @@
 // replacing the address. Below 1024px the sidebar is one sticky picker. The theme is not a setting: it lives in
 // the shell (the account menu and the theme button).
 //
-// General, Telegram and Secret check share one draft and one save bar above all sections: a change is kept while
-// the owner moves between sections (the unsaved guard keeps moves inside /settings), each section that holds one
-// shows a dot, and a refused field, by the page's own check or by the server, opens its section and takes the
-// focus. Account and Agent access act at once, outside the save bar.
+// General, Telegram, Secret check, Agent access's settings and the GitHub App share one draft and one save bar above
+// all sections: a change is kept while the owner moves between sections (the unsaved guard keeps moves inside
+// /settings), each section that holds one shows a dot, and a refused field, by the page's own check or by the server,
+// opens its section and takes the focus. Agent access and the GitHub App are saved to their own routes. Account, the
+// agent connections and the GitHub installations act at once, outside the save bar.
 //
 // Each row marks a value that differs from its default (one table, src/shared/settings.ts) as Changed with Reset to
 // default, which changes only the draft; a value put back as it was loaded drops out of the count. A setting the
@@ -34,7 +35,7 @@ import { LANGUAGES } from "../../shared/enums.ts"
 import { CLOSED_ITEM_DAYS_MAX, CLOSED_ITEM_DAYS_MIN, SETTINGS_DEFAULTS } from "../../shared/settings.ts"
 import { ApiError } from "../api/client.ts"
 import { api, qk } from "../api/endpoints.ts"
-import type { AgentSettings, DateFormat, Settings, SettingsPatch, TimeFormat } from "../api/types.ts"
+import type { AgentSettings, DateFormat, GitHubView, Settings, SettingsPatch, TimeFormat } from "../api/types.ts"
 import {
   APP_TIME_ZONE,
   DATE_FORMATS,
@@ -66,6 +67,15 @@ import {
   idleDaysOf,
   useAgentSettings,
 } from "./settings/AgentAccessPanel.tsx"
+import {
+  GITHUB_ID,
+  type GitHubDraft,
+  GitHubSection,
+  githubChanges,
+  githubErrorText,
+  PEM_KEY,
+  useGitHubView,
+} from "./settings/GitHubSection.tsx"
 import { Fact, Facts, Group, type ResetMark, Row, SwitchRow } from "./settings/parts.tsx"
 import { StatusSection, SuppressionsSection } from "./settings/SyncSections.tsx"
 import {
@@ -76,6 +86,7 @@ import {
   isSettingsPath,
   isSettingsSection,
   refusedField,
+  refusedGitHubField,
   SETTINGS_GROUPS,
   type SettingsSection,
   settingsPath,
@@ -88,17 +99,18 @@ const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
 /** The bot token in the form: kept as stored, replaced by a typed one, or removed on save (v3 FS-3). */
 type TokenDraft = { mode: "replace"; value: string } | { mode: "remove" }
 
-type Draft = AgentDraft & {
-  language?: Language
-  dateFormat?: DateFormat
-  timeFormat?: TimeFormat
-  closedItemDays?: string
-  sessionIdleDays?: string
-  otpViaTelegram?: boolean
-  botToken?: TokenDraft
-  chatId?: string
-  privateDomains?: string[]
-}
+type Draft = AgentDraft &
+  GitHubDraft & {
+    language?: Language
+    dateFormat?: DateFormat
+    timeFormat?: TimeFormat
+    closedItemDays?: string
+    sessionIdleDays?: string
+    otpViaTelegram?: boolean
+    botToken?: TokenDraft
+    chatId?: string
+    privateDomains?: string[]
+  }
 
 /** The same domains, in any order: removing one and adding it back is no change (SV-2). */
 const sameList = (a: string[], b: string[]) => {
@@ -187,7 +199,9 @@ export function SettingsPage() {
   const query = usePageQuery({ queryKey: qk.settings, queryFn: api.settings, every: EVERY.slow })
   // Agent access's own settings join the one draft once they are read.
   const agents = useAgentSettings()
-  const form = useSettingsDraft(query.data, agents.data, active)
+  // So do the GitHub App's.
+  const github = useGitHubView()
+  const form = useSettingsDraft(query.data, agents.data, github.data, active)
 
   const pageRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -219,6 +233,7 @@ export function SettingsPage() {
       body = <ErrorState title={t("settings.failed")} error={query.error} onRetry={() => void query.refetch()} />
     else body = <Loading label={t("settings.loading")} />
   } else if (active === "agents") body = <AgentsSection form={form} />
+  else if (active === "github") body = <GitHubSection form={form} />
   else if (active === "status") body = <StatusSection />
   else body = <SuppressionsSection />
 
@@ -541,8 +556,19 @@ export function keepRevealed(
 
 type FieldError = { field: DraftField; text: string }
 
+/** The sections of the draft's general part, with those saved to their own routes that hold a change. */
+function changedWith(sections: Set<SettingsSection>, own: Partial<Record<SettingsSection, boolean>>) {
+  for (const [section, has] of Object.entries(own) as [SettingsSection, boolean][]) if (has) sections.add(section)
+  return sections
+}
+
 /** The one settings draft for every section, its save bar and its guard (SV-1, R2). */
-function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings | undefined, active: SettingsSection) {
+function useSettingsDraft(
+  saved: Settings | undefined,
+  agentSaved: AgentSettings | undefined,
+  githubSaved: GitHubView | undefined,
+  active: SettingsSection,
+) {
   const { t, tc, language, setLanguage } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -560,6 +586,8 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
     privateDomains: `${base}-domain`,
     agentsEnabled: `${base}-agents`,
     agentIdleDays: `${base}-agent-days`,
+    githubAppId: `${base}-github-app`,
+    githubKey: `${base}-github-key`,
   }
   const errorId = `${base}-error`
   const [draft, setDraft] = useState<Draft>({})
@@ -569,7 +597,9 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
   const patch = saved ? changedFields(saved, draft) : {}
   // Agent access is saved to its own route, once its settings are read.
   const agentPatch = agentChanges(agentSaved, draft)
-  const count = Object.keys(patch).length + Object.keys(agentPatch).length
+  // And the GitHub App to its own, with the generation of the view it was based on.
+  const githubPatch = githubChanges(githubSaved, draft)
+  const count = Object.keys(patch).length + Object.keys(agentPatch).length + Object.keys(githubPatch).length
   useUnsaved("settings", { count, kind: "leave", keeps: (next) => isSettingsPath(next.pathname) })
 
   const set = (change: Partial<Draft>) => {
@@ -592,7 +622,7 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
   const save = async () => {
     // Without the general settings (still loading, or their read failed) only the agent settings can change: they save
     // on their own (the general part of the draft is empty then).
-    if (!saved && Object.keys(agentPatch).length === 0) return
+    if (!saved && Object.keys(agentPatch).length === 0 && Object.keys(githubPatch).length === 0) return
     const outside = (value: number | undefined, min: number, max: number) =>
       value !== undefined && (!Number.isInteger(value) || value < min || value > max)
     if (outside(patch.closedItemDays, CLOSED_ITEM_DAYS_MIN, CLOSED_ITEM_DAYS_MAX))
@@ -613,11 +643,24 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
       return refuse("chatId", t("telegramSettings.chatId"), t("telegramSettings.chatInvalid"))
     if (agentPatch.idleDays !== undefined && idleDaysOf(draft.agentIdleDays ?? "") === null)
       return refuse("agentIdleDays", t("agentAccess.idleDays"), t("agentAccess.idleInvalid"))
+    if (typeof githubPatch.appId === "string" && !GITHUB_ID.test(githubPatch.appId))
+      return refuse("githubAppId", t("githubSettings.appId"), t("githubSettings.appIdInvalid"))
+    if (typeof githubPatch.privateKey === "string" && !PEM_KEY.test(githubPatch.privateKey)) {
+      // A paste that is not a key leaves the draft at once: it may be another secret.
+      // The pasted text leaves the draft; with no App field left, so does the generation it was based on.
+      setDraft(({ githubKey: _key, githubBasedOn, ...rest }) =>
+        rest.githubAppId === undefined ? rest : { ...rest, githubBasedOn },
+      )
+      return refuse("githubKey", t("githubSettings.key"), t("githubSettings.keyInvalid"))
+    }
     // A save that ends agent connections (agents off, fewer idle days) asks first; Cancel keeps the draft.
     const question = agentSaved ? endingQuestion(agentSaved, agentPatch, t, tc) : null
     if (question && !(await confirmDialog(question))) return
     setError(null)
     setBusy(true)
+    /** Which save failed: each route names its fields its own way. */
+    let step: "settings" | "agents" | "github" = "settings"
+    let githubWarning = false
     try {
       const settingsChanged = Object.keys(patch).length > 0
       if (settingsChanged) {
@@ -625,12 +668,19 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
         queryClient.setQueryData(qk.settings, next)
         setFormatPrefs({ dateFormat: next.dateFormat, timeFormat: next.timeFormat })
         if (next.language !== language) setLanguage(next.language)
-        // The agent fields stay until their own save below succeeds.
-        setDraft(({ agentsEnabled, agentIdleDays }) => ({ agentsEnabled, agentIdleDays }))
+        // The agent and GitHub fields stay until their own saves below succeed.
+        setDraft(({ agentsEnabled, agentIdleDays, githubAppId, githubKey, githubBasedOn }) => ({
+          agentsEnabled,
+          agentIdleDays,
+          githubAppId,
+          githubKey,
+          githubBasedOn,
+        }))
         await queryClient.invalidateQueries({ queryKey: qk.morning })
         await queryClient.invalidateQueries({ queryKey: qk.telegram })
       }
       if (Object.keys(agentPatch).length > 0) {
+        step = "agents"
         // The fields stay editable while the save runs: only a value still as it was sent leaves the draft, so one
         // typed meanwhile stays unsaved and guarded.
         const sent = { agentsEnabled: draft.agentsEnabled, agentIdleDays: draft.agentIdleDays }
@@ -644,6 +694,47 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
         await queryClient.invalidateQueries({ queryKey: qk.agentSettings })
         await queryClient.invalidateQueries({ queryKey: qk.agentConnections })
       }
+      if (githubSaved && Object.keys(githubPatch).length > 0) {
+        step = "github"
+        const sentAppId = draft.githubAppId
+        // A key pasted again while this save runs is a new edit: only the key sent leaves the draft.
+        const sentKey = draft.githubKey
+        try {
+          // The generation the first edit was made on, not the one a refresh brought in since.
+          const next = await api.updateGitHubApp(draft.githubBasedOn ?? githubSaved.settings.generation, githubPatch)
+          queryClient.setQueryData(qk.github, next)
+          // A key GitHub did not answer for is kept as not verified yet (a first key only).
+          githubWarning = typeof githubPatch.privateKey === "string" && next.settings.key.verified === false
+          // Saved: the App id leaves the draft unless it was typed again meanwhile.
+          setDraft(({ githubKey, githubBasedOn: _basedOn, ...rest }) => {
+            const current: typeof rest & { githubKey?: typeof githubKey } =
+              githubKey === sentKey ? rest : { ...rest, githubKey }
+            if (current.githubAppId === sentAppId) delete current.githubAppId
+            // An App id typed again meanwhile is an edit of the view just saved.
+            return current.githubAppId === undefined && current.githubKey === undefined
+              ? current
+              : { ...current, githubBasedOn: next.settings.generation }
+          })
+        } catch (failure) {
+          // The pasted key never stays in the draft after a refusal either; the App id stays for another try.
+          // The pasted key never stays. After a conflict the App's fields leave the draft too: the settings changed
+          // elsewhere, and the page shows them as they are now. After another refusal the App id stays, still based on
+          // the generation it was typed on.
+          const conflict = failure instanceof ApiError && failure.code === "conflict"
+          setDraft(({ githubKey, githubBasedOn, githubAppId, ...current }) => {
+            const newer = githubKey === sentKey ? undefined : githubKey
+            if (conflict) return current
+            const kept = {
+              ...current,
+              ...(githubAppId === undefined ? {} : { githubAppId }),
+              ...(newer ? { githubKey: newer } : {}),
+            }
+            return githubAppId === undefined && !newer ? kept : { ...kept, githubBasedOn }
+          })
+          throw failure
+        }
+        await queryClient.invalidateQueries({ queryKey: qk.morning })
+      }
       // A shorter length leaves browsers already signed in with the time they had (G2): offer to sign out everywhere.
       if (agentPatch.enabled === false) showToast(t("agentAccess.turnedOff"), "success")
       else if (saved && patch.sessionIdleDays !== undefined && patch.sessionIdleDays < saved.sessionIdleDays)
@@ -651,10 +742,19 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
           action: { label: t("account.endAll"), onAction: () => void signOutEverywhere() },
           duration: 10_000,
         })
+      else if (githubWarning) showToast(t("githubSettings.savedNotVerified"), "warning")
       else showToast(t("settings.saved"), "success")
     } catch (failure) {
       let text: string
-      if (failure instanceof ApiError && failure.code === "setting_locked") {
+      if (step === "github" && failure instanceof ApiError && failure.code === "conflict") {
+        // Another tab or the environment changed the GitHub settings: read them again before saving over them.
+        text = t("githubSettings.conflict")
+        showToast(text, "warning")
+        await queryClient.invalidateQueries({ queryKey: qk.github })
+      } else if (step === "github" && failure instanceof ApiError && failure.code !== "validation_failed") {
+        text = githubErrorText(t, language, failure)
+        showToast(t("settings.saveFailed", { reason: text }), "error")
+      } else if (failure instanceof ApiError && failure.code === "setting_locked") {
         text = t("settings.env.refused")
         showToast(text, "error")
       } else if (failure instanceof ApiError && failure.code === "validation_failed") {
@@ -665,7 +765,12 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
         showToast(t("settings.saveFailed", { reason: text }), "error")
       }
       // A refusal that names a field opens that field's section and focuses it (SV-1, R2).
-      const field = failure instanceof ApiError ? refusedField(failure.code, failure.details) : null
+      const field =
+        failure instanceof ApiError
+          ? step === "github"
+            ? refusedGitHubField(failure.code, failure.details)
+            : refusedField(failure.code, failure.details)
+          : null
       if (field) mark(field, text)
     } finally {
       setBusy(false)
@@ -708,7 +813,10 @@ function useSettingsDraft(saved: Settings | undefined, agentSaved: AgentSettings
     count,
     busy,
     error,
-    changed: Object.keys(agentPatch).length > 0 ? changedSections(patch).add("agents") : changedSections(patch),
+    changed: changedWith(changedSections(patch), {
+      agents: Object.keys(agentPatch).length > 0,
+      github: Object.keys(githubPatch).length > 0,
+    }),
   }
 }
 

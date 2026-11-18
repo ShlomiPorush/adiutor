@@ -165,6 +165,17 @@ The dry run runs on the development stack on your PC with real data. Move its da
 
 **Keys of the development stack.** `scripts/local.sh up` or `start` generates the database password and the keys once into `stack.env` in the stack's data directory (default `~/.local/share/adiutor-dev/stack.env`, mode 0600), before PostgreSQL first starts, and never rewrites it. Keep that file with the database: without it the stack refuses to start, because new keys would not open the database. `nuke` deletes both. Keys that an older `.env.dev` already sets keep winning over `stack.env`; leave them there, or move them by hand as whole values with every version listed. Interrupted on its very first start (before any data), a stack can be started over with `nuke` and `start`.
 
+**Values from the old tracked `docker/dev.env` are public.** Before commit 9c6ff7b, the repository tracked `docker/dev.env` with a PostgreSQL password, a connection string that held it, and fixed `ADIUTOR_AUTH_SECRETS` and `ADIUTOR_SETTINGS_KEYS`. The repository is public, so those values are public. They were meant for the development stack only (production's keys are made on the server, step 2), but replace every one that is still in use, in `.env.dev` or anywhere else, and never keep one listed as an older key version afterwards: a listed auth secret still verifies sign-in cookies and the agents' cookies, and a listed settings key still decrypts what Settings stores.
+
+- **When the development data can go** (production holds your real data), the simplest way: delete those lines from `.env.dev`, then `scripts/local.sh nuke` and `scripts/local.sh start`. The stack starts empty with a new password and new keys in `stack.env`; create the account again.
+- **To keep the development data** of a stack whose data directory has its `stack.env` (made by `scripts/local.sh` since 9c6ff7b; a data directory without one is refused by `scripts/local.sh`, so take the first way for it), in one sitting:
+  1. In `.env.dev`: set `ADIUTOR_PORT=127.0.0.1:8090` (the port, published on this address only) and `ADIUTOR_PUBLIC_URL=http://127.0.0.1:8090`; in `ADIUTOR_AUTH_SECRETS` and `ADIUTOR_SETTINGS_KEYS` list a new random value first (`openssl rand -hex 32`) under a new version and keep the public one after it, for this sitting only (Adiutor refuses those public values as the first entry, so a stack still on them does not start); give the database role a new password (`ALTER ROLE ... PASSWORD`) and put it in the connection string wherever one is set. Stop the reverse proxy, then `scripts/local.sh start`.
+  2. Sign in at `http://127.0.0.1:8090` with the password and the code (a passkey belongs to the usual address). On the Account page set up a new authenticator and make new backup codes. In Settings enter the secrets stored there again (the Telegram bot token, the GitHub App key). In Settings, Agent access choose Disconnect all.
+  3. The agents' signing key is stored encrypted with the settings key too, and a new one is made only when none is stored. Clear it, so the next start makes one under the new settings key: `source scripts/lib/common.sh && dev_compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "update agent_state set signing_key_enc = null where id = 1"'`.
+  4. In `.env.dev`, remove the public versions from both lists and set `ADIUTOR_PORT` and `ADIUTOR_PUBLIC_URL` back as they were. Start the reverse proxy, then `scripts/local.sh start`, sign in at the usual address to check, and connect your agents again.
+
+  Older copies may name these values `MIKUD_AUTH_SECRETS`, `MIKUD_SETTINGS_KEYS`, `POSTGRES_PASSWORD` and `DATABASE_URL` (the product's earlier name): Adiutor no longer reads the `MIKUD_` names, so delete those lines wherever they are.
+
 **Optional overrides in `.env.dev`.** `docker/dev.env.example` lists them. Without a `.env.dev` at the root of the Adiutor checkout in WSL, copy the example there (git ignores it) and restrict it (`chmod 600 .env.dev`). When `.env.dev` exists, never copy over it: add only the lines you need, because keys it holds may be the ones your data is encrypted with. Then enter the Telegram bot token and chat id in Settings, Telegram. Connect your agents and the sync to production only (section 6).
 
 **A reverse proxy in front of the development stack.** The stack publishes its port (`ADIUTOR_PORT`, default 8090) on every interface. Set `ADIUTOR_PUBLIC_URL` in `.env.dev` to the URL the browser opens through the proxy; the access restrictions live in the proxy. Set `ADIUTOR_TRUSTED_PROXIES` only when the proxy replaces the `X-Forwarded-For` header clients send (section 3).
@@ -230,7 +241,8 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 
 1. Sign in and choose the Account page, "Sign out everywhere", then sign in again. When you cannot sign in, the recovery command above also signs out every browser.
 2. Open Settings, Agent access and disconnect every agent you do not recognise or had disconnected (Disconnect all, then connect your own again, is the sure way). On the Account page, remove every passkey you do not recognise or had removed.
-3. If `.env` or the backup may have leaked, put a new version first in `ADIUTOR_AUTH_SECRETS` (keep the old one listed so the TOTP secret stays readable; the agents' cookie keys follow it) and run `docker compose up -d`: every browser is signed out. Disconnect all agents and connect them again, and replace the Telegram bot token with BotFather.
+3. Open Settings, GitHub: check the installations on the list and the key's fingerprint against the App's page on GitHub. Remove an installation you had removed (and uninstall the App from that account on GitHub), and delete on GitHub every key you no longer use.
+4. If `.env` or the backup may have leaked, put a new version first in `ADIUTOR_AUTH_SECRETS` (keep the old one listed so the TOTP secret stays readable; the agents' cookie keys follow it) and run `docker compose up -d`: every browser is signed out. Disconnect all agents and connect them again, and replace the Telegram bot token with BotFather and the GitHub App's key on GitHub (section 11, "Rotate the key").
 
 ## 9. Upgrade
 
@@ -260,3 +272,42 @@ The release that switches agents to connect by approval (CHANGELOG, "Agents and 
 5. **Clean up:** Settings, Agent access lists the agent keys left over, which no longer work: delete them there (the list goes away in a later release). On the Account page, sign out any session named "adiutor connect (agent approval)" that a cut-off approval of the old command left.
 
 From the deploy until you approve each client again, that client cannot write to Adiutor, and the sync does not run until it is connected again; the board and the morning message keep working.
+
+## 11. GitHub: the server reads security data (once, then as needed)
+
+From the release that moves security data to the server (CHANGELOG, "The server reads GitHub security data itself"), the Adiutor server reads GitHub's security alerts (Dependabot, code scanning, secret scanning) and the open Issues count of each project's repository itself, every hour on the hour. It reads only through your own GitHub App, read only, and only the installations you allow in Settings, GitHub. The sync on your PC no longer collects or sends security data.
+
+**Network.** Production must reach `https://api.github.com` over HTTPS (outbound only). Nothing on GitHub calls Adiutor: the App has no webhook.
+
+### Create the App (once)
+
+1. On GitHub, open your personal account's Settings, Developer settings, GitHub Apps, New GitHub App.
+2. Name it (for example "Adiutor reader"), set any homepage URL (the repository's address is fine), and leave "Callback URL" empty. Turn off "Expire user authorization tokens" and "Request user authorization (OAuth) during installation". Under Webhook, clear "Active".
+3. Repository permissions, each **Read-only**: Dependabot alerts, Code scanning alerts, Secret scanning alerts, Issues. Metadata becomes read-only by itself. Give no other repository, organization or account permission: Adiutor refuses to read an installation granted anything more.
+4. "Where can this GitHub App be installed?": **Any account**, so it can be installed on the organizations too. Adiutor still reads only the installations you add in Settings.
+5. Create the App, and note its **App ID** from the App's settings page.
+6. Under "Private keys", generate a private key. GitHub downloads a `.pem` file once: keep it in your password manager or secret store, and delete the downloaded file. Never put it in a repository, a chat or an issue.
+
+### Install it and allow the installations
+
+1. On the App's page, Install App: install it on your personal account and on each organization whose repositories Adiutor should read (you must be an owner of the organization). Choose all repositories, or only those of your projects.
+2. Each installation's settings page has an address that ends with its id (`.../settings/installations/<id>`); note each id.
+3. In Adiutor, Settings, GitHub: enter the App ID, paste the private key's text and save. Adiutor checks the key with GitHub and shows its fingerprint, the same one GitHub shows beside the key on the App's page. Then add each installation by its id.
+4. Press Read now, and check the last pull, the projects without a repository, and the projects not covered.
+
+Instead of Settings, `.env` may set `ADIUTOR_GITHUB_APP_ID`, `ADIUTOR_GITHUB_PRIVATE_KEY` (the `.pem`'s text, its line breaks written as `\n`, from your secret store) and `ADIUTOR_GITHUB_INSTALLATIONS` (ids, comma-separated); Settings then shows those fields locked. When the App id or the installations are set there, the server refuses to start without a readable key. If a stored key no longer decrypts (for example after a restore with other `ADIUTOR_SETTINGS_KEYS`) and the server refuses to start for that reason, set `ADIUTOR_GITHUB_PRIVATE_KEY` from your secret store, or remove the GitHub variables from `.env` and paste the key again in Settings.
+
+### Move from the PC to the server (once)
+
+1. **Wait for the release to be published with the tray files.** The image goes up before the tray package: deploy the server only once the GitHub Release of this version is published with its tray assets.
+2. **Deploy the server** (section 9). From then on the server has no route for the PC's security data. Until the tray app on your PC updates itself (it does, from the same release), the old sync reports its security part as failed, and after two scheduled runs the tray says the sync did not complete; T3 keeps syncing. If the tray updates before the server is deployed, the old server keeps the counts last sent, which turn stale after 26 hours.
+3. **Set up the App** (above). Until then, the board and the morning message say that GitHub is not set up, so a quiet morning never means "nothing was checked".
+4. **Retire the old collector** on the PC: remove the scheduled task that ran the `overview` collector, and the overview folder setting in the tray app if it is still there.
+5. **Projects without a repository.** A project's repository now comes only from T3 or from you on the project page. Settings, GitHub lists the projects without one; set it on each project's page.
+
+**Rollback.** Going back to an earlier server version brings the old route back, but an updated tray app no longer sends security data: the counts then turn stale until you upgrade again.
+
+### Rotate the key, or remove an installation
+
+- **Rotate:** on the App's page generate a second key, paste it in Settings, GitHub (check that the fingerprint shown is the new one), then delete the old key on GitHub. A key that was ever committed, shown or sent anywhere is public: delete it on GitHub and paste a new one.
+- **Remove an installation:** Remove in Settings, GitHub stops reading it at once. Also uninstall the App from that account on GitHub (the account's Settings, Applications, the App, Uninstall): a database restored from before the removal would otherwise read it again.

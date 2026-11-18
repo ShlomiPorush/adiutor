@@ -149,13 +149,15 @@ test("a check-in, Sync now, Cancel, the claim and its result", async () => {
   expect(await checkIn({ running: { kind: "request", requestId: claim } })).toBe(claim)
   await checkIn({ finished: [{ requestId: claim, result: { t3: "accepted", security: "not_run" } }] })
   // The page reads again every 30 seconds by itself; a reload shows the result now.
+  // Security is the server's own read now: a sync that reports it not_run is done when T3 was accepted, and only
+  // T3's part shows.
   await page.reload()
-  await expect(requestFact()).toContainText(he.syncNow.state.partial)
-  await expect(requestFact()).toContainText(he.syncNow.part.not_run)
+  await expect(requestFact()).toContainText(he.syncNow.state.done)
+  await expect(requestFact()).not.toContainText(he.syncNow.part.not_run)
   // The card keeps the finished request with its result.
   await page.goto("/")
-  await expect(card()).toContainText(he.syncNow.state.partial)
-  await expect(card()).toContainText(he.syncNow.part.not_run)
+  await expect(card()).toContainText(he.syncNow.state.done)
+  await expect(card()).not.toContainText(he.syncNow.part.not_run)
 
   // Paused until a time: Sync now says the request waits for the pause, and promises no time.
   await checkIn({ paused: true, pausedUntil: new Date(Date.now() + 3_600_000).toISOString() })

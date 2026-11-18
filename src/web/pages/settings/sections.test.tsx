@@ -24,6 +24,7 @@ import {
   changedSections,
   FIELD_SECTION,
   refusedField,
+  refusedGitHubField,
   SETTINGS_GROUPS,
   SETTINGS_SECTIONS,
   settingsPath,
@@ -228,7 +229,7 @@ describe("the catalogue", () => {
       ["general", ["general"]],
       ["security", ["agents", "secret-check"]],
       ["integrations", ["telegram"]],
-      ["sync", ["status", "suppressions"]],
+      ["sync", ["status", "github", "suppressions"]],
     ])
     for (const locale of [en, he]) {
       for (const group of SETTINGS_GROUPS) expect(locale.settings.groups[group.id]).toBeTruthy()
@@ -252,6 +253,20 @@ describe("the catalogue", () => {
     expect(refusedField("validation_failed", { issues: [{ path: "telegramBotToken", message: "x" }] })).toBe("botToken")
     expect(refusedField("validation_failed", { issues: [{ path: "", message: "x" }] })).toBeNull()
     expect(refusedField("internal_error", { field: "closedItemDays" })).toBeNull()
+  })
+
+  it("puts the GitHub App in its own section, and maps a refusal of the App to its field", () => {
+    expect(FIELD_SECTION.githubAppId).toBe("github")
+    expect(FIELD_SECTION.githubKey).toBe("github")
+    expect(refusedGitHubField("setting_locked", { variable: "ADIUTOR_GITHUB_APP_ID" })).toBe("githubAppId")
+    expect(refusedGitHubField("setting_locked", { variable: "ADIUTOR_GITHUB_PRIVATE_KEY" })).toBe("githubKey")
+    expect(refusedGitHubField("github_key_invalid", { field: "privateKey" })).toBe("githubKey")
+    expect(refusedGitHubField("github_app_mismatch", {})).toBe("githubKey")
+    expect(refusedGitHubField("validation_failed", { field: "appId" })).toBe("githubAppId")
+    expect(refusedGitHubField("validation_failed", { issues: [{ path: "privateKey", message: "x" }] })).toBe(
+      "githubKey",
+    )
+    expect(refusedGitHubField("conflict", {})).toBeNull()
   })
 })
 

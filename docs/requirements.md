@@ -84,7 +84,8 @@ The inbox count is visible on the home screen and links to the inbox.
 
 - One line per project, only when there is something to say.
 - Critical findings count in every project. High findings count only in projects at stage `production`.
-- Sources: GitHub alerts (Dependabot, code scanning, secret scanning) as collected by the owner's existing `overview` collector, and open items of type `security` filed by agent audits.
+- Sources: GitHub alerts (Dependabot, code scanning, secret scanning), which the server reads every hour through the owner's GitHub App, read only and only from the installations he allowed in Settings (owner's decision, 2026-11-18; it replaced the `overview` collector on the PC), and open items of type `security` filed by agent audits.
+- When GitHub is not set up, has not been read yet, or some projects with a repository have no current data from it, the board and the morning message say so, so "nothing critical" is never shown while nothing was checked.
 
 ## 7. Agents and T3
 

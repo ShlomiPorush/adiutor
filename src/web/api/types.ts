@@ -41,6 +41,14 @@ export const API_ERROR_CODES = [
   "setting_locked",
   "telegram_failed",
   "telegram_uncertain",
+  "github_key_invalid",
+  "github_key_rejected",
+  "github_app_mismatch",
+  "github_unreachable",
+  "github_installation_not_found",
+  "github_key_required",
+  "github_not_set_up",
+  "github_rate_limited",
   "internal_error",
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
@@ -422,6 +430,8 @@ export type Morning = {
     lastPartialAt: string | null
     securityLastSuccessAt: string | null
   }
+  /** Whether the security data shown comes from GitHub and is current (GitHubStatus). */
+  github: GitHubStatus
 }
 
 export type Page<T> = { entries: T[]; nextCursor: string | null }
@@ -465,7 +475,8 @@ export type SettingsPatch = Partial<{
 
 export type SyncRun = {
   id: string
-  kind: "t3" | "security"
+  /** "github": the server's own pull of GitHub; "security": the sync's push, from before the server read GitHub. */
+  kind: "t3" | "security" | "github"
   startedAt: string
   finishedAt: string | null
   outcome: SyncOutcome | null
@@ -533,7 +544,91 @@ export type ItemPatch = Partial<{
 
 export type ProjectPatch = Partial<{
   stage: Stage | null
+  /** The GitHub repository as owner/name, or null for none. */
+  githubRepo: string | null
   whereWeAre: string | null
   goal: string | null
   name: string
 }>
+
+/**
+ * Whether the security data comes from GitHub and is current. off: GitHub is not set up; not_read: set up, never read;
+ * not_covered: some projects with a repository have no current GitHub data; fine: every one has.
+ */
+export type GitHubState = "off" | "not_read" | "not_covered" | "fine"
+
+export type GitHubStatus = {
+  state: GitHubState
+  /** Projects with a repository without current GitHub data (only in not_covered). */
+  notCovered: number
+  /** The oldest last good read among them; null when none of them was ever read. */
+  oldestGoodReadAt: string | null
+}
+
+/** An installation of the owner's GitHub App that the server may read, by its id. */
+export type GitHubAllowedInstallation = {
+  id: number
+  accountId: number | null
+  accountType: string | null
+  login: string | null
+}
+
+/** The GitHub settings in effect (GET /github). The private key is never returned: only its state and fingerprint. */
+export type GitHubSettings = {
+  appId: { value: string | null } & EnvLock
+  key: {
+    set: boolean
+    /** False: a stored key cannot be read; paste it again. */
+    readable: boolean
+    /** False: GitHub has not accepted it yet. Null: set by the environment. */
+    verified: boolean | null
+    /** As GitHub shows it beside each key on the App's settings page ("SHA256:..."). */
+    fingerprint: string | null
+  } & EnvLock
+  installations: { value: GitHubAllowedInstallation[] } & EnvLock
+  /** Every save raises it; a save names the one it was based on (a stale one answers 409 conflict). */
+  generation: number
+  /** App id, a readable key and at least one installation: the server reads GitHub. */
+  on: boolean
+}
+
+/** too_broad: granted more than read access, never read. other_account: now bound to another account. */
+export type GitHubInstallationState = "usable" | "too_broad" | "suspended" | "uninstalled" | "other_account" | "error"
+
+export type GitHubInstallation = GitHubAllowedInstallation & {
+  /** Null: not read yet. */
+  state: GitHubInstallationState | null
+  inventory: { complete: boolean; repos: number } | null
+}
+
+export type GitHubNotCoveredReason = "no_access" | "stale" | "never"
+
+export type GitHubView = {
+  settings: GitHubSettings
+  status: GitHubStatus
+  running: boolean
+  rateLimitedUntil: string | null
+  lastRun: {
+    startedAt: string
+    finishedAt: string | null
+    outcome: SyncOutcome | null
+    /** installations, installationsRead, projects, projectsWritten, projectsSkipped, projectsChanged, and the family counts. */
+    counts: Record<string, number>
+    errors: { record: string; code: string }[]
+  } | null
+  installations: GitHubInstallation[]
+  notCovered: {
+    id: string
+    name: string
+    repo: string
+    covered: false
+    reason: GitHubNotCoveredReason
+    lastGoodReadAt: string | null
+  }[]
+  /** The repository was renamed or moved: the owner updates the project's repository. */
+  moved: { id: string; name: string; repo: string | null; movedTo: string }[]
+  withoutRepo: { id: string; name: string }[]
+}
+
+/** PATCH /github/app: the App id, the pasted key (null removes the stored one), or both. */
+export type GitHubAppPatch = { appId?: string | null; privateKey?: string | null }

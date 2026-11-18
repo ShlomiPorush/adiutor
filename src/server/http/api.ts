@@ -14,7 +14,6 @@ import {
   morningQuery,
   proposeStageBody,
   restoreNoteBody,
-  securitySnapshotBody,
   settingsBody,
   startThreadBody,
   syncCheckinBody,
@@ -64,11 +63,12 @@ import {
   morning,
   projectDetail,
 } from "../services/reads.ts"
-import { applySecuritySnapshot, applyT3Snapshot, recentSyncRuns } from "../services/sync.ts"
+import { applyT3Snapshot, recentSyncRuns } from "../services/sync.ts"
 import { cancelSyncRequest, checkIn, requestSync, syncRequestsView } from "../services/sync-requests.ts"
 import { startThread } from "../services/threads.ts"
 import { TELEGRAM_OFF, type TelegramRuntime, telegramStatus } from "../telegram/status.ts"
 import { type AuthDeps, authenticate, byOf, type Env, requireOwnerAuth } from "./auth.ts"
+import { type GitHubHandle, githubRoutes } from "./github.ts"
 
 /** The settings that hold secrets or may be set by the environment, and how a save takes effect without a restart. */
 export type SettingsHandle = { env: SettingsEnv; apply(row: SettingsRow): Promise<void> }
@@ -210,10 +210,6 @@ export function openRouteHandlers(deps: { ctx: Ctx }): Record<string, RouteHandl
       requireToken(c)
       return c.json({ data: await applyT3Snapshot(ctx, await body(c, t3SnapshotBody)) })
     },
-    "POST /api/v1/sync/security": async (c) => {
-      requireToken(c)
-      return c.json({ data: await applySecuritySnapshot(ctx, await body(c, securitySnapshotBody)) })
-    },
     "POST /api/v1/sync/checkin": async (c) => {
       // The client is the agent connection that sends it: only a connection approved for the sync area checks in.
       const auth = c.get("auth")
@@ -226,11 +222,22 @@ export function openRouteHandlers(deps: { ctx: Ctx }): Record<string, RouteHandl
 /** The body limits of /api/v1: sync snapshots are large, everything else is small. */
 export const BODY_LIMITS = { sync: 16 * 1024 * 1024, default: 512 * 1024 } as const
 
-/** The sync's two snapshot pushes, whose answer is a sync run (`data.outcome`), as opposed to its check-in. */
-export const SNAPSHOT_PATHS = ["/api/v1/sync/t3", "/api/v1/sync/security"] as const
+/**
+ * The sync's snapshot push, whose answer is a sync run (`data.outcome`), as opposed to its check-in. Security data no
+ * longer comes from the sync: the server reads GitHub itself (server/github/).
+ */
+export const SNAPSHOT_PATHS = ["/api/v1/sync/t3"] as const
 export const isSnapshotPath = (path: string) => (SNAPSHOT_PATHS as readonly string[]).includes(path)
 
-export function apiRoutes(deps: AuthDeps & { version: string; telegram?: TelegramRuntime; settings: SettingsHandle }) {
+export function apiRoutes(
+  deps: AuthDeps & {
+    version: string
+    telegram?: TelegramRuntime
+    settings: SettingsHandle
+    /** The server's GitHub reading; the GitHub routes exist only with it (index.ts and the test core pass it). */
+    github?: GitHubHandle
+  },
+) {
   const { ctx } = deps
   const api = new Hono<Env>()
   const open = openRouteHandlers(deps)
@@ -327,11 +334,11 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   // --- T3 ---
   api.post("/threads/start", h("POST /api/v1/threads/start"))
   api.post("/sync/t3", h("POST /api/v1/sync/t3"))
-  api.post("/sync/security", h("POST /api/v1/sync/security"))
   api.post("/sync/checkin", h("POST /api/v1/sync/checkin"))
-  api.get("/sync/runs", async (c) =>
-    c.json({ data: await recentSyncRuns(ctx, query(c, z.object({ limit })).limit ?? 20) }),
-  )
+  api.get("/sync/runs", async (c) => {
+    const { limit: count, kind } = query(c, z.object({ limit, kind: z.enum(["t3", "security", "github"]).optional() }))
+    return c.json({ data: await recentSyncRuns(ctx, count ?? 20, kind) })
+  })
   // "Sync now": the owner asks the sync on the computer for a run; it takes the request at its next check-in.
   api.use("/sync/requests", noStore)
   api.get("/sync/requests", requireOwnerAuth, async (c) => c.json({ data: await syncRequestsView(ctx) }))
@@ -366,6 +373,8 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
     const send = deps.telegram?.configured ? deps.telegram.send?.bind(deps.telegram) : undefined
     return c.json({ data: await sendTestMorningMessage(ctx, byOf(c), deps.config.publicUrl, send) })
   })
+  // --- Owner only: the server's GitHub reading ---
+  if (deps.github) githubRoutes(api, { ctx, env: deps.settings.env, github: deps.github })
   return api
 }
 

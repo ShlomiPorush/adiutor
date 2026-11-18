@@ -17,11 +17,18 @@ export const CLOSED_STATUSES = ["done", "not_relevant"] as const satisfies reado
 
 /** Who made a change. Services enforce the rights of each. */
 export const ACTOR_KINDS = ["owner", "agent", "bot", "sync", "system"] as const
-/** Where a change came in. `cli` is the recovery command run on the server (dist/server/cli.js). */
-export const AUDIT_SOURCES = ["ui", "api", "mcp", "telegram", "sync", "cli"] as const
+/**
+ * Where a change came in. `cli` is the recovery command run on the server (dist/server/cli.js); `github` the server's
+ * own pull from GitHub (server/github/).
+ */
+export const AUDIT_SOURCES = ["ui", "api", "mcp", "telegram", "sync", "cli", "github"] as const
 export const PROPOSAL_STATES = ["open", "accepted", "rejected"] as const
 export const SECURITY_FAMILIES = ["dependabot", "code_scanning", "secret_scanning", "overview"] as const
 export const SECURITY_COVERAGES = ["enabled", "not_enabled", "no_access", "error", "unknown"] as const
+/** Where a project's stored security or Issues data came from: the sync's push from the PC, or the server's pull. */
+export const SECURITY_ORIGINS = ["push", "github"] as const
+/** How the server's last attempt to read a source from GitHub ended. */
+export const SECURITY_ATTEMPTS = ["ok", "error"] as const
 /** What a suppression keeps the sync from recreating. */
 export const SUPPRESSION_KINDS = ["thread", "project"] as const
 export const SYNC_OUTCOMES = ["succeeded", "partial", "failed"] as const
@@ -98,6 +105,8 @@ export const AUDIT_ACTIONS = [
   "proposal.accept",
   "proposal.reject",
   "security.update",
+  // One row per pull from GitHub: every time-only change and every attempt (server/github/).
+  "security.pull",
   "sync_request.create",
   "sync_request.cancel",
   "suppression.create",
@@ -159,6 +168,7 @@ export const AUDIT_ENTITY_TYPES = [
   "device_code",
   "agent_connection",
   "sync_request",
+  "github",
 ] as const
 
 export type Stage = (typeof STAGES)[number]
@@ -170,6 +180,8 @@ export type AuditSource = (typeof AUDIT_SOURCES)[number]
 export type ProposalState = (typeof PROPOSAL_STATES)[number]
 export type SecurityFamily = (typeof SECURITY_FAMILIES)[number]
 export type SecurityCoverage = (typeof SECURITY_COVERAGES)[number]
+export type SecurityOrigin = (typeof SECURITY_ORIGINS)[number]
+export type SecurityAttempt = (typeof SECURITY_ATTEMPTS)[number]
 export type SuppressionKind = (typeof SUPPRESSION_KINDS)[number]
 export type SyncOutcome = (typeof SYNC_OUTCOMES)[number]
 export type SyncRequestState = (typeof SYNC_REQUEST_STATES)[number]

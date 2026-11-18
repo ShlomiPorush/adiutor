@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import type { SyncCheckin } from "../../shared/api.ts"
-import { audit, syncRequests } from "../db/schema.ts"
+import { audit, syncRequests, syncRuns } from "../db/schema.ts"
 import { AppError } from "../errors.ts"
 import { addSyncConnection } from "../testing/agents.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
@@ -373,6 +373,10 @@ describe("cancel", () => {
 describe("the view", () => {
   it("says no computer ever checked in, or that the sync there takes no requests", async () => {
     expect(await syncRequestsView(t.ctx)).toEqual({ request: null, client: null, unavailable: "no_client" })
+    // The server's own GitHub pulls are not a sync on a computer.
+    const now = t.ctx.clock()
+    await t.ctx.db.insert(syncRuns).values({ kind: "github", startedAt: now, finishedAt: now, outcome: "succeeded" })
+    expect((await syncRequestsView(t.ctx)).unavailable).toBe("no_client")
     await addSyncConnection(t.ctx)
     expect((await syncRequestsView(t.ctx)).unavailable).toBe("older_client")
   })
@@ -396,7 +400,10 @@ describe("the view", () => {
 describe("finishedState", () => {
   it("is done when both parts were accepted, failed when neither got through, partial otherwise", () => {
     expect(finishedState({ t3: "accepted", security: "accepted" })).toBe("done")
-    expect(finishedState({ t3: "accepted", security: "not_run" })).toBe("partial")
+    // A sync that no longer collects security reports it not_run: the server reads GitHub, and T3 alone decides.
+    expect(finishedState({ t3: "accepted", security: "not_run" })).toBe("done")
+    expect(finishedState({ t3: "partial", security: "not_run" })).toBe("partial")
+    expect(finishedState({ t3: "failed", security: "not_run" })).toBe("failed")
     expect(finishedState({ t3: "partial", security: "failed" })).toBe("partial")
     expect(finishedState({ t3: "outcome_unknown", security: "failed" })).toBe("failed")
     expect(finishedState({ t3: "not_run", security: "not_run" })).toBe("failed")

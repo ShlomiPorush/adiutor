@@ -94,11 +94,65 @@ run_checks() {
 # (stack.env in its temporary data directory). The tests' Origin is PUBLIC_URL. Its PostgreSQL is
 # production's major version (TEST_POSTGRES_IMAGE), not the development stack's.
 stack() {
+  local files=(-f "$REPO_ROOT/docker/docker-compose-dev.example.yml")
+  # The server's command with the stand-in GitHub's origin (github_stand_in): an override in the run's data directory,
+  # never in the tracked template, so no other stack can point the server elsewhere.
+  if [ -n "${ADIUTOR_DATA_DIR:-}" ] && [ -f "$ADIUTOR_DATA_DIR/compose.github.yml" ]; then
+    files+=(-f "$ADIUTOR_DATA_DIR/compose.github.yml")
+  fi
   env -u COMPOSE_ENV_FILES ADIUTOR_IMAGE_TAG=verify ADIUTOR_PORT=0 ADIUTOR_LOCAL_ENV_FILE=/dev/null \
     ADIUTOR_POSTGRES_IMAGE="$TEST_POSTGRES_IMAGE" ADIUTOR_POSTGRES_DATA="$TEST_POSTGRES_DATA" \
     ADIUTOR_PUBLIC_URL="$PUBLIC_URL" ADIUTOR_STACK_ENV_FILE="${ADIUTOR_DATA_DIR:-/nonexistent}/stack.env" \
-    docker compose --env-file /dev/null -p "$PROJECT" --project-directory "$REPO_ROOT" \
-    -f "$REPO_ROOT/docker/docker-compose-dev.example.yml" "$@"
+    docker compose --env-file /dev/null -p "$PROJECT" --project-directory "$REPO_ROOT" "${files[@]}" "$@"
+}
+
+# The stand-in GitHub API (e2e/github-stand-in.mjs) for the end-to-end run. The App's key pair is new on every run,
+# made with node:crypto into the run's data directory (files 0600, owned by the user every container here runs as):
+# the stand-in gets the public key only and the Playwright container the private key only, each mounted read-only.
+# The stand-in runs on the stack's network as "github", from the pinned Node 20 image with the repository read-only,
+# and is removed by its container id (in cleanup_stack, and before the stack stops).
+GITHUB_CID=""
+GITHUB_APP_ID=""
+github_stand_in() {
+  local dir="$ADIUTOR_DATA_DIR/github"
+  mkdir -p "$dir/public" "$dir/private"
+  chmod 700 "$dir" "$dir/public" "$dir/private"
+  GITHUB_APP_ID="$((100000 + RANDOM * 20 + RANDOM % 20))"
+  # shellcheck disable=SC2016 # JavaScript, not shell
+  docker run --rm --user "$(id -u):$(id -g)" -v "$dir:/keys" "$SKILL_NODE_IMAGE" node -e '
+    const { generateKeyPairSync } = require("node:crypto")
+    const { writeFileSync } = require("node:fs")
+    const pair = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs1", format: "pem" },
+    })
+    writeFileSync("/keys/public/app.pub", pair.publicKey, { mode: 0o600 })
+    writeFileSync("/keys/private/app.pem", pair.privateKey, { mode: 0o600 })' ||
+    die "could not make the stand-in GitHub App's key pair"
+  printf 'services:\n  adiutor:\n    command: ["node", "dist/server/index.js", "--github-api-origin=http://github:8080"]\n' \
+    >"$ADIUTOR_DATA_DIR/compose.github.yml"
+  GITHUB_CID="$(docker run -d --rm --network "${PROJECT}_default" --network-alias github \
+    --user "$(id -u):$(id -g)" -v "$REPO_ROOT:/repo:ro" -v "$dir/public:/keys:ro" -w /repo "$SKILL_NODE_IMAGE" \
+    node e2e/github-stand-in.mjs --public-key=/keys/app.pub --app-id="$GITHUB_APP_ID" --port=8080)" ||
+    die "the stand-in GitHub API did not start"
+  local tries=0
+  # shellcheck disable=SC2016 # JavaScript, not shell
+  until docker exec "$GITHUB_CID" node -e \
+    'fetch("http://127.0.0.1:8080/__health").then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
+    >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    [ $tries -lt 30 ] || die "the stand-in GitHub API did not answer"
+    sleep 1
+  done
+  echo "    stand-in GitHub API: http://github:8080 (App $GITHUB_APP_ID)"
+}
+
+remove_github_stand_in() {
+  if [ -n "$GITHUB_CID" ]; then
+    docker rm -f "$GITHUB_CID" >/dev/null 2>&1 || true
+    GITHUB_CID=""
+  fi
 }
 
 # The verification database, with this run's generated password.
@@ -107,6 +161,7 @@ stack_db_url() {
 }
 
 cleanup_stack() {
+  remove_github_stand_in
   stack down --remove-orphans >/dev/null 2>&1 || true
   if [ -n "${ADIUTOR_DATA_DIR:-}" ]; then
     remove_data_dir "$ADIUTOR_DATA_DIR"
@@ -129,6 +184,8 @@ run_e2e() {
   docker run --rm --ipc=host --network "${PROJECT}_default" \
     --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI="${CI:-}" -e E2E_TARGET=adiutor:8080 -e E2E_BASE_URL="$PUBLIC_URL" \
     -e E2E_DATABASE_URL="$(stack_db_url)" \
+    -e E2E_GITHUB_APP_ID="$GITHUB_APP_ID" -e E2E_GITHUB_KEY_FILE=/github-key/app.pem \
+    -v "$ADIUTOR_DATA_DIR/github/private:/github-key:ro" \
     -v "$REPO_ROOT:/repo" -w /repo "$PLAYWRIGHT_IMAGE" \
     npx --no-install playwright test --config config/playwright.config.ts
 }
@@ -160,6 +217,8 @@ run_integration() {
 
   info "Container: image, health, runtime user and hardening"
   build_image verify "verify-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
+  # Only the end-to-end tests read the stand-in GitHub API.
+  if [ $E2E -eq 1 ]; then github_stand_in; fi
   stack up -d --wait --wait-timeout 120 adiutor || fail_stack "the adiutor container did not become healthy"
   TOOLCHAIN_EXTRA_ARGS=(--network "${PROJECT}_default")
   # shellcheck disable=SC2016 # expands inside the container
@@ -183,6 +242,7 @@ run_integration() {
   fi
 
   info "Stopping $PROJECT"
+  remove_github_stand_in
   stack down --remove-orphans || die "the verification stack did not stop"
   [ -z "$(stack ps -q)" ] || die "the verification stack still runs after stopping it"
   remove_data_dir "$ADIUTOR_DATA_DIR"

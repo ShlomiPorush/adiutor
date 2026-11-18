@@ -162,7 +162,13 @@ export async function morningSummary(ctx: Ctx): Promise<MorningRead> {
       : new Date(ctx.clock().getTime() - FIRST_VISIT_WINDOW_MS)
   const view = await morning(ctx, { since })
   return {
-    summary: { waiting: view.waiting, newCount: view.new.length, security: view.security, sync: view.sync },
+    summary: {
+      waiting: view.waiting,
+      newCount: view.new.length,
+      security: view.security,
+      sync: view.sync,
+      github: view.github,
+    },
     coversUntil: new Date(view.now.getTime() - VISIT_SAFETY_MARGIN_MS),
   }
 }

@@ -58,7 +58,8 @@ beforeAll(async () => {
   vi.spyOn(console, "error").mockImplementation(() => {})
   t = await createTestDatabase("morning")
   standIn = await StandInBotApi.start(TOKEN)
-  ctx = { ...t.ctx, clock: () => now }
+  // GitHub set up, and no project with a repository: its status is fine, so the message says nothing of it.
+  ctx = { ...t.ctx, clock: () => now, githubOn: () => true }
 })
 afterAll(async () => {
   await standIn?.close()

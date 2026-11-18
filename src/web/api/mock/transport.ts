@@ -20,6 +20,7 @@ import type {
   SyncRequest,
 } from "../types.ts"
 import { ago, createState, type MockState, uuid } from "./fixtures.ts"
+import { githubRoute, mockGitHubStatus } from "./github.ts"
 
 const state: MockState = createState()
 /** The same state for mock/auth.ts. */
@@ -236,6 +237,7 @@ function morning(): Morning {
       lastPartialAt: ago(3),
       securityLastSuccessAt: ago(9),
     },
+    github: mockGitHubStatus(state.projects),
   }
 }
 
@@ -558,6 +560,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     if (method === "PATCH") {
       const before = { name: project.name, stage: project.stage, whereWeAre: project.whereWeAre }
       if ("stage" in body) project.stage = body.stage as Stage | null
+      if ("githubRepo" in body) project.githubRepo = (body.githubRepo as string | null) || null
       if ("whereWeAre" in body) project.whereWeAre = (body.whereWeAre as string | null) || null
       if ("goal" in body) {
         for (const goal of state.goals)
@@ -765,6 +768,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     state.agentConnections = state.agentConnections.filter((connection) => connection.id !== sub)
     return { status: 204, body: null }
   }
+  if (head === "github") return githubRoute(method, url, parts, body, state.projects)
   if (head === "telegram" && id === "test-message" && method === "POST") return ok({ sent: true })
   if (head === "telegram")
     return ok({

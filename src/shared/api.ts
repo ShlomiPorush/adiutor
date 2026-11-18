@@ -5,8 +5,6 @@ import {
   itemStatusSchema,
   itemTypeSchema,
   languageSchema,
-  securityCoverageSchema,
-  securityFamilySchema,
   severitySchema,
   stageSchema,
   syncPartResultSchema,
@@ -191,27 +189,25 @@ export const t3SnapshotBody = z.object({
   failedProjects: z.array(externalId).max(2_000).optional(),
 })
 
-const count = z.number().int().min(0)
+/** A GitHub App id or installation id. */
+const githubId = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 
-export const securitySnapshotBody = z.object({
-  collectedAt: isoDate,
-  repos: z
-    .array(
-      z.object({
-        repo,
-        openIssues: count.nullable(),
-        issuesAsOf: isoDate.nullable(),
-        families: z.array(
-          z.object({
-            family: securityFamilySchema,
-            coverage: securityCoverageSchema,
-            counts: z.object({ critical: count, high: count, medium: count, low: count }),
-            asOf: isoDate.nullable(),
-          }),
-        ),
-      }),
-    )
-    .max(2_000),
+/** Saves the GitHub App's id, its private key, or both (docs/api.md, "GitHub"). */
+export const githubAppBody = z.object({
+  /** The generation of the GitHub settings the owner's view was based on. */
+  generation: z.number().int().min(0),
+  appId: z
+    .string()
+    .regex(/^[1-9][0-9]{0,15}$/)
+    .nullable()
+    .optional(),
+  /** A new private key (PEM), or null to remove the stored one. Never returned. */
+  privateKey: z.string().min(1).max(10_000).nullable().optional(),
+})
+
+export const githubInstallationBody = z.object({
+  generation: z.number().int().min(0),
+  installationId: githubId,
 })
 
 /** One request's result: what each part of the run that served it came to. */
@@ -287,5 +283,4 @@ export type CreateItemBody = z.infer<typeof createItemBody>
 export type UpdateItemBody = z.infer<typeof updateItemBody>
 export type StartThreadBody = z.infer<typeof startThreadBody>
 export type T3Snapshot = z.infer<typeof t3SnapshotBody>
-export type SecuritySnapshot = z.infer<typeof securitySnapshotBody>
 export type SyncCheckin = z.infer<typeof syncCheckinBody>

@@ -4,13 +4,14 @@
 // below it is one column in the same order, waiting on you first (v3 NL-17). Each column is its own wrapper, so
 // the DOM order (waiting, security, new, agent updates, projects) is the visual, keyboard and screen-reader
 // order: nothing is reordered by CSS. The inbox count links to the inbox; the last T3 sync time shows, with a
-// banner when it is stale.
+// banner when it is stale. The security panel never says all clear while the server's GitHub data is not fine: one
+// line then says why (not set up, not read yet, or how many projects lack current data) and opens Settings, GitHub.
 
 import { ChevronRight } from "lucide-react"
 import { type CSSProperties, useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router"
 import { api, qk } from "../api/endpoints.ts"
-import type { AgentUpdateGroup, Morning, MorningProject, SecurityLine } from "../api/types.ts"
+import type { AgentUpdateGroup, GitHubStatus, Morning, MorningProject, SecurityLine } from "../api/types.ts"
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { ProposalRow } from "../shell/Bell.tsx"
@@ -171,7 +172,10 @@ function MorningBody({
           </Panel>
 
           <Panel id="security" title={t("morning.securityTitle")} count={securityLines.length}>
-            {securityLines.length === 0 ? <Empty title={t("morning.securityEmpty")} hint={t("security.rule")} /> : null}
+            {morning.github.state !== "fine" ? <GitHubLine status={morning.github} /> : null}
+            {securityLines.length === 0 && morning.github.state === "fine" ? (
+              <Empty title={t("morning.securityEmpty")} hint={t("security.rule")} />
+            ) : null}
             {securityLines.map((line) => (
               <SecurityRow key={line.projectId} line={line} />
             ))}
@@ -231,6 +235,39 @@ function MorningBody({
         </Panel>
       </div>
     </>
+  )
+}
+
+/** Why the security data is not current: GitHub not set up, not read yet, or projects without current data. */
+function GitHubLine({ status }: { status: GitHubStatus }) {
+  const { t, tc } = useI18n()
+  return (
+    <div className="ui-alert" data-tone="warn" data-testid="github-line">
+      <i className="ui-alert-bar" />
+      <div className="ui-alert-text">
+        <span className="ui-alert-title">
+          {status.state === "off"
+            ? t("morning.githubOff")
+            : status.state === "not_read"
+              ? t("morning.githubNotRead")
+              : tc("morning.githubNotCovered", status.notCovered)}
+        </span>
+        <p>
+          {status.state === "not_covered" ? (
+            status.oldestGoodReadAt ? (
+              <>
+                {t("morning.githubOldest")} <Time value={status.oldestGoodReadAt} mode="full" />.{" "}
+              </>
+            ) : (
+              <>{t("morning.githubNeverRead")} </>
+            )
+          ) : null}
+          <Link to="/settings/github" className="ui-link">
+            {status.state === "off" ? t("morning.githubSetUp") : t("morning.githubOpen")}
+          </Link>
+        </p>
+      </div>
+    </div>
   )
 }
 
