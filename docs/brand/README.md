@@ -5,12 +5,12 @@ Source of truth: `src/web/public/favicon.svg` in the repository (24-unit grid, t
 
 ## Colours
 
-| Name  | Hex       | Use                                   |
-|-------|-----------|---------------------------------------|
-| Ink   | `#111814` | Tile and wordmark on light backgrounds |
-| Paper | `#f2f5f3` | Tile and wordmark on dark backgrounds  |
-| Night | `#0e1110` | Dark canvas (social images)           |
-| Muted | `#5e6863` / `#97a29c` | Tagline, light / dark     |
+| Name  | Hex                   | Use                                    |
+| ----- | --------------------- | -------------------------------------- |
+| Ink   | `#111814`             | Tile and wordmark on light backgrounds |
+| Paper | `#f2f5f3`             | Tile and wordmark on dark backgrounds  |
+| Night | `#0e1110`             | Dark canvas (social images)            |
+| Muted | `#5e6863` / `#97a29c` | Tagline, light / dark                  |
 
 Wordmark: "Adiutor" in Onest, weight 750, tracking -0.02em. Onest is under the SIL Open Font License 1.1 (`fonts/OFL.txt`).
 
