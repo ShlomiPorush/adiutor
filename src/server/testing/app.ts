@@ -40,7 +40,12 @@ export type TestCoreOptions = {
    * The server's GitHub reading: the stand-in's origin (e2e/github-stand-in.mjs), the generation the gate starts at
    * (0 for a new database) and the write pause of a test. Without an origin it points at a closed local port.
    */
-  github?: { origin?: string; generation?: number; beforeWrite?: () => Promise<void> }
+  github?: {
+    origin?: string
+    generation?: number
+    beforeWrite?: () => Promise<void>
+    afterLock?: () => Promise<void>
+  }
 }
 
 export type TestCore = Core & {
@@ -99,6 +104,7 @@ export function testCore(t: TestDatabase, options: TestCoreOptions): TestCore {
       generation: options.github?.generation ?? 0,
       origin: options.github?.origin ?? "http://127.0.0.1:9",
       beforeWrite: options.github?.beforeWrite,
+      afterLock: options.github?.afterLock,
     }),
   }
 }

@@ -57,12 +57,7 @@ export async function gitHubCoverage(
     .orderBy(asc(projects.name))
   const ids = withRepo.map((p) => p.id)
   const sources =
-    ids.length === 0
-      ? []
-      : await db
-          .select()
-          .from(securitySources)
-          .where(inArray(securitySources.projectId, ids))
+    ids.length === 0 ? [] : await db.select().from(securitySources).where(inArray(securitySources.projectId, ids))
   const fresh = (asOf: Date | null) => asOf !== null && now.getTime() - asOf.getTime() <= COVERED_FOR_MS
   const list: ProjectCoverage[] = withRepo.map((p) => {
     const own = ALERT_FAMILIES.map((family) => sources.find((s) => s.projectId === p.id && s.family === family))

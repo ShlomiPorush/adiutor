@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm"
 import type { T3Snapshot } from "../../shared/api.ts"
-import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
+import { items, itemThreads, projects, syncRuns } from "../db/schema.ts"
 import { AppError, invalid } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
 import { type By, type Ctx, inLinkTx, inTx, writeAudit } from "./context.ts"

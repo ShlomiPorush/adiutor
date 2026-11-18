@@ -25,9 +25,13 @@ const CHECK_TIMEOUT_MS = 10_000
 export type GitHubDeps = { env: SettingsEnv; gate: GitHubGate; origin: string }
 
 const locked = (variable: string) =>
-  new AppError("setting_locked", `The environment variable ${variable} sets this. Change it there and restart Adiutor.`, {
-    variable,
-  })
+  new AppError(
+    "setting_locked",
+    `The environment variable ${variable} sets this. Change it there and restart Adiutor.`,
+    {
+      variable,
+    },
+  )
 
 const unreachable = () => new AppError("github_unreachable", "GitHub did not answer. Try again in a minute.")
 const rejected = () =>
@@ -261,6 +265,7 @@ export async function gitHubView(ctx: Ctx, deps: GitHubDeps, runner: GitHubRunne
     .from(projects)
     .where(isNull(projects.githubRepo))
     .orderBy(asc(projects.name))
+  const named = await ctx.db.select({ id: projects.id, name: projects.name, repo: projects.githubRepo }).from(projects)
   const pulls = runner.state()
   const installations = github.installations.map((installation) => {
     const read = pulls.last?.installations.find((i) => i.id === installation.id)
@@ -295,9 +300,12 @@ export async function gitHubView(ctx: Ctx, deps: GitHubDeps, runner: GitHubRunne
         }
       : null,
     installations,
-    notCovered: coverage.projects
-      .filter((p) => !p.covered)
-      .map((p) => ({ ...p, movedTo: pulls.last?.moved.find((m) => m.projectId === p.id)?.to ?? null })),
+    notCovered: coverage.projects.filter((p) => !p.covered),
+    /** Repositories the last pull found only by their id: renamed or moved, the owner updates the project. */
+    moved: (pulls.last?.moved ?? []).flatMap((m) => {
+      const p = named.find((row) => row.id === m.projectId)
+      return p ? [{ id: p.id, name: p.name, repo: p.repo, movedTo: m.to }] : []
+    }),
     withoutRepo,
   }
 }

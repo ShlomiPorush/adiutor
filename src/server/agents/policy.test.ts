@@ -10,6 +10,7 @@ import type { AuthHolder } from "../auth/auth.ts"
 import { ALLOWED_PATHS, OTP_PATHS } from "../auth/auth.ts"
 import { AppError } from "../errors.ts"
 import type { SettingsHandle } from "../http/api.ts"
+import type { GitHubHandle } from "../http/github.ts"
 import { buildMcpServer } from "../mcp/server.ts"
 import type { AgentAccess } from "../oauth/access.ts"
 import { agentOAuthMount } from "../oauth/routes.ts"
@@ -62,6 +63,7 @@ beforeAll(() => {
       config: { publicUrl: new URL(ISSUER), version: "test" },
       auth: {} as AuthHolder,
       settings: {} as SettingsHandle,
+      github: {} as GitHubHandle,
     },
     agentOAuth: agentOAuthMount(access),
     web: { root: web },
@@ -157,7 +159,6 @@ describe("the closed route table", () => {
       "POST /api/v1/notes": "act",
       "PATCH /api/v1/notes/{id}": "act",
       "POST /api/v1/sync/t3": "act",
-      "POST /api/v1/sync/security": "act",
       // The check-in claims a waiting request: it changes state.
       "POST /api/v1/sync/checkin": "act",
     }
@@ -237,13 +238,7 @@ describe("the endpoints listing", () => {
     expect(all.count).toBe(OPEN.length)
     const sync = listing([...AGENT_AREAS], "sync")
     expect(sync.endpoints.map((e) => e.path).sort()).toEqual(
-      [
-        "/api/v1/agent/access",
-        "/api/v1/agent/endpoints",
-        "/api/v1/sync/checkin",
-        "/api/v1/sync/security",
-        "/api/v1/sync/t3",
-      ].sort(),
+      ["/api/v1/agent/access", "/api/v1/agent/endpoints", "/api/v1/sync/checkin", "/api/v1/sync/t3"].sort(),
     )
     expect(listing(["read"], "write").endpoints.every((e) => e.area === "any")).toBe(true)
     for (const e of all.endpoints) expect(e.path).not.toContain(":")

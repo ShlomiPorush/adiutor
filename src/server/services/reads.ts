@@ -27,6 +27,7 @@ import {
   type ItemType,
   type SyncOutcome,
 } from "../../shared/enums.ts"
+import type { Db } from "../db/client.ts"
 import {
   audit,
   comments,
@@ -41,10 +42,9 @@ import {
   syncRuns,
 } from "../db/schema.ts"
 import { invalid, notFound } from "../errors.ts"
-import { syncConnected } from "../oauth/sync-status.ts"
-import type { Db } from "../db/client.ts"
 import { GITHUB_RUN_KIND } from "../github/apply.ts"
 import { gitHubCoverage } from "../github/status.ts"
+import { syncConnected } from "../oauth/sync-status.ts"
 import { getSettings, previousVisit, readSettings } from "./admin.ts"
 import type { By, Ctx } from "./context.ts"
 import type { ItemRow } from "./items.ts"

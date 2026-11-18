@@ -88,7 +88,10 @@ export function pullOutcome(read: PullRead, skipped: number): SyncOutcome {
   const installationsKnown = read.installations.every(
     (i) => (i.state === "usable" && i.inventory?.complete === true) || (i.state !== "usable" && i.state !== "error"),
   )
-  const reads = read.projects.flatMap((p) => [...ALERT_FAMILIES.map((f) => p.families[f].coverage !== "error"), p.issues.kind !== "error"])
+  const reads = read.projects.flatMap((p) => [
+    ...ALERT_FAMILIES.map((f) => p.families[f].coverage !== "error"),
+    p.issues.kind !== "error",
+  ])
   const anyRead = reads.some(Boolean) || read.installations.some((i) => i.state !== "error")
   if (!anyRead) return "failed"
   if (installationsKnown && reads.every(Boolean) && skipped === 0 && read.stopped === null) return "succeeded"
@@ -100,8 +103,10 @@ function runErrors(read: PullRead, skipped: string[]) {
   const errors: { record: string; code: string }[] = []
   if (read.stopped?.kind === "rate_limit") errors.push({ record: "pull", code: "rate_limited" })
   for (const i of read.installations)
-    if (i.state !== "usable") errors.push({ record: `installation:${i.id}`, code: i.state === "error" ? (i.code ?? "error") : i.state })
-    else if (i.inventory && !i.inventory.complete) errors.push({ record: `installation:${i.id}`, code: i.code ?? "inventory_incomplete" })
+    if (i.state !== "usable")
+      errors.push({ record: `installation:${i.id}`, code: i.state === "error" ? (i.code ?? "error") : i.state })
+    else if (i.inventory && !i.inventory.complete)
+      errors.push({ record: `installation:${i.id}`, code: i.code ?? "inventory_incomplete" })
   for (const p of read.projects) {
     for (const family of ALERT_FAMILIES) {
       const f = p.families[family]
@@ -119,6 +124,8 @@ export type ApplyInput = {
   startedAt: Date
   /** The key the pull used is the stored one (not the environment's): GitHub's answer marks it verified or not. */
   keyStored: boolean
+  /** Test seam: runs inside the transaction once it holds the shared GitHub lock and checked the generation. */
+  afterLock?: () => Promise<void>
 }
 
 export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResult> {
@@ -133,13 +140,19 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
       .from(settings)
       .where(eq(settings.id, 1))
     if (!stored || stored.generation !== generation) return { written: false } as const
+    await input.afterLock?.()
 
     const now = ctx.clock()
     const ids = [...new Set(read.projects.map((p) => p.projectId))].sort()
     const locked: ProjectRow[] =
       ids.length === 0
         ? []
-        : await tx.select().from(projects).where(inArray(projects.id, ids)).orderBy(asc(projects.id)).for("no key update")
+        : await tx
+            .select()
+            .from(projects)
+            .where(inArray(projects.id, ids))
+            .orderBy(asc(projects.id))
+            .for("no key update")
     const current = new Map(locked.map((p) => [p.id, p]))
     const skipped: string[] = []
     const reads = read.projects.filter((p) => {
@@ -153,7 +166,9 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
     })
     const writeIds = reads.map((p) => p.projectId)
     const before =
-      writeIds.length === 0 ? [] : await tx.select().from(securitySources).where(inArray(securitySources.projectId, writeIds))
+      writeIds.length === 0
+        ? []
+        : await tx.select().from(securitySources).where(inArray(securitySources.projectId, writeIds))
 
     const sourceRows: ReturnType<typeof nextSource>[] = []
     const issueCases: {
@@ -174,9 +189,17 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
         const prior = old.find((s) => s.family === family)
         const source = nextSource(p.projectId, family, p.families[family], prior, now)
         const result = p.families[family]
-        attempts.push({ projectId: p.projectId, family, attempt: source.attempt, ...(result.coverage === "error" ? { code: result.code } : {}) })
+        attempts.push({
+          projectId: p.projectId,
+          family,
+          attempt: source.attempt,
+          ...(result.coverage === "error" ? { code: result.code } : {}),
+        })
         if (result.coverage !== "error" && !sameResult(prior, source)) real = true
-        else if (result.coverage !== "error" && (time(prior?.asOf) !== time(source.asOf) || prior?.origin !== source.origin))
+        else if (
+          result.coverage !== "error" &&
+          (time(prior?.asOf) !== time(source.asOf) || prior?.origin !== source.origin)
+        )
           timeOnly.push({ projectId: p.projectId, family, from: prior?.asOf ?? null, to: source.asOf })
         return source
       })
@@ -191,7 +214,12 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
         if (count !== row.openIssuesCount) real = true
         else timeOnly.push({ projectId: p.projectId, family: "issues", from: row.openIssuesAsOf, to: p.issues.asOf })
       }
-      attempts.push({ projectId: p.projectId, family: "issues", attempt: p.issues.kind === "error" ? "error" : "ok", ...(p.issues.kind === "error" ? { code: p.issues.code } : {}) })
+      attempts.push({
+        projectId: p.projectId,
+        family: "issues",
+        attempt: p.issues.kind === "error" ? "error" : "ok",
+        ...(p.issues.kind === "error" ? { code: p.issues.code } : {}),
+      })
       const repoId = p.repoId !== null && p.repoId !== row.githubRepoId ? p.repoId : null
       if (issuesChanged || repoId !== null)
         issueCases.push({
@@ -238,7 +266,10 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
     }
     if (issueCases.length > 0) {
       const when = (value: (c: (typeof issueCases)[number]) => SQL) =>
-        sql.join([sql`case ${projects.id}`, ...issueCases.map((c) => sql`when ${c.id}::uuid then ${value(c)}`), sql`end`], sql` `)
+        sql.join(
+          [sql`case ${projects.id}`, ...issueCases.map((c) => sql`when ${c.id}::uuid then ${value(c)}`), sql`end`],
+          sql` `,
+        )
       await tx
         .update(projects)
         .set({
@@ -247,7 +278,12 @@ export async function applyPull(ctx: Ctx, input: ApplyInput): Promise<ApplyResul
           openIssuesOrigin: when((c) => sql`${c.origin}::text`),
           githubRepoId: when((c) => sql`${c.repoId}::bigint`),
         })
-        .where(inArray(projects.id, issueCases.map((c) => c.id)))
+        .where(
+          inArray(
+            projects.id,
+            issueCases.map((c) => c.id),
+          ),
+        )
     }
 
     if (input.keyStored && read.keyAccepted !== null && read.keyAccepted !== stored.verified)

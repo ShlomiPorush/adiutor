@@ -689,8 +689,8 @@ describe("refusals of every act route are 4xx when nothing changed", () => {
       ["PATCH", `/api/v1/notes/${missing}`, { version: 1, title: "x" }, 404, "not_found"],
       ["POST", "/api/v1/sync/t3", {}, 400, "validation_failed"],
       ["POST", "/api/v1/sync/t3", { collectedAt: future, projects: [], threads: [] }, 400, "validation_failed"],
-      ["POST", "/api/v1/sync/security", {}, 400, "validation_failed"],
-      ["POST", "/api/v1/sync/security", { collectedAt: future, repos: [] }, 400, "validation_failed"],
+      // The server reads GitHub itself: the sync's security push is gone, and closed like any route not in the list.
+      ["POST", "/api/v1/sync/security", { collectedAt: future, repos: [] }, 403, "forbidden"],
       ["POST", "/api/v1/sync/checkin", {}, 400, "validation_failed"],
     ]
     for (const [method, path, body, status, code] of cases) {

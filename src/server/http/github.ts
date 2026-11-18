@@ -26,10 +26,18 @@ export function createGitHubHandle(options: {
   generation: number
   origin?: string
   beforeWrite?: () => Promise<void>
+  afterLock?: () => Promise<void>
 }): GitHubHandle {
   const origin = options.origin ?? DEFAULT_GITHUB_API_ORIGIN
   const gate = new GitHubGate(options.generation)
-  const runner = new GitHubRunner({ ctx: options.ctx, env: options.env, gate, origin, beforeWrite: options.beforeWrite })
+  const runner = new GitHubRunner({
+    ctx: options.ctx,
+    env: options.env,
+    gate,
+    origin,
+    beforeWrite: options.beforeWrite,
+    afterLock: options.afterLock,
+  })
   return { gate, runner, origin }
 }
 

@@ -153,7 +153,8 @@ export async function updateProject(ctx: Ctx, by: By, id: string, patch: Project
     // Another repository: its security data and Issues count belong to the old one. They are cleared, and the binding
     // version is raised, so a pull that read the old repository writes nothing for this project (github/apply.ts).
     const repoChanged =
-      next.githubRepo !== undefined && (next.githubRepo?.toLowerCase() ?? null) !== (before.githubRepo?.toLowerCase() ?? null)
+      next.githubRepo !== undefined &&
+      (next.githubRepo?.toLowerCase() ?? null) !== (before.githubRepo?.toLowerCase() ?? null)
     if (changed.length > 0) {
       const [row] = await tx
         .update(projects)

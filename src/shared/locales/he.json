@@ -721,6 +721,7 @@
       "proposal_accept": "אישר הצעת שלב",
       "proposal_reject": "דחה הצעת שלב",
       "security_update": "עדכן נתוני אבטחה",
+      "security_pull": "קרא נתוני אבטחה מ-GitHub",
       "sync_request_create": "ביקש סנכרון",
       "sync_request_cancel": "ביטל בקשת סנכרון",
       "suppression_create": "השתיק",
@@ -791,7 +792,8 @@
       "api_key": "מפתח סוכן",
       "device_code": "אישור סוכן",
       "agent_connection": "חיבור של סוכן",
-      "sync_request": "בקשת סנכרון"
+      "sync_request": "בקשת סנכרון",
+      "github": "GitHub"
     },
     "source": {
       "ui": "לוח",
@@ -799,7 +801,8 @@
       "mcp": "MCP",
       "telegram": "טלגרם",
       "sync": "סנכרון",
-      "cli": "פקודת שרת"
+      "cli": "פקודת שרת",
+      "github": "GitHub"
     }
   },
   "settings": {

@@ -5,6 +5,7 @@ import { buildMorningMessage, type MessageOptions, type MorningSummary } from ".
 const URL_BASE = "https://adiutor.example.com"
 const options: MessageOptions = { language: "en", publicUrl: URL_BASE, dateFormat: "dd/MM/yyyy", timeFormat: "HH:mm" }
 const fresh = { connected: true, lastSuccessAt: new Date("2026-11-01T05:30:00Z"), stale: false }
+const github = { state: "fine", notCovered: 0, oldestGoodReadAt: null } as const
 
 // 2026-10-30 05:31 UTC is 07:31 in Asia/Jerusalem (winter time, UTC+2).
 const full: MorningSummary = {
@@ -20,6 +21,7 @@ const full: MorningSummary = {
     { projectName: "Gizmo", critical: 1, high: 0, asOf: null, stale: true },
   ],
   sync: { connected: true, lastSuccessAt: new Date("2026-10-30T05:30:00Z"), stale: true },
+  github,
 }
 
 const lines = (text: unknown) => String(text).split("\n")
@@ -37,14 +39,14 @@ describe("buildMorningMessage", () => {
   })
 
   it("sends one line when nothing needs the owner", () => {
-    const empty: MorningSummary = { waiting: [], newCount: 0, security: [], sync: fresh }
+    const empty: MorningSummary = { waiting: [], newCount: 0, security: [], sync: fresh, github }
     expect(String(buildMorningMessage(empty, options))).toBe(
       `Nothing is waiting on you today. <a href="${URL_BASE}/">Open the board</a>`,
     )
   })
 
   it("keeps three lines when only new items changed", () => {
-    const summary: MorningSummary = { waiting: [], newCount: 2, security: [], sync: fresh }
+    const summary: MorningSummary = { waiting: [], newCount: 2, security: [], sync: fresh, github }
     expect(lines(buildMorningMessage(summary, options))).toEqual([
       "Nothing is waiting on you.",
       "New since your last visit: 2",
@@ -58,6 +60,7 @@ describe("buildMorningMessage", () => {
       newCount: 0,
       security: [{ projectName: "Gizmo", critical: 0, high: 3, asOf: null, stale: true }],
       sync: { connected: true, lastSuccessAt: null, stale: true },
+      github,
     }
     expect(lines(buildMorningMessage(summary, options))).toEqual([
       "Nothing is waiting on you.",
@@ -69,7 +72,13 @@ describe("buildMorningMessage", () => {
   })
 
   it("says that the sync is disconnected and must be connected again, with the last sync, even when it is fresh", () => {
-    const summary: MorningSummary = { waiting: [], newCount: 0, security: [], sync: { ...fresh, connected: false } }
+    const summary: MorningSummary = {
+      waiting: [],
+      newCount: 0,
+      security: [],
+      sync: { ...fresh, connected: false },
+      github,
+    }
     const disconnected =
       "The sync is disconnected: connect it again on the computer that runs it (Settings, Agent access)."
     expect(lines(buildMorningMessage(summary, options))).toEqual([
@@ -95,6 +104,7 @@ describe("buildMorningMessage", () => {
       newCount: 0,
       security: [{ projectName: "</a><script>\u200F", critical: 1, high: 0, asOf: null, stale: false }],
       sync: fresh,
+      github,
     }
     const text = String(buildMorningMessage(summary, options))
     expect(lines(text)[0]).toBe(
@@ -113,6 +123,7 @@ describe("buildMorningMessage", () => {
       newCount: 0,
       security: [],
       sync: fresh,
+      github,
     }
     const first = lines(buildMorningMessage(summary, options))[0] ?? ""
     expect(first).toContain(`${URL_BASE}/items/a%2Fb%3Fc`)
@@ -120,7 +131,7 @@ describe("buildMorningMessage", () => {
   })
 
   it("keeps a path prefix of the public URL in every link", () => {
-    const empty: MorningSummary = { waiting: [], newCount: 0, security: [], sync: fresh }
+    const empty: MorningSummary = { waiting: [], newCount: 0, security: [], sync: fresh, github }
     expect(String(buildMorningMessage(empty, { ...options, publicUrl: "https://example.com/adiutor" }))).toContain(
       '<a href="https://example.com/adiutor/">',
     )
@@ -137,7 +148,7 @@ describe("buildMorningMessage", () => {
       m.syncStale.replace("{time}", "30/10/2026 07:30"),
       `<a href="${URL_BASE}/">${m.openBoard}</a>`,
     ])
-    const empty: MorningSummary = { waiting: [], newCount: 0, security: [], sync: fresh }
+    const empty: MorningSummary = { waiting: [], newCount: 0, security: [], sync: fresh, github }
     expect(String(buildMorningMessage(empty, { ...options, language: "he" }))).toBe(
       `${m.allClear} <a href="${URL_BASE}/">${m.openBoard}</a>`,
     )
@@ -150,11 +161,53 @@ describe("buildMorningMessage", () => {
       security: [],
       // 2026-07-04 21:05 UTC is 00:05 on 5 July in Asia/Jerusalem (summer time, UTC+3).
       sync: { connected: true, lastSuccessAt: new Date("2026-07-04T21:05:00Z"), stale: true },
+      github,
     }
     expect(lines(buildMorningMessage(summary, options))[2]).toBe("Last T3 sync: 05/07/2026 00:05")
     const twelve = buildMorningMessage(summary, { ...options, dateFormat: "yyyy-MM-dd", timeFormat: "h:mm a" })
     expect(lines(twelve)[2]).toMatch(/^Last T3 sync: 2026-07-05 12:05\sAM$/u)
     const browser = buildMorningMessage(summary, { ...options, dateFormat: "browser", timeFormat: "browser" })
     expect(lines(browser)[2]).toBe("Last T3 sync: 05/07/2026 00:05")
+  })
+
+  it("says when GitHub is not set up or not read yet, so all clear is never shown unchecked", () => {
+    const off: MorningSummary = {
+      waiting: [],
+      newCount: 0,
+      security: [],
+      sync: fresh,
+      github: { ...github, state: "off" },
+    }
+    expect(lines(buildMorningMessage(off, options))).toEqual([
+      "Nothing is waiting on you.",
+      "New since your last visit: 0",
+      "GitHub is not set up, so security data is not checked (Settings, GitHub).",
+      `<a href="${URL_BASE}/">Open the board</a>`,
+    ])
+    const notRead = { ...off, github: { ...github, state: "not_read" as const } }
+    expect(lines(buildMorningMessage(notRead, options))[2]).toBe(
+      "GitHub has not been read yet, so security data is not checked.",
+    )
+  })
+
+  it("counts the projects without current GitHub data, with the oldest good read", () => {
+    const summary: MorningSummary = {
+      waiting: [],
+      newCount: 0,
+      security: [],
+      sync: fresh,
+      github: { state: "not_covered", notCovered: 2, oldestGoodReadAt: new Date("2026-10-30T05:31:00Z") },
+    }
+    expect(lines(buildMorningMessage(summary, options))[2]).toBe(
+      "Projects without current GitHub data: 2 (last good read 30/10/2026 07:31)",
+    )
+  })
+
+  it("keeps six lines: with the sync and GitHub lines, one security line remains", () => {
+    const summary: MorningSummary = { ...full, github: { ...github, state: "off" } }
+    const message = lines(buildMorningMessage(summary, options))
+    expect(message).toHaveLength(6)
+    expect(message.filter((line) => line.startsWith("Security,"))).toHaveLength(1)
+    expect(message[2]).toContain("+2 more")
   })
 })

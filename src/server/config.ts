@@ -313,7 +313,7 @@ export function githubApiOrigin(argv: readonly string[]): string {
   if (flag === undefined) return DEFAULT_GITHUB_API_ORIGIN
   const value = flag.slice(prefix.length)
   const url = URL.canParse(value) ? new URL(value) : undefined
-  if (!url || (url.protocol !== "https:" && url.protocol !== "http:") || url.origin !== value.replace(//+$/, ""))
+  if (!url || (url.protocol !== "https:" && url.protocol !== "http:") || url.origin !== value.replace(/\/+$/, ""))
     throw new ConfigError("--github-api-origin must be an http or https origin, without a path")
   return url.origin
 }

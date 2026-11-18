@@ -5,8 +5,6 @@ import {
   itemStatusSchema,
   itemTypeSchema,
   languageSchema,
-  securityCoverageSchema,
-  securityFamilySchema,
   severitySchema,
   stageSchema,
   syncPartResultSchema,

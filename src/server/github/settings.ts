@@ -11,7 +11,12 @@ import { keyFingerprint, readPrivateKey } from "./key.ts"
 export const GITHUB_KEY_COLUMN = "github_private_key_enc"
 
 /** An installation the server may read: from Settings with its bound account, or from the environment by id alone. */
-export type AllowedInstallation = { id: number; accountId: number | null; accountType: string | null; login: string | null }
+export type AllowedInstallation = {
+  id: number
+  accountId: number | null
+  accountType: string | null
+  login: string | null
+}
 
 export type GitHubKeyView = {
   set: boolean

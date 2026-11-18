@@ -1,6 +1,6 @@
-import type { AllowedInstallation } from "./settings.ts"
 import { appClient, type FetchGuard, installationClient, type Octokit } from "./client.ts"
 import { describeFailure, type Failure, failureCode, graphqlRateLimit } from "./errors.ts"
+import type { AllowedInstallation } from "./settings.ts"
 
 // One pull's reading: everything is read into memory first, under the generation the pull started with; nothing is
 // written here (github/apply.ts writes it in one transaction). Requests go one installation after another, four
@@ -327,11 +327,12 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
   const planned: Planned[] = []
   for (const p of input.projects) {
     const [owner, name, ...rest] = p.githubRepo.split("/")
-    const errorAll = (code: string) => ({
-      dependabot: { coverage: "error", code },
-      code_scanning: { coverage: "error", code },
-      secret_scanning: { coverage: "error", code },
-    }) as Record<AlertFamily, FamilyRead>
+    const errorAll = (code: string) =>
+      ({
+        dependabot: { coverage: "error", code },
+        code_scanning: { coverage: "error", code },
+        secret_scanning: { coverage: "error", code },
+      }) as Record<AlertFamily, FamilyRead>
     const project: ProjectRead = {
       projectId: p.id,
       version: p.githubRepoVersion,
@@ -413,7 +414,10 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
           )
           if (/resource not accessible by integration/i.test(message) || lacking)
             return { coverage: "no_access", asOf: now() }
-          if (family === "code_scanning" && /(advanced security|code security)\b.*\b(must be|is not|not) enabled/i.test(message))
+          if (
+            family === "code_scanning" &&
+            /(advanced security|code security)\b.*\b(must be|is not|not) enabled/i.test(message)
+          )
             return { coverage: "not_enabled", asOf: now() }
           if (family === "dependabot" && /alerts are disabled/i.test(message))
             return { coverage: "not_enabled", asOf: now() }
@@ -440,7 +444,8 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       if (!next) return { coverage: "enabled", counts, asOf }
       // The next page must stay on this list: the same origin and path, a cursor not seen before.
       const url = URL.canParse(next) ? new URL(next) : null
-      if (!url || url.origin !== options.origin || url.pathname !== path) return { coverage: "error", code: "malformed" }
+      if (!url || url.origin !== options.origin || url.pathname !== path)
+        return { coverage: "error", code: "malformed" }
       const key = url.searchParams.has("after") ? "after" : url.searchParams.has("page") ? "page" : null
       const value = key ? url.searchParams.get(key) : null
       if (!key || !value || seen.has(`${key}=${value}`)) return { coverage: "error", code: "malformed" }
@@ -491,8 +496,12 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
         const failure = describeFailure(error, now())
         // A GraphQL rate limit can come with any status.
         const data = (error as { response?: { data?: unknown } }).response?.data
-        const limit = isObject(data) ? graphqlRateLimit(data.errors, failure.kind === "status" ? failure.headers : {}, now()) : null
-        const code = limit ? (stopOn({ kind: "rate_limit", until: limit }) as string) : (stopOn(failure) ?? failureCode(failure))
+        const limit = isObject(data)
+          ? graphqlRateLimit(data.errors, failure.kind === "status" ? failure.headers : {}, now())
+          : null
+        const code = limit
+          ? (stopOn({ kind: "rate_limit", until: limit }) as string)
+          : (stopOn(failure) ?? failureCode(failure))
         for (const plan of chunk) plan.project.issues = { kind: "error", code }
         continue
       }

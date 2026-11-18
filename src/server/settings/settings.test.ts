@@ -22,6 +22,12 @@ const row = (patch: Partial<SettingsRow> = {}): SettingsRow => ({
   privateDomains: [],
   agentsEnabled: false,
   agentIdleDays: 90,
+  githubAppId: null,
+  githubPrivateKeyEnc: null,
+  githubKeyFingerprint: null,
+  githubKeyVerified: false,
+  githubInstallations: [],
+  githubGeneration: 0,
   updatedAt: new Date(0),
   ...patch,
 })

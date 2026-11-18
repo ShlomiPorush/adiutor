@@ -410,13 +410,14 @@ describe("routes and error codes", () => {
     const snapshot = { collectedAt: new Date().toISOString(), projects: [], threads: [] }
     const res = await call("/sync/t3", { method: "POST", token: AGENT, body: snapshot })
     expect(res.json.data).toMatchObject({ outcome: "succeeded" })
+    // The server reads GitHub itself: the security push is gone.
     const security = await call("/sync/security", {
       method: "POST",
       token: AGENT,
       body: { collectedAt: new Date().toISOString(), repos: [] },
     })
-    expect(security.status).toBe(200)
-    expect((await call("/sync/runs", { token: AGENT })).json.data).toHaveLength(2)
+    expect(security.status).toBe(404)
+    expect((await call("/sync/runs", { token: AGENT })).json.data).toHaveLength(1)
   })
 
   it("lets the owner delete an item and a suppression shows up", async () => {

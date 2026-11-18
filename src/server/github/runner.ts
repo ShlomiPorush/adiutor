@@ -38,6 +38,8 @@ export type GitHubRunnerDeps = {
   origin: string
   /** Test seam: runs after the reading, before the write transaction. */
   beforeWrite?: () => Promise<void>
+  /** Test seam: runs inside the write transaction once it holds the shared GitHub lock. */
+  afterLock?: () => Promise<void>
 }
 
 export class GitHubRunner {
@@ -180,6 +182,7 @@ export class GitHubRunner {
         generation,
         startedAt,
         keyStored: env.overrides.githubPrivateKey === undefined,
+        afterLock: this.deps.afterLock,
       })
     } catch (error) {
       // A lock or statement timeout, or a conflict: nothing was written; the next pull runs as usual.

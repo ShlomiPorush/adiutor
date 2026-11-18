@@ -43,7 +43,12 @@ function waitUntil(now: Date, ms: number): Date {
  * GitHub's rate limits on a REST answer (403 or 429): the primary limit (`x-ratelimit-remaining: 0`, until
  * `x-ratelimit-reset`), `retry-after`, or a secondary limit named in the message. A 429 is always one.
  */
-export function restRateLimit(status: number, headers: Record<string, string>, message: string, now: Date): Date | null {
+export function restRateLimit(
+  status: number,
+  headers: Record<string, string>,
+  message: string,
+  now: Date,
+): Date | null {
   if (status !== 403 && status !== 429) return null
   if (headers["x-ratelimit-remaining"] === "0") {
     const reset = Number(headers["x-ratelimit-reset"])

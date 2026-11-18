@@ -150,7 +150,9 @@ const shutdown = (signal: string) => {
   const stopped = Promise.all([
     telegram.stop().catch((error: unknown) => log.error("telegram did not stop cleanly", errorFacts(error))),
     // A pull still reading is aborted and writes nothing.
-    githubHandle.runner.stop().catch((error: unknown) => log.error("github pulls did not stop cleanly", errorFacts(error))),
+    githubHandle.runner
+      .stop()
+      .catch((error: unknown) => log.error("github pulls did not stop cleanly", errorFacts(error))),
   ])
   void Promise.all([closed, stopped]).then(() =>
     // The agent calls still running write their audit rows before the pools close.
