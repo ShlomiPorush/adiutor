@@ -26,10 +26,18 @@ export function readPrivateKey(text: string): { key: KeyObject } | { problem: Ke
   } catch {
     return { problem: "not_a_key" }
   }
-  if (key.type !== "private") return { problem: "not_a_key" }
-  if (key.asymmetricKeyType !== "rsa") return { problem: "not_rsa" }
-  if ((key.asymmetricKeyDetails?.modulusLength ?? 0) < MIN_MODULUS_BITS) return { problem: "too_small" }
-  return { key }
+  const problem = keyProblem(key)
+  return problem ? { problem } : { key }
+}
+
+/** What makes a key object unfit for the App: not a private key, not RSA, or under 2048 bits. */
+export function keyProblem(
+  key: Pick<KeyObject, "type" | "asymmetricKeyType" | "asymmetricKeyDetails">,
+): KeyProblem | null {
+  if (key.type !== "private") return "not_a_key"
+  if (key.asymmetricKeyType !== "rsa") return "not_rsa"
+  if ((key.asymmetricKeyDetails?.modulusLength ?? 0) < MIN_MODULUS_BITS) return "too_small"
+  return null
 }
 
 /**

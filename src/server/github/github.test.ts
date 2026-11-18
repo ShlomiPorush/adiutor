@@ -5,7 +5,7 @@ import { testSecret } from "../testing/secrets.ts"
 import { GitHubRefused, guardedFetch } from "./client.ts"
 import { describeFailure, graphqlRateLimit, restRateLimit } from "./errors.ts"
 import { GitHubGate } from "./gate.ts"
-import { keyFingerprint, normalizeKey, readPrivateKey } from "./key.ts"
+import { keyFingerprint, keyProblem, normalizeKey, readPrivateKey } from "./key.ts"
 import { withinReadPermissions } from "./pull.ts"
 
 // The local parts of the GitHub reading: the key checks, the configuration, the rate-limit forms, the guarded fetch
@@ -36,11 +36,10 @@ describe("the App's private key", () => {
     expect(readPrivateKey(["-----BEGIN RSA", "PRIVATE KEY-----"].join(" "))).toEqual({ problem: "not_a_key" })
     const ec = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ type: "pkcs8", format: "pem" })
     expect(readPrivateKey(ec.toString())).toEqual({ problem: "not_rsa" })
-    const small = generateKeyPairSync("rsa", { modulusLength: 1024 }).privateKey.export({
-      type: "pkcs1",
-      format: "pem",
-    })
-    expect(readPrivateKey(small.toString())).toEqual({ problem: "too_small" })
+    // A small RSA key is described, not made: no test creates a weak key.
+    expect(
+      keyProblem({ type: "private", asymmetricKeyType: "rsa", asymmetricKeyDetails: { modulusLength: 1024 } }),
+    ).toBe("too_small")
   })
 
   it("is shown by the fingerprint GitHub shows: SHA-256 of the public key, in Base64", () => {
