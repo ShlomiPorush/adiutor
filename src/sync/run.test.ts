@@ -465,9 +465,10 @@ describe("run", () => {
 
   it("counts the last good sync by T3 alone, also from a status an older engine wrote", async () => {
     mkdirSync(data(), { recursive: true })
+    // The stored time is later than the run (the clock was set back since): the run with T3 accepted still wins.
     const older = {
       v: 1,
-      lastGoodSyncAt: "2026-11-10T06:00:00.000Z",
+      lastGoodSyncAt: "2026-11-14T06:00:00.000Z",
       lastRun: {
         startedAt: "2026-11-12T05:59:00.000Z",
         finishedAt: "2026-11-12T06:00:00.000Z",
@@ -475,7 +476,7 @@ describe("run", () => {
         requestId: null,
         t3: { result: "accepted", projectsFrom: "t3", projectsAt: null, projects: 2, threads: 3, failedProjects: 0 },
         security: { result: "failed", reason: "no_overview" },
-        lastGoodSyncAt: "2026-11-10T06:00:00.000Z",
+        lastGoodSyncAt: "2026-11-14T06:00:00.000Z",
       },
     }
     writeFileSync(join(data(), "status.json"), JSON.stringify(older))
