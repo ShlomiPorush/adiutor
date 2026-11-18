@@ -1,5 +1,5 @@
 # Toolchain used by every workflow script and by CI, so the host needs only Docker.
-FROM node:26.13.0-bookworm-slim
+FROM node:26.13.1-bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git jq openssl shellcheck shfmt \
