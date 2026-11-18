@@ -23,7 +23,7 @@ import { DEFAULT_T3_URL, dataDir, envFileToRead, type Resolved, resolveSettings 
 import { readStatus, runningSince, takeRunLock } from "./state.ts"
 import { t3Session } from "./t3-session.ts"
 
-export const USAGE = `Usage: node adiutor-sync.js run [--env <file>] [--overview <dir>] [--no-collect] [--dry-run] [--request <id>] [--json]
+export const USAGE = `Usage: node adiutor-sync.js run [--env <file>] [--dry-run] [--request <id>] [--json]
        node adiutor-sync.js status [--url <url>] [--env <file>] [--json]
        node adiutor-sync.js connect --name <name> [--url <url>] [--env <file>] [--replace] [--no-open] [--json]
        node adiutor-sync.js disconnect [--url <url>] [--env <file>] [--json]
@@ -33,18 +33,17 @@ export const USAGE = `Usage: node adiutor-sync.js run [--env <file>] [--overview
        node adiutor-sync.js hold-run [--env <file>] [--json]
        node adiutor-sync.js setup-mcp --for <claude|codex> [--url <url>] [--env <file>]
 
-run: runs the overview collector, reads T3's projects with the sync's T3 session and every project's threads through
-the T3 CLI, and sends both to Adiutor. One run at a time: a second one answers that a run is going.
+run: reads T3's projects with the sync's T3 session and every project's threads through the T3 CLI, and sends
+them to Adiutor. Security data is not the sync's: the Adiutor server reads GitHub itself. One run at a time: a second
+one answers that a run is going.
 
-  --overview <dir>   overview checkout (default: ADIUTOR_OVERVIEW_DIR)
   --env <file>       KEY=VALUE file with the settings below (default: the sync.env that connect writes, if any)
-  --no-collect       do not run the collector; use the newest existing snapshot
   --dry-run          print payload sizes and a sample; send nothing
   --request <id>     the sync request from Adiutor this run serves (from checkin); named in the run's report
   --json             one JSON object per line: events, then one result (see docs/sync.md)
 
-Settings: ADIUTOR_URL, T3CODE_CLI_PATH (default: T3's own install), ADIUTOR_T3_URL (default: ${DEFAULT_T3_URL}),
-ADIUTOR_OVERVIEW_DIR: an option, the env file, the environment, then the settings file in the sync's data folder.
+Settings: ADIUTOR_URL, T3CODE_CLI_PATH (default: T3's own install), ADIUTOR_T3_URL (default: ${DEFAULT_T3_URL}): an
+option, the env file, the environment, then the settings file in the sync's data folder.
 Exit code: 0 when something was sent, 1 when nothing could be sent, 2 for bad arguments or settings.
 
 status: the Adiutor connection, the T3 session, the last run and the last good sync. Nothing is sent.
@@ -100,9 +99,7 @@ const COMMANDS: readonly string[] = [
 ]
 
 type Values = {
-  overview?: string
   env?: string
-  "no-collect"?: boolean
   "dry-run"?: boolean
   name?: string
   for?: string
@@ -127,9 +124,7 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
         allowPositionals: true,
         strict: true,
         options: {
-          overview: { type: "string" },
           env: { type: "string" },
-          "no-collect": { type: "boolean" },
           "dry-run": { type: "boolean" },
           name: { type: "string" },
           for: { type: "string" },
@@ -201,7 +196,6 @@ export async function main(argv: string[], deps: MainDeps): Promise<number> {
         }
         const { exit, body } = await runSync(
           {
-            collect: !values["no-collect"],
             dryRun: values["dry-run"] === true,
             settings,
             oldToken: resolved.oldTokenValue !== undefined,
@@ -265,7 +259,7 @@ async function settingsFor(
     envFileFirst: target?.required === true && requireEnvFile,
     ...(target ? { envFile: target.path } : {}),
     now: deps.now().getTime(),
-    flags: { url: values.url, overviewDir: values.overview },
+    flags: { url: values.url },
   })
   const oldToken = (vars.ADIUTOR_AGENT_TOKEN ?? deps.env.ADIUTOR_AGENT_TOKEN ?? "").trim()
   return { settings, ...(oldToken ? { oldTokenValue: oldToken } : {}) }
@@ -349,7 +343,6 @@ async function statusCommand(settings: Resolved, deps: MainDeps, out: Output): P
         adiutorUrl: { value: settings.url ?? null, source: settings.sources.url },
         t3CliPath: { value: settings.cliPath, source: settings.sources.cliPath },
         t3Url: { value: settings.t3Url ?? null, source: settings.sources.t3Url },
-        overviewDir: { value: settings.overviewDir ?? null, source: settings.sources.overviewDir },
       },
     },
   }
@@ -369,11 +362,7 @@ async function statusCommand(settings: Resolved, deps: MainDeps, out: Output): P
         : "not connected"
   out.say(`T3: ${t3Said}${t3.revocationPending ? "; a revocation is still pending" : ""}`)
   const last = kept.lastRun
-  out.say(
-    last
-      ? `Last run: ${last.finishedAt}: T3 ${last.t3.result}, security ${last.security.result}`
-      : "Last run: none recorded",
-  )
+  out.say(last ? `Last run: ${last.finishedAt}: T3 ${last.t3.result}` : "Last run: none recorded")
   out.say(`Last good sync: ${kept.lastGoodSyncAt ?? "none recorded"}`)
   if (body.running) out.say(`A run is going since ${body.running.startedAt}`)
   if (body.paused) out.say(`Paused ${body.paused.until ? `until ${body.paused.until}` : "until resumed"}`)

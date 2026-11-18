@@ -164,11 +164,11 @@ describe("pushing", () => {
     const { client } = await connected(u)
     const listings = fake.counts.listing
     expect(await client.push("/api/v1/sync/t3", { a: 1 })).toMatchObject({ kind: "answer", status: 200 })
-    expect(await client.push("/api/v1/sync/security", { b: 2 })).toMatchObject({ kind: "answer", status: 200 })
+    expect(await client.push("/api/v1/sync/t3", { b: 2 })).toMatchObject({ kind: "answer", status: 200 })
     expect(fake.counts.listing - listings).toBe(1)
     expect(fake.pushes.map((p) => [p.path, p.policy, p.kind])).toEqual([
       ["/api/v1/sync/t3", fake.revision, "act"],
-      ["/api/v1/sync/security", fake.revision, "act"],
+      ["/api/v1/sync/t3", fake.revision, "act"],
     ])
   })
 

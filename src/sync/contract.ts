@@ -1,10 +1,11 @@
 // The sync's machine-readable output (`--json`), the contract the tray reads: one JSON object per line on stdout,
 // events first, then exactly one result object, and nothing else. Without --json the same commands print their human
 // lines as before. No line ever holds a token. The sync names projects by id and puts no T3 title or path in a line;
-// a failure's message can pass on the last error line the T3 CLI or the collector printed.
+// a failure's message can pass on the last error line the T3 CLI printed.
 // Described in docs/sync.md, "Machine-readable output".
 
-export const CONTRACT_VERSION = 1
+/** 2: a run has no security part (the Adiutor server reads GitHub itself), and `status` no overview folder. */
+export const CONTRACT_VERSION = 2
 
 export type Command =
   | "status"
@@ -16,7 +17,10 @@ export type Command =
   | "checkin"
   | "hold-run"
 
-/** What one part of a run (T3 or security) came to. */
+/**
+ * What a part of a run came to. A run has one part, T3; a check-in still reports a security part for each finished
+ * request, always `not_run` (the server reads GitHub itself, and Adiutor's check-in takes both).
+ */
 export type PartResult = "accepted" | "partial" | "failed" | "outcome_unknown" | "not_run"
 
 /** A human line, and the approval link of `connect`. */
@@ -71,23 +75,6 @@ export type T3Part = {
   failedProjects: number
 }
 
-export type SecurityPart = {
-  result: PartResult
-  reason?: string
-  message?: string
-  httpStatus?: number
-  /** The overview snapshot that was sent, and when its collection finished. */
-  snapshotRunId: string | null
-  snapshotAt: string | null
-  repos: number
-  /**
-   * Where the repositories came from: this run's T3 project list, or, when T3 was not read, the last good list
-   * (projectsAt is then its time). Security reads nothing from T3; the list only maps projects to repositories.
-   */
-  projectsFrom: "t3" | "last_good" | null
-  projectsAt: string | null
-}
-
 export type RunReport = {
   startedAt: string
   finishedAt: string
@@ -95,8 +82,7 @@ export type RunReport = {
   /** The sync request from Adiutor this run served (`run --request <id>`), or null. */
   requestId: string | null
   t3: T3Part
-  security: SecurityPart
-  /** The last run in which both parts were accepted, this one included. */
+  /** The last run in which T3 was accepted, this one included. */
   lastGoodSyncAt: string | null
 }
 
@@ -151,7 +137,7 @@ export type StatusBody = {
   settings: {
     problems: string[]
     /** Each setting as this engine uses it, by the settings file's key. */
-    values: Record<"adiutorUrl" | "t3CliPath" | "t3Url" | "overviewDir", EffectiveSetting>
+    values: Record<"adiutorUrl" | "t3CliPath" | "t3Url", EffectiveSetting>
   }
 }
 
