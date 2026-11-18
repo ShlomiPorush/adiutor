@@ -481,7 +481,10 @@ describe("run", () => {
     writeFileSync(join(data(), "status.json"), JSON.stringify(older))
     const { deps: d, lines } = deps()
     const status = await json(["status"], d, lines)
-    expect(status.result).toMatchObject({ lastGoodSyncAt: "2026-11-12T06:00:00.000Z" })
+    expect(status.result).toMatchObject({
+      lastGoodSyncAt: "2026-11-12T06:00:00.000Z",
+      lastRun: { lastGoodSyncAt: "2026-11-12T06:00:00.000Z" },
+    })
     expect(status.result.lastRun).not.toHaveProperty("security")
   })
 

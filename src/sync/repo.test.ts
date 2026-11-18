@@ -7,7 +7,6 @@ describe("resolveRepo", () => {
     const project: T3Project = {
       id: "p",
       title: "",
-      workspaceRoot: "C:\\Elsewhere",
       repositoryIdentity: { provider: "GitHub", owner: "acme", name: "widget.js" },
     }
     expect(resolveRepo(project)).toBe("acme/widget.js")
@@ -17,8 +16,7 @@ describe("resolveRepo", () => {
     const local: T3Project = {
       id: "p",
       title: "",
-      workspaceRoot: "c:/work/gadget/",
-      repositoryIdentity: { provider: "unknown", owner: "dev", name: "gadget", rootPath: "c:/work/gadget" },
+      repositoryIdentity: { provider: "unknown", owner: "dev", name: "gadget" },
     }
     expect(resolveRepo(local)).toBeUndefined()
     expect(resolveRepo({ id: "p", title: "" })).toBeUndefined()

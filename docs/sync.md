@@ -66,7 +66,7 @@ node dist/sync/adiutor-sync.js hold-run [--env <file>] [--json]
 - **A lost answer** (`outcome_unknown`) is safe: a check-in is a state report, so the next one sends the same report and Adiutor answers the same claim again. `checkin` does not take the run lock.
 - **The activity log**: every agent call is audited (owner's decision D-T2), so one check-in a minute is one row a minute (about 1,440 a day): the engine keeps the endpoints listing (below) and reads it again only when it must. Run by hand, `checkin` reads stdin to its end: pipe or redirect the report, or it waits.
 - **An older Adiutor**, whose endpoints listing has the sync's pushes but no check-in, is answered `server_older` (exit 1) without sending anything: requests from Adiutor are not available there, and the tray says so. Adiutor's other refusals are passed on with their code.
-- The result: `{"type":"result","v":1,"command":"checkin","ok":...,"claim":{"requestId","receivedAt"}|null}`; with `ok` false, `error` and the claim kept from an earlier check-in, if any. Exit code 0 when Adiutor answered, 1 when not, 2 for bad arguments or a bad report.
+- The result: `{"type":"result","v":2,"command":"checkin","ok":...,"claim":{"requestId","receivedAt"}|null}`; with `ok` false, `error` and the claim kept from an earlier check-in, if any. Exit code 0 when Adiutor answered, 1 when not, 2 for bad arguments or a bad report.
 
 ## The tray app
 
@@ -107,7 +107,7 @@ node dist/sync/adiutor-sync.js checkin [--url <url>] [--env <file>] [--json] < r
 With `--json`, a command writes one JSON object per line on stdout and nothing else: events, then exactly one result, also after a failure. The types are in `src/sync/contract.ts`. No line holds a token. The sync names projects by id and puts no T3 title or path in a line; a failure's message can pass on the last error line the T3 CLI printed. The contract is version 2 (`v`): a run has no security part, and `status` no overview folder.
 
 - **Events:** `{"type":"event","event":"message","text":...}` for each human line, for `connect` `{"type":"event","event":"approval","link":...,"userCode":"ABCD-EFGH"}`, and for `hold-run` `{"type":"event","event":"held"}` once it holds the run lock.
-- **Result:** `{"type":"result","v":1,"command":...,"ok":...}` with, by command:
+- **Result:** `{"type":"result","v":2,"command":...,"ok":...}` with, by command:
   - `status`: `adiutor` (`state`: `connected`, `not_connected` or `ended`; `url`, `label`, `scope`, `revocationPending`), `t3` (`state`: `connected`, `not_connected` or `ended`; `reason` `rejected` or `other_environment`; `environmentId`, `expiresAt`, `revocationPending`), `lastRun` (the last run's report), `lastGoodSyncAt`, `running` (`{startedAt}` while a run holds the lock), `paused` (the settings file's pause), `claim` (a sync request from Adiutor kept to run, or null), `settings.problems`, and `settings.values`: each setting as the engine uses it, by the settings file's key (`adiutorUrl`, `t3CliPath`, `t3Url`), as `{value, source}` with `source` one of `option`, `environment`, `envFile` (`--env`, or the default `sync.env`), `settingsFile` or `default`. The tray shows these values, and locks a field set by the environment or an env file.
   - `connect`: `state` (`connected`, `already_connected`, `not_connected`), `scope`.
   - `disconnect`, `t3-disconnect`: `wasConnected`, `revocationPending`.

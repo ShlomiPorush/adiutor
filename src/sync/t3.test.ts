@@ -15,8 +15,7 @@ describe("parseProjectList", () => {
     expect(file.projects[0]).toEqual({
       id: "p-widget",
       title: "Widget",
-      workspaceRoot: "C:\\Work\\Widget",
-      repositoryIdentity: { provider: "github", owner: "acme", name: "widget", rootPath: "C:/Work/Widget" },
+      repositoryIdentity: { provider: "github", owner: "acme", name: "widget" },
     })
     expect(file.projects[1]?.repositoryIdentity).toBeUndefined()
   })

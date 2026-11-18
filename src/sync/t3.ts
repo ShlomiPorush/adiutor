@@ -5,12 +5,11 @@ import { asArray, asObject, asString, asTime, type JsonObject, parseJson } from 
 // and each project's threads from `t3 thread list --project <id> --json`. Top-level and child threads are both kept;
 // the server folds child threads into their parent's item. Everything read is untrusted data, passed on only as JSON.
 
-export type RepositoryIdentity = { provider?: string; owner?: string; name?: string; rootPath?: string }
+export type RepositoryIdentity = { provider?: string; owner?: string; name?: string }
 
 export type T3Project = {
   id: string
   title: string
-  workspaceRoot?: string
   repositoryIdentity?: RepositoryIdentity
 }
 
@@ -38,16 +37,14 @@ function identity(value: unknown): RepositoryIdentity | undefined {
     provider: asString(data.provider),
     owner: asString(data.owner),
     name: asString(data.name),
-    rootPath: asString(data.rootPath),
   }
 }
 
-/** One project record as the sync keeps it: id, title, folder and repository identity. */
+/** One project record as the sync keeps it: id, title and repository identity (no local folder: nothing reads it). */
 export function projectFrom(data: JsonObject, id: string): T3Project {
   return {
     id,
     title: asString(data.title) ?? "",
-    workspaceRoot: asString(data.workspaceRoot),
     repositoryIdentity: identity(data.repositoryIdentity),
   }
 }

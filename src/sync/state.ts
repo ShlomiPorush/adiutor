@@ -106,9 +106,10 @@ export function readStatus(dir: string): StatusFile {
     const run = Object.keys(lastRun).length > 0 ? (lastRun as unknown as RunReport) : null
     // The last good sync is the last run with T3 accepted. An older engine counted only runs where security was
     // accepted too: its last run counts when T3 was accepted in it.
-    const kept = asTime(root?.lastGoodSyncAt)
     const t3Good = run?.t3?.result === "accepted" ? asTime(run.finishedAt) : null
-    const lastGoodSyncAt = kept && t3Good ? (Date.parse(t3Good) > Date.parse(kept) ? t3Good : kept) : (kept ?? t3Good)
+    const lastGoodSyncAt = t3Good ?? asTime(root?.lastGoodSyncAt)
+    // The report says the same as the status: an older engine's report kept its own, both-parts time.
+    if (run) run.lastGoodSyncAt = lastGoodSyncAt
     return { v: 1, lastRun: run, lastGoodSyncAt }
   } catch {
     return { v: 1, lastRun: null, lastGoodSyncAt: null }
