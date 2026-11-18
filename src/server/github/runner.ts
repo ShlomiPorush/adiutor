@@ -28,7 +28,7 @@ export type PullSummary =
 export type LastPull = {
   finishedAt: Date
   installations: InstallationRead[]
-  moved: { projectId: string; from: string; to: string }[]
+  moved: { projectId: string; version: number; to: string }[]
 }
 
 export type GitHubRunnerDeps = {
@@ -199,7 +199,9 @@ export class GitHubRunner {
     this.last = {
       finishedAt: ctx.clock(),
       installations: read.installations,
-      moved: read.projects.flatMap((p) => (p.movedTo ? [{ projectId: p.projectId, from: p.repo, to: p.movedTo }] : [])),
+      moved: read.projects.flatMap((p) =>
+        p.movedTo ? [{ projectId: p.projectId, version: p.version, to: p.movedTo }] : [],
+      ),
     }
     log.info("github pull", { outcome: applied.outcome, ...applied.counts })
     return { result: "written", runId: applied.runId, outcome: applied.outcome }

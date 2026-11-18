@@ -394,7 +394,8 @@ describe("a pull", () => {
       message: "API rate limit exceeded",
       headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) },
     }
-    expect(await handle.runner.pull()).toMatchObject({ result: "written", outcome: "partial" })
+    // Nothing about the one project could be read before the limit: the pull failed, and wrote the attempts.
+    expect(await handle.runner.pull()).toMatchObject({ result: "written", outcome: "failed" })
     expect(await family(widget.id, "dependabot")).toMatchObject({ coverage: "error" })
     const sent = standIn.requests.length
     await expect(handle.runner.readNow()).rejects.toMatchObject({ code: "github_rate_limited" })
@@ -600,5 +601,50 @@ describe("review round 1", () => {
       ...(await t.ctx.db.execute<{ n: number }>(sql`select count(*)::int as n from security_sources`)),
     ]
     expect(n).toBe(600)
+  })
+
+  it("keeps the stored counts when the name led to another repository while the lists were read", async () => {
+    await setUp()
+    const widget = await project("Widget", "example-org/widget")
+    await handle.runner.pull()
+    const repo = standIn.scenario.repos["example-org/widget"] as Scenario["repos"][string]
+    repo.dependabot = { alerts: [] }
+    repo.restId = 7999
+    await handle.runner.pull()
+    expect(await family(widget.id, "dependabot")).toMatchObject({ coverage: "enabled", critical: 1, attempt: "error" })
+  })
+
+  it("counts an alert that a page-number list shows twice once", async () => {
+    await setUp()
+    const gadget = await project("Gadget", "example-org/gadget")
+    ;(standIn.scenario.repos["example-org/gadget"] as Scenario["repos"][string]).code_scanning = {
+      alerts: [
+        { number: 1, rule: { security_severity_level: "high" } },
+        { number: 1, rule: { security_severity_level: "high" } },
+        { number: 2, rule: { security_severity_level: "low" } },
+      ],
+      pageSize: 1,
+    }
+    await handle.runner.pull()
+    expect(await family(gadget.id, "code_scanning")).toMatchObject({ coverage: "enabled", high: 1, low: 1 })
+  })
+
+  it("is failed when nothing about any project could be read", async () => {
+    await setUp()
+    await project("Widget", "example-org/widget")
+    const repo = standIn.scenario.repos["example-org/widget"] as Scenario["repos"][string]
+    for (const f of ["dependabot", "code_scanning", "secret_scanning"] as const) repo[f] = { status: 502 }
+    repo.issues = "error"
+    expect(await handle.runner.pull()).toMatchObject({ result: "written", outcome: "failed" })
+  })
+
+  it("does not carry the old key's verification to a new key saved without an App id", async () => {
+    await saveGitHubApp(t.ctx, owner, deps(), { generation: 0, appId: APP_ID, privateKey: keys.privateKey })
+    const row = await saveGitHubApp(t.ctx, owner, deps(), {
+      generation: 1,
+      appId: null,
+      privateKey: otherKeys.privateKey,
+    })
+    expect(row.githubKeyVerified).toBe(false)
   })
 })

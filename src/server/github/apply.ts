@@ -99,7 +99,9 @@ export function pullOutcome(read: PullRead, skipped: number): SyncOutcome {
     ...ALERT_FAMILIES.map((f) => p.families[f].coverage !== "error"),
     p.issues.kind !== "error",
   ])
-  const anyRead = reads.some(Boolean) || read.installations.some((i) => i.state !== "error")
+  // Installations answering is enough only when there is no project to read.
+  const anyRead =
+    reads.some(Boolean) || (read.projects.length === 0 && read.installations.some((i) => i.state !== "error"))
   if (!anyRead) return "failed"
   if (installationsKnown && reads.every(Boolean) && skipped === 0 && read.stopped === null) return "succeeded"
   return "partial"

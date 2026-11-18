@@ -32,6 +32,8 @@ export type StandInRepo = {
   issues?: number | "error"
   /** The database id GraphQL answers, when it differs from the inventory's. */
   graphqlId?: number
+  /** The id GET /repos/{owner}/{repo} answers, when the name now leads to another repository. */
+  restId?: number
   /** The installation GitHub names for the repository (null: none). */
   appInstallation?: number | null
   dependabot?: FamilyMode

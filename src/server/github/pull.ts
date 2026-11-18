@@ -184,8 +184,12 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
 
   /** Records a failure that stops the whole pull; answers the code to record for the read it ended. */
   const stopOn = (failure: Failure): string | null => {
-    if (failure.kind === "rate_limit") result.stopped ??= { kind: "rate_limit", until: failure.until }
-    else if (failure.kind === "aborted") result.stopped ??= { kind: "aborted" }
+    if (failure.kind === "rate_limit") {
+      // Requests already under way may each come back limited: the latest end holds.
+      if (result.stopped === null) result.stopped = { kind: "rate_limit", until: failure.until }
+      else if (result.stopped.kind === "rate_limit" && failure.until > result.stopped.until)
+        result.stopped.until = failure.until
+    } else if (failure.kind === "aborted") result.stopped ??= { kind: "aborted" }
     else if (failure.kind === "refused" && failure.code === "superseded") result.stopped ??= { kind: "superseded" }
     else return null
     return failureCode(failure)
@@ -397,6 +401,20 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
     }
   }
 
+  /** Null when the repository's name still leads to the id the inventory gave; else why not, as a code. */
+  const sameRepository = async (plan: Planned): Promise<string | null> => {
+    try {
+      const { data } = await ((plan.installation as Usable).client as Octokit).request("GET /repos/{owner}/{repo}", {
+        owner: plan.owner,
+        repo: plan.name,
+      })
+      return isObject(data) && data.id === plan.project.repoId ? null : "moved"
+    } catch (error) {
+      const failure = describeFailure(error, now())
+      return stopOn(failure) ?? failureCode(failure)
+    }
+  }
+
   const readFamily = async (plan: Planned, family: AlertFamily): Promise<FamilyRead> => {
     const installation = plan.installation as Usable
     if (installation.granted[PERMISSION[family]] !== "read") return { coverage: "no_access", asOf: now() }
@@ -410,6 +428,8 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
     }
     const counts = zero()
     const seen = new Set<string>()
+    // Page-number paging can show an alert twice when another opens meanwhile: each alert counts once, by its number.
+    const counted = new Set<number>()
     let cursor: Record<string, string> = {}
     let path: string | null = null
     for (let page = 0; page < MAX_PAGES; page++) {
@@ -450,6 +470,8 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
       if (!Array.isArray(response.data)) return { coverage: "error", code: "malformed" }
       for (const alert of response.data) {
         if (!isOpenAlert(alert)) return { coverage: "error", code: "malformed" }
+        if (counted.has(alert.number as number)) continue
+        counted.add(alert.number as number)
         counts[severity[family](alert)]++
       }
       const asOf = now()
@@ -477,6 +499,12 @@ export async function readGitHub(input: PullInput, options: PullOptions): Promis
   // 4. Alerts, four repositories at a time.
   await pool(planned, REPOS_AT_ONCE, async (plan) => {
     for (const family of ALERT_FAMILIES) plan.project.families[family] = await readFamily(plan, family)
+    if (ALERT_FAMILIES.every((family) => plan.project.families[family].coverage === "error")) return
+    // The lists are read by name: the name must still be the repository the inventory gave, or another repository
+    // that took it meanwhile was read. Asked after the lists (Metadata comes with every installation).
+    const problem = await sameRepository(plan)
+    if (problem)
+      for (const family of ALERT_FAMILIES) plan.project.families[family] = { coverage: "error", code: problem }
   })
 
   // 5. Open Issues counts, by GraphQL per installation, up to 25 repositories a query. A repository renamed since the

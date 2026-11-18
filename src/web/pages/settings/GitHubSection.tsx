@@ -184,8 +184,11 @@ function AppGroup({ view, form }: { view: GitHubView; form: GitHubForm }) {
   const { t } = useI18n()
   const { draft, set, ids, fieldError, invalid } = form
   const { appId, key } = view.settings
-  const edit = (patch: GitHubDraft) =>
-    set(draft.githubBasedOn === undefined ? { ...patch, githubBasedOn: view.settings.generation } : patch)
+  const edit = (patch: GitHubDraft) => {
+    const next = { ...draft, ...patch }
+    const empty = next.githubAppId === undefined && next.githubKey === undefined
+    set({ ...patch, githubBasedOn: empty ? undefined : (draft.githubBasedOn ?? view.settings.generation) })
+  }
   const appLock = appId.locked ? { variable: appId.variable } : null
   const keyLock = key.locked ? { variable: key.variable } : null
   // A locked field shows what the environment sets, never an edit made before it was locked.

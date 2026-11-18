@@ -259,7 +259,7 @@ A cursor belongs to the filters of the page that gave it: with other filters it 
 | --------------------- | ----- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `POST /threads/start` | any   | `{threadId, parentThreadId (required, null for a top-level thread), title, projectId?, t3ProjectId?, itemId?}` | `{item: Item, created, linked}`: `201` when an item was created, else `200` |
 | `POST /sync/t3`       | token | T3 snapshot (below)                                                                                            | `SyncResult`                                                                |
-| `GET /sync/runs`      | any   | `limit?` (default 20)                                                                                          | `SyncRun[]`, newest first                                                   |
+| `GET /sync/runs`      | any   | `limit?` (default 20), `kind?` (`t3`, `security` or `github`: one kind only)                                   | `SyncRun[]`, newest first                                                   |
 
 **Start of thread**, in one transaction: refuses `not_top_level` when `parentThreadId` is set; returns the item already linked to `threadId` (also on a retry or a race); otherwise links `itemId`, or creates a `task` in `projectId`, or in the project whose `t3ProjectId` matches, or in the inbox. The item is set `in_progress` (a closed item reopens). `suppressed` when the owner deleted this thread's item; `conflict` when `itemId` differs from the item the thread is linked to.
 

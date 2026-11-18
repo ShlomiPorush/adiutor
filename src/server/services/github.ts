@@ -134,12 +134,19 @@ export async function saveGitHubApp(ctx: Ctx, by: By, deps: GitHubDeps, patch: G
   const appId = patch.appId !== undefined ? patch.appId : current.appId
   const pem = key !== undefined ? (key?.pem ?? null) : current.privateKey
   let verified: boolean | undefined
+  /** GitHub was asked about a new key and did not answer: it must not replace a key GitHub accepted. */
+  let unanswered = false
   if (appId && pem && (patch.appId !== undefined || key !== undefined)) {
     const answer = await checkKey(deps.origin, appId, pem)
     if (answer === "ok") verified = true
     else if (key && current.view.key.verified === true) throw unreachable()
-    else verified = false
+    else {
+      verified = false
+      unanswered = key !== undefined && key !== null
+    }
   }
+  // Not checked (no App id with it): a new key, or the key under another App id, is not verified.
+  if (verified === undefined && (key || patch.appId !== undefined)) verified = false
 
   return commit(
     ctx,
@@ -148,8 +155,7 @@ export async function saveGitHubApp(ctx: Ctx, by: By, deps: GitHubDeps, patch: G
     patch.generation,
     (before) => {
       // Read again under the lock: a pull may have marked the stored key verified while GitHub was being asked.
-      if (key && verified === false && before.githubPrivateKeyEnc !== null && before.githubKeyVerified)
-        throw unreachable()
+      if (unanswered && before.githubPrivateKeyEnc !== null && before.githubKeyVerified) throw unreachable()
       return {
         ...(patch.appId !== undefined ? { githubAppId: patch.appId } : {}),
         ...(key !== undefined
@@ -274,7 +280,9 @@ export async function gitHubView(ctx: Ctx, deps: GitHubDeps, runner: GitHubRunne
     .from(projects)
     .where(isNull(projects.githubRepo))
     .orderBy(asc(projects.name))
-  const named = await ctx.db.select({ id: projects.id, name: projects.name, repo: projects.githubRepo }).from(projects)
+  const named = await ctx.db
+    .select({ id: projects.id, name: projects.name, repo: projects.githubRepo, version: projects.githubRepoVersion })
+    .from(projects)
   const pulls = runner.state()
   const installations = github.installations.map((installation) => {
     const read = pulls.last?.installations.find((i) => i.id === installation.id)
@@ -314,7 +322,7 @@ export async function gitHubView(ctx: Ctx, deps: GitHubDeps, runner: GitHubRunne
     moved: (pulls.last?.moved ?? []).flatMap((m) => {
       const p = named.find((row) => row.id === m.projectId)
       // Only while the project is still bound to the repository the pull read: an edit since then answered it.
-      return p && p.repo === m.from ? [{ id: p.id, name: p.name, repo: p.repo, movedTo: m.to }] : []
+      return p && p.version === m.version ? [{ id: p.id, name: p.name, repo: p.repo, movedTo: m.to }] : []
     }),
     withoutRepo,
   }
