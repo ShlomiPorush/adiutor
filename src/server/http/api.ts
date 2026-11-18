@@ -374,7 +374,8 @@ export function apiRoutes(
     return c.json({ data: await sendTestMorningMessage(ctx, byOf(c), deps.config.publicUrl, send) })
   })
   // --- Owner only: the server's GitHub reading ---
-  if (deps.github) githubRoutes(api, { ctx, env: deps.settings.env, github: deps.github })
+  if (deps.github)
+    githubRoutes(api, { ctx, env: deps.settings.env, github: deps.github, publicUrl: deps.config.publicUrl })
   return api
 }
 

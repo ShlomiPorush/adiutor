@@ -69,6 +69,8 @@ export const TELEGRAM_CHAT_ID = /^-?\d{1,20}$/
 export const GITHUB_ID = /^[1-9][0-9]{0,15}$/
 /** GitHub's API, which the server reads through the owner's App only; tests point it at a stand-in by a flag. */
 export const DEFAULT_GITHUB_API_ORIGIN = "https://api.github.com"
+/** GitHub's web pages: the App's creation from its manifest and its install page; tests point it elsewhere by a flag. */
+export const DEFAULT_GITHUB_WEB_ORIGIN = "https://github.com"
 
 /** One domain name, lowercased, without leading or trailing dots. */
 export const DOMAIN_NAME = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
@@ -308,12 +310,26 @@ export const githubMeantOn = (overrides: EnvOverrides) =>
  * verification stack passes it, to point the server at a stand-in. Production's command has no such flag.
  */
 export function githubApiOrigin(argv: readonly string[]): string {
-  const prefix = "--github-api-origin="
+  return originFlag(argv, "github-api-origin", DEFAULT_GITHUB_API_ORIGIN)
+}
+
+/**
+ * GitHub's web origin from the command line (`--github-web-origin=<origin>`), never from the environment: where the
+ * browser posts the App's manifest and installs the App, and the `form-action` of the UI's pages. Production's command
+ * has no such flag.
+ */
+export function githubWebOrigin(argv: readonly string[]): string {
+  return originFlag(argv, "github-web-origin", DEFAULT_GITHUB_WEB_ORIGIN)
+}
+
+/** An http or https origin from a command-line flag (`--<name>=<origin>`), or `fallback` without the flag. */
+function originFlag(argv: readonly string[], name: string, fallback: string): string {
+  const prefix = `--${name}=`
   const flag = argv.find((arg) => arg.startsWith(prefix))
-  if (flag === undefined) return DEFAULT_GITHUB_API_ORIGIN
+  if (flag === undefined) return fallback
   const value = flag.slice(prefix.length)
   const url = URL.canParse(value) ? new URL(value) : undefined
   if (!url || (url.protocol !== "https:" && url.protocol !== "http:") || url.origin !== value.replace(/\/+$/, ""))
-    throw new ConfigError("--github-api-origin must be an http or https origin, without a path")
+    throw new ConfigError(`--${name} must be an http or https origin, without a path`)
   return url.origin
 }

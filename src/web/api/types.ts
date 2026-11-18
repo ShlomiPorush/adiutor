@@ -49,6 +49,11 @@ export const API_ERROR_CODES = [
   "github_key_required",
   "github_not_set_up",
   "github_rate_limited",
+  "github_create_expired",
+  "github_code_rejected",
+  "github_app_invalid",
+  "github_installation_suspended",
+  "github_installation_too_broad",
   "internal_error",
 ] as const
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
@@ -632,3 +637,19 @@ export type GitHubView = {
 
 /** PATCH /github/app: the App id, the pasted key (null removes the stored one), or both. */
 export type GitHubAppPatch = { appId?: string | null; privateKey?: string | null }
+
+/** POST /github/create: the form Settings posts to GitHub, its address (with the state) and the manifest's JSON. */
+export type GitHubCreateForm = { action: string; manifest: string }
+
+/** POST /github/create/finish: the account that owns the new App, and the view with the App saved. */
+export type GitHubCreated = { owner: { login: string; type: string | null }; view: GitHubView }
+
+/** What adding an installation would come to: already_added when it is on the list. */
+export type GitHubPreviewState = "usable" | "too_broad" | "suspended" | "already_added"
+
+/** GET /github/installations/:id/preview: an installation as GitHub answers it, before it is added. */
+export type GitHubInstallationPreview = {
+  id: number
+  account: { login: string; type: string }
+  state: GitHubPreviewState
+}

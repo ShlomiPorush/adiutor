@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit"
 import { HTTPException } from "hono/http-exception"
 import { type AgentChannel, createAgentChannel, REFUSALS } from "./agents/channel.ts"
 import type { AuthHolder } from "./auth/auth.ts"
-import type { ServerConfig } from "./config.ts"
+import { DEFAULT_GITHUB_WEB_ORIGIN, type ServerConfig } from "./config.ts"
 import { AppError, errorBody } from "./errors.ts"
 import { apiRoutes, type SettingsHandle } from "./http/api.ts"
 import { RateLimiter } from "./http/auth.ts"
@@ -160,7 +160,7 @@ export function createApp(deps: AppDeps) {
     app.route("/mcp", mcpRoutes(shared, agents))
   }
 
-  if (deps.web) webRoutes(app, deps.web.root)
+  if (deps.web) webRoutes(app, deps.web.root, deps.core?.github?.webOrigin ?? DEFAULT_GITHUB_WEB_ORIGIN)
 
   app.notFound((c) => c.json({ error: { code: "not_found", message: "Nothing is here." } }, 404))
   app.onError((error, c) => {

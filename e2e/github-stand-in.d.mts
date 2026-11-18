@@ -60,10 +60,15 @@ export type StandInRequest = {
   permissions?: string[]
 }
 
+/** What the conversion of a registered code answers: GitHub's 201 with `body` unless a status is given. */
+export type ConversionAnswer = { status?: number; body: unknown }
+
 export type StandIn = {
   origin: string
   scenario: Scenario
   requests: StandInRequest[]
+  /** The answer to POST /app-manifests/{code}/conversions for `code`, once; then the code is a 404. */
+  registerConversion(code: string, answer: ConversionAnswer): void
   close(): Promise<void>
 }
 
@@ -74,4 +79,6 @@ export function startGitHubStandIn(options: {
   host?: string
   port?: number
   scenario?: Scenario
+  /** The slug GET /app answers. */
+  slug?: string
 }): Promise<StandIn>

@@ -1,11 +1,13 @@
 import { generateKeyPairSync } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { githubApiOrigin, githubMeantOn, loadConfig } from "../config.ts"
+import { githubApiOrigin, githubMeantOn, githubWebOrigin, loadConfig } from "../config.ts"
 import { testSecret } from "../testing/secrets.ts"
+import { contentSecurityPolicy } from "../web.ts"
 import { GitHubRefused, guardedFetch } from "./client.ts"
 import { describeFailure, graphqlRateLimit, restRateLimit } from "./errors.ts"
 import { GitHubGate } from "./gate.ts"
 import { keyFingerprint, keyProblem, normalizeKey, readPrivateKey } from "./key.ts"
+import { CREATION_TTL_MS, PendingCreation, readConversion } from "./manifest.ts"
 import { withinReadPermissions } from "./pull.ts"
 
 // The local parts of the GitHub reading: the key checks, the configuration, the rate-limit forms, the guarded fetch
@@ -78,6 +80,73 @@ describe("the configuration", () => {
     expect(githubApiOrigin(["--github-api-origin=http://github:8080"])).toBe("http://github:8080")
     expect(() => githubApiOrigin(["--github-api-origin=http://github:8080/api"])).toThrow(/without a path/)
     expect(() => githubApiOrigin(["--github-api-origin=file:///etc"])).toThrow()
+  })
+
+  it("takes the web origin only from its own flag, and lets the UI's pages post a form there alone", () => {
+    expect(githubWebOrigin([])).toBe("https://github.com")
+    expect(githubWebOrigin(["--github-api-origin=http://github:8080"])).toBe("https://github.com")
+    expect(githubWebOrigin(["--github-web-origin=http://github-web:8081"])).toBe("http://github-web:8081")
+    expect(() => githubWebOrigin(["--github-web-origin=http://github-web:8081/x"])).toThrow(/github-web-origin/)
+    expect(contentSecurityPolicy("https://github.com")).toContain("form-action 'self' https://github.com;")
+    expect(contentSecurityPolicy()).toContain("form-action 'self';")
+  })
+})
+
+describe("the App made from a manifest", () => {
+  const read = {
+    vulnerability_alerts: "read",
+    security_events: "read",
+    secret_scanning_alerts: "read",
+    issues: "read",
+    metadata: "read",
+  }
+  const answer = (change: Record<string, unknown> = {}) => ({
+    id: 123456,
+    slug: "adiutor-reader-0a1b",
+    owner: { login: "example-owner", type: "User" },
+    permissions: read,
+    events: [],
+    pem: rsa.privateKey,
+    ...change,
+  })
+
+  it("keeps the id, the slug, the owner and the key, and nothing else of the answer", () => {
+    const created = readConversion(answer({ client_secret: testSecret(), webhook_secret: testSecret() }))
+    expect("problem" in created).toBe(false)
+    if ("problem" in created) return
+    expect(Object.keys(created).sort()).toEqual(["appId", "key", "owner", "slug"])
+    expect(created).toMatchObject({
+      appId: "123456",
+      slug: "adiutor-reader-0a1b",
+      owner: { login: "example-owner", type: "User" },
+    })
+  })
+
+  it("refuses other permissions, events, a malformed answer and a key that is not the App's kind", () => {
+    expect(readConversion(answer({ permissions: { ...read, contents: "read" } }))).toEqual({ problem: "permissions" })
+    expect(readConversion(answer({ permissions: { metadata: "read" } }))).toEqual({ problem: "permissions" })
+    expect(readConversion(answer({ permissions: { ...read, issues: "write" } }))).toEqual({ problem: "permissions" })
+    expect(readConversion(answer({ events: ["issues"] }))).toEqual({ problem: "events" })
+    expect(readConversion(answer({ id: 0 }))).toEqual({ problem: "malformed" })
+    expect(readConversion(answer({ owner: { type: "User" } }))).toEqual({ problem: "malformed" })
+    expect(readConversion(answer({ slug: "../x" }))).toEqual({ problem: "malformed" })
+    expect(readConversion(null)).toEqual({ problem: "malformed" })
+    const ed = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString()
+    expect(readConversion(answer({ pem: ed }))).toEqual({ problem: "key" })
+  })
+
+  it("takes a state once, only the latest one, and only within the hour", () => {
+    const pending = new PendingCreation()
+    const now = new Date("2026-11-18T10:00:00Z")
+    const first = pending.start(3, now)
+    const second = pending.start(4, now)
+    expect(pending.take(first, now)).toBeNull()
+    expect(pending.take("other", now)).toBeNull()
+    expect(pending.take(second, now)).toEqual({ generation: 4 })
+    expect(pending.take(second, now)).toBeNull()
+    const late = pending.start(5, now)
+    expect(pending.take(late, new Date(now.getTime() + CREATION_TTL_MS))).toBeNull()
+    expect(pending.take(late, now)).toBeNull()
   })
 })
 

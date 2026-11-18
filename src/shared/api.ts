@@ -210,6 +210,12 @@ export const githubInstallationBody = z.object({
   installationId: githubId,
 })
 
+/** GitHub's return after it created the App from its manifest: the one-time code and the state Settings sent. */
+export const githubCreateFinishBody = z.object({
+  code: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),
+  state: z.string().min(1).max(200),
+})
+
 /** One request's result: what each part of the run that served it came to. */
 export const syncRequestResultSchema = z.object({ t3: syncPartResultSchema, security: syncPartResultSchema })
 

@@ -3888,6 +3888,12 @@ button.ui-item-title {
   color: var(--ui-muted);
   font-size: var(--ui-fs-meta);
 }
+/* A banner with more than one action (GitHub's return: Add and Close). */
+.ui-banner-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 /* Settings, GitHub: the pasted key reads as code; the stored key's state and its fingerprint on one line. */
 .ui-github-key {
   font-family: var(--ui-mono);

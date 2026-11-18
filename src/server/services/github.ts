@@ -3,11 +3,12 @@ import { GITHUB_ID } from "../config.ts"
 import { projects, type StoredInstallation, settings, syncRuns } from "../db/schema.ts"
 import { AppError, invalid } from "../errors.ts"
 import { GITHUB_RUN_KIND } from "../github/apply.ts"
-import { appClient } from "../github/client.ts"
+import { anonymousClient, appClient, type Octokit } from "../github/client.ts"
 import { describeFailure } from "../github/errors.ts"
 import { type GitHubGate, lockGitHubExclusive } from "../github/gate.ts"
 import { keyFingerprint, normalizeKey, pkcs8, readPrivateKey } from "../github/key.ts"
-import type { InstallationState } from "../github/pull.ts"
+import { APP_SLUG, appManifest, type PendingCreation, readConversion } from "../github/manifest.ts"
+import { type InstallationState, withinReadPermissions } from "../github/pull.ts"
 import type { GitHubRunner } from "../github/runner.ts"
 import { effectiveGitHub, GITHUB_KEY_COLUMN } from "../github/settings.ts"
 import { gitHubCoverage } from "../github/status.ts"
@@ -23,6 +24,9 @@ import { type By, type Ctx, requireOwner, writeAudit } from "./context.ts"
 const CHECK_TIMEOUT_MS = 10_000
 
 export type GitHubDeps = { env: SettingsEnv; gate: GitHubGate; origin: string }
+
+/** What creating the App from Settings needs besides: GitHub's web origin, the public URL and the pending creation. */
+export type GitHubCreateDeps = GitHubDeps & { webOrigin: string; publicUrl: URL; pending: PendingCreation }
 
 const locked = (variable: string) =>
   new AppError(
@@ -175,39 +179,28 @@ export async function saveGitHubApp(ctx: Ctx, by: By, deps: GitHubDeps, patch: G
   )
 }
 
-/**
- * Adds an installation to the allow-list by its id (from the address of its settings page on GitHub). The server
- * asks GitHub for that one installation as the App and stores the account it is bound to; it never lists the App's
- * installations, so a stranger's installation is never offered or read.
- */
-export async function addGitHubInstallation(
-  ctx: Ctx,
-  by: By,
-  deps: GitHubDeps,
-  input: { generation: number; installationId: number },
-): Promise<SettingsRow> {
-  requireOwner(by, "change the GitHub settings")
-  const { overrides, cipher } = deps.env
-  if (overrides.githubInstallations !== undefined) throw locked("ADIUTOR_GITHUB_INSTALLATIONS")
-  if (!GITHUB_ID.test(String(input.installationId)))
-    throw invalid("The installation id is the number at the end of the installation's address.", {
-      field: "installationId",
-    })
-  const current = effectiveGitHub(await getSettings(ctx.db), overrides, cipher)
-  if (!current.appId || !current.privateKey)
-    throw new AppError("github_not_set_up", "Set the App id and its key before adding an installation.")
-  if (current.installations.some((i) => i.id === input.installationId))
-    throw new AppError("conflict", "This installation is already on the list.")
-  const app = appClient(
+/** The App's client of the settings in effect, or `github_not_set_up` without an App id and a readable key. */
+function appOf(current: ReturnType<typeof effectiveGitHub>, deps: GitHubDeps, why: string): Octokit {
+  if (!current.appId || !current.privateKey) throw new AppError("github_not_set_up", why)
+  return appClient(
     { origin: deps.origin, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) },
     current.appId,
     current.privateKey,
   )
+}
+
+/** One installation of the App as GitHub answers it: its account, and whether it is suspended or too broad. */
+type InstallationRead = {
+  account: { id: number; type: string; login: string }
+  suspended: boolean
+  tooBroad: boolean
+}
+
+/** Asks GitHub, as the App, for that one installation; it never lists the App's installations. */
+async function readInstallation(app: Octokit, installationId: number): Promise<InstallationRead> {
   let data: unknown
   try {
-    ;({ data } = await app.request("GET /app/installations/{installation_id}", {
-      installation_id: input.installationId,
-    }))
+    ;({ data } = await app.request("GET /app/installations/{installation_id}", { installation_id: installationId }))
   } catch (error) {
     const failure = describeFailure(error, new Date())
     if (failure.kind === "status" && failure.status === 404)
@@ -220,21 +213,219 @@ export async function addGitHubInstallation(
   const account = isObject(data) && isObject(data.account) ? data.account : null
   if (
     !isObject(data) ||
-    data.id !== input.installationId ||
+    data.id !== installationId ||
     !account ||
     typeof account.id !== "number" ||
-    typeof account.type !== "string"
+    typeof account.type !== "string" ||
+    !isObject(data.permissions)
   )
     throw unreachable()
+  return {
+    account: {
+      id: account.id,
+      type: account.type,
+      login: typeof account.login === "string" ? account.login.slice(0, 100) : "",
+    },
+    suspended: Boolean(data.suspended_at),
+    tooBroad: !withinReadPermissions(data.permissions),
+  }
+}
+
+function checkInstallationId(installationId: number): void {
+  if (!GITHUB_ID.test(String(installationId)))
+    throw invalid("The installation id is the number at the end of the installation's address.", {
+      field: "installationId",
+    })
+}
+
+/**
+ * Adds an installation to the allow-list by its id (from the address of its settings page on GitHub, or from GitHub's
+ * return to Settings after an install). The server asks GitHub for that one installation as the App and stores the
+ * account it is bound to; it never lists the App's installations, so a stranger's installation is never offered or
+ * read. A suspended installation, or one granted more than the read permissions, is refused: it would never be read.
+ */
+export async function addGitHubInstallation(
+  ctx: Ctx,
+  by: By,
+  deps: GitHubDeps,
+  input: { generation: number; installationId: number },
+): Promise<SettingsRow> {
+  requireOwner(by, "change the GitHub settings")
+  const { overrides, cipher } = deps.env
+  if (overrides.githubInstallations !== undefined) throw locked("ADIUTOR_GITHUB_INSTALLATIONS")
+  checkInstallationId(input.installationId)
+  const current = effectiveGitHub(await getSettings(ctx.db), overrides, cipher)
+  const app = appOf(current, deps, "Set the App id and its key before adding an installation.")
+  if (current.installations.some((i) => i.id === input.installationId))
+    throw new AppError("conflict", "This installation is already on the list.")
+  const read = await readInstallation(app, input.installationId)
+  if (read.suspended)
+    throw new AppError("github_installation_suspended", "This installation is suspended on GitHub. Resume it there.")
+  if (read.tooBroad)
+    throw new AppError(
+      "github_installation_too_broad",
+      "This installation grants more than read access. Reduce the App's permissions to read only.",
+    )
   const entry: StoredInstallation = {
     id: input.installationId,
-    accountId: account.id,
-    accountType: account.type,
-    login: typeof account.login === "string" ? account.login.slice(0, 100) : "",
+    accountId: read.account.id,
+    accountType: read.account.type,
+    login: read.account.login,
   }
   return commit(ctx, by, deps, input.generation, (row) => ({
     githubInstallations: [...row.githubInstallations.filter((i) => i.id !== entry.id), entry],
   }))
+}
+
+/** What adding an installation would come to, as Settings shows it after GitHub's install page sent the browser back. */
+export type InstallationPreviewState = "usable" | "too_broad" | "suspended" | "already_added"
+
+/**
+ * An installation before it is added: its account and whether adding it would be accepted. GitHub's return names the
+ * installation in the address, which anyone can write, so the account shown comes from GitHub, read as the App, and
+ * nothing is stored: the owner's Add stores it.
+ */
+export async function previewGitHubInstallation(
+  ctx: Ctx,
+  by: By,
+  deps: GitHubDeps,
+  installationId: number,
+): Promise<{ id: number; account: { login: string; type: string }; state: InstallationPreviewState }> {
+  requireOwner(by, "read the GitHub settings")
+  checkInstallationId(installationId)
+  const current = effectiveGitHub(await getSettings(ctx.db), deps.env.overrides, deps.env.cipher)
+  const app = appOf(current, deps, "Set the App id and its key before adding an installation.")
+  const read = await readInstallation(app, installationId)
+  const state: InstallationPreviewState = current.installations.some((i) => i.id === installationId)
+    ? "already_added"
+    : read.suspended
+      ? "suspended"
+      : read.tooBroad
+        ? "too_broad"
+        : "usable"
+  return { id: installationId, account: { login: read.account.login, type: read.account.type }, state }
+}
+
+/**
+ * The address of GitHub's install page of the App: its slug is read from GitHub (`GET /app`) each time, never stored.
+ * GitHub sends the browser back to the App's setup URL (Settings, GitHub) with the installation's id.
+ */
+export async function gitHubInstallLink(ctx: Ctx, by: By, deps: GitHubCreateDeps): Promise<{ url: string }> {
+  requireOwner(by, "change the GitHub settings")
+  const { overrides, cipher } = deps.env
+  if (overrides.githubInstallations !== undefined) throw locked("ADIUTOR_GITHUB_INSTALLATIONS")
+  const current = effectiveGitHub(await getSettings(ctx.db), overrides, cipher)
+  const app = appOf(current, deps, "Set the App id and its key before installing the App.")
+  let data: unknown
+  try {
+    ;({ data } = await app.request("GET /app"))
+  } catch (error) {
+    const failure = describeFailure(error, new Date())
+    if (failure.kind === "status" && failure.status >= 400 && failure.status < 500 && failure.status !== 429)
+      throw rejected()
+    throw unreachable()
+  }
+  if (!isObject(data) || typeof data.slug !== "string" || !APP_SLUG.test(data.slug)) throw unreachable()
+  if (String(data.id) !== current.appId)
+    throw new AppError("github_app_mismatch", "The key belongs to another GitHub App than the App id.")
+  return { url: `${deps.webOrigin}/apps/${encodeURIComponent(data.slug)}/installations/new` }
+}
+
+const alreadySet = () =>
+  new AppError(
+    "conflict",
+    "A GitHub App is already set. To use another App, remove the App id and the key and set the new ones by hand.",
+  )
+
+/** The App is created only as a first setup: none of its variables set, and no App id or key stored. */
+async function refuseCreation(ctx: Ctx, deps: GitHubCreateDeps): Promise<SettingsRow> {
+  const { overrides } = deps.env
+  if (overrides.githubAppId !== undefined) throw locked("ADIUTOR_GITHUB_APP_ID")
+  if (overrides.githubPrivateKey !== undefined) throw locked("ADIUTOR_GITHUB_PRIVATE_KEY")
+  if (overrides.githubInstallations !== undefined) throw locked("ADIUTOR_GITHUB_INSTALLATIONS")
+  const row = await getSettings(ctx.db)
+  if (row.githubAppId !== null || row.githubPrivateKeyEnc !== null) throw alreadySet()
+  return row
+}
+
+/**
+ * Starts creating the App from its manifest: a new one-time state, kept as a hash with the current generation for an
+ * hour (a new start replaces it), and the form Settings posts to GitHub: its address and the manifest's JSON.
+ */
+export async function startGitHubCreation(
+  ctx: Ctx,
+  by: By,
+  deps: GitHubCreateDeps,
+): Promise<{ action: string; manifest: string }> {
+  requireOwner(by, "create the GitHub App")
+  const row = await refuseCreation(ctx, deps)
+  const state = deps.pending.start(row.githubGeneration, ctx.clock())
+  return {
+    action: `${deps.webOrigin}/settings/apps/new?state=${state}`,
+    manifest: JSON.stringify(appManifest(deps.publicUrl)),
+  }
+}
+
+/**
+ * Finishes creating the App when GitHub sent the browser back with a code: the state must be the pending one (it is
+ * used up first), the settings unchanged since the start, and GitHub's answer the App the manifest asked for, whose
+ * key GitHub accepts. Only then are the App id and its key saved, as a save of the key is, at the generation of the
+ * start. The client id, client secret and webhook secret in GitHub's answer are never read.
+ */
+export async function finishGitHubCreation(
+  ctx: Ctx,
+  by: By,
+  deps: GitHubCreateDeps,
+  input: { code: string; state: string },
+): Promise<{ owner: { login: string; type: string | null } }> {
+  requireOwner(by, "create the GitHub App")
+  const taken = deps.pending.take(input.state, ctx.clock())
+  if (!taken)
+    throw new AppError(
+      "github_create_expired",
+      "This App creation is unknown, already used or older than an hour. Nothing was saved.",
+    )
+  const row = await refuseCreation(ctx, deps)
+  if (row.githubGeneration !== taken.generation)
+    throw new AppError("conflict", "The GitHub settings changed meanwhile. Nothing was saved.", {
+      generation: row.githubGeneration,
+    })
+  const client = anonymousClient({ origin: deps.origin, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) })
+  let data: unknown
+  try {
+    ;({ data } = await client.request("POST /app-manifests/{code}/conversions", { code: input.code }))
+  } catch (error) {
+    const failure = describeFailure(error, new Date())
+    if (failure.kind === "status" && failure.status >= 400 && failure.status < 500 && failure.status !== 429)
+      throw new AppError("github_code_rejected", "GitHub did not accept the code: it is unknown, used or expired.")
+    throw unreachable()
+  }
+  const app = readConversion(data)
+  data = undefined
+  if ("problem" in app)
+    throw new AppError("github_app_invalid", "GitHub answered with another App than the one asked for.", {
+      reason: app.problem,
+    })
+  const pem = pkcs8(app.key)
+  if ((await checkKey(deps.origin, app.appId, pem)) !== "ok") throw unreachable()
+  const fingerprint = keyFingerprint(app.key)
+  await commit(
+    ctx,
+    by,
+    deps,
+    taken.generation,
+    (before) => {
+      if (before.githubAppId !== null || before.githubPrivateKeyEnc !== null) throw alreadySet()
+      return {
+        githubAppId: app.appId,
+        githubPrivateKeyEnc: deps.env.cipher.encrypt(GITHUB_KEY_COLUMN, normalizeKey(pem)),
+        githubKeyFingerprint: fingerprint,
+        githubKeyVerified: true,
+      }
+    },
+    { githubKeyChange: "replaced", githubAppCreated: { owner: app.owner.login } },
+  )
+  return { owner: app.owner }
 }
 
 /**

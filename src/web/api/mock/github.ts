@@ -4,6 +4,10 @@
 // not covered, a moved repository, a rate limit). `adiutor.mock.env` locks the fields as the environment would
 // (ADIUTOR_GITHUB_APP_ID, ADIUTOR_GITHUB_PRIVATE_KEY, ADIUTOR_GITHUB_INSTALLATIONS). No value here is a credential:
 // a pasted key is only looked at for its PEM markers and never kept; its fingerprint is invented on each save.
+// Create the App on GitHub answers GitHub's real form address, so in the mock the return is opened by hand:
+// /settings/github?code=<any>&state=<any> (a code starting with "bad" is refused), and
+// /settings/github?installation_id=<id>&setup_action=install (or request). An installation id under 1000 is not the
+// App's; one ending in 1 grants too much and one ending in 2 is suspended, for screenshots of the refusals.
 
 import type { TransportResponse } from "../client.ts"
 import type { GitHubInstallation, GitHubStatus, GitHubView, Project } from "../types.ts"
@@ -229,6 +233,17 @@ const locked = (variable: string) =>
   refuse(409, "setting_locked", `The environment variable ${variable} sets this. Change it there.`, { variable })
 const stale = () => refuse(409, "conflict", "The GitHub settings changed meanwhile. Read them again.")
 
+/** An installation as the mock's GitHub answers it, by the rules in the header. */
+function mockInstallation(id: number) {
+  if (id < 1000) return null
+  const state = id % 10 === 1 ? "too_broad" : id % 10 === 2 ? "suspended" : "usable"
+  return { login: `example-team-${String(id).slice(-3)}`, type: "Organization", state } as const
+}
+const notFound = () =>
+  refuse(422, "github_installation_not_found", "The App has no installation with this id.", {
+    field: "installationId",
+  })
+
 /** The /github routes over the mock store. */
 export function githubRoute(
   method: string,
@@ -263,6 +278,49 @@ export function githubRoute(
       s.key = { set: true, readable: true, verified: true, fingerprint: fingerprint() }
     return changed()
   }
+  if (sub === "create" && !target && method === "POST") {
+    for (const lock of [settings.appId, settings.key, settings.installations])
+      if (lock.locked && lock.variable) return locked(lock.variable)
+    if (s.appId || s.key.set) return refuse(409, "conflict", "A GitHub App is already set.")
+    const hex = (bytes: number) =>
+      Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("")
+    const state = hex(32)
+    const name = `Adiutor reader ${hex(2)}`
+    const back = `${window.location.origin}/settings/github`
+    return ok({
+      action: `https://github.com/settings/apps/new?state=${state}`,
+      manifest: JSON.stringify({
+        name,
+        url: "https://github.com/ShlomiPorush/adiutor",
+        redirect_url: back,
+        setup_url: back,
+      }),
+    })
+  }
+  if (sub === "create" && target === "finish" && method === "POST") {
+    if (String(body.code ?? "").startsWith("bad"))
+      return refuse(422, "github_code_rejected", "GitHub did not accept the code: it is unknown, used or expired.")
+    if (s.appId || s.key.set) return refuse(409, "conflict", "A GitHub App is already set.")
+    s.appId = "2097152"
+    s.key = { set: true, readable: true, verified: true, fingerprint: fingerprint() }
+    s.generation++
+    return ok({ owner: { login: "example-owner", type: "User" }, view: view(projects) })
+  }
+  if (sub === "install" && method === "POST") {
+    if (settings.installations.locked) return locked("ADIUTOR_GITHUB_INSTALLATIONS")
+    if (!settings.appId.value || !settings.key.set || !settings.key.readable)
+      return refuse(409, "github_not_set_up", "Set the App id and its key before installing the App.")
+    return ok({ url: "https://github.com/apps/adiutor-reader-0a1b/installations/new" })
+  }
+  if (sub === "installations" && target && parts[3] === "preview" && method === "GET") {
+    if (!settings.appId.value || !settings.key.set || !settings.key.readable)
+      return refuse(409, "github_not_set_up", "Set the App id and its key before adding an installation.")
+    const id = Number(target)
+    const found = mockInstallation(id)
+    if (!found) return notFound()
+    const added = s.installations.some((installation) => installation.id === id)
+    return ok({ id, account: { login: found.login, type: found.type }, state: added ? "already_added" : found.state })
+  }
   if (sub === "installations" && !target && method === "POST") {
     if (body.generation !== s.generation) return stale()
     if (settings.installations.locked) return locked("ADIUTOR_GITHUB_INSTALLATIONS")
@@ -271,16 +329,17 @@ export function githubRoute(
     const id = Number(body.installationId)
     if (s.installations.some((installation) => installation.id === id))
       return refuse(409, "conflict", "This installation is already on the list.")
-    // An id under 1000 stands for one the App does not have, for screenshots of the refusal.
-    if (id < 1000)
-      return refuse(422, "github_installation_not_found", "The App has no installation with this id.", {
-        field: "installationId",
-      })
+    const found = mockInstallation(id)
+    if (!found) return notFound()
+    if (found.state === "suspended")
+      return refuse(422, "github_installation_suspended", "This installation is suspended on GitHub.")
+    if (found.state === "too_broad")
+      return refuse(422, "github_installation_too_broad", "This installation grants more than read access.")
     s.installations.push({
       id,
       accountId: id * 7,
-      accountType: "Organization",
-      login: `example-team-${String(id).slice(-3)}`,
+      accountType: found.type,
+      login: found.login,
       state: null,
       inventory: null,
     })

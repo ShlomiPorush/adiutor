@@ -7,6 +7,7 @@ import type { Language } from "../../shared/enums.ts"
 import en from "../../shared/locales/en.json"
 import he from "../../shared/locales/he.json"
 import { createApp } from "../app.ts"
+import { DEFAULT_GITHUB_WEB_ORIGIN } from "../config.ts"
 import { settings } from "../db/schema.ts"
 import { getSettings } from "../services/admin.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
@@ -24,7 +25,7 @@ import {
   uidOf,
   wideLimits,
 } from "../testing/oauth.ts"
-import { CONTENT_SECURITY_POLICY } from "../web.ts"
+import { contentSecurityPolicy } from "../web.ts"
 import { WindowLimit } from "./limits.ts"
 
 /*
@@ -207,7 +208,8 @@ describe("the consent page's address", () => {
     expect(page.status).toBe(200)
     expect(page.text).toContain("the built UI")
     expectFlowHeaders(page, "consent page")
-    expect(page.headers.get("content-security-policy")).toBe(CONTENT_SECURITY_POLICY)
+    // The UI's pages: forms to this origin and to GitHub's web origin (the App's manifest) only.
+    expect(page.headers.get("content-security-policy")).toBe(contentSecurityPolicy(DEFAULT_GITHUB_WEB_ORIGIN))
     // Its API keeps its own answers' policy.
     const details = await browserCall(h.owner, `/connect/approve/${uid}/details`)
     expectFlowHeaders(details, "details")

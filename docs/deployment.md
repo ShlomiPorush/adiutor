@@ -277,23 +277,38 @@ From the deploy until you approve each client again, that client cannot write to
 
 From the release that moves security data to the server (CHANGELOG, "The server reads GitHub security data itself"), the Adiutor server reads GitHub's security alerts (Dependabot, code scanning, secret scanning) and the open Issues count of each project's repository itself, every hour on the hour. It reads only through your own GitHub App, read only, and only the installations you allow in Settings, GitHub. The sync on your PC no longer collects or sends security data.
 
-**Network.** Production must reach `https://api.github.com` over HTTPS (outbound only). Nothing on GitHub calls Adiutor: the App has no webhook.
+**Network.** Production must reach `https://api.github.com` over HTTPS (outbound only). Nothing on GitHub calls Adiutor: the App has no webhook. To create and install the App, your browser goes to `https://github.com`, and GitHub sends it back to Adiutor's address (`ADIUTOR_PUBLIC_URL`); only your browser needs to reach that address.
 
 ### Create the App (once)
 
+1. In Adiutor, Settings, GitHub, press **Create the App on GitHub**. GitHub opens in the same tab with the App's settings filled in: the name "Adiutor reader" and four random characters (you may change it), read-only access to Dependabot alerts, code scanning alerts, secret scanning alerts, Issues and metadata, no webhook, and Settings, GitHub as the address GitHub sends you back to. The button shows only while no App id or key is stored and none of `ADIUTOR_GITHUB_APP_ID`, `ADIUTOR_GITHUB_PRIVATE_KEY` and `ADIUTOR_GITHUB_INSTALLATIONS` is set.
+2. Confirm on GitHub, on your personal account. GitHub sends the browser back to Settings, GitHub. Adiutor checks the new App with GitHub and saves its id and private key. The page shows the App's owner and the key's fingerprint, the same one GitHub shows beside the key on the App's page. Adiutor never shows or exports the key, and does not keep the App's other secrets from GitHub (its client secret and webhook secret).
+
+On the way back, GitHub puts a one-time code in the address. Adiutor uses it at once, and it expires within an hour. If your reverse proxy keeps an access log with query strings, that log records the code: turn off query logging for `/settings/github` if you keep access logs.
+
+**If the App was not saved.** GitHub may have created the App even though Adiutor saved nothing: for example after Adiutor restarted, after more than an hour on GitHub's page, or when Settings shows a refusal on the way back. Then do one of these:
+
+- Open the App's settings on GitHub (Settings, Developer settings, GitHub Apps), generate a new private key, and paste it in Settings, GitHub with the App ID (steps 5 to 7 of "Set it up by hand", below).
+- Delete that App on GitHub, and press Create the App on GitHub again.
+
+### Install it on each account
+
+1. In Settings, GitHub, press **Install on an account**. GitHub's install page opens in the same tab. Pick the account (your personal account, or an organization you own) and its repositories: all of them, or only those of your projects.
+2. GitHub sends the browser back to Settings, GitHub, which shows the account and whether the installation can be added. Press **Add**. Adiutor does not add an installation that is suspended or grants more than read access. When an organization needs its owner's approval, Settings says so and adds nothing: once the owner approves, install again, or add the installation by its id.
+3. Repeat for each account. Then press Read now, and check the last pull, the projects without a repository, and the projects not covered.
+
+### Set it up by hand (instead of the buttons)
+
 1. On GitHub, open your personal account's Settings, Developer settings, GitHub Apps, New GitHub App.
-2. Name it (for example "Adiutor reader"), set any homepage URL (the repository's address is fine), and leave "Callback URL" empty. Turn off "Expire user authorization tokens" and "Request user authorization (OAuth) during installation". Under Webhook, clear "Active".
+2. Name it (for example "Adiutor reader"), set any homepage URL (the repository's address is fine), and leave "Callback URL" empty. Turn off "Expire user authorization tokens" and "Request user authorization (OAuth) during installation". Under Webhook, clear "Active". To come back to Adiutor after each install, set "Setup URL" to Adiutor's address followed by `/settings/github` and select "Redirect on update"; without it, add each installation by its id.
 3. Repository permissions, each **Read-only**: Dependabot alerts, Code scanning alerts, Secret scanning alerts, Issues. Metadata becomes read-only by itself. Give no other repository, organization or account permission: Adiutor refuses to read an installation granted anything more.
 4. "Where can this GitHub App be installed?": **Any account**, so it can be installed on the organizations too. Adiutor still reads only the installations you add in Settings.
 5. Create the App, and note its **App ID** from the App's settings page.
 6. Under "Private keys", generate a private key. GitHub downloads a `.pem` file once: keep it in your password manager or secret store, and delete the downloaded file. Never put it in a repository, a chat or an issue.
-
-### Install it and allow the installations
-
-1. On the App's page, Install App: install it on your personal account and on each organization whose repositories Adiutor should read (you must be an owner of the organization). Choose all repositories, or only those of your projects.
-2. Each installation's settings page has an address that ends with its id (`.../settings/installations/<id>`); note each id.
-3. In Adiutor, Settings, GitHub: enter the App ID, paste the private key's text and save. Adiutor checks the key with GitHub and shows its fingerprint, the same one GitHub shows beside the key on the App's page. Then add each installation by its id.
-4. Press Read now, and check the last pull, the projects without a repository, and the projects not covered.
+7. In Adiutor, Settings, GitHub: enter the App ID, paste the private key's text and save. Adiutor checks the key with GitHub and shows its fingerprint, the same one GitHub shows beside the key on the App's page.
+8. On the App's page, Install App: install it on your personal account and on each organization whose repositories Adiutor should read (you must be an owner of the organization). Choose all repositories, or only those of your projects.
+9. Each installation's settings page has an address that ends with its id (`.../settings/installations/<id>`). In Settings, GitHub, add each installation by its id, or press Add when GitHub sent you back (step 2).
+10. Press Read now, and check the last pull, the projects without a repository, and the projects not covered.
 
 Instead of Settings, `.env` may set `ADIUTOR_GITHUB_APP_ID`, `ADIUTOR_GITHUB_PRIVATE_KEY` (the `.pem`'s text, its line breaks written as `\n`, from your secret store) and `ADIUTOR_GITHUB_INSTALLATIONS` (ids, comma-separated); Settings then shows those fields locked. When the App id or the installations are set there, the server refuses to start without a readable key. If a stored key no longer decrypts (for example after a restore with other `ADIUTOR_SETTINGS_KEYS`) and the server refuses to start for that reason, set `ADIUTOR_GITHUB_PRIVATE_KEY` from your secret store, or remove the GitHub variables from `.env` and paste the key again in Settings.
 

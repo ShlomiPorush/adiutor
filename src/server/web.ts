@@ -17,19 +17,27 @@ const TYPES: Record<string, string> = {
   ".json": "application/json",
 }
 
-/** Only this origin's scripts, styles, fonts and requests; no inline script, no framing. */
-export const CONTENT_SECURITY_POLICY = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "font-src 'self'",
-  "connect-src 'self'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-].join("; ")
+/**
+ * Only this origin's scripts, styles, fonts and requests; no inline script, no framing. Forms go to this origin, and
+ * from the UI's pages also to `formOrigin`: GitHub's web origin, where Settings, GitHub posts the App's manifest.
+ */
+export function contentSecurityPolicy(formOrigin?: string): string {
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    formOrigin ? `form-action 'self' ${formOrigin}` : "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ")
+}
+
+/** The policy of the authorization server's own pages (oauth/routes.ts): forms to this origin only. */
+export const CONTENT_SECURITY_POLICY = contentSecurityPolicy()
 
 /**
  * Addresses that are never a page: the API, MCP, the health check, and the approval API under the consent page's
@@ -45,8 +53,10 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
-export function webRoutes(app: Hono, root: string): void {
+/** Serves the UI from `root`; its pages may post a form to `githubWebOrigin` (the App's manifest), and nowhere else. */
+export function webRoutes(app: Hono, root: string, githubWebOrigin: string): void {
   const base = resolve(root)
+  const policy = contentSecurityPolicy(githubWebOrigin)
   app.on(["GET", "HEAD"], "*", async (c, next) => {
     const path = c.req.path
     if (RESERVED.test(path)) return next()
@@ -77,7 +87,7 @@ export function webRoutes(app: Hono, root: string): void {
       "Cache-Control": file.includes(`${sep}assets${sep}`) ? "public, max-age=31536000, immutable" : "no-cache",
     }
     if (type.startsWith("text/html")) {
-      headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+      headers["Content-Security-Policy"] = policy
       headers["Referrer-Policy"] = "no-referrer"
       headers["X-Frame-Options"] = "DENY"
     }

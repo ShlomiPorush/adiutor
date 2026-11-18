@@ -7,6 +7,10 @@
 // are not read permissions the installation holds, a secret scanning page without hide_secret=true, and a request of
 // one installation's token for another installation's repository.
 //
+// The App's creation from a manifest: POST /app-manifests/{code}/conversions answers what a test registered for that
+// code (registerConversion), once, and refuses a request that carries credentials. The test makes the answer's key
+// pair and its secrets at run time; the stand-in holds none of its own.
+//
 // As a program: node e2e/github-stand-in.mjs --public-key=<file> --app-id=<id> [--port=8080] [--host=0.0.0.0]
 // serves the end-to-end scenario below; GET /__health answers ok.
 
@@ -86,9 +90,18 @@ function appJwtValid(header, publicKey, appId) {
  * Starts the stand-in. `scenario` is kept by reference: a test may change it between requests. `requests` records
  * every request (method, path, query, who made it), never a token.
  */
-export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1", port = 0, scenario = e2eScenario() }) {
+export async function startGitHubStandIn({
+  publicKey,
+  appId,
+  host = "127.0.0.1",
+  port = 0,
+  scenario = e2eScenario(),
+  slug = "adiutor-stand-in",
+}) {
   const tokens = new Map()
   const requests = []
+  /** The conversion answer of each registered code, answered once. */
+  const conversions = new Map()
   const state = { scenario, requests, tokens }
 
   const server = createServer((req, res) => {
@@ -116,6 +129,19 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
     if (req.headers["x-github-api-version"] !== API_VERSION)
       return json(res, 400, { message: "missing or wrong X-GitHub-Api-Version" })
 
+    // --- The manifest's conversion: no credentials, each code once ---
+    const conversion = /^\/app-manifests\/([^/]+)\/conversions$/.exec(path)
+    if (conversion && req.method === "POST") {
+      if (req.headers.authorization) {
+        entry.auth = "credentials"
+        return json(res, 400, { message: "the conversion takes no credentials" })
+      }
+      const answer = conversions.get(conversion[1])
+      if (!answer) return json(res, 404, { message: "Not Found" })
+      conversions.delete(conversion[1])
+      return json(res, answer.status ?? 201, answer.body)
+    }
+
     // --- App routes: a JWT signed with the App's key ---
     const appRoute =
       path === "/app" ||
@@ -125,8 +151,7 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
       entry.auth = "app"
       if (!appJwtValid(req.headers.authorization, publicKey, appId))
         return json(res, 401, { message: "A JSON web token could not be decoded" })
-      if (path === "/app" && req.method === "GET")
-        return json(res, 200, { id: Number(appId), slug: "adiutor-stand-in" })
+      if (path === "/app" && req.method === "GET") return json(res, 200, { id: Number(appId), slug })
       const installationMatch = /^\/app\/installations\/(\d+)(\/access_tokens)?$/.exec(path)
       if (installationMatch) {
         const id = Number(installationMatch[1])
@@ -308,6 +333,9 @@ export async function startGitHubStandIn({ publicKey, appId, host = "127.0.0.1",
       state.scenario = next
     },
     requests,
+    registerConversion(code, answer) {
+      conversions.set(code, answer)
+    },
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections?.()

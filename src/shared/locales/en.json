@@ -244,6 +244,11 @@
       "github_key_required": "An environment variable turns GitHub on, so a key is required",
       "github_not_set_up": "Set the App id and its key first",
       "github_rate_limited": "GitHub asked to wait. Try again later",
+      "github_create_expired": "This App creation is unknown, already used or older than an hour",
+      "github_code_rejected": "GitHub did not accept the code of the new App",
+      "github_app_invalid": "GitHub answered with another App than the one asked for",
+      "github_installation_suspended": "This installation is suspended on GitHub",
+      "github_installation_too_broad": "This installation grants more than read access",
       "internal_error": "The server failed",
       "totp_required": "Two-factor authentication is not finished",
       "setting_locked": "An environment variable sets this"
@@ -1342,7 +1347,7 @@
     "installationsIntro": "The accounts the App is installed on that the server may read. An installation not listed here is never read.",
     "installationsLocked": "Set by the environment ({variable}). Change the list there.",
     "installationsEmpty": "No installations yet.",
-    "installationsEmptyHint": "Install the App on your GitHub account, then add the installation's id below.",
+    "installationsEmptyHint": "Install the App on an account below, or add an installation by its id.",
     "installation": "Installation",
     "installationId": "Id",
     "accountType": {
@@ -1437,7 +1442,40 @@
     "lastGoodRead": "Last good read",
     "neverGoodRead": "Never read from GitHub",
     "withoutRepoTitle": "Projects without a repository",
-    "withoutRepoIntro": "GitHub is not read for them. Set the repository on the project's page."
+    "withoutRepoIntro": "GitHub is not read for them. Set the repository on the project's page.",
+    "createLabel": "Create the App",
+    "createHint": "GitHub opens in this tab with the App's settings filled in: read access to security alerts and Issues, and no webhook. Confirm there, and GitHub brings you back here with the App saved.",
+    "create": "Create the App on GitHub",
+    "creating": "Opening GitHub...",
+    "createStartFailed": "Could not start creating the App: {reason}",
+    "finishing": "Saving the App GitHub created...",
+    "created": "GitHub App created",
+    "createdOwner": "Owned by {login}. Next, install it on an account below.",
+    "createFailed": "The App was not saved",
+    "createRecovery": "GitHub may have created the App even though Adiutor saved nothing. Open the App's settings on GitHub (Settings, Developer settings, GitHub Apps), generate a new private key and paste it here with the App ID. Or delete that App on GitHub and create it again.",
+    "installLabel": "Install the App",
+    "installHint": "GitHub opens in this tab: pick the account and its repositories there. GitHub then brings you back here to add the installation.",
+    "install": "Install on an account",
+    "installing": "Opening GitHub...",
+    "installFailed": "Could not open GitHub's install page: {reason}",
+    "requestTitle": "Waiting for the organization's approval",
+    "requestBody": "An owner of the organization must approve the installation on GitHub. Nothing was added. Once it is approved, install again from here or add it by its id.",
+    "previewLoading": "Reading the installation from GitHub...",
+    "previewFailed": "Could not read the installation",
+    "previewTitle": "Installation on {name}",
+    "previewState": {
+      "usable": "Ready to add",
+      "too_broad": "Too much access",
+      "suspended": "Suspended",
+      "already_added": "Already on the list"
+    },
+    "previewHint": {
+      "usable": "Add it, and the server reads this account from the next read on.",
+      "too_broad": "It grants more than read access, so it cannot be added. Reduce the App's permissions to read only on GitHub, then install again.",
+      "suspended": "It is suspended on GitHub, so it cannot be added. Resume it there, then install again.",
+      "already_added": "This installation is already on the list."
+    },
+    "dismiss": "Close"
   },
   "secretCheck": {
     "domains": "Private domains",

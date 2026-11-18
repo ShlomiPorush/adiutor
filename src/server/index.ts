@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import { serve } from "@hono/node-server"
 import { createApp, socketAddress } from "./app.ts"
 import { AuthHolder } from "./auth/auth.ts"
-import { ConfigError, githubApiOrigin, loadConfig } from "./config.ts"
+import { ConfigError, githubApiOrigin, githubWebOrigin, loadConfig } from "./config.ts"
 import { createDatabase, migrationFailure } from "./db/client.ts"
 import { effectiveGitHub } from "./github/settings.ts"
 import { clientAddress } from "./http/auth.ts"
@@ -28,10 +28,12 @@ function fail(msg: string): never {
 
 let config: ReturnType<typeof loadConfig>
 let githubOrigin: string
+let githubWeb: string
 try {
   config = loadConfig()
-  // Only the verification stack passes the flag, to point the server at a stand-in GitHub.
+  // Only the verification stack passes the flags, to point the server at a stand-in GitHub.
   githubOrigin = githubApiOrigin(process.argv.slice(2))
+  githubWeb = githubWebOrigin(process.argv.slice(2))
 } catch (error) {
   if (error instanceof ConfigError) fail(error.message)
   throw error
@@ -108,7 +110,13 @@ if (github.meantOn && !github.privateKey)
   )
 if (github.view.key.set && !github.view.key.readable)
   log.warn("the stored GitHub key cannot be read: GitHub is off until it is pasted again")
-const githubHandle = createGitHubHandle({ ctx, env, generation: settings.githubGeneration, origin: githubOrigin })
+const githubHandle = createGitHubHandle({
+  ctx,
+  env,
+  generation: settings.githubGeneration,
+  origin: githubOrigin,
+  webOrigin: githubWeb,
+})
 
 // The image holds the built UI in dist/web next to the server bundle; a checkout without a UI build serves the API only.
 const webRoot = process.env.ADIUTOR_WEB_DIR ?? "dist/web"
