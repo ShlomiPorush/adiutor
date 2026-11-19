@@ -2020,7 +2020,6 @@ a.ui-kpi:focus-visible {
   gap: 28px;
   align-items: start;
   width: 100%;
-  max-width: 1180px;
 }
 .ui-set-picker {
   display: none;
@@ -2084,11 +2083,9 @@ a.ui-kpi:focus-visible {
   gap: var(--ui-gap);
   min-width: 0;
 }
-/* The Account page's groups are as wide as a Settings section's fields (1180px less the 220px sidebar and its 28px
-   gap): a row keeps its label and its control within one look. */
+/* Settings and the Account page are as wide as the screen, like every other page. */
 .ui-account {
   width: 100%;
-  max-width: 932px;
 }
 .ui-set-title {
   margin: 0;
@@ -2098,7 +2095,6 @@ a.ui-kpi:focus-visible {
   line-height: 1.2;
 }
 .ui-set-tabdesc {
-  max-width: 75ch;
   margin: -8px 0 0;
   color: var(--ui-muted);
   font-size: var(--ui-fs-sm);
@@ -2135,7 +2131,6 @@ a.ui-kpi:focus-visible {
 }
 .ui-set-group-intro,
 .ui-set-group-foot {
-  max-width: 75ch;
   margin: 0;
   padding: 0 var(--ui-pad-x) 12px;
   color: var(--ui-muted);
@@ -2143,7 +2138,6 @@ a.ui-kpi:focus-visible {
   line-height: 1.5;
 }
 .ui-set-group-foot {
-  max-width: none;
   padding-top: 12px;
   border-top: 1px solid var(--ui-line);
 }
@@ -2932,9 +2926,8 @@ html.ui-layer-on .ui-page {
 .ui-set-group-fold:has(> .ui-fold-body[hidden]) > .ui-set-group-head {
   padding-bottom: 13px;
 }
-/* Written text (a goal, "where we are", a comment) keeps a readable line on a page as wide as the screen. */
+/* Written text (a goal, "where we are", a comment) runs as wide as its panel. */
 .ui-text-block {
-  max-width: 75ch;
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -4165,7 +4158,6 @@ button.ui-item-title {
 
 /* Markdown a note renders. Blocks take their own text's direction (dir="auto"); code reads left to right. */
 .ui-md {
-  max-width: 80ch;
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
