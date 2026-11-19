@@ -5,9 +5,9 @@
 // Its groups: the App (Create the App on GitHub while none is set and nothing is locked, GitHubSetup.tsx; its id and
 // its private key, fields of the page's one draft and its save bar, SV-1, saved to PATCH /github/app with the
 // generation of the view; the key is a secret, FS-3: never shown back, a paste field only while there is none or on
-// Replace, and emptied from the draft after the save or a refusal); the installations (Install on an account through
-// GitHub's install page, whose return shows the installation with Add; added by id and removed after a question at
-// once, outside the save bar, like the agent connections); the last
+// Replace, and emptied from the draft after the save or a refusal); the installations (Connect an account through
+// GitHub's install page, whose return adds the installation; added by id and removed after a question at once,
+// outside the save bar, like the agent connections); the last
 // read with Read now (locked while GitHub is not set up or GitHub asked to wait, FB-1); and the projects GitHub
 // cannot read: repositories that moved, projects without current data and projects without a repository, each
 // opening its project.
@@ -143,8 +143,27 @@ export function GitHubSection({ form }: { form: GitHubForm }) {
     wasRunning.current = view?.running ?? false
   }, [view, queryClient])
   const retry = () => void query.refetch()
-  if (query.isPending) return <Loading label={t("githubSettings.loading")} />
-  if (!view) return <ErrorState title={t("githubSettings.failed")} error={query.error} onRetry={retry} />
+  // GitHub's return: shown also while the settings load or could not be read, since the App or the account may be saved.
+  const returnResult = returned.state ? (
+    <>
+      <CreateResult result={returned.state} onDismiss={returned.dismiss} />
+      <InstallReturn result={returned.state} onDismiss={returned.dismiss} />
+    </>
+  ) : null
+  if (query.isPending)
+    return (
+      <>
+        {returnResult}
+        <Loading label={t("githubSettings.loading")} />
+      </>
+    )
+  if (!view)
+    return (
+      <>
+        {returnResult}
+        <ErrorState title={t("githubSettings.failed")} error={query.error} onRetry={retry} />
+      </>
+    )
   return (
     <>
       {query.isError ? (
@@ -158,15 +177,7 @@ export function GitHubSection({ form }: { form: GitHubForm }) {
           }
         />
       ) : null}
-      {returned.state ? <CreateResult result={returned.state} onDismiss={returned.dismiss} /> : null}
-      {returned.state ? (
-        <InstallReturn
-          result={returned.state}
-          view={view}
-          onDismiss={returned.dismiss}
-          onRetry={returned.retryPreview}
-        />
-      ) : null}
+      {returnResult}
       <AppGroup view={view} form={form} finishing={returned.state?.kind === "creating"} />
       <InstallationsGroup view={view} form={form} />
       <PullGroup view={view} />

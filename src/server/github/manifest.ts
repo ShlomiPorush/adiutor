@@ -43,6 +43,35 @@ export class PendingCreation {
   }
 }
 
+/** How long a started connection of an account waits for GitHub to send the browser back. */
+export const INSTALL_TTL_MS = 5 * 60_000
+
+/**
+ * The one connection of an account started from Settings and not finished yet: its state's SHA-256 and its end. GitHub's
+ * return names the installation in an address anyone can write (GitHub warns that its installation_id can be spoofed),
+ * so the install link carries a one-time state (GitHub's documented `state` of the installation URL, which it brings
+ * back), and only a return with that state adds an installation. Another state changes nothing; the matching one is
+ * used up first, so it works once. A new start replaces it.
+ */
+export class PendingInstall {
+  private pending: { hash: Buffer; until: number } | null = null
+
+  /** Starts a connection and answers its state (32 random bytes, base64url), kept only as a hash. */
+  start(now: Date): string {
+    const state = randomBytes(32).toString("base64url")
+    this.pending = { hash: sha256(state), until: now.getTime() + INSTALL_TTL_MS }
+    return state
+  }
+
+  /** Whether `state` is the pending connection's and it is not over yet; a match is used up either way. */
+  take(state: string, now: Date): boolean {
+    const pending = this.pending
+    if (!pending || !timingSafeEqual(sha256(state), pending.hash)) return false
+    this.pending = null
+    return now.getTime() < pending.until
+  }
+}
+
 /** The manifest of the App Settings creates: read access to the security data and Issues only, no webhook. */
 export function appManifest(publicUrl: URL) {
   const back = uiUrl(publicUrl, UI_ROUTES.githubSettings)

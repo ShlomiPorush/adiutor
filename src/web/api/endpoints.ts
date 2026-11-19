@@ -14,7 +14,7 @@ import type {
   GitHubAppPatch,
   GitHubCreated,
   GitHubCreateForm,
-  GitHubInstallationPreview,
+  GitHubInstallFinished,
   GitHubView,
   Item,
   ItemDetail,
@@ -160,8 +160,8 @@ export const api = {
   finishGitHubApp: (code: string, state: string) =>
     data<GitHubCreated>("POST", "/github/create/finish", { code, state }),
   gitHubInstallLink: () => data<{ url: string }>("POST", "/github/install", {}),
-  previewGitHubInstallation: (installationId: number) =>
-    data<GitHubInstallationPreview>("GET", `/github/installations/${installationId}/preview`),
+  finishGitHubInstall: (installationId: number, state: string) =>
+    data<GitHubInstallFinished>("POST", "/github/install/finish", { installationId, state }),
   /** Read now: starts a pull, or joins the one running (`joined`); does not wait for it. */
   readGitHub: () => data<{ joined: boolean; view: GitHubView }>("POST", "/github/pull", {}),
 

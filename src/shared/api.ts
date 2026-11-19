@@ -210,6 +210,9 @@ export const githubInstallationBody = z.object({
   installationId: githubId,
 })
 
+/** GitHub's return after the owner's Connect an account: the installation id it names and the state it brought back. */
+export const githubInstallFinishBody = z.object({ installationId: githubId, state: z.string().max(200) })
+
 /** GitHub's return after it created the App from its manifest: the one-time code and the state Settings sent. */
 export const githubCreateFinishBody = z.object({
   code: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),

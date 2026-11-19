@@ -7,7 +7,7 @@ import { GitHubRefused, guardedFetch } from "./client.ts"
 import { describeFailure, graphqlRateLimit, restRateLimit } from "./errors.ts"
 import { GitHubGate } from "./gate.ts"
 import { keyFingerprint, keyProblem, normalizeKey, readPrivateKey } from "./key.ts"
-import { CREATION_TTL_MS, PendingCreation, readConversion } from "./manifest.ts"
+import { CREATION_TTL_MS, INSTALL_TTL_MS, PendingCreation, PendingInstall, readConversion } from "./manifest.ts"
 import { withinReadPermissions } from "./pull.ts"
 
 // The local parts of the GitHub reading: the key checks, the configuration, the rate-limit forms, the guarded fetch
@@ -143,6 +143,26 @@ describe("the App made from a manifest", () => {
     const late = pending.start(5, now)
     expect(pending.take(late, new Date(now.getTime() + CREATION_TTL_MS))).toBeNull()
     expect(pending.take(late, now)).toBeNull()
+  })
+
+  it("takes a connection of an account by its state once, only the latest one, and only within five minutes", () => {
+    const pending = new PendingInstall()
+    const now = new Date("2026-11-18T10:00:00Z")
+    expect(INSTALL_TTL_MS).toBe(5 * 60_000)
+    expect(pending.take("", now)).toBe(false)
+    const first = pending.start(now)
+    const second = pending.start(now)
+    expect(second).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(pending.take(first, now)).toBe(false)
+    // Another state, or none, leaves the pending one as it is.
+    expect(pending.take("other", now)).toBe(false)
+    expect(pending.take("", now)).toBe(false)
+    expect(pending.take(second, new Date(now.getTime() + INSTALL_TTL_MS - 1))).toBe(true)
+    expect(pending.take(second, now)).toBe(false)
+    const late = pending.start(now)
+    // Expired is used up too.
+    expect(pending.take(late, new Date(now.getTime() + INSTALL_TTL_MS))).toBe(false)
+    expect(pending.take(late, now)).toBe(false)
   })
 })
 
