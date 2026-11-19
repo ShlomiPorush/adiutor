@@ -252,7 +252,7 @@ describe("the private key's states (FS-3)", () => {
     await render()
     // A key GitHub has not accepted (or refused on a later read) holds the group open, marked in its head.
     expect(keyRow()?.closest("[hidden]")).toBeNull()
-    expect(appFold()).toBeNull()
+    expect(appFold()?.getAttribute("aria-disabled")).toBe("true")
     expect(plain(group("settings-github-app-title")?.textContent)).toContain(en.githubSettings.appCheckKey)
     const text = plain(keyRow()?.textContent)
     expect(text).toContain(en.githubSettings.keyNotVerified)
@@ -324,20 +324,39 @@ describe("saving the App with the one save bar (SV-1)", () => {
     await render()
     await openApp()
     await type(row(en.githubSettings.appId)?.querySelector("input"), "12ab")
-    // An edit holds the group open: no fold button while it waits, so the field and its refusal cannot be hidden.
-    expect(appFold()).toBeNull()
+    // An edit holds the group open: its button is held while it waits, so the field and its refusal cannot be hidden.
+    expect(appFold()?.getAttribute("aria-disabled")).toBe("true")
     await click(button(en.savebar.save))
     expect(githubCalls("PATCH", "/github/app")).toHaveLength(0)
     expect(plain(row(en.githubSettings.appId)?.textContent)).toContain(en.githubSettings.appIdInvalid)
     expect(row(en.githubSettings.appId)?.closest("[hidden]")).toBeNull()
     expect(document.activeElement).toBe(row(en.githubSettings.appId)?.querySelector("input"))
-    expect(appFold()).toBeNull()
+    expect(appFold()?.getAttribute("aria-disabled")).toBe("true")
+  })
+
+  it("a key the environment sets and the last read refused holds the group open, with Check the key", async () => {
+    view = {
+      ...VIEW,
+      settings: { ...VIEW.settings, key: { ...VIEW.settings.key, verified: null, locked: true, variable: "ADIUTOR_GITHUB_PRIVATE_KEY" } },
+      lastRun: {
+        startedAt: "2026-11-19T10:00:00.000Z",
+        finishedAt: "2026-11-19T10:00:05.000Z",
+        outcome: "failed",
+        counts: {},
+        errors: [{ record: "installation:51234567", code: "key_rejected" }],
+      },
+    }
+    await render()
+    expect(appFold()?.getAttribute("aria-disabled")).toBe("true")
+    expect(appFold()?.getAttribute("aria-expanded")).toBe("true")
+    expect(plain(appFold()?.textContent)).toContain(en.githubSettings.appCheckKey)
+    expect(keyRow()?.closest("[hidden]")).toBeNull()
   })
 
   it("a first setup holds the App group open, with Not set up in its head", async () => {
     view = { ...VIEW, settings: { ...VIEW.settings, appId: { value: null, locked: false, variable: null } } }
     await render()
-    expect(appFold()).toBeNull()
+    expect(appFold()?.getAttribute("aria-disabled")).toBe("true")
     expect(plain(group("settings-github-app-title")?.textContent)).toContain(en.githubSettings.appNotSetUp)
     expect(row(en.githubSettings.appId)?.closest("[hidden]")).toBeNull()
   })

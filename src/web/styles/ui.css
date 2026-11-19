@@ -2876,6 +2876,9 @@ html.ui-layer-on .ui-page {
   font-weight: 500;
 }
 /* A part that starts folded (ui/fold.tsx): its head's button and its body, which keeps the parent's layout. */
+.ui-fold-btn[aria-disabled="true"] {
+  cursor: default;
+}
 .ui-fold-btn {
   display: inline-flex;
   align-items: center;

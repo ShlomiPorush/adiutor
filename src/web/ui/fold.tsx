@@ -42,7 +42,8 @@ export function FoldButton({
   children,
 }: {
   open: boolean
-  onToggle: (open: boolean) => void
+  /** None: held open for now. The button stays (aria-disabled), so a focus on it is kept. */
+  onToggle?: (open: boolean) => void
   controls: string
   children: ReactNode
 }) {
@@ -52,7 +53,8 @@ export function FoldButton({
       className="ui-fold-btn"
       aria-expanded={open}
       aria-controls={controls}
-      onClick={() => onToggle(!open)}
+      aria-disabled={onToggle ? undefined : true}
+      onClick={() => onToggle?.(!open)}
     >
       <ChevronRight aria-hidden="true" className="ui-fold-chev" />
       {children}

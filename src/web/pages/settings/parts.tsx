@@ -35,8 +35,8 @@ export function Group({
   /** A tag beside the title: the group's state, seen also while it is folded. */
   mark?: ReactNode
   /**
-   * A group that folds (ui/fold.tsx). Without `onToggle` it is held open with no fold button, in the same markup, so
-   * its fields are never mounted again when it starts or stops folding.
+   * A group that folds (ui/fold.tsx). Without `onToggle` it is held open, its button marked unavailable but kept, in
+   * the same markup, so neither its fields nor a focus on the button are lost when it starts or stops folding.
    */
   fold?: { open: boolean; onToggle?: (open: boolean) => void }
   children: ReactNode
@@ -48,17 +48,16 @@ export function Group({
       {children}
     </>
   )
-  const toggle = fold?.onToggle
   return (
     <section
       id={id}
-      className={toggle ? "ui-panel ui-set-group ui-set-group-fold" : "ui-panel ui-set-group"}
+      className={fold ? "ui-panel ui-set-group ui-set-group-fold" : "ui-panel ui-set-group"}
       aria-labelledby={`${id}-title`}
     >
       <div className="ui-set-group-head">
         <Heading id={`${id}-title`} className="ui-set-group-title">
-          {fold && toggle ? (
-            <FoldButton open={fold.open} onToggle={toggle} controls={bodyId}>
+          {fold ? (
+            <FoldButton open={fold.open} onToggle={fold.onToggle} controls={bodyId}>
               {title}
               {mark}
             </FoldButton>
@@ -75,7 +74,7 @@ export function Group({
         {extra ? <div className="ui-set-group-acts">{extra}</div> : null}
       </div>
       {fold ? (
-        <div id={bodyId} className="ui-fold-body" hidden={toggle ? !fold.open : undefined}>
+        <div id={bodyId} className="ui-fold-body" hidden={!fold.open}>
           {body}
         </div>
       ) : (
