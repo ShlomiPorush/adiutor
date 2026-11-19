@@ -20,12 +20,7 @@ import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
 import { UnsavedProvider } from "../../ui/unsaved.tsx"
 import { forgetSettingsVisit, SettingsPage } from "../SettingsPage.tsx"
-import {
-  agentChanges,
-  claudeCommand,
-  idleDaysOf,
-  skillSentence,
-} from "./AgentAccessPanel.tsx"
+import { agentChanges, claudeCommand, idleDaysOf, skillSentence } from "./AgentAccessPanel.tsx"
 
 /** Better Auth's key list and delete, as the old keys' group calls them. */
 const oldKeys = vi.hoisted(() => ({
