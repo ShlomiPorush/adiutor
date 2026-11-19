@@ -113,44 +113,38 @@ function ComputerGroup() {
                   <Time value={client.lastCheckinAt} mode="full" />
                 )}
                 <span className="ui-muted">{t("syncNow.version", { version: client.version })}</span>
+                {/* A pause and a sync the computer runs on its own show here, only while they hold. */}
+                {client.paused ? (
+                  <Tag tone="warn">
+                    {client.pausedUntil ? (
+                      <>
+                        {t("syncNow.pausedUntil")} <Time value={client.pausedUntil} mode="full" />
+                      </>
+                    ) : (
+                      t("syncNow.paused")
+                    )}
+                  </Tag>
+                ) : null}
+                {client.running?.kind === "local" ? <Tag tone="info">{t("syncNow.runningLocal")}</Tag> : null}
               </>
             ) : (
               "-"
             )}
           </Fact>
-          <Fact label={t("syncNow.pause")}>
-            {!client ? (
-              "-"
-            ) : client.paused ? (
-              client.pausedUntil ? (
-                <>
-                  {t("syncNow.pausedUntil")} <Time value={client.pausedUntil} mode="full" />
-                </>
-              ) : (
-                t("syncNow.paused")
-              )
-            ) : (
-              t("syncNow.notPaused")
-            )}
-            {client?.running?.kind === "local" ? <Tag tone="info">{t("syncNow.runningLocal")}</Tag> : null}
-          </Fact>
           <Fact label={t("syncNow.nextRun")}>
             {client?.nextRunAt ? <Time value={client.nextRunAt} mode="full" /> : "-"}
           </Fact>
-          <Fact label={t("syncNow.request")}>
-            {request ? (
-              <>
+          {/* The last sync asked for here, only once there is one. */}
+          {request ? (
+            <Fact label={t("syncNow.request")}>
                 <Tag tone={REQUEST_TONE[request.state]}>{t(`syncNow.state.${request.state}`)}</Tag>
                 <span className="ui-muted">
                   {t("syncNow.requestedAt")} <Time value={request.requestedAt} />
                 </span>
                 {request.result ? <span>{requestParts(t, request.result)}</span> : null}
                 {request.state === "waiting" ? <CancelRequestButton request={request} /> : null}
-              </>
-            ) : (
-              t("syncNow.noRequest")
-            )}
-          </Fact>
+            </Fact>
+          ) : null}
         </Facts>
       ) : null}
     </Group>

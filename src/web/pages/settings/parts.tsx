@@ -7,6 +7,7 @@
 
 import { Lock, RotateCcw, X } from "lucide-react"
 import { type ReactNode, useId } from "react"
+import { FoldButton } from "../../ui/fold.tsx"
 import { formatNumber } from "../../format/number.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 
@@ -18,6 +19,7 @@ export function Group({
   extra,
   intro,
   heading: Heading = "h3",
+  fold,
   children,
 }: {
   id: string
@@ -29,19 +31,44 @@ export function Group({
   intro?: ReactNode
   /** h3 under a Settings section's h2; h2 on a page without sections (Account). */
   heading?: "h2" | "h3"
+  /** A group that folds (ui/fold.tsx): whether it is open, and a mark beside its title (its state, seen while folded). */
+  fold?: { open: boolean; onToggle: (open: boolean) => void; mark?: ReactNode }
   children: ReactNode
 }) {
+  const bodyId = `${id}-body`
+  const body = (
+    <>
+      {intro ? <p className="ui-set-group-intro">{intro}</p> : null}
+      {children}
+    </>
+  )
   return (
-    <section id={id} className="ui-panel ui-set-group" aria-labelledby={`${id}-title`}>
+    <section
+      id={id}
+      className={fold ? "ui-panel ui-set-group ui-set-group-fold" : "ui-panel ui-set-group"}
+      aria-labelledby={`${id}-title`}
+    >
       <div className="ui-set-group-head">
         <Heading id={`${id}-title`} className="ui-set-group-title">
-          {title}
+          {fold ? (
+            <FoldButton open={fold.open} onToggle={fold.onToggle} controls={bodyId}>
+              {title}
+              {fold.mark}
+            </FoldButton>
+          ) : (
+            title
+          )}
         </Heading>
         {count !== undefined ? <span className="ui-count">{formatNumber(count)}</span> : null}
         {extra ? <div className="ui-set-group-acts">{extra}</div> : null}
       </div>
-      {intro ? <p className="ui-set-group-intro">{intro}</p> : null}
-      {children}
+      {fold ? (
+        <div id={bodyId} className="ui-fold-body" hidden={!fold.open}>
+          {body}
+        </div>
+      ) : (
+        body
+      )}
     </section>
   )
 }

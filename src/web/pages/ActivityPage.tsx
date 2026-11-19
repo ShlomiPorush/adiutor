@@ -1,8 +1,8 @@
 // The audit log: every change by anyone, newest first, loaded by cursor as the end scrolls into view.
 // An item entry opens the item; a project or note entry opens its page.
 //
-// The filter bar (v3 MP-6, TB-17, TB-18, NL-3): the search and Who at every size, Agent, Action and Project behind
-// the Filters button, and an item named by a link (the item dialog's "All activity"). The filters live in the
+// The filter bar (v3 MP-6, TB-17, TB-18, NL-3): the search at every size, Who, Agent, Action and Project behind
+// the Filters button (owner's decision: Who has no row of its own), and an item named by a link (the item dialog's "All activity"). The filters live in the
 // address under the API's own names, so a reload, Back, Forward and a shared link keep them; a value the API
 // would refuse is dropped from the address in place. Every count comes from the server's first page, never from
 // the rows loaded; each picker's counts are what choosing that value lists. A change of filters is a new list
@@ -121,7 +121,7 @@ export function ActivityPage() {
   const total = first?.total ?? null
 
   const options = useFilterOptions(counts, filters, projects.data ?? [])
-  const more = [filters.agent, filters.action, filters.projectId].filter(Boolean).length
+  const more = [filters.actorKind, filters.agent, filters.action, filters.projectId].filter(Boolean).length
 
   return (
     <div className="ui-page">
@@ -141,6 +141,11 @@ export function ActivityPage() {
             />
           }
           pickers={
+            filters.itemId ? (
+              <ItemFilter itemId={filters.itemId} onRemove={() => setFilters({ itemId: undefined })} />
+            ) : undefined
+          }
+          more={
             <>
               <Picker
                 label={t("activity.who")}
@@ -150,13 +155,6 @@ export function ActivityPage() {
                 // A kind replaces the agent: the counts of Who ignore both (docs/api.md, Audit filters).
                 onChange={(value) => setFilters({ actorKind: value || undefined, agent: undefined })}
               />
-              {filters.itemId ? (
-                <ItemFilter itemId={filters.itemId} onRemove={() => setFilters({ itemId: undefined })} />
-              ) : null}
-            </>
-          }
-          more={
-            <>
               {!filters.actorKind || filters.actorKind === "agent" ? (
                 <Picker
                   label={t("activity.agent")}
