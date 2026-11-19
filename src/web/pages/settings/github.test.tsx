@@ -175,6 +175,12 @@ const row = (label: string) =>
 const keyRow = () => row(en.githubSettings.key)
 const keyField = () => keyRow()?.querySelector("textarea")
 const group = (id: string) => document.getElementById(id)
+const appFold = () => group("settings-github-app")?.querySelector<HTMLButtonElement>(".ui-fold-btn") ?? null
+/** Opens the GitHub App group from its head, as the owner does once the App is set up. */
+async function openApp(): Promise<void> {
+  await click(appFold())
+  expect(appFold()?.getAttribute("aria-expanded")).toBe("true")
+}
 const question = () => document.querySelector<HTMLElement>('[role="alertdialog"]')
 const saveBar = () => document.querySelector(".ui-savebar")
 const readNow = () => button(en.githubSettings.readNow, group("settings-github-pull") ?? document)
@@ -226,6 +232,11 @@ describe("the private key's states (FS-3)", () => {
 
   it("stored and accepted: Stored with Replace, Remove and its fingerprint, never a paste field", async () => {
     await render()
+    // Set up: the group starts folded, says so in its head, and opens from there.
+    expect(plain(appFold()?.textContent)).toContain(en.githubSettings.appSetUp)
+    expect(appFold()?.getAttribute("aria-expanded")).toBe("false")
+    expect(keyRow()?.closest("[hidden]")).not.toBeNull()
+    await openApp()
     const text = plain(keyRow()?.textContent)
     expect(text).toContain(en.githubSettings.keyStored)
     expect(text).toContain(en.githubSettings.keyAccepted)
@@ -307,10 +318,24 @@ describe("saving the App with the one save bar (SV-1)", () => {
 
   it("an App id that is not a number is refused before it is sent", async () => {
     await render()
+    await openApp()
     await type(row(en.githubSettings.appId)?.querySelector("input"), "12ab")
+    // An edit holds the group open: no fold button while it waits, so the field and its refusal cannot be hidden.
+    expect(appFold()).toBeNull()
     await click(button(en.savebar.save))
     expect(githubCalls("PATCH", "/github/app")).toHaveLength(0)
     expect(plain(row(en.githubSettings.appId)?.textContent)).toContain(en.githubSettings.appIdInvalid)
+    expect(row(en.githubSettings.appId)?.closest("[hidden]")).toBeNull()
+    expect(document.activeElement).toBe(row(en.githubSettings.appId)?.querySelector("input"))
+    expect(appFold()).toBeNull()
+  })
+
+  it("a first setup holds the App group open, with Not set up in its head", async () => {
+    view = { ...VIEW, settings: { ...VIEW.settings, appId: { value: null, locked: false, variable: null } } }
+    await render()
+    expect(appFold()).toBeNull()
+    expect(plain(group("settings-github-app-title")?.textContent)).toContain(en.githubSettings.appNotSetUp)
+    expect(row(en.githubSettings.appId)?.closest("[hidden]")).toBeNull()
   })
 
   it("githubChanges sends only what differs, and never a locked field", () => {

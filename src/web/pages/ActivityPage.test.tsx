@@ -213,6 +213,8 @@ async function click(element: Element | null | undefined) {
 
 /** Opens a picker and answers its options as label and count. */
 async function options(name: string): Promise<{ label: string; hint: string; element: HTMLElement }[]> {
+  // Who, Agent, Action and Project sit in the Filters panel: open it first, as the owner does.
+  if (pill(name)?.closest("[hidden]")) await click(document.querySelector(".ui-filters-toggle"))
   await click(pill(name))
   return Array.from(document.querySelectorAll<HTMLElement>('[role="listbox"] [role="option"]')).map((element) => ({
     label: plain(element.querySelector(".ui-picker-opt-label")?.textContent),
