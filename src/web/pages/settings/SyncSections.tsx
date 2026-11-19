@@ -115,7 +115,7 @@ function ComputerGroup() {
                 <span className="ui-muted">{t("syncNow.version", { version: client.version })}</span>
                 {/* A pause and a sync the computer runs on its own show here, only while they hold. */}
                 {client.paused ? (
-                  <Tag tone="warn">
+                  <span className="ui-text-warn">
                     {client.pausedUntil ? (
                       <>
                         {t("syncNow.pausedUntil")} <Time value={client.pausedUntil} mode="full" />
@@ -123,7 +123,7 @@ function ComputerGroup() {
                     ) : (
                       t("syncNow.paused")
                     )}
-                  </Tag>
+                  </span>
                 ) : null}
                 {client.running?.kind === "local" ? <Tag tone="info">{t("syncNow.runningLocal")}</Tag> : null}
               </>
