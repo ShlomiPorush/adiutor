@@ -7,7 +7,7 @@ import { anonymousClient, appClient, type Octokit } from "../github/client.ts"
 import { describeFailure } from "../github/errors.ts"
 import { type GitHubGate, lockGitHubExclusive } from "../github/gate.ts"
 import { keyFingerprint, normalizeKey, pkcs8, readPrivateKey } from "../github/key.ts"
-import { APP_SLUG, appManifest, type PendingCreation, readConversion } from "../github/manifest.ts"
+import { APP_SLUG, appManifest, type PendingCreation, type PendingInstall, readConversion } from "../github/manifest.ts"
 import { type InstallationState, withinReadPermissions } from "../github/pull.ts"
 import type { GitHubRunner } from "../github/runner.ts"
 import { effectiveGitHub, GITHUB_KEY_COLUMN } from "../github/settings.ts"
@@ -25,8 +25,11 @@ const CHECK_TIMEOUT_MS = 10_000
 
 export type GitHubDeps = { env: SettingsEnv; gate: GitHubGate; origin: string }
 
-/** What creating the App from Settings needs besides: GitHub's web origin, the public URL and the pending creation. */
-export type GitHubCreateDeps = GitHubDeps & { publicUrl: URL; pending: PendingCreation }
+/**
+ * What creating the App and connecting accounts from Settings need besides: the public URL, the pending creation and
+ * the pending connection of an account.
+ */
+export type GitHubCreateDeps = GitHubDeps & { publicUrl: URL; pending: PendingCreation; installing: PendingInstall }
 
 const locked = (variable: string) =>
   new AppError(
@@ -259,6 +262,11 @@ export async function addGitHubInstallation(
   if (current.installations.some((i) => i.id === input.installationId))
     throw new AppError("conflict", "This installation is already on the list.")
   const read = await readInstallation(app, input.installationId)
+  return commit(ctx, by, deps, input.generation, addition(input.installationId, read))
+}
+
+/** The change that adds an installation GitHub answered for, or the refusal of one that would never be read. */
+function addition(installationId: number, read: InstallationRead) {
   if (read.suspended)
     throw new AppError("github_installation_suspended", "This installation is suspended on GitHub. Resume it there.")
   if (read.tooBroad)
@@ -267,51 +275,59 @@ export async function addGitHubInstallation(
       "This installation grants more than read access. Reduce the App's permissions to read only.",
     )
   const entry: StoredInstallation = {
-    id: input.installationId,
+    id: installationId,
     accountId: read.account.id,
     accountType: read.account.type,
     login: read.account.login,
   }
-  return commit(ctx, by, deps, input.generation, (row) => ({
-    githubInstallations: [...row.githubInstallations.filter((i) => i.id !== entry.id), entry],
-  }))
+  return (row: SettingsRow) => ({
+    githubInstallations: row.githubInstallations.some((i) => i.id === entry.id)
+      ? row.githubInstallations.map((i) => (i.id === entry.id ? entry : i))
+      : [...row.githubInstallations, entry],
+  })
 }
 
-/** What adding an installation would come to, as Settings shows it after GitHub's install page sent the browser back. */
-export type InstallationPreviewState = "usable" | "too_broad" | "suspended" | "already_added" | "locked"
-
 /**
- * An installation before it is added: its account and whether adding it would be accepted. GitHub's return names the
- * installation in the address, which anyone can write, so the account shown comes from GitHub, read as the App, and
- * nothing is stored: the owner's Add stores it.
+ * Finishes connecting an account when GitHub's install page sent the browser back with an installation id: only with
+ * the state of the owner's pending Connect an account (used up first, so a return works once, and an address someone
+ * else wrote, with another state or none, adds nothing and leaves the pending connection as it is), and only an
+ * installation GitHub answers for as the App, not suspended, with read access alone. One already on the list is checked
+ * the same way and written again with the account GitHub answers. It is saved at the generation read here.
  */
-export async function previewGitHubInstallation(
+export async function finishGitHubInstallation(
   ctx: Ctx,
   by: By,
-  deps: GitHubDeps,
-  installationId: number,
-): Promise<{ id: number; account: { login: string; type: string }; state: InstallationPreviewState }> {
-  requireOwner(by, "read the GitHub settings")
-  checkInstallationId(installationId)
-  const current = effectiveGitHub(await getSettings(ctx.db), deps.env.overrides, deps.env.cipher)
-  const app = appOf(current, deps, "Set the App id and its key before adding an installation.")
-  const read = await readInstallation(app, installationId)
-  const state: InstallationPreviewState = current.installations.some((i) => i.id === installationId)
-    ? "already_added"
-    : // The environment sets the list: Settings cannot add to it, so the preview offers no Add.
-      deps.env.overrides.githubInstallations !== undefined
-      ? "locked"
-      : read.suspended
-        ? "suspended"
-        : read.tooBroad
-          ? "too_broad"
-          : "usable"
-  return { id: installationId, account: { login: read.account.login, type: read.account.type }, state }
+  deps: GitHubCreateDeps,
+  input: { installationId: number; state: string },
+): Promise<{ login: string; added: boolean }> {
+  requireOwner(by, "change the GitHub settings")
+  const { overrides, cipher } = deps.env
+  if (overrides.githubInstallations !== undefined) throw locked("ADIUTOR_GITHUB_INSTALLATIONS")
+  checkInstallationId(input.installationId)
+  if (!deps.installing.take(input.state, ctx.clock()))
+    throw new AppError(
+      "github_install_expired",
+      "This connection of an account was not started from Settings, was used already or is older than five minutes. Nothing was added.",
+    )
+  const row = await getSettings(ctx.db)
+  const current = effectiveGitHub(row, overrides, cipher)
+  const app = appOf(current, deps, "Set the App id and its key before connecting an account.")
+  const read = await readInstallation(app, input.installationId)
+  const add = addition(input.installationId, read)
+  // Already connected only when the list, read under the lock, holds this installation for the account GitHub answers
+  // now; otherwise the entry is (re)written, so a removal meanwhile or another account is never reported as connected.
+  let added = true
+  await commit(ctx, by, deps, row.githubGeneration, (before) => {
+    added = !before.githubInstallations.some((i) => i.id === input.installationId && i.accountId === read.account.id)
+    return add(before)
+  })
+  return { login: read.account.login, added }
 }
 
 /**
  * The address of GitHub's install page of the App: its slug is read from GitHub (`GET /app`) each time, never stored.
- * GitHub sends the browser back to the App's setup URL (Settings, GitHub) with the installation's id.
+ * It carries the state of a new pending connection; GitHub sends the browser back to the App's setup URL (Settings,
+ * GitHub) with the installation's id and that state, which finishGitHubInstallation takes (five minutes, once).
  */
 export async function gitHubInstallLink(ctx: Ctx, by: By, deps: GitHubCreateDeps): Promise<{ url: string }> {
   requireOwner(by, "change the GitHub settings")
@@ -331,7 +347,8 @@ export async function gitHubInstallLink(ctx: Ctx, by: By, deps: GitHubCreateDeps
   if (!isObject(data) || typeof data.slug !== "string" || !APP_SLUG.test(data.slug)) throw unreachable()
   if (String(data.id) !== current.appId)
     throw new AppError("github_app_mismatch", "The key belongs to another GitHub App than the App id.")
-  return { url: `${GITHUB_WEB_ORIGIN}/apps/${encodeURIComponent(data.slug)}/installations/new` }
+  const state = deps.installing.start(ctx.clock())
+  return { url: `${GITHUB_WEB_ORIGIN}/apps/${encodeURIComponent(data.slug)}/installations/new?state=${state}` }
 }
 
 const alreadySet = () =>

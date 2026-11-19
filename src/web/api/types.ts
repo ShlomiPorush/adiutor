@@ -50,6 +50,7 @@ export const API_ERROR_CODES = [
   "github_not_set_up",
   "github_rate_limited",
   "github_create_expired",
+  "github_install_expired",
   "github_code_rejected",
   "github_app_invalid",
   "github_installation_suspended",
@@ -644,12 +645,5 @@ export type GitHubCreateForm = { action: string; manifest: string }
 /** POST /github/create/finish: the account that owns the new App, and the view with the App saved. */
 export type GitHubCreated = { owner: { login: string; type: string | null }; view: GitHubView }
 
-/** What adding an installation would come to: already_added when it is on the list; locked when the environment sets it. */
-export type GitHubPreviewState = "usable" | "too_broad" | "suspended" | "already_added" | "locked"
-
-/** GET /github/installations/:id/preview: an installation as GitHub answers it, before it is added. */
-export type GitHubInstallationPreview = {
-  id: number
-  account: { login: string; type: string }
-  state: GitHubPreviewState
-}
+/** POST /github/install/finish: the account connected (`added` false: it was on the list already). */
+export type GitHubInstallFinished = { login: string; added: boolean }

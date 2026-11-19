@@ -2,20 +2,19 @@
 // GitHub's own pages in this tab. Create posts the manifest form to GitHub; GitHub sends the browser back to
 // /settings/github with `code` and `state` (the App was created) or `installation_id` and `setup_action` (it was
 // installed). Those parameters leave the address before anything else, so a reload or Back never repeats them; the
-// code is then exchanged once, and an installation is only shown until the owner adds it with his own click.
+// code is then exchanged once, and the installation is sent once with the state GitHub brought back; the server adds
+// it only when that state is the one of the owner's own pending Connect an account.
 
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import { ApiError } from "../../api/client.ts"
 import { api, qk } from "../../api/endpoints.ts"
-import type { GitHubInstallationPreview, GitHubPreviewState, GitHubView } from "../../api/types.ts"
 import { formatTime } from "../../format/datetime.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
 import { Copyable } from "../../ui/Copyable.tsx"
 import { Banner, errorReason } from "../../ui/states.tsx"
 import { showToast } from "../../ui/Toast.tsx"
-import { Tag, type Tone } from "../../ui/tags.tsx"
 import { Row } from "./parts.tsx"
 
 /** A GitHub refusal in the owner's language (the server's own sentence is English); others as usual. */
@@ -65,11 +64,13 @@ export type GitHubReturn =
   | { kind: "created"; login: string; fingerprint: string | null }
   | { kind: "createFailed"; error: unknown }
   | { kind: "request" }
-  | { kind: "preview"; id: number; preview: GitHubInstallationPreview | null; error: unknown }
+  | { kind: "connecting" }
+  | { kind: "connected"; login: string; added: boolean }
+  | { kind: "connectFailed"; error: unknown }
 
 /**
  * Reads GitHub's return from the address once: the parameters are replaced away first, then the App's code is
- * exchanged (once, also under StrictMode's second run of the effect), or the installation is read for a preview.
+ * exchanged, or the installation is sent to be added (each once, also under StrictMode's second run of the effect).
  */
 export function useGitHubReturn() {
   const location = useLocation()
@@ -77,14 +78,6 @@ export function useGitHubReturn() {
   const queryClient = useQueryClient()
   const handled = useRef(false)
   const [state, setState] = useState<GitHubReturn | null>(null)
-
-  const preview = (id: number) => {
-    setState({ kind: "preview", id, preview: null, error: null })
-    api.previewGitHubInstallation(id).then(
-      (answer) => setState({ kind: "preview", id, preview: answer, error: null }),
-      (error: unknown) => setState({ kind: "preview", id, preview: null, error }),
-    )
-  }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs for each address; the rest is read as it is then
   useEffect(() => {
@@ -119,10 +112,31 @@ export function useGitHubReturn() {
     } else if (action === "request") {
       // An organization's owner must approve the install: GitHub may send no installation id yet.
       setState({ kind: "request" })
-    } else if (installation && INSTALLATION_ID.test(installation)) preview(Number(installation))
+    } else if (installation && INSTALLATION_ID.test(installation) && !returned) {
+      // A return without a state is not a Connect an account (GitHub's Configure, or a change of repositories): it adds
+      // nothing, and the list is read again.
+      void queryClient.invalidateQueries({ queryKey: qk.github })
+    } else if (installation && INSTALLATION_ID.test(installation) && returned) {
+      setState({ kind: "connecting" })
+      api
+        .finishGitHubInstall(Number(installation), returned)
+        .then((connected) => {
+          // An answer outside the contract is no confirmation: it shows as a failure, with what to check.
+          if (typeof connected?.login !== "string" || typeof connected.added !== "boolean")
+            throw new Error("The answer is not the expected one.")
+          setState({ kind: "connected", login: connected.login || installation, added: connected.added })
+        })
+        .catch((error: unknown) => setState({ kind: "connectFailed", error }))
+        // Read the settings again either way, so the list shows what was saved: a read that started before the save
+        // is cancelled first, since one without data yet would otherwise be joined instead of read again.
+        .finally(async () => {
+          await queryClient.cancelQueries({ queryKey: qk.github })
+          await queryClient.invalidateQueries({ queryKey: qk.github })
+        })
+    }
   }, [location.search])
 
-  return { state, dismiss: () => setState(null), retryPreview: preview }
+  return { state, dismiss: () => setState(null) }
 }
 
 /**
@@ -298,33 +312,12 @@ export function InstallRow({ unsaved }: { unsaved: boolean }) {
   )
 }
 
-/** One tone per preview state, for its banner and its tag. */
-const PREVIEW_TONE: Record<GitHubPreviewState, Exclude<Tone, "neutral">> = {
-  usable: "info",
-  too_broad: "fail",
-  suspended: "warn",
-  already_added: "ok",
-  locked: "warn",
-}
-
 /**
- * GitHub's return after an install: an organization's request waits for its owner; otherwise the installation as
- * GitHub answers it, with Add for one that can be added. Nothing is added until the owner presses Add.
+ * GitHub's return after Connect an account: an organization's request waits for its owner; otherwise the account is
+ * being connected, was connected (or was on the list already), or could not be, with what to do.
  */
-export function InstallReturn({
-  result,
-  view,
-  onDismiss,
-  onRetry,
-}: {
-  result: GitHubReturn
-  view: GitHubView
-  onDismiss: () => void
-  onRetry: (id: number) => void
-}) {
+export function InstallReturn({ result, onDismiss }: { result: GitHubReturn; onDismiss: () => void }) {
   const { t, language } = useI18n()
-  const queryClient = useQueryClient()
-  const [adding, setAdding] = useState(false)
   const close = (
     <button type="button" className="ui-btn ui-btn-sm" onClick={onDismiss}>
       {t("githubSettings.dismiss")}
@@ -336,70 +329,22 @@ export function InstallReturn({
         {t("githubSettings.requestBody")}
       </Banner>
     )
-  if (result.kind !== "preview") return null
-  if (result.error)
+  if (result.kind === "connecting") return <Banner tone="info" title={t("githubSettings.connecting")} />
+  if (result.kind === "connected")
     return (
       <Banner
-        tone="fail"
-        title={t("githubSettings.previewFailed")}
-        action={
-          <span className="ui-banner-actions">
-            <button type="button" className="ui-btn ui-btn-sm" onClick={() => onRetry(result.id)}>
-              {t("common.tryAgain")}
-            </button>
-            {close}
-          </span>
-        }
+        tone="ok"
+        title={t(result.added ? "githubSettings.connected" : "githubSettings.alreadyConnected", { name: result.login })}
+        action={close}
       >
-        {githubErrorText(t, language, result.error)}
+        {result.added ? t("githubSettings.connectedHint") : null}
       </Banner>
     )
-  if (!result.preview) return <Banner tone="info" title={t("githubSettings.previewLoading")} />
-  const { account, state } = result.preview
-  const add = async () => {
-    setAdding(true)
-    try {
-      const next = await api.addGitHubInstallation(view.settings.generation, result.id)
-      queryClient.setQueryData(qk.github, next)
-      showToast(t("githubSettings.added", { name: account.login || String(result.id) }), "success")
-      onDismiss()
-    } catch (failure) {
-      showToast(t("githubSettings.addFailed", { reason: githubErrorText(t, language, failure) }), "error")
-      if (failure instanceof ApiError && failure.code === "conflict")
-        await queryClient.invalidateQueries({ queryKey: qk.github })
-    } finally {
-      setAdding(false)
-    }
-  }
-  const type =
-    account.type === "User" || account.type === "Organization"
-      ? t(`githubSettings.accountType.${account.type}`)
-      : account.type
-  return (
-    <Banner
-      tone={PREVIEW_TONE[state]}
-      title={t("githubSettings.previewTitle", { name: account.login || String(result.id) })}
-      action={
-        <span className="ui-banner-actions">
-          {state === "usable" ? (
-            <button
-              type="button"
-              className="ui-btn ui-btn-sm ui-btn-primary"
-              disabled={adding}
-              onClick={() => void add()}
-            >
-              {adding ? t("githubSettings.adding") : t("githubSettings.add")}
-            </button>
-          ) : null}
-          {close}
-        </span>
-      }
-    >
-      <Tag tone="neutral">{type}</Tag> <Tag tone={PREVIEW_TONE[state]}>{t(`githubSettings.previewState.${state}`)}</Tag>{" "}
-      {t(`githubSettings.previewHint.${state}`, {
-        variable: view.settings.installations.variable ?? "ADIUTOR_GITHUB_INSTALLATIONS",
-        id: String(result.id),
-      })}
-    </Banner>
-  )
+  if (result.kind === "connectFailed")
+    return (
+      <Banner tone="fail" title={t("githubSettings.connectFailed")} action={close}>
+        {githubErrorText(t, language, result.error)}. {t("githubSettings.connectRecovery")}
+      </Banner>
+    )
+  return null
 }

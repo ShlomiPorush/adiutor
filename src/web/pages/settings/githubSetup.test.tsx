@@ -2,9 +2,9 @@
 // Settings, GitHub: the App made from a manifest and GitHub's returns. Create the App on GitHub shows only while no App
 // is set and nothing is locked, and posts a form with the manifest to GitHub's address; GitHub's return with a code
 // and a state leaves the address at once and is exchanged once, showing the App's owner and fingerprint or the
-// refusal with what to do; Install on an account opens GitHub's install page in this tab; and GitHub's return after an
-// install shows the installation, adding it only on the owner's Add, or says an organization must approve it. The data
-// is invented.
+// refusal with what to do; Connect an account opens GitHub's install page in this tab; and GitHub's return after an
+// install sends the installation once to be added (the server adds it only while the owner's Connect an account is
+// pending) and shows the account or the refusal, or says an organization must approve it. The data is invented.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, type ReactNode, StrictMode } from "react"
@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import en from "../../../shared/locales/en.json"
 import { setTransport, type TransportRequest } from "../../api/client.ts"
 import { qk } from "../../api/endpoints.ts"
-import type { GitHubInstallationPreview, GitHubView } from "../../api/types.ts"
+import type { GitHubView } from "../../api/types.ts"
 import { I18nProvider } from "../../i18n/i18n.tsx"
 import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
@@ -65,7 +65,10 @@ const SET_UP: GitHubView = {
 let view: GitHubView
 let calls: { method: string; path: string; body?: unknown }[]
 let finishAnswer: { status: number; body: unknown }
-let preview: GitHubInstallationPreview
+/** Whether GET /github fails (the settings could not be read). */
+let viewFails: boolean
+/** The answer of POST /github/install/finish: the account connected, or a refusal. */
+let installAnswer: { status: number; body: unknown } | null
 
 /** While set, the answers of Create and Install wait for it (an answer that arrives late). */
 let hold: Promise<void> | null
@@ -76,7 +79,10 @@ async function transport({ method, path, body }: TransportRequest) {
   if (path.startsWith("/github")) calls.push({ method, path, body })
   if (hold && method === "POST" && (path === "/github/create" || path === "/github/install")) await hold
   if (holdFinish && method === "POST" && path === "/github/create/finish") await holdFinish
-  if (path === "/github" && method === "GET") return { status: 200, body: { data: view } }
+  if (path === "/github" && method === "GET")
+    return viewFails
+      ? { status: 500, body: { error: { code: "internal_error", message: "failed" } } }
+      : { status: 200, body: { data: view } }
   if (path === "/github/create" && method === "POST")
     return {
       status: 200,
@@ -89,24 +95,24 @@ async function transport({ method, path, body }: TransportRequest) {
   }
   if (path === "/github/install" && method === "POST")
     return { status: 200, body: { data: { url: `${WEB}/apps/adiutor-reader-0a1b/installations/new` } } }
-  if (/^\/github\/installations\/\d+\/preview$/.test(path) && method === "GET")
-    return { status: 200, body: { data: preview } }
-  if (path === "/github/installations" && method === "POST") {
+  if (path === "/github/install/finish" && method === "POST") {
+    if (installAnswer) return installAnswer
+    // The server added the installation: its view from now on.
     view = {
       ...view,
       settings: { ...view.settings, generation: view.settings.generation + 1 },
       installations: [
         {
-          id: preview.id,
+          id: (body as { installationId: number }).installationId,
           accountId: 7,
-          accountType: preview.account.type,
-          login: preview.account.login,
+          accountType: "Organization",
+          login: "example-org",
           state: null,
           inventory: null,
         },
       ],
     }
-    return { status: 201, body: { data: view } }
+    return { status: 200, body: { data: { login: "example-org", added: true } } }
   }
   return { status: 404, body: { error: { code: "not_found", message: "Not here." } } }
 }
@@ -198,7 +204,8 @@ beforeEach(() => {
   hold = null
   holdFinish = null
   finishAnswer = { status: 200, body: { data: { owner: { login: "example-owner", type: "User" }, view: SET_UP } } }
-  preview = { id: 51234567, account: { login: "example-org", type: "Organization" }, state: "usable" }
+  installAnswer = null
+  viewFails = false
   setTransport(transport)
   vi.spyOn(window, "matchMedia").mockImplementation(
     (query: string) =>
@@ -294,7 +301,7 @@ describe("GitHub's return after creating the App", () => {
   })
 })
 
-describe("Install on an account", () => {
+describe("Connect an account", () => {
   it("opens GitHub's install page in this tab", async () => {
     view = structuredClone(SET_UP)
     const go = vi.spyOn(leaveFor, "page").mockImplementation(() => {})
@@ -317,32 +324,46 @@ describe("Install on an account", () => {
   })
 })
 
-describe("GitHub's return after an install", () => {
-  it("shows the installation as GitHub answers it, and adds it only on Add", async () => {
+describe("GitHub's return after Connect an account", () => {
+  it("adds the installation at once, and shows the account", async () => {
     view = structuredClone(SET_UP)
-    await render("/settings/github?installation_id=51234567&setup_action=install")
+    await render("/settings/github?installation_id=51234567&setup_action=install&state=i1")
     expect(router.state.location.search).toBe("")
-    expect(calls.filter((call) => call.path === "/github/installations/51234567/preview")).toHaveLength(1)
-    expect(githubCalls("POST", "/github/installations")).toHaveLength(0)
-    const shown = banners().join("\n")
-    expect(shown).toContain("example-org")
-    expect(shown).toContain(en.githubSettings.accountType.Organization)
-    expect(shown).toContain(en.githubSettings.previewState.usable)
-    await click(button(en.githubSettings.add, document.querySelector(".ui-banner") ?? document))
-    expect(githubCalls("POST", "/github/installations")).toEqual([
-      { method: "POST", path: "/github/installations", body: { generation: 1, installationId: 51234567 } },
+    expect(githubCalls("POST", "/github/install/finish")).toEqual([
+      { method: "POST", path: "/github/install/finish", body: { installationId: 51234567, state: "i1" } },
     ])
-    expect(plain(document.querySelector(".ui-toast")?.textContent)).toContain("example-org")
-    expect(banners().join("\n")).not.toContain(en.githubSettings.previewState.usable)
+    const shown = banners().join("\n")
+    expect(shown).toContain(en.githubSettings.connected.replace("{name}", "example-org"))
+    expect(document.querySelector("#settings-github-installations")?.textContent).toContain("example-org")
   })
 
-  it("offers no Add for an installation that cannot be added", async () => {
+  it("shows the connected account even when the settings cannot be read afterwards", async () => {
     view = structuredClone(SET_UP)
-    preview = { ...preview, state: "too_broad" }
-    await render("/settings/github?installation_id=51234567&setup_action=update")
-    const banner = document.querySelector<HTMLElement>(".ui-banner")
-    expect(plain(banner?.textContent)).toContain(en.githubSettings.previewHint.too_broad)
-    expect(button(en.githubSettings.add, banner ?? document)).toBeUndefined()
+    viewFails = true
+    await render("/settings/github?installation_id=51234567&setup_action=install&state=i1")
+    expect(banners().join("\n")).toContain(en.githubSettings.connected.replace("{name}", "example-org"))
+  })
+
+  it("sends an update's return too, and says when the account was on the list already", async () => {
+    view = structuredClone(SET_UP)
+    installAnswer = { status: 200, body: { data: { login: "example-org", added: false } } }
+    await render("/settings/github?installation_id=51234567&setup_action=update&state=i1")
+    expect(githubCalls("POST", "/github/install/finish")).toHaveLength(1)
+    expect(banners().join("\n")).toContain(en.githubSettings.alreadyConnected.replace("{name}", "example-org"))
+  })
+
+  it("shows a refusal with what to do, and adds nothing", async () => {
+    view = structuredClone(SET_UP)
+    installAnswer = {
+      status: 409,
+      body: { error: { code: "github_install_expired", message: "Not started here." } },
+    }
+    await render("/settings/github?installation_id=51234567&setup_action=install&state=i1")
+    const shown = banners().join("\n")
+    expect(shown).toContain(en.githubSettings.connectFailed)
+    expect(shown).toContain(en.errors.code.github_install_expired)
+    expect(shown).toContain(en.githubSettings.connectRecovery)
+    expect(document.querySelector("#settings-github-installations")?.textContent).not.toContain("example-org")
   })
 
   it("says an organization's owner must approve a request, and adds nothing", async () => {
@@ -350,8 +371,7 @@ describe("GitHub's return after an install", () => {
     await render("/settings/github?installation_id=51234567&setup_action=request")
     expect(router.state.location.search).toBe("")
     expect(banners().join("\n")).toContain(en.githubSettings.requestTitle)
-    expect(calls.some((call) => call.path.includes("/preview"))).toBe(false)
-    expect(githubCalls("POST", "/github/installations")).toHaveLength(0)
+    expect(githubCalls("POST", "/github/install/finish")).toHaveLength(0)
   })
 })
 
@@ -361,25 +381,40 @@ describe("returns and leaves that change nothing", () => {
     await render("/settings/github?setup_action=request")
     expect(router.state.location.search).toBe("")
     expect(banners().join("\n")).toContain(en.githubSettings.requestTitle)
-    expect(calls.some((call) => call.path.includes("/preview"))).toBe(false)
+    expect(githubCalls("POST", "/github/install/finish")).toHaveLength(0)
   })
 
-  it("offers no Add while the environment sets the installations, and names the variable", async () => {
-    view = {
-      ...structuredClone(SET_UP),
-      settings: {
-        ...SET_UP.settings,
-        installations: { value: [], locked: true, variable: "ADIUTOR_GITHUB_INSTALLATIONS" },
-      },
-    }
-    preview = { ...preview, state: "locked" }
-    await render("/settings/github?installation_id=51234567&setup_action=install")
-    const banner = document.querySelector<HTMLElement>(".ui-banner")
-    const text = plain(banner?.textContent)
-    expect(text).toContain(en.githubSettings.previewState.locked)
-    expect(text).toContain("ADIUTOR_GITHUB_INSTALLATIONS")
-    expect(text).toContain("51234567")
-    expect(button(en.githubSettings.add, banner ?? document)).toBeUndefined()
+  it("sends a return without a state nowhere (GitHub's Configure, or a change of repositories)", async () => {
+    view = structuredClone(SET_UP)
+    await render("/settings/github?installation_id=51234567&setup_action=update")
+    expect(router.state.location.search).toBe("")
+    expect(githubCalls("POST", "/github/install/finish")).toHaveLength(0)
+    expect(banners().join("\n")).not.toContain(en.githubSettings.connectFailed)
+  })
+
+  it("shows a failure, not a lasting Connecting, when the answer is not the expected one", async () => {
+    view = structuredClone(SET_UP)
+    installAnswer = { status: 200, body: { data: null } }
+    await render("/settings/github?installation_id=51234567&setup_action=install&state=i1")
+    const shown = banners().join("\n")
+    expect(shown).toContain(en.githubSettings.connectFailed)
+    expect(shown).not.toContain(en.githubSettings.connecting)
+  })
+
+  it("shows a failure, not Already connected, when the answer lacks the account and the result", async () => {
+    view = structuredClone(SET_UP)
+    installAnswer = { status: 200, body: { data: {} } }
+    await render("/settings/github?installation_id=51234567&setup_action=install&state=i1")
+    const shown = banners().join("\n")
+    expect(shown).toContain(en.githubSettings.connectFailed)
+    expect(shown).not.toContain(en.githubSettings.alreadyConnected.replace("{name}", "51234567"))
+  })
+
+  it("sends an installation id that is not a number nowhere", async () => {
+    view = structuredClone(SET_UP)
+    await render("/settings/github?installation_id=12ab&setup_action=install&state=i1")
+    expect(router.state.location.search).toBe("")
+    expect(githubCalls("POST", "/github/install/finish")).toHaveLength(0)
   })
 
   it("disables Create and Install while the Settings draft has changes, and enables them without", async () => {

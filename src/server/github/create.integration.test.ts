@@ -9,10 +9,10 @@ import { getSettings } from "../services/admin.ts"
 import {
   addGitHubInstallation,
   finishGitHubCreation,
+  finishGitHubInstallation,
   type GitHubCreateDeps,
   gitHubInstallLink,
   gitHubView,
-  previewGitHubInstallation,
   saveGitHubApp,
   startGitHubCreation,
 } from "../services/github.ts"
@@ -22,7 +22,7 @@ import { TEST_ORIGIN } from "../testing/browser.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { testSecret } from "../testing/secrets.ts"
 import { keyFingerprint } from "./key.ts"
-import { CREATION_TTL_MS } from "./manifest.ts"
+import { CREATION_TTL_MS, INSTALL_TTL_MS } from "./manifest.ts"
 
 // The App made from a manifest (Settings, Create the App on GitHub) and the installations added after GitHub's install
 // page sent the browser back, against the stand-in GitHub (e2e/github-stand-in.mjs) on a real database. The App's key
@@ -117,6 +117,7 @@ const deps = (overrides: EnvOverrides = {}): GitHubCreateDeps => ({
   origin: handle.origin,
   publicUrl: PUBLIC,
   pending: handle.pending,
+  installing: handle.installing,
 })
 const newCode = () => randomBytes(10).toString("hex")
 const stateOf = (action: string) => new URL(action).searchParams.get("state") as string
@@ -373,9 +374,10 @@ describe("installing the App", () => {
 
   it("links GitHub's install page by the slug GitHub gives now", async () => {
     await setUp()
-    expect(await gitHubInstallLink(t.ctx, owner, deps())).toEqual({
-      url: `${WEB}/apps/${SLUG}/installations/new`,
-    })
+    const { url } = await gitHubInstallLink(t.ctx, owner, deps())
+    expect(url).toMatch(new RegExp(`^${WEB}/apps/${SLUG}/installations/new\\?state=[A-Za-z0-9_-]{43}$`))
+    // Each link starts a connection of its own.
+    expect((await gitHubInstallLink(t.ctx, owner, deps())).url).not.toBe(url)
   })
 
   it("is refused while the environment sets the installations, and before the App is set up", async () => {
@@ -387,32 +389,80 @@ describe("installing the App", () => {
     })
   })
 
-  it("previews an installation as GitHub answers it, and stores nothing", async () => {
+  /** Connect an account: the install link starts it and carries its state. */
+  const link = async () => stateOf((await gitHubInstallLink(t.ctx, owner, deps())).url)
+  /** GitHub's return with `state`. */
+  const returned = (id: number, state: string, overrides: EnvOverrides = {}) =>
+    finishGitHubInstallation(t.ctx, owner, deps(overrides), { installationId: id, state })
+  const connect = async (id: number) => returned(id, await link())
+
+  it("adds the installation GitHub's return names after the owner's Connect an account, once", async () => {
     await setUp()
-    const preview = (id: number) => previewGitHubInstallation(t.ctx, owner, deps(), id)
-    expect(await preview(USABLE)).toEqual({
-      id: USABLE,
-      account: { login: "example-org", type: "Organization" },
-      state: "usable",
+    expect(await connect(USABLE)).toEqual({ login: "example-org", added: true })
+    expect(await settingsRow()).toMatchObject({
+      githubInstallations: [{ id: USABLE, login: "example-org", accountType: "Organization" }],
+      githubGeneration: 2,
     })
-    expect((await preview(BROAD)).state).toBe("too_broad")
-    expect(await preview(SUSPENDED)).toMatchObject({ account: { login: "example-owner", type: "User" } })
-    expect((await preview(SUSPENDED)).state).toBe("suspended")
-    await expect(preview(4545)).rejects.toMatchObject({ code: "github_installation_not_found" })
-    expect(await settingsRow()).toMatchObject({ githubInstallations: [], githubGeneration: 1 })
-    await addGitHubInstallation(t.ctx, owner, deps(), { generation: 1, installationId: USABLE })
-    expect((await preview(USABLE)).state).toBe("already_added")
+    // On the list already, for the same account: checked with GitHub and reported as connected already.
+    expect(await connect(USABLE)).toEqual({ login: "example-org", added: false })
+    expect((await settingsRow()).githubInstallations).toHaveLength(1)
   })
 
-  it("previews an installation as locked while the environment sets the list, so no Add is offered", async () => {
+  it("writes the entry again when GitHub now answers another account for the same installation", async () => {
     await setUp()
-    const locked = deps({ githubInstallations: [USABLE] })
-    expect(await previewGitHubInstallation(t.ctx, owner, locked, BROAD)).toMatchObject({ state: "locked" })
-    expect(await previewGitHubInstallation(t.ctx, owner, locked, USABLE)).toMatchObject({ state: "already_added" })
-    expect(await previewGitHubInstallation(t.ctx, owner, locked, SUSPENDED)).toMatchObject({ state: "locked" })
-    await expect(
-      addGitHubInstallation(t.ctx, owner, locked, { generation: 1, installationId: SUSPENDED }),
-    ).rejects.toMatchObject({ code: "setting_locked" })
+    await connect(USABLE)
+    const installation = standIn.scenario.installations[USABLE]
+    if (!installation) throw new Error("the scenario has no usable installation")
+    installation.account = { id: 9191, login: "example-other", type: "Organization" }
+    expect(await connect(USABLE)).toEqual({ login: "example-other", added: true })
+    expect((await settingsRow()).githubInstallations).toEqual([
+      { id: USABLE, accountId: 9191, accountType: "Organization", login: "example-other" },
+    ])
+  })
+
+  it("adds nothing from a return with another state, none, a used one, or one older than five minutes", async () => {
+    await setUp()
+    const state = await link()
+    // Someone else's address, or one from an older Connect an account: refused, and the pending one stays.
+    await expect(returned(BROAD, "")).rejects.toMatchObject({ code: "github_install_expired" })
+    await expect(returned(BROAD, randomBytes(32).toString("base64url"))).rejects.toMatchObject({
+      code: "github_install_expired",
+    })
+    expect(standIn.requests.filter((r) => r.path.startsWith("/app/installations/"))).toEqual([])
+    expect(await returned(USABLE, state)).toEqual({ login: "example-org", added: true })
+    // The same return again: used up.
+    await expect(returned(USABLE, state)).rejects.toMatchObject({ code: "github_install_expired" })
+    const late = await link()
+    t.clock.offsetMs += INSTALL_TTL_MS + 1000
+    await expect(returned(SUSPENDED, late)).rejects.toMatchObject({ code: "github_install_expired" })
+    t.clock.offsetMs = 0
+    // Expired is used up too.
+    await expect(returned(SUSPENDED, late)).rejects.toMatchObject({ code: "github_install_expired" })
+    expect((await settingsRow()).githubInstallations.map((i) => i.id)).toEqual([USABLE])
+  })
+
+  it("refuses an installation on the list that GitHub no longer reads, instead of calling it connected", async () => {
+    await setUp()
+    await connect(USABLE)
+    const installation = standIn.scenario.installations[USABLE]
+    if (!installation) throw new Error("the scenario has no usable installation")
+    installation.suspended = true
+    await expect(connect(USABLE)).rejects.toMatchObject({ code: "github_installation_suspended" })
+    expect((await settingsRow()).githubGeneration).toBe(2)
+  })
+
+  it("refuses an installation that would never be read, one GitHub does not know, and a locked list", async () => {
+    await setUp()
+    await expect(connect(SUSPENDED)).rejects.toMatchObject({ code: "github_installation_suspended" })
+    await expect(connect(BROAD)).rejects.toMatchObject({ code: "github_installation_too_broad" })
+    await expect(connect(4545)).rejects.toMatchObject({ code: "github_installation_not_found" })
+    const state = await link()
+    await expect(returned(USABLE, state, { githubInstallations: [USABLE] })).rejects.toMatchObject({
+      code: "setting_locked",
+    })
+    // The locked refusal came first and left the connection pending.
+    expect(await returned(USABLE, state)).toEqual({ login: "example-org", added: true })
+    expect((await settingsRow()).githubInstallations.map((i) => i.id)).toEqual([USABLE])
   })
 
   it("refuses to add a suspended installation or one granted more than the read permissions", async () => {
@@ -460,20 +510,25 @@ describe("over HTTP", () => {
       expect(again.json.error.code).toBe("github_create_expired")
 
       const install = await b.call("POST", "/api/v1/github/install")
-      expect(install.json.data).toEqual({ url: `${WEB}/apps/${SLUG}/installations/new` })
+      expect(install.json.data.url).toMatch(new RegExp(`^${WEB}/apps/${SLUG}/installations/new\\?state=`))
       expect(install.headers.get("cache-control")).toBe("no-store")
-      const preview = await b.call("GET", `/api/v1/github/installations/${USABLE}/preview`)
-      expect(preview.json.data).toMatchObject({ id: USABLE, state: "usable" })
-      expect(preview.headers.get("cache-control")).toBe("no-store")
-      const added = await b.call("POST", "/api/v1/github/installations", {
-        body: { generation: finish.json.data.view.settings.generation, installationId: USABLE },
-      })
-      expect(added.status).toBe(201)
+      const installState = stateOf(install.json.data.url)
+      const connectBody = { body: { installationId: USABLE, state: installState } }
+      const connected = await b.call("POST", "/api/v1/github/install/finish", connectBody)
+      expect(connected.status).toBe(200)
+      expect(connected.headers.get("cache-control")).toBe("no-store")
+      expect(connected.json.data).toEqual({ login: "example-org", added: true })
+      const listed = await b.call("GET", "/api/v1/github")
+      expect(listed.json.data.installations.map((i: { id: number }) => i.id)).toEqual([USABLE])
+      const twice = await b.call("POST", "/api/v1/github/install/finish", connectBody)
+      expect(twice.status).toBe(409)
+      expect(twice.json.error.code).toBe("github_install_expired")
 
-      const everything = JSON.stringify([start.json, finish.json, again.json, install.json, preview.json, lines])
+      const everything = JSON.stringify([start.json, finish.json, again.json, install.json, connected.json, lines])
       for (const secret of [CLIENT_ID, CLIENT_SECRET, WEBHOOK_SECRET, KEY_BODY, code])
         expect(everything).not.toContain(secret)
       expect(lines.join("\n")).not.toContain(state)
+      expect(lines.join("\n")).not.toContain(installState)
     } finally {
       for (const spy of spies) spy.mockRestore()
     }

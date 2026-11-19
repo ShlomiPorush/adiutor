@@ -6,8 +6,9 @@
 // a pasted key is only looked at for its PEM markers and never kept; its fingerprint is invented on each save.
 // Create the App on GitHub answers GitHub's real form address, so in the mock the return is opened by hand:
 // /settings/github?code=<any>&state=<any> (a code starting with "bad" is refused), and
-// /settings/github?installation_id=<id>&setup_action=install (or request). An installation id under 1000 is not the
-// App's; one ending in 1 grants too much and one ending in 2 is suspended, for screenshots of the refusals.
+// /settings/github?installation_id=<id>&setup_action=install (or request), which adds it as the server does after the
+// owner's Connect an account (the mock checks no state: a reload would lose it). An installation id under 1000 is not
+// the App's; one ending in 1 grants too much and one ending in 2 is suspended, for screenshots of the refusals.
 
 import type { TransportResponse } from "../client.ts"
 import type { GitHubInstallation, GitHubStatus, GitHubView, Project } from "../types.ts"
@@ -306,24 +307,35 @@ export function githubRoute(
     s.generation++
     return ok({ owner: { login: "example-owner", type: "User" }, view: view(projects) })
   }
-  if (sub === "install" && method === "POST") {
+  if (sub === "install" && !target && method === "POST") {
     if (settings.installations.locked) return locked("ADIUTOR_GITHUB_INSTALLATIONS")
     if (!settings.appId.value || !settings.key.set || !settings.key.readable)
       return refuse(409, "github_not_set_up", "Set the App id and its key before installing the App.")
     return ok({ url: "https://github.com/apps/adiutor-reader-0a1b/installations/new" })
   }
-  if (sub === "installations" && target && parts[3] === "preview" && method === "GET") {
+  if (sub === "install" && target === "finish" && method === "POST") {
+    if (settings.installations.locked) return locked("ADIUTOR_GITHUB_INSTALLATIONS")
+    const id = Number(body.installationId)
     if (!settings.appId.value || !settings.key.set || !settings.key.readable)
-      return refuse(409, "github_not_set_up", "Set the App id and its key before adding an installation.")
-    const id = Number(target)
+      return refuse(409, "github_not_set_up", "Set the App id and its key before connecting an account.")
+    const listed = s.installations.find((installation) => installation.id === id)
+    if (listed) return ok({ login: listed.login, added: false })
     const found = mockInstallation(id)
     if (!found) return notFound()
-    const added = s.installations.some((installation) => installation.id === id)
-    return ok({
+    if (found.state === "suspended")
+      return refuse(422, "github_installation_suspended", "This installation is suspended on GitHub.")
+    if (found.state === "too_broad")
+      return refuse(422, "github_installation_too_broad", "This installation grants more than read access.")
+    s.installations.push({
       id,
-      account: { login: found.login, type: found.type },
-      state: added ? "already_added" : settings.installations.locked ? "locked" : found.state,
+      accountId: id * 7,
+      accountType: found.type,
+      login: found.login,
+      state: null,
+      inventory: null,
     })
+    s.generation++
+    return ok({ login: found.login, added: true })
   }
   if (sub === "installations" && !target && method === "POST") {
     if (body.generation !== s.generation) return stale()

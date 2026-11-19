@@ -291,11 +291,13 @@ On the way back, GitHub puts a one-time code in the address. Adiutor uses it at 
 - Open the App's settings on GitHub (Settings, Developer settings, GitHub Apps), generate a new private key, and paste it in Settings, GitHub with the App ID (steps 5 to 7 of "Set it up by hand", below).
 - Delete that App on GitHub, and press Create the App on GitHub again.
 
-### Install it on each account
+### Connect each account
 
-1. In Settings, GitHub, press **Install on an account**. GitHub's install page opens in the same tab. Pick the account (your personal account, or an organization you own) and its repositories: all of them, or only those of your projects.
-2. GitHub sends the browser back to Settings, GitHub, which shows the account and whether the installation can be added. Press **Add**. Adiutor does not add an installation that is suspended or grants more than read access. When an organization needs its owner's approval, Settings says so and adds nothing: once the owner approves, install again, or add the installation by its id.
+1. In Settings, GitHub, press **Connect an account**. GitHub's install page opens in the same tab. Pick the account (your personal account, or an organization you own) and its repositories: all of them, or only those of your projects.
+2. GitHub sends the browser back to Settings, GitHub, and Adiutor adds the installation. It adds one only on the way back from your own Connect an account, once, within five minutes: an address someone else sends you adds nothing. Adiutor does not add an installation that is suspended or grants more than read access. When an organization needs its owner's approval, Settings says so and adds nothing: once the owner approves, add the installation by its id (step 9 below).
 3. Repeat for each account. Then press Read now, and check the last pull, the projects without a repository, and the projects not covered.
+
+For an account the App is installed on already, GitHub's install page offers only Configure, and its way back carries no state, so Adiutor adds nothing from it. Add that installation by its id instead (step 9 below), or uninstall the App from that account on GitHub and connect it again.
 
 ### Set it up by hand (instead of the buttons)
 
@@ -307,7 +309,7 @@ On the way back, GitHub puts a one-time code in the address. Adiutor uses it at 
 6. Under "Private keys", generate a private key. GitHub downloads a `.pem` file once: keep it in your password manager or secret store, and delete the downloaded file. Never put it in a repository, a chat or an issue.
 7. In Adiutor, Settings, GitHub: enter the App ID, paste the private key's text and save. Adiutor checks the key with GitHub and shows its fingerprint, the same one GitHub shows beside the key on the App's page.
 8. On the App's page, Install App: install it on your personal account and on each organization whose repositories Adiutor should read (you must be an owner of the organization). Choose all repositories, or only those of your projects.
-9. Each installation's settings page has an address that ends with its id (`.../settings/installations/<id>`). In Settings, GitHub, add each installation by its id, or press Add when GitHub sent you back (step 2).
+9. Each installation's settings page has an address that ends with its id (`.../settings/installations/<id>`). In Settings, GitHub, add each installation by its id, or connect it with Connect an account ("Connect each account", above).
 10. Press Read now, and check the last pull, the projects without a repository, and the projects not covered.
 
 Instead of Settings, `.env` may set `ADIUTOR_GITHUB_APP_ID`, `ADIUTOR_GITHUB_PRIVATE_KEY` (the `.pem`'s text, its line breaks written as `\n`, from your secret store) and `ADIUTOR_GITHUB_INSTALLATIONS` (ids, comma-separated); Settings then shows those fields locked. When the App id or the installations are set there, the server refuses to start without a readable key. If a stored key no longer decrypts (for example after a restore with other `ADIUTOR_SETTINGS_KEYS`) and the server refuses to start for that reason, set `ADIUTOR_GITHUB_PRIVATE_KEY` from your secret store, or remove the GitHub variables from `.env` and paste the key again in Settings.
