@@ -5,7 +5,6 @@
 // save asks first when it ends connections: agents turned off, or fewer idle days); How to connect (the agent-access
 // standard's two ways, distribution-and-versioning.md: the MCP address with the Claude Code command, and the sentence
 // that installs the agent skill from /agents/skill/; or the locked reason when the public URL does not allow agents);
-// the sync bundle's commands on the computer that runs the sync (connect, and setup-mcp for Claude Code and Codex);
 // Connected agents (name, how it connected, areas, approved, last used and when it ends, with Disconnect, and
 // Disconnect all at the end of the head, always there: it also ends waiting codes and open approvals); and, while any
 // is left, the old agent keys (AgentKeysPanel.tsx). The commands and the sentence are written for agents and
@@ -40,19 +39,6 @@ export function claudeCommand(mcpUrl: string): string {
 /** What the owner tells a coding agent that runs commands: install the skill from Adiutor, then connect. */
 export function skillSentence(issuer: string): string {
   return `Install the adiutor skill into your personal skills folder as described at ${issuer}/agents/skill/, then connect to Adiutor.`
-}
-
-/** The sync bundle, run in the Adiutor folder on the computer that runs the sync. */
-const BUNDLE = "node dist/sync/adiutor-sync.js"
-
-/** The sync's own connection (the sync area), approved in this browser. */
-export function syncConnectCommand(issuer: string): string {
-  return `${BUNDLE} connect --name "sync" --url "${issuer}"`
-}
-
-/** Sets Claude Code or Codex up for Adiutor's MCP with OAuth, replacing a setup that used an agent key. */
-export function setupMcpCommand(issuer: string, client: "claude" | "codex"): string {
-  return `${BUNDLE} setup-mcp --for ${client} --url "${issuer}"`
 }
 
 /** A whole number of idle days within the limits, or null. */
@@ -192,8 +178,8 @@ function SettingsGroup({ settings, form }: { settings: AgentSettings; form: Agen
 }
 
 /**
- * How to connect: the MCP address with the Claude Code command, the skill sentence, and the sync bundle's commands; or
- * why agents cannot connect.
+ * How to connect: the MCP address with the Claude Code command and the skill sentence; or why agents cannot connect. The
+ * sync connects from its tray app's settings, so it has no commands here.
  */
 function ConnectGroup({ settings }: { settings: AgentSettings }) {
   const { t } = useI18n()
@@ -205,33 +191,19 @@ function ConnectGroup({ settings }: { settings: AgentSettings }) {
         </Locked>
       </Group>
     )
-  const issuer = settings.issuer
   return (
-    <>
-      <Group id="settings-connect" title={t("agentAccess.connectTitle")} intro={t("agentAccess.connectIntro")}>
-        {settings.enabled ? null : <Banner tone="warn" title={t("agentAccess.offNote")} />}
-        <Row label={t("agentAccess.mcpUrl")} hint={t("agentAccess.mcpHint")}>
-          <Command value={settings.mcpUrl} />
-        </Row>
-        <Row label={t("agentAccess.claude")} hint={t("agentAccess.claudeHint")}>
-          <Command value={claudeCommand(settings.mcpUrl)} />
-        </Row>
-        <Row label={t("agentAccess.skill")} hint={t("agentAccess.skillHint")}>
-          <Command value={skillSentence(issuer)} />
-        </Row>
-      </Group>
-      <Group id="settings-connect-sync" title={t("agentAccess.syncTitle")} intro={t("agentAccess.syncIntro")}>
-        <Row label={t("agentAccess.syncConnect")} hint={t("agentAccess.syncConnectHint", { replace: "--replace" })}>
-          <Command value={syncConnectCommand(issuer)} />
-        </Row>
-        <Row label={t("agentAccess.setupClaude")} hint={t("agentAccess.setupHint")}>
-          <Command value={setupMcpCommand(issuer, "claude")} />
-        </Row>
-        <Row label={t("agentAccess.setupCodex")} hint={t("agentAccess.setupHint")}>
-          <Command value={setupMcpCommand(issuer, "codex")} />
-        </Row>
-      </Group>
-    </>
+    <Group id="settings-connect" title={t("agentAccess.connectTitle")} intro={t("agentAccess.connectIntro")}>
+      {settings.enabled ? null : <Banner tone="warn" title={t("agentAccess.offNote")} />}
+      <Row label={t("agentAccess.mcpUrl")} hint={t("agentAccess.mcpHint")}>
+        <Command value={settings.mcpUrl} />
+      </Row>
+      <Row label={t("agentAccess.claude")} hint={t("agentAccess.claudeHint")}>
+        <Command value={claudeCommand(settings.mcpUrl)} />
+      </Row>
+      <Row label={t("agentAccess.skill")} hint={t("agentAccess.skillHint")}>
+        <Command value={skillSentence(settings.issuer)} />
+      </Row>
+    </Group>
   )
 }
 

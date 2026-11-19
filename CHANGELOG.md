@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Settings, Agent access no longer shows the sync's commands: the sync connects from its tray app (Settings, Adiutor, Connect), and the board and the morning message now point there when the sync is disconnected. The `connect` and `setup-mcp` commands still work from the command line.
+
 ## [0.4.1] - 2026-11-19
 
 ### Changed

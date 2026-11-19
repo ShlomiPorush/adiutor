@@ -299,7 +299,7 @@
     "partial": "Partial sync",
     "partialBody": "A later sync could not read every project, at",
     "disconnectedTitle": "The sync is disconnected",
-    "disconnectedBody": "Connect it again on the computer that runs it: Settings, Agent access shows the command.",
+    "disconnectedBody": "Connect it again in the sync app on the computer that runs it: Settings, Adiutor, Connect.",
     "disconnectedLast": "The last successful sync was at"
   },
   "syncNow": {
@@ -1019,7 +1019,7 @@
       "more": "+{count} more",
       "syncStale": "Last T3 sync: {time}",
       "syncNever": "No T3 sync yet",
-      "syncDisconnected": "The sync is disconnected: connect it again on the computer that runs it (Settings, Agent access).",
+      "syncDisconnected": "The sync is disconnected: connect it again in the sync app on the computer that runs it (Settings, Adiutor, Connect).",
       "githubOff": "GitHub is not set up, so security data is not checked (Settings, GitHub).",
       "githubNotRead": "GitHub has not been read yet, so security data is not checked.",
       "githubNotCovered": "Projects without current GitHub data: {count}",
@@ -1620,13 +1620,6 @@
     "skill": "Tell the agent",
     "skillHint": "For a coding agent that runs commands, such as Claude Code or Codex. It installs the adiutor skill from Adiutor, then shows a link and a code: open the link, check that the code matches, and approve.",
     "offNote": "Agents are off. Turn them on above to connect one.",
-    "syncTitle": "On the computer that runs the sync",
-    "syncIntro": "Run these in the Adiutor folder there. Each one opens Adiutor in the browser to approve the connection; no key or token shows here.",
-    "syncConnect": "The sync",
-    "syncConnectHint": "Connects the sync for the sync area: keep it ticked. After its connection ended, add {replace}.",
-    "setupClaude": "Claude Code over MCP",
-    "setupCodex": "Codex over MCP",
-    "setupHint": "Sets the client up for Adiutor's MCP address and replaces an older setup that used an agent key.",
     "issuerTitle": "Agents cannot connect at this address",
     "issuer": {
       "invalid": "ADIUTOR_PUBLIC_URL is not an http or https address.",
