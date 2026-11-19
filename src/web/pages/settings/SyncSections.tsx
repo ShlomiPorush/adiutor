@@ -137,12 +137,12 @@ function ComputerGroup() {
           {/* The last sync asked for here, only once there is one. */}
           {request ? (
             <Fact label={t("syncNow.request")}>
-                <Tag tone={REQUEST_TONE[request.state]}>{t(`syncNow.state.${request.state}`)}</Tag>
-                <span className="ui-muted">
-                  {t("syncNow.requestedAt")} <Time value={request.requestedAt} />
-                </span>
-                {request.result ? <span>{requestParts(t, request.result)}</span> : null}
-                {request.state === "waiting" ? <CancelRequestButton request={request} /> : null}
+              <Tag tone={REQUEST_TONE[request.state]}>{t(`syncNow.state.${request.state}`)}</Tag>
+              <span className="ui-muted">
+                {t("syncNow.requestedAt")} <Time value={request.requestedAt} />
+              </span>
+              {request.result ? <span>{requestParts(t, request.result)}</span> : null}
+              {request.state === "waiting" ? <CancelRequestButton request={request} /> : null}
             </Fact>
           ) : null}
         </Facts>

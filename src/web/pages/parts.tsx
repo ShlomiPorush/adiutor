@@ -69,7 +69,7 @@ function FoldPanel({
   return (
     <section id={id} className="ui-panel ui-panel-fold" aria-labelledby={headingId}>
       <div className="ui-panel-head">
-        <h2 id={headingId}>
+        <h2 id={headingId} className="ui-fold-title">
           <FoldButton open={open} onToggle={setOpen} controls={bodyId}>
             {title}
             {count}

@@ -2913,7 +2913,7 @@ html.ui-layer-on .ui-page {
 .ui-fold-body[hidden] {
   display: none;
 }
-.ui-panel-fold > .ui-panel-head > h2 {
+.ui-panel-fold .ui-fold-title {
   flex: 1;
   min-width: 0;
 }
@@ -3743,7 +3743,7 @@ html.ui-layer-on .ui-page {
   gap: 4px;
   min-width: 0;
 }
-.ui-repo-link > bdi {
+.ui-repo-name {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

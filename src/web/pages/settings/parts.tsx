@@ -7,9 +7,9 @@
 
 import { Lock, RotateCcw, X } from "lucide-react"
 import { type ReactNode, useId } from "react"
-import { FoldButton } from "../../ui/fold.tsx"
 import { formatNumber } from "../../format/number.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
+import { FoldButton } from "../../ui/fold.tsx"
 
 /** A group of a section: a small panel with a 13px title, its count and its list actions at the end of its head. */
 export function Group({

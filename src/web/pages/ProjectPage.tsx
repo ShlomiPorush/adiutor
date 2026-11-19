@@ -97,7 +97,7 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
                       className="ui-link ui-repo-link"
                       title={t("project.openRepo")}
                     >
-                      <bdi className="ui-mono" dir="ltr">
+                      <bdi className="ui-mono ui-repo-name" dir="ltr">
                         {project.githubRepo}
                       </bdi>
                       <ExternalLink aria-hidden="true" />
