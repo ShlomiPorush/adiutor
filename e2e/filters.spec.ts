@@ -155,7 +155,7 @@ test("the Filters button opens by keyboard on its first field; Escape closes onl
   expect(Math.abs((c?.y ?? 0) - (d?.y ?? 100))).toBeLessThan(2)
   // An odd last one takes the whole line (MO-8): with Who set to a person, Agent goes and three are left.
   await pick(he.activity.who, he.activity.actorKind.owner)
-  expect(await cells.count()).toBe(3)
+  await expect(cells).toHaveCount(3)
   const [e, f] = await Promise.all([0, 2].map((index) => cells.nth(index).boundingBox()))
   expect(f?.width ?? 0).toBeGreaterThan((e?.width ?? 0) * 1.8)
   const viewport = page.viewportSize()?.width ?? 0
