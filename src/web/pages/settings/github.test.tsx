@@ -337,7 +337,10 @@ describe("saving the App with the one save bar (SV-1)", () => {
   it("a key the environment sets and the last read refused holds the group open, with Check the key", async () => {
     view = {
       ...VIEW,
-      settings: { ...VIEW.settings, key: { ...VIEW.settings.key, verified: null, locked: true, variable: "ADIUTOR_GITHUB_PRIVATE_KEY" } },
+      settings: {
+        ...VIEW.settings,
+        key: { ...VIEW.settings.key, verified: null, locked: true, variable: "ADIUTOR_GITHUB_PRIVATE_KEY" },
+      },
       lastRun: {
         startedAt: "2026-11-19T10:00:00.000Z",
         finishedAt: "2026-11-19T10:00:05.000Z",
