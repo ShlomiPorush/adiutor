@@ -80,7 +80,7 @@ describe("buildMorningMessage", () => {
       github,
     }
     const disconnected =
-      "The sync is disconnected: connect it again on the computer that runs it (Settings, Agent access)."
+      "The sync is disconnected: connect it again in the sync app on the computer that runs it (Settings, Adiutor, Connect)."
     expect(lines(buildMorningMessage(summary, options))).toEqual([
       "Nothing is waiting on you.",
       "New since your last visit: 0",
