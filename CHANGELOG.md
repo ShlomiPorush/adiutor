@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-19
+
 ### Changed
 
 - Settings, GitHub: Connect an account (formerly Install on an account) adds the account as soon as GitHub sends you back, with no second step. It adds an account only on the way back from your own Connect an account, within five minutes. An account the App is installed on already is added by its installation id.
