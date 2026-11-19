@@ -3,7 +3,7 @@
 // comes from, and deleting it.
 
 import { useQueryClient } from "@tanstack/react-query"
-import { ChevronRight, Plus } from "lucide-react"
+import { ChevronRight, ExternalLink, Pencil, Plus } from "lucide-react"
 import { type CSSProperties, type FormEvent, useId, useState } from "react"
 import { useNavigate, useParams } from "react-router"
 import { LIMITS } from "../../shared/api.ts"
@@ -18,7 +18,6 @@ import { PageHead } from "../shell/chrome.tsx"
 import { useRefreshItems } from "../shell/items.ts"
 import { usePageMeta } from "../shell/pageMeta.tsx"
 import { QuickAdd } from "../shell/QuickAdd.tsx"
-import { Copyable } from "../ui/Copyable.tsx"
 import { confirmDialog, useDiscardGuard } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
 import { EVERY, usePageQuery } from "../ui/refresh.ts"
@@ -26,7 +25,7 @@ import { Empty, ErrorState, errorReason, Loading, StaleNote } from "../ui/states
 import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Progress, StageTag, Tag } from "../ui/tags.tsx"
-import { issuesUrl } from "./MorningPage.tsx"
+import { issuesUrl, repoUrl } from "./MorningPage.tsx"
 import { ProjectNotes } from "./NotesPage.tsx"
 import { ItemRow, Panel } from "./parts.tsx"
 
@@ -84,12 +83,35 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
           title={project.name}
           titleDir="auto"
           description={
+            // One line: the stage, the open items, the repository on GitHub with its Issues, and the repository's edit.
             <p className="ui-project-sub">
               <StageTag stage={project.stage} />
               <span>{tc("project.openCount", openItems.length)}</span>
               {project.githubRepo ? (
                 <>
-                  <Copyable value={project.githubRepo} />
+                  <span className="ui-project-repo">
+                    <a
+                      href={repoUrl(project.githubRepo)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ui-link ui-repo-link"
+                      title={t("project.openRepo")}
+                    >
+                      <bdi className="ui-mono ui-repo-name" dir="ltr">
+                        {project.githubRepo}
+                      </bdi>
+                      <ExternalLink aria-hidden="true" />
+                    </a>
+                    <button
+                      type="button"
+                      className="ui-icon-btn ui-icon-btn-sm"
+                      aria-label={t("project.changeRepo")}
+                      title={t("project.changeRepo")}
+                      onClick={() => setEditing("repo")}
+                    >
+                      <Pencil aria-hidden="true" />
+                    </button>
+                  </span>
                   {project.openIssuesCount !== null ? (
                     <a
                       href={issuesUrl(project.githubRepo)}
@@ -101,10 +123,11 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
                     </a>
                   ) : null}
                 </>
-              ) : null}
-              <button type="button" className="ui-link-btn" onClick={() => setEditing("repo")}>
-                {project.githubRepo ? t("project.changeRepo") : t("project.setRepo")}
-              </button>
+              ) : (
+                <button type="button" className="ui-link-btn" onClick={() => setEditing("repo")}>
+                  {t("project.setRepo")}
+                </button>
+              )}
             </p>
           }
           actions={
@@ -187,7 +210,7 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
 
         <ProjectNotes projectId={project.id} />
 
-        <SecuritySourcesPanel sources={detail.securitySources} />
+        <SecuritySourcesPanel sources={detail.securitySources} repo={project.githubRepo} />
         <DeletePanel project={project} items={detail.items.length} openItems={openItems.length} />
       </div>
       {editing === "goal" ? (
@@ -260,12 +283,13 @@ function StagePanel({ project }: { project: Project }) {
     <Panel id="stage" title={t("project.stageTitle")}>
       <div className="ui-panel-body ui-section">
         <p className="ui-hint">{t("project.stageHint")}</p>
-        <fieldset className="ui-seg ui-plain-fieldset" aria-busy={busy || undefined}>
+        <fieldset className="ui-chips ui-stage-chips ui-plain-fieldset" aria-busy={busy || undefined}>
           <legend className="ui-sr-only">{t("project.stageTitle")}</legend>
           {STAGES.map((stage) => (
             <button
               key={stage}
               type="button"
+              className="ui-chip"
               aria-pressed={project.stage === stage}
               disabled={busy}
               onClick={() => void setStage(stage)}
@@ -495,7 +519,15 @@ export function sourceStale(source: SecuritySource, now = Date.now()): boolean {
   return !source.asOf || now - new Date(source.asOf).getTime() > 26 * 3600 * 1000
 }
 
-function SecuritySourcesPanel({ sources }: { sources: SecuritySource[] }) {
+/** Each source's own alerts page on GitHub: the counts here are only GitHub's totals, the alerts themselves are there. */
+const SOURCE_PAGE: Record<SecuritySource["family"], string> = {
+  dependabot: "security/dependabot",
+  code_scanning: "security/code-scanning",
+  secret_scanning: "security/secret-scanning",
+  overview: "security",
+}
+
+function SecuritySourcesPanel({ sources, repo }: { sources: SecuritySource[]; repo: string | null }) {
   const { t } = useI18n()
   return (
     <Panel id="security" title={t("project.securityTitle")} count={sources.length}>
@@ -525,7 +557,20 @@ function SecuritySourcesPanel({ sources }: { sources: SecuritySource[] }) {
           {sources.map((source) => (
             <div key={source.family} className="ui-tr">
               <span className="ui-td ui-td-first">
-                <b>{t(`security.family.${source.family}`)}</b>
+                {repo ? (
+                  <a
+                    href={repoUrl(repo, SOURCE_PAGE[source.family])}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ui-link ui-repo-link"
+                    title={t("project.openAlerts")}
+                  >
+                    <b>{t(`security.family.${source.family}`)}</b>
+                    <ExternalLink aria-hidden="true" />
+                  </a>
+                ) : (
+                  <b>{t(`security.family.${source.family}`)}</b>
+                )}
               </span>
               <span className="ui-td">
                 <Tag tone={COVERAGE_TONE[source.coverage]}>{t(`security.coverage.${source.coverage}`)}</Tag>

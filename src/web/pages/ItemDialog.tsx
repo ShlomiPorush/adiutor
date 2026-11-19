@@ -5,7 +5,7 @@
 // the version the typing started on (draft.ts): a change made meanwhile is a conflict, never overwritten.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { type FormEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react"
+import { type FormEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react"
 import { Link } from "react-router"
 import { LIMITS } from "../../shared/api.ts"
 import { ITEM_STATUSES, ITEM_TYPES, SEVERITIES, type Severity } from "../../shared/enums.ts"
@@ -17,6 +17,7 @@ import { ITEM_PARAM, useCloseItem, useItemActions, useRefreshItems } from "../sh
 import { Copyable } from "../ui/Copyable.tsx"
 import { confirmDialog } from "../ui/confirm.tsx"
 import { Dialog } from "../ui/Dialog.tsx"
+import { FoldButton, useFold } from "../ui/fold.tsx"
 import { Picker } from "../ui/Picker.tsx"
 import { EVERY } from "../ui/refresh.ts"
 import { Banner, Empty, ErrorState, errorReason, Loading } from "../ui/states.tsx"
@@ -553,8 +554,7 @@ function ItemBody({
         </form>
       </section>
 
-      <section className="ui-section">
-        <h4 className="ui-section-title">{t("item.history")}</h4>
+      <HistorySection title={t("item.history")}>
         {detail.audit.length === 0 ? (
           <p className="ui-hint">{t("item.noHistory")}</p>
         ) : (
@@ -590,8 +590,26 @@ function ItemBody({
             </Link>
           ) : null}
         </p>
-      </section>
+      </HistorySection>
     </div>
+  )
+}
+
+/** The item's history: folded each time the dialog opens, since most visits do not need it. */
+function HistorySection({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useFold()
+  const bodyId = useId()
+  return (
+    <section className="ui-section">
+      <h4 className="ui-section-title">
+        <FoldButton open={open} onToggle={setOpen} controls={bodyId}>
+          {title}
+        </FoldButton>
+      </h4>
+      <div id={bodyId} className="ui-fold-body" hidden={!open}>
+        {children}
+      </div>
+    </section>
   )
 }
 

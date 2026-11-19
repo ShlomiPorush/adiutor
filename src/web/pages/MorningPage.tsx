@@ -220,6 +220,7 @@ function MorningBody({
         <Panel
           id="projects"
           title={t("morning.projectsTitle")}
+          fold="morning-projects"
           count={morning.projects.length}
           extra={
             <Link to="/projects" className="ui-more">
@@ -382,8 +383,14 @@ function ActorActivityLink({ kind, label }: { kind: AgentUpdateGroup["updates"][
   )
 }
 
+/** A repository's page on GitHub, or one of its pages under it (`issues`, `security/dependabot`). */
+export function repoUrl(repo: string, page?: string): string {
+  const base = `https://github.com/${repo.split("/").map(encodeURIComponent).join("/")}`
+  return page ? `${base}/${page}` : base
+}
+
 export function issuesUrl(repo: string): string {
-  return `https://github.com/${repo.split("/").map(encodeURIComponent).join("/")}/issues`
+  return repoUrl(repo, "issues")
 }
 
 export function ProjectTable({ projects }: { projects: MorningProject[] }) {

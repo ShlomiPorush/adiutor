@@ -120,8 +120,9 @@ test("a check-in, Sync now, Cancel, the claim and its result", async () => {
   expect(await checkIn()).toBeNull()
   await page.goto("/settings/status")
   await expect(group()).toContainText("0.3.0")
-  await expect(group()).toContainText(he.syncNow.notPaused)
-  await expect(requestFact()).toContainText(he.syncNow.noRequest)
+  // Not paused and nothing asked yet: neither has a fact of its own.
+  await expect(group()).not.toContainText(he.syncNow.paused)
+  await expect(requestFact()).toHaveCount(0)
 
   // Sync now, then Cancel while it waits; Sync now again.
   await syncNow().click()

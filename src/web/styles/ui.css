@@ -73,6 +73,9 @@
   --ui-hover: color-mix(in srgb, var(--ui-ink) 5%, transparent);
   --ui-shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --ui-card-ring: color-mix(in srgb, var(--ui-ink) 10%, transparent);
+  --ui-scroll: rgb(156 163 175 / 0.6);
+  /* A page's side padding, on its scroll region, so the scrollbar sits at the card's edge. */
+  --ui-page-x: 22px;
 
   color-scheme: light;
 }
@@ -94,6 +97,7 @@
   --ui-info: #7db3ff;
 
   --ui-shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --ui-scroll: rgb(75 85 99 / 0.8);
 
   color-scheme: dark;
 }
@@ -121,6 +125,13 @@ body {
 }
 #root {
   height: 100%;
+}
+/* Thin themed scrollbars (v3 OT-4). Whether one stays drawn at rest is the browser's: phones show theirs only while scrolling. */
+.ui {
+  scrollbar-color: var(--ui-scroll) transparent;
+}
+.ui * {
+  scrollbar-width: thin;
 }
 :where(.ui) :focus-visible {
   outline: 2px solid var(--ui-focus);
@@ -608,7 +619,7 @@ button {
   overflow: hidden;
   margin-inline-end: var(--ui-frame-gap);
   margin-bottom: var(--ui-frame-gap);
-  padding: 22px 22px 0;
+  padding: 22px 0 0;
   border-end-start-radius: var(--ui-radius);
   border-end-end-radius: var(--ui-radius);
 }
@@ -620,8 +631,7 @@ button {
   min-height: 0;
   overflow-y: auto;
   padding-bottom: 28px;
-  margin-inline: -4px;
-  padding-inline: 4px;
+  padding-inline: var(--ui-page-x);
 }
 .ui-page > * {
   flex: none;
@@ -1078,7 +1088,7 @@ button {
     margin-inline-end: 28px;
   }
   .ui-content {
-    padding-inline: 28px;
+    --ui-page-x: 28px;
   }
 }
 
@@ -1337,6 +1347,22 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 6px 8px;
+}
+/* A row on one line: its title, tags and a short note together, its action beside them at every width. */
+.ui-item-line-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.ui-item-line-main > .ui-item-title {
+  min-width: 0;
+}
+.ui-item-line-note {
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-meta);
+  font-variant-numeric: tabular-nums;
 }
 .ui-unread {
   display: inline-block;
@@ -1994,7 +2020,6 @@ a.ui-kpi:focus-visible {
   gap: 28px;
   align-items: start;
   width: 100%;
-  max-width: 1180px;
 }
 .ui-set-picker {
   display: none;
@@ -2058,11 +2083,9 @@ a.ui-kpi:focus-visible {
   gap: var(--ui-gap);
   min-width: 0;
 }
-/* The Account page's groups are as wide as a Settings section's fields (1180px less the 220px sidebar and its 28px
-   gap): a row keeps its label and its control within one look. */
+/* Settings and the Account page are as wide as the screen, like every other page. */
 .ui-account {
   width: 100%;
-  max-width: 932px;
 }
 .ui-set-title {
   margin: 0;
@@ -2072,7 +2095,6 @@ a.ui-kpi:focus-visible {
   line-height: 1.2;
 }
 .ui-set-tabdesc {
-  max-width: 75ch;
   margin: -8px 0 0;
   color: var(--ui-muted);
   font-size: var(--ui-fs-sm);
@@ -2109,7 +2131,6 @@ a.ui-kpi:focus-visible {
 }
 .ui-set-group-intro,
 .ui-set-group-foot {
-  max-width: 75ch;
   margin: 0;
   padding: 0 var(--ui-pad-x) 12px;
   color: var(--ui-muted);
@@ -2117,7 +2138,6 @@ a.ui-kpi:focus-visible {
   line-height: 1.5;
 }
 .ui-set-group-foot {
-  max-width: none;
   padding-top: 12px;
   border-top: 1px solid var(--ui-line);
 }
@@ -2849,9 +2869,65 @@ html.ui-layer-on .ui-page {
   color: var(--ui-muted);
   font-weight: 500;
 }
-/* Written text (a goal, "where we are", a comment) keeps a readable line on a page as wide as the screen. */
+/* A part that starts folded (ui/fold.tsx): its head's button and its body, which keeps the parent's layout. */
+.ui-fold-btn[aria-disabled="true"] {
+  cursor: default;
+}
+.ui-fold-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  /* A 44px target (v3 MO-5) that reaches into the head's padding instead of making the head taller. */
+  min-height: 44px;
+  margin-block: -8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.ui-fold-chev {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  transition: transform 0.15s ease;
+}
+[dir="rtl"] .ui-fold-chev {
+  transform: scaleX(-1);
+}
+.ui-fold-btn[aria-expanded="true"] .ui-fold-chev {
+  transform: rotate(90deg);
+}
+.ui-fold-body {
+  display: contents;
+}
+.ui-fold-body[hidden] {
+  display: none;
+}
+.ui-panel-fold .ui-fold-title {
+  flex: 1;
+  min-width: 0;
+}
+.ui-panel-fold:has(> .ui-fold-body[hidden]) > .ui-panel-head {
+  padding-bottom: 13px;
+}
+.ui-set-group-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ui-set-group-fold > .ui-set-group-head > .ui-set-group-title {
+  flex: 1;
+  min-width: 0;
+}
+.ui-set-group-fold:has(> .ui-fold-body[hidden]) > .ui-set-group-head {
+  padding-bottom: 13px;
+}
+/* Written text (a goal, "where we are", a comment) runs as wide as its panel. */
 .ui-text-block {
-  max-width: 75ch;
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3241,7 +3317,6 @@ html.ui-layer-on .ui-page {
     border-bottom: 1px solid var(--ui-line);
   }
   .ui-mtop-home {
-    display: flex;
     flex: none;
     border-radius: var(--ui-radius-sm);
     text-decoration: none;
@@ -3286,8 +3361,9 @@ html.ui-layer-on .ui-page {
   .ui-content {
     flex: 1;
     margin: 0;
-    padding: 16px 12px calc(var(--ui-tabbar-h) + env(safe-area-inset-bottom));
+    padding: 16px 0 calc(var(--ui-tabbar-h) + env(safe-area-inset-bottom));
     border-radius: 0;
+    --ui-page-x: 12px;
   }
   .ui-tabbar {
     position: fixed;
@@ -3429,6 +3505,37 @@ html.ui-layer-on .ui-page {
   }
   .ui-item-end {
     justify-content: flex-start;
+  }
+  .ui-item.ui-item-line {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .ui-item.ui-item-line > .ui-item-end {
+    justify-content: flex-end;
+  }
+  /* Figures two to a line; an odd last figure takes the whole line (v3 MO-8). */
+  .ui-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ui-kpis > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+  /* Each fact on one line, its name at the start and its value at the end (v3 MO-9). */
+  .ui-set-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* The value never gets narrower than its longest word (a date and time), the name wraps instead. */
+  .ui-set-fact {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(min-content, 1fr);
+    align-items: center;
+    gap: 4px 12px;
+  }
+  .ui-set-fact > span {
+    margin-bottom: 0;
+  }
+  .ui-set-fact > div {
+    justify-content: flex-end;
+    text-align: end;
   }
   .ui-alert {
     flex-wrap: wrap;
@@ -3609,11 +3716,66 @@ html.ui-layer-on .ui-page {
   padding: 0;
   border: 0;
 }
+/* A project's line under its name: its stage, open items, the repository with its edit, and its Issues. */
 .ui-project-sub {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 12px;
+  gap: 6px 14px;
+  font-size: var(--ui-fs-sm);
+  color: var(--ui-muted);
+}
+.ui-project-sub .ui-link {
+  color: var(--ui-ink);
+}
+.ui-project-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+/* A link that leaves Adiutor for GitHub: its text, then the small external mark. */
+.ui-repo-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.ui-repo-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* biome-ignore lint/style/noDescendingSpecificity: icon sizes per component; each rule targets its own component */
+.ui-repo-link > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--ui-muted);
+}
+.ui-icon-btn.ui-icon-btn-sm {
+  width: 30px;
+  height: 30px;
+}
+/* biome-ignore lint/style/noDescendingSpecificity: icon sizes per component; each rule targets its own component */
+.ui-icon-btn.ui-icon-btn-sm svg {
+  width: 15px;
+  height: 15px;
+}
+/* 44px targets on phones (v3 MO-5): the repository's edit and the stage buttons. */
+@media (max-width: 760px) {
+  .ui-icon-btn.ui-icon-btn-sm {
+    width: 44px;
+    height: 44px;
+  }
+  .ui-stage-chips > .ui-chip {
+    min-height: 44px;
+  }
+}
+.ui-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .ui-check-label {
   display: inline-flex;
@@ -3640,6 +3802,12 @@ html.ui-layer-on .ui-page {
 }
 [dir="ltr"] [dir="auto"] {
   text-align: start;
+}
+/* A field whose value is left to right keeps that direction and aligns with a right-to-left page (v3 RT-6). The rule
+   tests the parent, since the field itself is LTR. */
+:dir(rtl) > input[dir="ltr"],
+:dir(rtl) > textarea[dir="ltr"] {
+  text-align: right;
 }
 /* A title that is a button keeps to its column, so a long title ends in an ellipsis instead of overflowing */
 .ui-row-title {
@@ -3990,7 +4158,6 @@ button.ui-item-title {
 
 /* Markdown a note renders. Blocks take their own text's direction (dir="auto"); code reads left to right. */
 .ui-md {
-  max-width: 80ch;
   overflow-wrap: anywhere;
   line-height: 1.6;
 }

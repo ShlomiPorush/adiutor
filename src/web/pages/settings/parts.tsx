@@ -9,6 +9,7 @@ import { Lock, RotateCcw, X } from "lucide-react"
 import { type ReactNode, useId } from "react"
 import { formatNumber } from "../../format/number.ts"
 import { useI18n } from "../../i18n/i18n.tsx"
+import { FoldButton } from "../../ui/fold.tsx"
 
 /** A group of a section: a small panel with a 13px title, its count and its list actions at the end of its head. */
 export function Group({
@@ -18,6 +19,8 @@ export function Group({
   extra,
   intro,
   heading: Heading = "h3",
+  mark,
+  fold,
   children,
 }: {
   id: string
@@ -29,19 +32,54 @@ export function Group({
   intro?: ReactNode
   /** h3 under a Settings section's h2; h2 on a page without sections (Account). */
   heading?: "h2" | "h3"
+  /** A tag beside the title: the group's state, seen also while it is folded. */
+  mark?: ReactNode
+  /**
+   * A group that folds (ui/fold.tsx). Without `onToggle` it is held open, its button marked unavailable but kept, in
+   * the same markup, so neither its fields nor a focus on the button are lost when it starts or stops folding.
+   */
+  fold?: { open: boolean; onToggle?: (open: boolean) => void }
   children: ReactNode
 }) {
+  const bodyId = `${id}-body`
+  const body = (
+    <>
+      {intro ? <p className="ui-set-group-intro">{intro}</p> : null}
+      {children}
+    </>
+  )
   return (
-    <section id={id} className="ui-panel ui-set-group" aria-labelledby={`${id}-title`}>
+    <section
+      id={id}
+      className={fold ? "ui-panel ui-set-group ui-set-group-fold" : "ui-panel ui-set-group"}
+      aria-labelledby={`${id}-title`}
+    >
       <div className="ui-set-group-head">
         <Heading id={`${id}-title`} className="ui-set-group-title">
-          {title}
+          {fold ? (
+            <FoldButton open={fold.open} onToggle={fold.onToggle} controls={bodyId}>
+              {title}
+              {mark}
+            </FoldButton>
+          ) : mark ? (
+            <span className="ui-set-group-name">
+              {title}
+              {mark}
+            </span>
+          ) : (
+            title
+          )}
         </Heading>
         {count !== undefined ? <span className="ui-count">{formatNumber(count)}</span> : null}
         {extra ? <div className="ui-set-group-acts">{extra}</div> : null}
       </div>
-      {intro ? <p className="ui-set-group-intro">{intro}</p> : null}
-      {children}
+      {fold ? (
+        <div id={bodyId} className="ui-fold-body" hidden={!fold.open}>
+          {body}
+        </div>
+      ) : (
+        body
+      )}
     </section>
   )
 }

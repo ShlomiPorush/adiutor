@@ -1,11 +1,12 @@
 // Parts that several pages draw the same way: a panel with its head, an item row that opens the
 // item, and the project and inbox names.
 
-import type { KeyboardEvent, ReactNode } from "react"
+import { type KeyboardEvent, type ReactNode, useId } from "react"
 import type { ItemSummary } from "../api/types.ts"
 import { formatNumber } from "../format/number.ts"
 import { useI18n } from "../i18n/i18n.tsx"
 import { useOpenItem } from "../shell/items.ts"
+import { FoldButton, useFold } from "../ui/fold.tsx"
 import { Time } from "../ui/Time.tsx"
 import { SeverityTag, STATUS_TONE, StatusTag, Tag, TypeTag } from "../ui/tags.tsx"
 
@@ -14,23 +15,71 @@ export function Panel({
   title,
   count,
   extra,
+  fold,
   children,
 }: {
   id?: string
   title: string
   count?: number
   extra?: ReactNode
+  /** Starts folded, and this browser keeps the owner's choice under this key (ui/fold.tsx). */
+  fold?: string
   children: ReactNode
 }) {
   const headingId = id ? `${id}-title` : undefined
+  const countTag = count !== undefined ? <span className="ui-count">{formatNumber(count)}</span> : null
+  if (fold) {
+    return (
+      <FoldPanel id={id} headingId={headingId} title={title} count={countTag} extra={extra} remember={fold}>
+        {children}
+      </FoldPanel>
+    )
+  }
   return (
     <section id={id} className="ui-panel" aria-labelledby={headingId}>
       <div className="ui-panel-head">
         <h2 id={headingId}>{title}</h2>
-        {count !== undefined ? <span className="ui-count">{formatNumber(count)}</span> : null}
+        {countTag}
         {extra}
       </div>
       {children}
+    </section>
+  )
+}
+
+function FoldPanel({
+  id,
+  headingId,
+  title,
+  count,
+  extra,
+  remember,
+  children,
+}: {
+  id?: string
+  headingId?: string
+  title: string
+  count: ReactNode
+  extra?: ReactNode
+  remember: string
+  children: ReactNode
+}) {
+  const [open, setOpen] = useFold(remember)
+  const bodyId = useId()
+  return (
+    <section id={id} className="ui-panel ui-panel-fold" aria-labelledby={headingId}>
+      <div className="ui-panel-head">
+        <h2 id={headingId} className="ui-fold-title">
+          <FoldButton open={open} onToggle={setOpen} controls={bodyId}>
+            {title}
+            {count}
+          </FoldButton>
+        </h2>
+        {extra}
+      </div>
+      <div id={bodyId} className="ui-fold-body" hidden={!open}>
+        {children}
+      </div>
     </section>
   )
 }

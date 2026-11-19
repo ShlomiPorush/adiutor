@@ -165,6 +165,7 @@ function SettingsGroup({ settings, form }: { settings: AgentSettings; form: Agen
           className="ui-input"
           type="number"
           inputMode="numeric"
+          dir="ltr"
           min={AGENT_IDLE_DAYS_MIN}
           max={AGENT_IDLE_DAYS_MAX}
           value={draft.agentIdleDays ?? String(settings.idleDays)}

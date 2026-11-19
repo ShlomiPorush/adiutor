@@ -95,6 +95,8 @@ export type GitHubForm = {
   focus(field: "githubAppId" | "githubKey"): void
   /** Unsaved changes in the whole Settings draft: GitHub's pages are not opened while there are any. */
   count: number
+  /** The refused field that waits for the focus; a folded group that holds it opens first. */
+  focusing: string | null
 }
 
 const STATE_TONE: Record<GitHubState, Tone> = { off: "neutral", not_read: "warn", not_covered: "warn", fine: "ok" }
@@ -216,8 +218,43 @@ function AppGroup({ view, form, finishing }: { view: GitHubView; form: GitHubFor
   const creatable = !appId.value && !key.set && !appId.locked && !key.locked && !view.settings.installations.locked
   // A locked field shows what the environment sets, never an edit made before it was locked.
   const typedAppId = (appLock ? undefined : draft.githubAppId) ?? appId.value ?? ""
+  // Set up only while GitHub has not refused the key: not accepted when saved (`verified: false`), or refused by the last
+  // read (`key_rejected`), which is the only sign for a key the environment sets (its `verified` is always null).
+  const keyRefused = view.lastRun?.errors.some((error) => error.code === "key_rejected") ?? false
+  const configured = Boolean(appId.value) && key.set && key.readable && key.verified !== false && !keyRefused
+  const keyNeedsCheck = Boolean(appId.value) && key.set && !configured
+  // Folded once the App is set up. While anything needs the owner (a first setup, the App being created, an edit, a
+  // refused field or key, a field taking the focus) the group is open in that same render and its button is held, so
+  // nothing that needs the owner can be hidden; once that passes it stays open until the owner folds it.
+  const needsOwner =
+    !configured ||
+    finishing ||
+    form.focusing === "githubAppId" ||
+    form.focusing === "githubKey" ||
+    draft.githubAppId !== undefined ||
+    draft.githubKey !== undefined ||
+    Boolean(fieldError("githubAppId")) ||
+    Boolean(fieldError("githubKey"))
+  const [open, setOpen] = useState(needsOwner)
+  useEffect(() => {
+    if (needsOwner) setOpen(true)
+  }, [needsOwner])
   return (
-    <Group id="settings-github-app" title={t("githubSettings.appTitle")} intro={t("githubSettings.appIntro")}>
+    <Group
+      id="settings-github-app"
+      title={t("githubSettings.appTitle")}
+      intro={t("githubSettings.appIntro")}
+      mark={
+        configured ? (
+          <Tag tone="ok">{t("githubSettings.appSetUp")}</Tag>
+        ) : keyNeedsCheck ? (
+          <Tag tone="warn">{t("githubSettings.appCheckKey")}</Tag>
+        ) : (
+          <Tag tone="warn">{t("githubSettings.appNotSetUp")}</Tag>
+        )
+      }
+      fold={needsOwner ? { open: true } : { open, onToggle: setOpen }}
+    >
       {creatable ? <CreateAppRow unsaved={form.count > 0} finishing={finishing} /> : null}
       <Row
         label={t("githubSettings.appId")}
@@ -459,33 +496,38 @@ function InstallationsGroup({ view, form }: { view: GitHubView; form: GitHubForm
         return (
           <div
             key={installation.id}
-            className="ui-item"
+            className="ui-item ui-item-line"
             data-tone={installation.state ? INSTALLATION_TONE[installation.state] : undefined}
             data-testid="github-installation"
           >
+            {/* One line: the account, its tags and its repositories. The id matters only where the environment lists
+                installations by id, so it shows only then. */}
             <div className="ui-item-main">
-              <span className="ui-item-title">
-                <bdi dir="auto">{name}</bdi>{" "}
+              <span className="ui-item-line-main">
+                <bdi className="ui-item-title" dir="auto">
+                  {name}
+                </bdi>
                 {type ? (
                   <Tag tone="neutral">
                     {type === "User" || type === "Organization" ? t(`githubSettings.accountType.${type}`) : type}
                   </Tag>
-                ) : null}{" "}
+                ) : null}
                 <Tag tone={installation.state ? INSTALLATION_TONE[installation.state] : "neutral"}>
                   {t(`githubSettings.installationState.${installation.state ?? "not_read"}`)}
                 </Tag>
-              </span>
-              <span className="ui-item-meta">
-                <span>
-                  {t("githubSettings.installationId")} <Copyable value={String(installation.id)} />
-                </span>
-                <span>
+                <span className="ui-item-line-note">
                   {installation.inventory
                     ? installation.inventory.complete
                       ? tc("githubSettings.repos", installation.inventory.repos)
                       : tc("githubSettings.reposIncomplete", installation.inventory.repos)
                     : t("githubSettings.reposUnknown")}
                 </span>
+                {/* The id, which the environment's list names, on the same line; a name made of the id already shows it. */}
+                {locked && installation.login ? (
+                  <span className="ui-item-line-note">
+                    {t("githubSettings.installationId")} <Copyable value={String(installation.id)} />
+                  </span>
+                ) : null}
               </span>
               {installation.state && installation.state !== "usable" ? (
                 <span className="ui-item-meta">{t(`githubSettings.installationHint.${installation.state}`)}</span>

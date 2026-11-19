@@ -944,6 +944,7 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
               className="ui-input"
               type="number"
               inputMode="numeric"
+              dir="ltr"
               min={CLOSED_ITEM_DAYS_MIN}
               max={CLOSED_ITEM_DAYS_MAX}
               value={current.closedItemDays}
@@ -971,6 +972,7 @@ function FormSection({ section, form, saved }: { section: SettingsSection; form:
               className="ui-input"
               type="number"
               inputMode="numeric"
+              dir="ltr"
               min={SESSION_IDLE_DAYS_MIN}
               max={SESSION_IDLE_DAYS_MAX}
               value={current.sessionIdleDays}

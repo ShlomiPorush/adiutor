@@ -1,10 +1,10 @@
 // The Activity filters against the real server, on the desktop and on a phone (v3 MP-6, TB-17, TB-18, NL-3, R5,
-// R6): Who narrows the list with the server's counts and the address keeps it through a reload, Back and
-// Forward; a project and a search in Hebrew words narrow it to one change; Clear filters empties the address; the
-// Filters button opens by keyboard with the focus on its first field, and Escape closes only a picker; on a phone
-// the search shares its line with the Filters button and the revealed pickers go two to a line; the item dialog's
-// "All activity" opens the item's activity and asks first about an unsaved comment. It reuses the browser that
-// signed in in auth.spec.ts. The data is invented and created here through the API.
+// R6): Who, behind the Filters button, narrows the list with the server's counts and the address keeps it through a
+// reload, Back and Forward; a project and a search in Hebrew words narrow it to one change; Clear filters empties the
+// address; the Filters button opens by keyboard with the focus on its first field, and Escape closes only a picker; on
+// a phone the search shares its line with the Filters button and the revealed pickers go two to a line; the item
+// dialog's "All activity", under its folded history, opens the item's activity and asks first about an unsaved
+// comment. It reuses the browser that signed in in auth.spec.ts. The data is invented and created here through the API.
 import { type Browser, expect, type Page, test } from "@playwright/test"
 import he from "../src/shared/locales/he.json" with { type: "json" }
 import { fill, storageFile } from "./helpers.ts"
@@ -34,6 +34,12 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 const isPhone = () => (page.viewportSize()?.width ?? 1440) <= 760
 const pill = (name: string) => page.locator(".ui-fbar .ui-picker-pill", { hasText: `${name}:` })
 const countLine = () => page.locator(".ui-fbar .ui-list-summary b")
+
+/** Opens the Filters panel, where Who, Agent, Action and Project are, unless it is open. */
+async function showFilters(): Promise<void> {
+  const toggle = page.locator(".ui-filters-toggle")
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click()
+}
 
 /**
  * Opens a page and waits until it settled: the shell draws the page again once the owner's settings arrive (its
@@ -76,6 +82,7 @@ test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
 test("Who narrows the list with the server's counts, and the address keeps it", async () => {
   await open("/activity")
   await expect(page.locator(".ui-clear-filters")).toHaveCount(0)
+  await showFilters()
   await pill(he.activity.who).click()
   const owner = page.getByRole("option", { name: new RegExp(`^${he.activity.actorKind.owner}`) })
   const shown = (await owner.locator("small").textContent())?.trim() ?? ""
@@ -84,15 +91,19 @@ test("Who narrows the list with the server's counts, and the address keeps it", 
   // The count line says what the option said (TB-18).
   await expect(countLine()).toContainText(shown)
   await expect(page.locator(".ui-clear-filters")).toBeVisible()
+  await expect(page.locator(".ui-filters-n")).toHaveText("1")
 
   await page.reload()
   await page.waitForLoadState("networkidle")
+  await showFilters()
   await expect(pill(he.activity.who)).toContainText(he.activity.actorKind.owner)
   await page.goBack()
   await expect(page).toHaveURL(/\/activity$/)
+  await showFilters()
   await expect(pill(he.activity.who)).toContainText(he.activity.everyone)
   await page.goForward()
   await expect(page).toHaveURL(/\/activity\?actorKind=owner$/)
+  await showFilters()
   await expect(pill(he.activity.who)).toContainText(he.activity.actorKind.owner)
 })
 
@@ -134,14 +145,19 @@ test("the Filters button opens by keyboard on its first field; Escape closes onl
   const search = await page.locator(".ui-fbar-search").boundingBox()
   const button = await toggle.boundingBox()
   expect(Math.abs((search?.y ?? 0) - (button?.y ?? 100))).toBeLessThan(6)
+  // Who, Agent, Action and Project, two to a line.
   const cells = page.locator(".ui-fbar-more > *")
-  expect(await cells.count()).toBe(3)
-  const [a, b, c] = await Promise.all([0, 1, 2].map((index) => cells.nth(index).boundingBox()))
+  expect(await cells.count()).toBe(4)
+  const [a, b, c, d] = await Promise.all([0, 1, 2, 3].map((index) => cells.nth(index).boundingBox()))
   expect(Math.abs((a?.y ?? 0) - (b?.y ?? 100))).toBeLessThan(2)
   expect(Math.abs((a?.width ?? 0) - (b?.width ?? 0))).toBeLessThan(2)
-  // An odd last one takes the whole line (MO-8).
   expect(c?.y ?? 0).toBeGreaterThan(a?.y ?? 0)
-  expect(c?.width ?? 0).toBeGreaterThan((a?.width ?? 0) * 1.8)
+  expect(Math.abs((c?.y ?? 0) - (d?.y ?? 100))).toBeLessThan(2)
+  // An odd last one takes the whole line (MO-8): with Who set to a person, Agent goes and three are left.
+  await pick(he.activity.who, he.activity.actorKind.owner)
+  await expect(cells).toHaveCount(3)
+  const [e, f] = await Promise.all([0, 2].map((index) => cells.nth(index).boundingBox()))
+  expect(f?.width ?? 0).toBeGreaterThan((e?.width ?? 0) * 1.8)
   const viewport = page.viewportSize()?.width ?? 0
   const bar = await page.locator(".ui-fbar").boundingBox()
   expect((bar?.x ?? 0) + (bar?.width ?? 0)).toBeLessThanOrEqual(viewport)
@@ -152,6 +168,8 @@ test("the item dialog's All activity opens the item's activity, and asks first a
   const dialog = page.getByRole("dialog")
   await expect(dialog.locator("#item-title")).toHaveValue(trellis.title)
   await dialog.getByLabel(he.item.newComment).fill("Half a thought")
+  // The history starts folded; All activity is under it.
+  await dialog.getByRole("button", { name: he.item.history, exact: true }).click()
   await dialog.getByRole("link", { name: he.item.allActivity }).click()
   const question = page.getByRole("alertdialog")
   await expect(question).toContainText(he.unsaved.discardTitle)
