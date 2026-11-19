@@ -262,7 +262,7 @@ test("Back and Forward bring each section back to where it was scrolled; a new s
   await fullScreen()
 })
 
-test("Agent access shows both ways to connect an agent and the sync's commands, with this address and no key", async () => {
+test("Agent access shows both ways to connect an agent, with this address, no key and no sync command", async () => {
   await page.goto("/settings/agents")
   const panel = page.locator("#agents")
   await expect(panel.getByRole("heading", { name: he.agentAccess.connectTitle })).toBeVisible()
@@ -270,10 +270,7 @@ test("Agent access shows both ways to connect an agent and the sync's commands, 
   await expect(panel).toContainText(
     `Install the adiutor skill into your personal skills folder as described at ${BASE_URL}/agents/skill/, then connect to Adiutor.`,
   )
-  await expect(panel.getByRole("heading", { name: he.agentAccess.syncTitle })).toBeVisible()
-  await expect(panel).toContainText(`node dist/sync/adiutor-sync.js connect --name "sync" --url "${BASE_URL}"`)
-  await expect(panel).toContainText(`node dist/sync/adiutor-sync.js setup-mcp --for claude --url "${BASE_URL}"`)
-  await expect(panel).toContainText(`node dist/sync/adiutor-sync.js setup-mcp --for codex --url "${BASE_URL}"`)
+  await expect(panel).not.toContainText("adiutor-sync")
   await expect(panel).not.toContainText("--days")
 })
 

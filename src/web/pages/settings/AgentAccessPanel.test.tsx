@@ -20,14 +20,7 @@ import { ConfirmHost } from "../../ui/confirm.tsx"
 import { ToastHost } from "../../ui/Toast.tsx"
 import { UnsavedProvider } from "../../ui/unsaved.tsx"
 import { forgetSettingsVisit, SettingsPage } from "../SettingsPage.tsx"
-import {
-  agentChanges,
-  claudeCommand,
-  idleDaysOf,
-  setupMcpCommand,
-  skillSentence,
-  syncConnectCommand,
-} from "./AgentAccessPanel.tsx"
+import { agentChanges, claudeCommand, idleDaysOf, skillSentence } from "./AgentAccessPanel.tsx"
 
 /** Better Auth's key list and delete, as the old keys' group calls them. */
 const oldKeys = vi.hoisted(() => ({
@@ -318,18 +311,9 @@ describe("the new panel", () => {
       `Install the adiutor skill into your personal skills folder as described at ${ISSUER}/agents/skill/, then connect to Adiutor.`,
     )
     expect(page()).toContain(skillSentence(ISSUER))
-    // The sync bundle's commands, every address quoted; nothing of the agent keys' commands.
-    expect(syncConnectCommand(ISSUER)).toBe(`node dist/sync/adiutor-sync.js connect --name "sync" --url "${ISSUER}"`)
-    expect(setupMcpCommand(ISSUER, "codex")).toBe(
-      `node dist/sync/adiutor-sync.js setup-mcp --for codex --url "${ISSUER}"`,
-    )
-    const sync = plain(document.querySelector("#settings-connect-sync")?.textContent)
-    for (const command of [
-      syncConnectCommand(ISSUER),
-      setupMcpCommand(ISSUER, "claude"),
-      setupMcpCommand(ISSUER, "codex"),
-    ])
-      expect(sync).toContain(command)
+    // The sync connects from its tray app: no sync group and no command of the sync bundle; nothing of the agent keys'.
+    expect(document.querySelector("#settings-connect-sync")).toBeNull()
+    expect(page()).not.toContain("adiutor-sync")
     expect(page()).not.toContain("--days")
     expect(page()).not.toMatch(/--for (sync|claude|codex) *$|connect --url [^ ]+ --name [^ ]+ --for/)
     expect(page()).toContain(en.agentAccess.empty)
