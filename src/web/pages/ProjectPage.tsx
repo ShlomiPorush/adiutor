@@ -283,7 +283,7 @@ function StagePanel({ project }: { project: Project }) {
     <Panel id="stage" title={t("project.stageTitle")}>
       <div className="ui-panel-body ui-section">
         <p className="ui-hint">{t("project.stageHint")}</p>
-        <fieldset className="ui-chips ui-plain-fieldset" aria-busy={busy || undefined}>
+        <fieldset className="ui-chips ui-stage-chips ui-plain-fieldset" aria-busy={busy || undefined}>
           <legend className="ui-sr-only">{t("project.stageTitle")}</legend>
           {STAGES.map((stage) => (
             <button

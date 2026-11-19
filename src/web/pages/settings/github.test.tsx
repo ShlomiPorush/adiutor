@@ -250,6 +250,10 @@ describe("the private key's states (FS-3)", () => {
   it("not verified yet: says so and that the next read checks it", async () => {
     view = withKey({ verified: false })
     await render()
+    // A key GitHub has not accepted (or refused on a later read) holds the group open, marked in its head.
+    expect(keyRow()?.closest("[hidden]")).toBeNull()
+    expect(appFold()).toBeNull()
+    expect(plain(group("settings-github-app-title")?.textContent)).toContain(en.githubSettings.appCheckKey)
     const text = plain(keyRow()?.textContent)
     expect(text).toContain(en.githubSettings.keyNotVerified)
     expect(text).toContain(en.githubSettings.keyNotVerifiedHint)

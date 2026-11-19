@@ -126,7 +126,7 @@ body {
 #root {
   height: 100%;
 }
-/* Thin themed scrollbars (v3 OT-4). With these set, Chromium keeps them drawn instead of an overlay shown only while scrolling. */
+/* Thin themed scrollbars (v3 OT-4). Whether one stays drawn at rest is the browser's: phones show theirs only while scrolling. */
 .ui {
   scrollbar-color: var(--ui-scroll) transparent;
 }
@@ -3767,11 +3767,14 @@ html.ui-layer-on .ui-page {
   width: 15px;
   height: 15px;
 }
-/* A 40px target on phones, as the phone bar's buttons. */
+/* 44px targets on phones (v3 MO-5): the repository's edit and the stage buttons. */
 @media (max-width: 760px) {
   .ui-icon-btn.ui-icon-btn-sm {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
+  }
+  .ui-stage-chips > .ui-chip {
+    min-height: 44px;
   }
 }
 .ui-chip:disabled {

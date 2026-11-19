@@ -1323,6 +1323,7 @@
     "appTitle": "GitHub App",
     "appSetUp": "מוגדר",
     "appNotSetUp": "לא מוגדר",
+    "appCheckKey": "יש לבדוק את המפתח",
     "appIntro": "יש לתת ל-App הרשאת קריאה להתראות Dependabot, להתראות code scanning, להתראות secret scanning ול-Issues, ולא יותר: התקנה שנותנת יותר לא נקראת לעולם.",
     "appId": "מזהה App",
     "appIdHint": "המספר בראש דף ההגדרות של ה-App ב-GitHub (Settings, Developer settings, GitHub Apps).",

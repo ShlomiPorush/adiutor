@@ -62,11 +62,13 @@ export function Group({
               {title}
               {mark}
             </FoldButton>
-          ) : (
+          ) : mark ? (
             <span className="ui-set-group-name">
               {title}
               {mark}
             </span>
+          ) : (
+            title
           )}
         </Heading>
         {count !== undefined ? <span className="ui-count">{formatNumber(count)}</span> : null}

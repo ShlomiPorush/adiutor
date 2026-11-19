@@ -218,7 +218,9 @@ function AppGroup({ view, form, finishing }: { view: GitHubView; form: GitHubFor
   const creatable = !appId.value && !key.set && !appId.locked && !key.locked && !view.settings.installations.locked
   // A locked field shows what the environment sets, never an edit made before it was locked.
   const typedAppId = (appLock ? undefined : draft.githubAppId) ?? appId.value ?? ""
-  const configured = Boolean(appId.value) && key.set && key.readable
+  // Set up only while GitHub has not refused the key: a key it rejected later (a read answered 401) needs the owner too.
+  const configured = Boolean(appId.value) && key.set && key.readable && key.verified !== false
+  const keyNeedsCheck = Boolean(appId.value) && key.set && !configured
   // Folded once the App is set up. While anything needs the owner (a first setup, the App being created, an edit, a
   // refused field, a field taking the focus) the group is open in that same render and has no fold button, so nothing
   // that needs the owner can be hidden; once that passes it stays open until the owner folds it.
@@ -243,6 +245,8 @@ function AppGroup({ view, form, finishing }: { view: GitHubView; form: GitHubFor
       mark={
         configured ? (
           <Tag tone="ok">{t("githubSettings.appSetUp")}</Tag>
+        ) : keyNeedsCheck ? (
+          <Tag tone="warn">{t("githubSettings.appCheckKey")}</Tag>
         ) : (
           <Tag tone="warn">{t("githubSettings.appNotSetUp")}</Tag>
         )
