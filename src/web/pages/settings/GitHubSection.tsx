@@ -219,13 +219,14 @@ function AppGroup({ view, form, finishing }: { view: GitHubView; form: GitHubFor
   // A locked field shows what the environment sets, never an edit made before it was locked.
   const typedAppId = (appLock ? undefined : draft.githubAppId) ?? appId.value ?? ""
   const configured = Boolean(appId.value) && key.set && key.readable
-  // Folded once the App is set up. It opens by itself for a first setup, an edit, a refused field or a field that
-  // takes the focus, so nothing that needs the owner stays hidden; a field taking the focus opens it in that render.
-  const focusingHere = form.focusing === "githubAppId" || form.focusing === "githubKey"
+  // Folded once the App is set up. While anything needs the owner (a first setup, the App being created, an edit, a
+  // refused field, a field taking the focus) the group is open in that same render and has no fold button, so nothing
+  // that needs the owner can be hidden; once that passes it stays open until the owner folds it.
   const needsOwner =
     !configured ||
     finishing ||
-    focusingHere ||
+    form.focusing === "githubAppId" ||
+    form.focusing === "githubKey" ||
     draft.githubAppId !== undefined ||
     draft.githubKey !== undefined ||
     Boolean(fieldError("githubAppId")) ||
@@ -239,15 +240,14 @@ function AppGroup({ view, form, finishing }: { view: GitHubView; form: GitHubFor
       id="settings-github-app"
       title={t("githubSettings.appTitle")}
       intro={t("githubSettings.appIntro")}
-      fold={{
-        open: open || focusingHere,
-        onToggle: setOpen,
-        mark: configured ? (
+      mark={
+        configured ? (
           <Tag tone="ok">{t("githubSettings.appSetUp")}</Tag>
         ) : (
           <Tag tone="warn">{t("githubSettings.appNotSetUp")}</Tag>
-        ),
-      }}
+        )
+      }
+      fold={needsOwner ? { open: true } : { open, onToggle: setOpen }}
     >
       {creatable ? <CreateAppRow unsaved={form.count > 0} finishing={finishing} /> : null}
       <Row
@@ -516,14 +516,13 @@ function InstallationsGroup({ view, form }: { view: GitHubView; form: GitHubForm
                       : tc("githubSettings.reposIncomplete", installation.inventory.repos)
                     : t("githubSettings.reposUnknown")}
                 </span>
-              </span>
-              {locked ? (
-                <span className="ui-item-meta">
-                  <span>
+                {/* The id, which the environment's list names, on the same line; a name made of the id already shows it. */}
+                {locked && installation.login ? (
+                  <span className="ui-item-line-note">
                     {t("githubSettings.installationId")} <Copyable value={String(installation.id)} />
                   </span>
-                </span>
-              ) : null}
+                ) : null}
+              </span>
               {installation.state && installation.state !== "usable" ? (
                 <span className="ui-item-meta">{t(`githubSettings.installationHint.${installation.state}`)}</span>
               ) : null}

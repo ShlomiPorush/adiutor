@@ -600,7 +600,7 @@ function HistorySection({ title, children }: { title: string; children: ReactNod
   const [open, setOpen] = useFold()
   const bodyId = useId()
   return (
-    <section className="ui-section ui-section-fold">
+    <section className="ui-section">
       <h4 className="ui-section-title">
         <FoldButton open={open} onToggle={setOpen} controls={bodyId}>
           {title}

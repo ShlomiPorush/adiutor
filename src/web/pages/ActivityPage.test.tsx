@@ -203,6 +203,8 @@ const lastAudit = () => requests.at(-1) ?? ""
 
 async function click(element: Element | null | undefined) {
   if (!element) throw new Error("nothing to click")
+  // The owner cannot reach what the closed Filters panel hides.
+  if (element.closest("[hidden]")) throw new Error("hidden: open the Filters panel first")
   await act(async () => {
     ;(element as HTMLElement).click()
   })

@@ -19,6 +19,7 @@ export function Group({
   extra,
   intro,
   heading: Heading = "h3",
+  mark,
   fold,
   children,
 }: {
@@ -31,8 +32,13 @@ export function Group({
   intro?: ReactNode
   /** h3 under a Settings section's h2; h2 on a page without sections (Account). */
   heading?: "h2" | "h3"
-  /** A group that folds (ui/fold.tsx): whether it is open, and a mark beside its title (its state, seen while folded). */
-  fold?: { open: boolean; onToggle: (open: boolean) => void; mark?: ReactNode }
+  /** A tag beside the title: the group's state, seen also while it is folded. */
+  mark?: ReactNode
+  /**
+   * A group that folds (ui/fold.tsx). Without `onToggle` it is held open with no fold button, in the same markup, so
+   * its fields are never mounted again when it starts or stops folding.
+   */
+  fold?: { open: boolean; onToggle?: (open: boolean) => void }
   children: ReactNode
 }) {
   const bodyId = `${id}-body`
@@ -42,28 +48,32 @@ export function Group({
       {children}
     </>
   )
+  const toggle = fold?.onToggle
   return (
     <section
       id={id}
-      className={fold ? "ui-panel ui-set-group ui-set-group-fold" : "ui-panel ui-set-group"}
+      className={toggle ? "ui-panel ui-set-group ui-set-group-fold" : "ui-panel ui-set-group"}
       aria-labelledby={`${id}-title`}
     >
       <div className="ui-set-group-head">
         <Heading id={`${id}-title`} className="ui-set-group-title">
-          {fold ? (
-            <FoldButton open={fold.open} onToggle={fold.onToggle} controls={bodyId}>
+          {fold && toggle ? (
+            <FoldButton open={fold.open} onToggle={toggle} controls={bodyId}>
               {title}
-              {fold.mark}
+              {mark}
             </FoldButton>
           ) : (
-            title
+            <span className="ui-set-group-name">
+              {title}
+              {mark}
+            </span>
           )}
         </Heading>
         {count !== undefined ? <span className="ui-count">{formatNumber(count)}</span> : null}
         {extra ? <div className="ui-set-group-acts">{extra}</div> : null}
       </div>
       {fold ? (
-        <div id={bodyId} className="ui-fold-body" hidden={!fold.open}>
+        <div id={bodyId} className="ui-fold-body" hidden={toggle ? !fold.open : undefined}>
           {body}
         </div>
       ) : (

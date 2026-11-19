@@ -2892,9 +2892,6 @@ html.ui-layer-on .ui-page {
   text-align: start;
   cursor: pointer;
 }
-.ui-fold-btn:focus-visible {
-  outline-offset: 2px;
-}
 .ui-fold-chev {
   width: 16px;
   height: 16px;
@@ -2919,6 +2916,11 @@ html.ui-layer-on .ui-page {
 }
 .ui-panel-fold:has(> .ui-fold-body[hidden]) > .ui-panel-head {
   padding-bottom: 13px;
+}
+.ui-set-group-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 .ui-set-group-fold > .ui-set-group-head > .ui-set-group-title {
   flex: 1;
@@ -3525,9 +3527,10 @@ html.ui-layer-on .ui-page {
   .ui-set-facts {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* The value never gets narrower than its longest word (a date and time), the name wraps instead. */
   .ui-set-fact {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, max-content) minmax(min-content, 1fr);
     align-items: center;
     gap: 4px 12px;
   }
@@ -3763,6 +3766,13 @@ html.ui-layer-on .ui-page {
 .ui-icon-btn.ui-icon-btn-sm svg {
   width: 15px;
   height: 15px;
+}
+/* A 40px target on phones, as the phone bar's buttons. */
+@media (max-width: 760px) {
+  .ui-icon-btn.ui-icon-btn-sm {
+    width: 40px;
+    height: 40px;
+  }
 }
 .ui-chip:disabled {
   opacity: 0.5;

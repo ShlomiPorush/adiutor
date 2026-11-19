@@ -143,6 +143,8 @@ async function settle(ms = 40): Promise<void> {
 
 async function click(element: Element | null | undefined): Promise<void> {
   expect(element).toBeTruthy()
+  // The owner cannot reach what a folded group hides.
+  expect(element?.closest("[hidden]")).toBeNull()
   await act(async () => {
     ;(element as HTMLElement).focus()
     ;(element as HTMLElement).click()
@@ -153,6 +155,7 @@ async function click(element: Element | null | undefined): Promise<void> {
 /** Types into a controlled field as the browser does: the value, then an input event. */
 async function type(field: HTMLInputElement | HTMLTextAreaElement | null | undefined, value: string): Promise<void> {
   expect(field).toBeTruthy()
+  expect(field?.closest("[hidden]")).toBeNull()
   await act(async () => {
     const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
     Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(field, value)
