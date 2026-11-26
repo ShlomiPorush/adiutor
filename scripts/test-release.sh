@@ -542,16 +542,16 @@ check "  built by digest, then tagged" \
   grep -qF -- "--output type=image,name=ghcr.io/shlomiporush/adiutor,push-by-digest=true,push=true" "$STATE/calls"
 check "  and the version's tag names the checked digest" grep -qE "imagetools create --tag ghcr.io/shlomiporush/adiutor:0.1.0 ghcr.io/shlomiporush/adiutor@sha256:[0-9a-f]{64}$" "$STATE/calls"
 change_on_main src/fix.txt "A fix"
-BUMP=patch release
+BUMP="patch" release
 check "a release without a migration rolls out beside the release with the newest one" labelled 0.1.1 0.1.0
 change_on_main drizzle/0001_change.sql "A migration"
-BUMP=patch release
+BUMP="patch" release
 check "a release with a migration rolls out beside no older release" labelled 0.1.2 0.1.2
 change_on_main src/fix.txt "Another fix"
-BUMP=patch release
+BUMP="patch" release
 check "  and the release after it rolls out beside it" labelled 0.1.3 0.1.2
 change_on_main docker/rollout.txt "Cannot run beside older releases."
-BUMP=patch release
+BUMP="patch" release
 check "an edit of docker/rollout.txt: the release rolls out beside no older release" labelled 0.1.4 0.1.4
 change_on_main src/fix.txt "A last fix"
 dir="$(checkout)"
@@ -563,7 +563,7 @@ check "  and the compose file's hash" said "adiutor.compose-sha256=$(compose_sha
 sandbox
 release
 change_on_main src/fix.txt "A fix"
-MOCK_REGISTRY_EMPTY=1 BUMP=patch release
+MOCK_REGISTRY_EMPTY=1 BUMP="patch" release
 check "a registry that does not show the earlier release: the run stops" [ $? -ne 0 ]
 check "  and says why" said "does not show ghcr.io/shlomiporush/adiutor:0.1.0"
 check "  before tagging" lacks_tag v0.1.1
