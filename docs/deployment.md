@@ -345,6 +345,8 @@ A host can update Adiutor with a zero-downtime rollout with [docker rollout](htt
 
   Read them with `docker image inspect --format '{{json .Config.Labels}}' ghcr.io/shlomiporush/adiutor:X.Y.Z`.
 
+docker rollout itself reads neither label. Whatever starts the rollout, a deployment tool or you, compares them first: the same `adiutor.compose-sha256` on the running image and the new one, and a running version that is not older than the new image's `adiutor.rollout-from`. When either does not hold, or the running image has no labels, use "Update by hand" below. Never run docker rollout for Adiutor without that check: a release with a migration would migrate the database while the old container still serves.
+
 **How `rollout-from` is chosen.** It is the earliest release that contains the newest change to `drizzle/` (the migrations) or to `docker/rollout.txt`. So a release that adds a migration, or edits that file, runs beside no older release and is updated by hand: the new container migrates the database at start, while the old one still runs on it. A release without either runs beside every release since the last one that had them. `docker/rollout.txt` takes one dated line in a change that cannot run beside the previous release for another reason, for example a library upgrade that changes stored data, a changed meaning of stored values, or a changed lock between processes. The first release with labels is its own `rollout-from`, and it is updated by hand anyway: the releases before it carry no labels.
 
 ### What your host's files need
@@ -395,7 +397,7 @@ If the new container stops right after it starts (a wrong setting, a failed migr
 
 ### Update by hand
 
-A release that cannot roll out (its labels do not allow it, or the running image has none), and going back to an earlier release, are updated with a short downtime. Back up the database first (section 9, step 2), then run, in the deploy directory, with the version to run:
+A release that cannot roll out (its labels do not allow it, or the running image has none) is updated with a short downtime. Back up the database first (section 9, step 2), then run, in the deploy directory, with the version to run:
 
 ```bash
 NEW=X.Y.Z
@@ -406,4 +408,6 @@ docker pull "ghcr.io/shlomiporush/adiutor:$NEW" &&
   env -u VERSION docker compose up -d --wait --wait-timeout 300 adiutor
 ```
 
-Each step runs only after the one before it worked: the old container stops only once the new image is on the host and `.env` names it. `env -u VERSION` keeps a `VERSION` exported in your shell from overriding `.env`. Moving from the example file to your own rollout-ready file is done the same way: the project name stays `adiutor`, so Compose replaces the old container. Going back to an earlier release also needs the database from before the newer release's migrations (section 9).
+Each step runs only after the one before it worked: the old container stops only once the new image is on the host and `.env` names it. `env -u VERSION` keeps a `VERSION` exported in your shell from overriding `.env`. Moving from the example file to your own rollout-ready file is done the same way: the project name stays `adiutor`, so Compose replaces the old container.
+
+To go back to an earlier release, stop the service first (`env -u VERSION docker compose stop adiutor`), restore the backup taken before the newer release, then run the commands above with the earlier version, and follow "Recovery and after any restore" (section 8). Never start an earlier release on the database a newer one migrated.

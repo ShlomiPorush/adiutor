@@ -591,6 +591,15 @@ release
 check "  the next run builds again and finishes the version" complete 0.1.0
 
 sandbox
+release
+change_on_main src/fix.txt "A fix"
+MOCK_FAIL_LATEST=1 BUMP="patch" release
+rm "$STATE/images/ghcr.io_shlomiporush_adiutor_0.1.0" "$STATE/images/ghcr.io_shlomiporush_adiutor_0.1.0.labels"
+MOCK_DRIVER=docker release
+check "a stopped run whose version is published finishes without a build" complete 0.1.1
+check "  without the earlier release's image or a builder that pushes by digest" [ "$(calls "buildx build")" = 2 ]
+
+sandbox
 MOCK_DRIVER=docker release
 check "a builder that cannot push by digest: refused" said "cannot push by digest"
 check "  before tagging" lacks_tag v0.1.0

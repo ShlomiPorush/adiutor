@@ -362,6 +362,8 @@ create_tag() {
 
 build_checked_image() {
   local src="$1" revision="$2" ref="$3" meta="$4" compose from digest config label
+  require_earlier_image
+  require_digest_builder
   compose="$(compose_sha256 "$TAG")" || exit 1
   from="$(rollout_from "$TAG" "$VERSION")" || exit 1
   [[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "cannot work out $LABEL_KEY.rollout-from for $TAG"
@@ -395,7 +397,6 @@ publish_image() {
   # shellcheck disable=SC2064
   trap "rm -rf '$src' '$meta'" EXIT
   git_ archive "$TAG" | tar -x -C "$src"
-  require_earlier_image
   state="$(image_state "$ref" "$revision")"
   case "$state" in
     match) echo "    $ref is already published from $TAG" ;;
@@ -737,8 +738,10 @@ main() {
     return 0
   fi
 
-  require_digest_builder
-  [ $RESUME -eq 1 ] || create_tag
+  if [ $RESUME -eq 0 ]; then
+    require_digest_builder
+    create_tag
+  fi
   publish_image
   if [ $TRAY -eq 0 ]; then
     publish_release_without_tray
