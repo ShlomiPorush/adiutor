@@ -337,7 +337,7 @@ A host can update Adiutor with a zero-downtime rollout with [docker rollout](htt
 
 ### What each release publishes
 
-- **Image tags:** `ghcr.io/shlomiporush/adiutor:X.Y.Z` for every release, and `latest`. The Release workflow creates `X.Y.Z` only after the release's checks passed and the image it just built carries the right labels. It never moves or rebuilds a version that exists; a run that stopped halfway is finished by the next run. The git tag `vX.Y.Z` marks the same commit.
+- **Image tags:** `ghcr.io/shlomiporush/adiutor:X.Y.Z` for every release, and `latest`. The Release workflow creates `X.Y.Z` only after the release's checks passed and the image it just built carries the right labels. It never moves or rebuilds a version that exists; a run that stopped halfway is finished by the next run. The git tag `vX.Y.Z` marks the same commit. Make release tags only with the Release workflow: the next run would publish a tag pushed by hand without checking that commit first.
 - **Health check:** in the image (`node dist/server/healthcheck.js`, which calls `/healthz`, which reads the database).
 - **Labels:**
   - `adiutor.compose-sha256`: SHA-256 of `docker-compose.yml` in this repository at the release's tag. It changes only when the example file changes; your host's own file is never compared with it. A rollout needs the same value on the running image and the new one.
@@ -393,7 +393,7 @@ While both containers run:
 - When the overlap meets a GitHub pull (each hour, or the new container's first one), both containers may read GitHub. A pull that read earlier can be written last; its counts stay until the next pull.
 - A release that changes what agents may do can answer an agent `policy_changed` more than once; the agent reads the endpoints again each time.
 
-If the new container stops right after it starts (a wrong setting, a failed migration), docker rollout 0.14 can remove the old container too ([wowu/docker-rollout#75](https://github.com/wowu/docker-rollout/issues/75)). Read the new container's log, fix the cause, and start the version that ran before with "Update by hand", below.
+If the new container stops right after it starts (a wrong setting, for example), docker rollout 0.14 can remove the old container too ([wowu/docker-rollout#75](https://github.com/wowu/docker-rollout/issues/75)). Read the new container's log, fix the cause, and start the version that ran before with the commands of "Update by hand", below. It needs no restore: a release its labels let roll out uses the same database as the one before it.
 
 ### Update by hand
 
@@ -410,4 +410,4 @@ docker pull "ghcr.io/shlomiporush/adiutor:$NEW" &&
 
 Each step runs only after the one before it worked: the old container stops only once the new image is on the host and `.env` names it. `env -u VERSION` keeps a `VERSION` exported in your shell from overriding `.env`. Moving from the example file to your own rollout-ready file is done the same way: the project name stays `adiutor`, so Compose replaces the old container.
 
-To go back to an earlier release, stop the service first (`env -u VERSION docker compose stop adiutor`), restore the backup taken before the newer release, then run the commands above with the earlier version, and follow "Recovery and after any restore" (section 8). Never start an earlier release on the database a newer one migrated.
+To go back to an earlier release: when the newer release's `adiutor.rollout-from` is not newer than the earlier version, both use the same database, so run the commands above with the earlier version. Otherwise a migration came in between: stop the service first (`env -u VERSION docker compose stop adiutor`), restore the backup taken before the newer release, then run the commands above with the earlier version, and follow "Recovery and after any restore" (section 8). Never start an earlier release on a database a newer one migrated.
