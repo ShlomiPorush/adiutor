@@ -340,11 +340,8 @@ A host can update Adiutor with a zero-downtime rollout with [docker rollout](htt
 - **Image tags:** `ghcr.io/shlomiporush/adiutor:X.Y.Z` for every release, and `latest`. The Release workflow creates `X.Y.Z` only after the release's checks passed and the image it just built carries the right labels. It never moves or rebuilds a version that exists; a run that stopped halfway is finished by the next run. The git tag `vX.Y.Z` marks the same commit.
 - **Health check:** in the image (`node dist/server/healthcheck.js`, which calls `/healthz`, which reads the database).
 - **Labels:**
-
-  | Label | Value |
-  |---|---|
-  | `adiutor.compose-sha256` | SHA-256 of `docker-compose.yml` in this repository at the release's tag. It changes only when the example file changes; your host's own file is never compared with it. A rollout needs the same value on the running image and the new one. |
-  | `adiutor.rollout-from` | The oldest running release this release may run beside. A rollout needs the running release to be this version or newer. |
+  - `adiutor.compose-sha256`: SHA-256 of `docker-compose.yml` in this repository at the release's tag. It changes only when the example file changes; your host's own file is never compared with it. A rollout needs the same value on the running image and the new one.
+  - `adiutor.rollout-from`: the oldest running release this release may run beside. A rollout needs the running release to be this version or newer.
 
   Read them with `docker image inspect --format '{{json .Config.Labels}}' ghcr.io/shlomiporush/adiutor:X.Y.Z`.
 
