@@ -34,37 +34,73 @@ check() {
 mkdir -p "$WORK/bin"
 cat >"$WORK/bin/docker" <<'EOF'
 #!/usr/bin/env bash
-# Registry stand-in: one file per image tag, holding the commit it was built from.
 key() { printf '%s' "$1" | tr '/:' '__'; }
 echo "docker $*" >>"$STATE/calls"
 [ "$1" = info ] && exit 0
 [ "$1" = buildx ] || { echo "unexpected docker $*" >&2; exit 2; }
 shift
+if [ "$1" = inspect ]; then
+  printf 'Name:          builder\nDriver:        %s\n' "${MOCK_DRIVER:-docker-container}"
+  exit 0
+fi
 if [ "$1 $2" = "imagetools inspect" ]; then
+  shift 2
+  raw="" ref=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --raw) raw=1 ;;
+      --format) shift ;;
+      *) ref="$1" ;;
+    esac
+    shift
+  done
   [ -n "${MOCK_REGISTRY_DOWN:-}" ] && { echo "ERROR: unauthorized: authentication required" >&2; exit 1; }
-  f="$STATE/images/$(key "$3")"
-  [ -f "$f" ] || { echo "ERROR: $3: not found" >&2; exit 1; }
-  # Indented, as docker prints it.
-  printf '{\n  "architecture": "amd64",\n  "config": {\n    "Labels": {\n      "org.opencontainers.image.revision": "%s"\n    }\n  }\n}\n' "$(cat "$f")"
+  [ -n "${MOCK_REGISTRY_EMPTY:-}" ] && { echo "ERROR: $ref: not found" >&2; exit 1; }
+  f="$STATE/images/$(key "$ref")"
+  [ -f "$f" ] || { echo "ERROR: $ref: not found" >&2; exit 1; }
+  if [ -n "$raw" ]; then
+    printf '{"mediaType":"application/vnd.oci.image.index.v1+json"}\n'
+    exit 0
+  fi
+  [ -n "${MOCK_CONFIG_FAIL:-}" ] && { echo "ERROR: $ref: blob not found" >&2; exit 1; }
+  labels="$(printf '      "org.opencontainers.image.revision": "%s"' "$(cat "$f")")"
+  while IFS= read -r line; do
+    [ -n "$line" ] && labels="$(printf '%s,\n      "%s": "%s"' "$labels" "${line%%=*}" "${line#*=}")"
+  done < <(cat "$f.labels" 2>/dev/null)
+  printf '{\n  "architecture": "amd64",\n  "config": {\n    "Labels": {\n%s\n    }\n  }\n}\n' "$labels"
   exit 0
 fi
 if [ "$1 $2" = "imagetools create" ]; then
-  [ -n "${MOCK_FAIL_LATEST:-}" ] && { echo "push failed" >&2; exit 1; }
+  [ -n "${MOCK_FAIL_LATEST:-}" ] && [ "${4##*:}" = latest ] && { echo "push failed" >&2; exit 1; }
+  [ -n "${MOCK_FAIL_TAG:-}" ] && [ "${4##*:}" != latest ] && { echo "push failed" >&2; exit 1; }
   [ -f "$STATE/images/$(key "$5")" ] || exit 1
   cp "$STATE/images/$(key "$5")" "$STATE/images/$(key "$4")"
+  rm -f "$STATE/images/$(key "$4").labels"
+  [ ! -f "$STATE/images/$(key "$5").labels" ] || cp "$STATE/images/$(key "$5").labels" "$STATE/images/$(key "$4").labels"
   exit 0
 fi
 if [ "$1" = build ]; then
-  rev="" ref=""
+  rev="" name="" meta="" labels=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --label) case "$2" in org.opencontainers.image.revision=*) rev="${2#*=}" ;; esac; shift ;;
-      -t) ref="$2"; shift ;;
+      --label)
+        case "$2" in
+          org.opencontainers.image.revision=*) rev="${2#*=}" ;;
+          "${MOCK_DROP_LABEL:-none}"=*) ;;
+          *) labels="$labels$2"$'\n' ;;
+        esac
+        shift
+        ;;
+      --output) name="$(sed -nE 's/.*(^|,)name=([^,]+).*/\2/p' <<<"$2")"; shift ;;
+      --metadata-file) meta="$2"; shift ;;
     esac
     shift
   done
   [ -n "${MOCK_FAIL_BUILD:-}" ] && { echo "push failed" >&2; exit 1; }
-  printf '%s' "$rev" >"$STATE/images/$(key "$ref")"
+  digest="sha256:$(head -c 32 /dev/urandom | sha256sum | cut -d' ' -f1)"
+  printf '%s' "$rev" >"$STATE/images/$(key "$name@$digest")"
+  printf '%s' "$labels" >"$STATE/images/$(key "$name@$digest").labels"
+  printf '{"containerimage.digest":"%s"}\n' "$digest" >"$meta"
   exit 0
 fi
 echo "unexpected docker buildx $*" >&2
@@ -298,10 +334,13 @@ sandbox() {
   git init --quiet --bare --initial-branch=main "$WORK/case/origin.git"
   local seed="$WORK/case/seed"
   git init --quiet --initial-branch=main "$seed"
-  mkdir -p "$seed/scripts/lib" "$seed/docker" "$seed/tray"
+  mkdir -p "$seed/scripts/lib" "$seed/docker" "$seed/tray" "$seed/drizzle"
   cp "$REPO/scripts/release.sh" "$seed/scripts/"
   cp "$REPO/scripts/lib/common.sh" "$seed/scripts/lib/"
   : >"$seed/docker/adiutor.Dockerfile"
+  printf 'name: adiutor\n' >"$seed/docker-compose.yml"
+  printf 'create table t (id int);\n' >"$seed/drizzle/0000_initial.sql"
+  printf 'The first release with rollout labels.\n' >"$seed/docker/rollout.txt"
   : >"$seed/tray/dotnet-tools.json"
   : >"$seed/scripts/pack-tray.ps1"
   printf '{\n  "name": "adiutor",\n  "version": "0.0.0",\n  "private": true\n}\n' >"$seed/package.json"
@@ -437,6 +476,20 @@ image_from() { [ "$(image_rev "$1") $(image_rev latest)" = "$2 $2" ]; }
 # A published GitHub Release with no assets.
 published_bare() { is_published "$1" && [ -z "$(asset_names "$1")" ]; }
 not_called() { ! grep -qF -e "$1" "$STATE/calls"; }
+image_label() { sed -n "s/^$2=//p" "$STATE/images/ghcr.io_shlomiporush_adiutor_$1.labels" 2>/dev/null; }
+compose_sha() { git -C "$WORK/case/origin.git" show "$1:docker-compose.yml" | sha256sum | cut -d' ' -f1; }
+labelled() {
+  [ "$(image_label "$1" adiutor.compose-sha256)" = "$(compose_sha "v$1")" ] &&
+    [ "$(image_label "$1" adiutor.rollout-from)" = "$2" ]
+}
+change_on_main() {
+  local dir
+  dir="$(checkout)"
+  mkdir -p "$(dirname "$dir/$1")"
+  echo "$2" >>"$dir/$1"
+  sed -i 's/^## \[Unreleased\]$/## [Unreleased]\n\n### Fixed\n\n- A fix./' "$dir/CHANGELOG.md"
+  git -C "$dir" add -A && git -C "$dir" commit --quiet -m "$2" && git -C "$dir" push --quiet origin main
+}
 # The calls of the upload, the removals and the publish.
 upload_calls() { [ "$(calls "vpk \[win\] upload") $(calls "-X DELETE") $(calls "-X PATCH")" = "$1" ]; }
 
@@ -462,7 +515,7 @@ check "the CHANGELOG keeps an empty Unreleased above the dated section" \
   grep -qzP '## \[Unreleased\]\n\n## \[0\.1\.0\] - \d{4}-\d{2}-\d{2}\n' <(git -C "$WORK/case/origin.git" show main:CHANGELOG.md)
 check "the GitHub Release has the title and the section's notes" \
   [ "$(release_text v0.1.0)" = "$(printf 'Adiutor 0.1.0\n### Added\n\n- The first feature.')" ]
-check "the image is built with provenance and an SBOM" grep -q "buildx build --push --provenance=mode=max --sbom=true" "$STATE/calls"
+check "the image is built with provenance and an SBOM" grep -q "buildx build --provenance=mode=max --sbom=true" "$STATE/calls"
 check "the release step names the tag, the version and the tag's commit for the tray" \
   [ "$(cat "$WORK/case/output")" = "$(printf 'tag=v0.1.0\nversion=0.1.0\nsha=%s\ntray=true' "$(tag_rev v0.1.0)")" ]
 check "the GitHub Release is created as a draft" grep -q "gh release create v0.1.0 --verify-tag --draft" "$STATE/calls"
@@ -482,6 +535,67 @@ check "0.1.1's notes hold only its own entries" [ "$(release_text v0.1.1 | sed -
 check "0.1.0 is left as it was" released_before 0.1.0
 check ":latest is 0.1.1" [ "$(image_rev latest)" = "$(tag_rev v0.1.1)" ]
 
+sandbox
+release
+check "the first release carries the compose file's hash and rolls out beside no older release" labelled 0.1.0 0.1.0
+check "  built by digest, then tagged" \
+  grep -qF -- "--output type=image,name=ghcr.io/shlomiporush/adiutor,push-by-digest=true,push=true" "$STATE/calls"
+check "  and the version's tag names the checked digest" grep -qE "imagetools create --tag ghcr.io/shlomiporush/adiutor:0.1.0 ghcr.io/shlomiporush/adiutor@sha256:[0-9a-f]{64}$" "$STATE/calls"
+change_on_main src/fix.txt "A fix"
+BUMP=patch release
+check "a release without a migration rolls out beside the release with the newest one" labelled 0.1.1 0.1.0
+change_on_main drizzle/0001_change.sql "A migration"
+BUMP=patch release
+check "a release with a migration rolls out beside no older release" labelled 0.1.2 0.1.2
+change_on_main src/fix.txt "Another fix"
+BUMP=patch release
+check "  and the release after it rolls out beside it" labelled 0.1.3 0.1.2
+change_on_main docker/rollout.txt "Cannot run beside older releases."
+BUMP=patch release
+check "an edit of docker/rollout.txt: the release rolls out beside no older release" labelled 0.1.4 0.1.4
+change_on_main src/fix.txt "A last fix"
+dir="$(checkout)"
+DIR="$dir" MOCK_DRIVER=docker run_in --target ghcr --bump patch --dry-run
+check "a dry run runs with any builder" [ $? -eq 0 ]
+check "  and prints rollout-from" said "adiutor.rollout-from=0.1.4"
+check "  and the compose file's hash" said "adiutor.compose-sha256=$(compose_sha main)"
+
+sandbox
+release
+change_on_main src/fix.txt "A fix"
+MOCK_REGISTRY_EMPTY=1 BUMP=patch release
+check "a registry that does not show the earlier release: the run stops" [ $? -ne 0 ]
+check "  and says why" said "does not show ghcr.io/shlomiporush/adiutor:0.1.0"
+check "  before tagging" lacks_tag v0.1.1
+
+sandbox
+MOCK_FAIL_LATEST=1 release
+MOCK_CONFIG_FAIL=1 release
+check "the version's manifest is there but its image cannot be read: the run stops" [ $? -ne 0 ]
+check "  and says why" said "cannot read the image ghcr.io/shlomiporush/adiutor:0.1.0"
+check "  without building it again" [ "$(calls "buildx build")" = 1 ]
+
+sandbox
+MOCK_DROP_LABEL=adiutor.rollout-from release
+check "a built image without a label: the run stops" [ $? -ne 0 ]
+check "  and says which" said "lacks adiutor.rollout-from"
+check "  without the version's tag" [ ! -e "$STATE/images/ghcr.io_shlomiporush_adiutor_0.1.0" ]
+release
+check "  the next run builds it again and finishes the version" complete 0.1.0
+check "  with both labels" labelled 0.1.0 0.1.0
+
+sandbox
+MOCK_FAIL_TAG=1 release
+check "the version's tag cannot be created: the run stops" [ $? -ne 0 ]
+release
+check "  the next run builds again and finishes the version" complete 0.1.0
+
+sandbox
+MOCK_DRIVER=docker release
+check "a builder that cannot push by digest: refused" said "cannot push by digest"
+check "  before tagging" lacks_tag v0.1.0
+check "  and nothing was published" nothing_published
+
 # --- releases from before the tray -----------------------------------------------------------
 
 sandbox
@@ -490,6 +604,7 @@ sed -i 's/"version": "0.0.0"/"version": "0.1.0"/' "$dir/package.json"
 git -C "$dir" commit --quiet -am "Release v0.1.0" && git -C "$dir" tag -a v0.1.0 -m v0.1.0
 git -C "$dir" push --quiet origin main v0.1.0
 published_release v0.1.0 50
+printf '%s' "$(tag_rev v0.1.0)" >"$STATE/images/ghcr.io_shlomiporush_adiutor_0.1.0"
 release
 check "a published release without tray assets (from before the tray) is finished: the next version is released" complete 0.2.0
 check "  and the older release is not touched" [ -z "$(asset_names v0.1.0)" ]
@@ -907,6 +1022,33 @@ check "notes: a missing section fails" grep -q "found 0" <(notes 1.0.0 "## [0.9.
 check "notes: a section twice fails" grep -q "found 2" <(notes 1.0.0 "$(printf '## [1.0.0] - 2026-01-02\n- A.\n## [1.0.0] - 2026-01-03\n- B.\n')")
 check "notes: a section of headings only fails" grep -q "has no entries" <(notes 1.0.0 "$(printf '## [1.0.0] - 2026-01-02\n\n### Added\n\n')")
 check "notes: 1.0.0 does not match 1.0.01" grep -q "found 0" <(notes 1.0.0 "## [1.0.01] - 2026-01-02")
+
+history="$WORK/history"
+git init --quiet --initial-branch=main "$history"
+commit_in_history() {
+  mkdir -p "$(dirname "$history/$1")"
+  echo "$2" >>"$history/$1"
+  git -C "$history" add -A && git -C "$history" commit --quiet -m "$2"
+}
+from_in_history() { (REPO_ROOT="$history" rollout_from "$1" "$2") 2>&1; }
+commit_in_history src/app.txt "No migrations yet"
+git -C "$history" tag v0.1.0
+check "rollout-from: no migration and no edit of docker/rollout.txt ever: the version itself" [ "$(from_in_history v0.1.0 0.1.0)" = 0.1.0 ]
+commit_in_history drizzle/0000_initial.sql "A migration"
+git -C "$history" switch --quiet -c side
+commit_in_history side.txt "A side branch"
+git -C "$history" tag v0.1.5
+git -C "$history" switch --quiet main
+commit_in_history src/app.txt "A fix"
+git -C "$history" tag v0.2.0
+check "rollout-from: a tag outside the release's history does not count" [ "$(from_in_history v0.2.0 0.2.0)" = 0.2.0 ]
+commit_in_history src/app.txt "Another fix"
+git -C "$history" tag v0.2.1
+check "rollout-from: the earliest release with the newest migration" [ "$(from_in_history v0.2.1 0.2.1)" = 0.2.0 ]
+commit_in_history src/app.txt "Not released yet"
+check "rollout-from: the same from HEAD, as a dry run reads it" [ "$(from_in_history HEAD 0.2.2)" = 0.2.0 ]
+commit_in_history docker/rollout.txt "Cannot run beside older releases."
+check "rollout-from: an edit of docker/rollout.txt not released yet: the version itself" [ "$(from_in_history HEAD 0.2.2)" = 0.2.2 ]
 
 echo "release.sh: $PASSED passed, $FAILED failed"
 [ $FAILED -eq 0 ]

@@ -16,6 +16,7 @@ SOURCE_URL="https://github.com/ShlomiPorush/adiutor"
 # Dockerfile name under docker/ and image name under REGISTRY.
 DOCKERFILE="adiutor"
 IMAGE="adiutor"
+LABEL_KEY="adiutor"
 TARGET=""
 BUMP=""
 EXPECT_SHA=""
@@ -53,13 +54,15 @@ Usage: scripts/release.sh --target ghcr --bump <patch|minor|major> [--skip-verif
 
 Steps: preflight (clean main in sync with origin, release notes present, version unused), full
 scripts/verify.sh, version and changelog update, release commit and tag
-pushed together, the image built from the tag and pushed, then :latest, then the GitHub Release from
-the CHANGELOG section as a draft. Then, with --tray, the tray's installer and Velopack feed go on the
+pushed together, the image built from the tag with the labels adiutor.compose-sha256 and
+adiutor.rollout-from (docs/deployment.md, section 12), pushed by digest and checked, then tagged with
+the version, then :latest, then the GitHub Release from the CHANGELOG section as a draft. Then, with --tray, the tray's installer and Velopack feed go on the
 draft through `vpk upload github`; the release is published only once every one of them is read back
 from GitHub and matches the local files. When the newest tag has no published GitHub Release, an
 earlier run stopped halfway: this run finishes that version instead of starting a new one, reusing
 what is already published, replacing the tray assets a stopped run left on the draft and refusing
-anything that was not built from the tag. Needs docker with buildx, git, jq and gh (logged in to
+anything that was not built from the tag. Needs docker with a buildx builder that can push by digest
+(docker buildx create --use --driver docker-container), git, jq and gh (logged in to
 GitHub and GHCR), and for --tray the .NET SDK (tray/global.json).
 EOF
 }
@@ -224,23 +227,65 @@ clear_tray_assets() {
   done <<<"$assets"
 }
 
-# Prints "missing", "match" (built from the given commit) or "other" for an image tag. A registry
-# that cannot be read stops the release: it must never count as a free version.
+image_config() {
+  local out
+  out="$(docker buildx imagetools inspect "$1" --format '{{json .Image}}' 2>&1)" || die "cannot read the image $1: $out"
+  tr -d '[:space:]' <<<"$out"
+}
+
+has_label() {
+  grep -qF "\"$2\":\"$3\"" <<<"$1"
+}
+
 image_state() {
-  local ref="$1" revision="$2" out
-  if ! out="$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}' 2>&1)"; then
+  local ref="$1" revision="$2" out config
+  if ! out="$(docker buildx imagetools inspect --raw "$ref" 2>&1)"; then
     if grep -qiE "not found|manifest unknown" <<<"$out"; then
       echo missing
       return
     fi
     die "cannot read $ref from the registry: $out"
   fi
-  # The JSON comes indented; compare without white space.
-  if grep -qF "\"org.opencontainers.image.revision\":\"$revision\"" <<<"$(tr -d '[:space:]' <<<"$out")"; then
+  config="$(image_config "$ref")" || exit 1
+  if has_label "$config" org.opencontainers.image.revision "$revision"; then
     echo match
   else
     echo other
   fi
+}
+
+require_earlier_image() {
+  local earlier ref out
+  earlier="$(git_ tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -vxF "$TAG" | head -1 || true)"
+  [ -n "$earlier" ] || return 0
+  ref="$(image_ref "${earlier#v}")"
+  out="$(docker buildx imagetools inspect --raw "$ref" 2>&1)" ||
+    die "the registry does not show $ref of the earlier release $earlier, so it cannot tell whether $VERSION is free: $out"
+}
+
+require_digest_builder() {
+  local driver
+  driver="$(docker buildx inspect 2>/dev/null | sed -nE 's/^Driver:[[:space:]]*//p' | head -1 || true)"
+  if [ -z "$driver" ] || [ "$driver" = docker ]; then
+    die "the buildx builder in use (driver ${driver:-unknown}) cannot push by digest. Create one with 'docker buildx create --use --driver docker-container' and run again."
+  fi
+}
+
+compose_sha256() {
+  local hash
+  hash="$(git_ show "$1:docker-compose.yml" | sha256sum | cut -d' ' -f1)" || die "cannot read docker-compose.yml at $1"
+  [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || die "cannot hash docker-compose.yml at $1"
+  echo "$hash"
+}
+
+rollout_from() {
+  local ref="$1" version="$2" change first=""
+  change="$(git_ log -1 --format=%H "$ref" -- drizzle docker/rollout.txt)" || die "cannot read the history of $ref"
+  if [ -n "$change" ]; then
+    first="$(git_ tag -l 'v[0-9]*.[0-9]*.[0-9]*' --contains "$change" --merged "$ref" --sort=v:refname | head -1)" ||
+      die "cannot read the release tags of $ref"
+  fi
+  if [ -n "$first" ]; then echo "${first#v}"; else echo "$version"; fi
 }
 
 newest_tag() {
@@ -291,6 +336,7 @@ preflight() {
   TAG="v$VERSION"
   # Tags are immutable: an existing tag (origin's were fetched above) is never moved or reused.
   git_ rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already exists"
+  require_earlier_image
   state="$(image_state "$(image_ref "$VERSION")" none)"
   [ "$state" = missing ] || die "$(image_ref "$VERSION") is already published"
   echo "    $current -> $VERSION ($TAG)"
@@ -314,31 +360,50 @@ create_tag() {
     die "pushing the release commit and $TAG failed, so nothing was published. Run the release again."
 }
 
+build_checked_image() {
+  local src="$1" revision="$2" ref="$3" meta="$4" compose from digest config label
+  compose="$(compose_sha256 "$TAG")" || exit 1
+  from="$(rollout_from "$TAG" "$VERSION")" || exit 1
+  [[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "cannot work out $LABEL_KEY.rollout-from for $TAG"
+  info "Building $ref by digest ($LABEL_KEY.rollout-from=$from)"
+  docker buildx build --provenance=mode=max --sbom=true \
+    -f "$src/docker/$DOCKERFILE.Dockerfile" --build-arg "VERSION=$VERSION" \
+    --label "org.opencontainers.image.revision=$revision" \
+    --label "org.opencontainers.image.source=$SOURCE_URL" \
+    --label "org.opencontainers.image.version=$VERSION" \
+    --label "$LABEL_KEY.compose-sha256=$compose" \
+    --label "$LABEL_KEY.rollout-from=$from" \
+    --output "type=image,name=$REGISTRY/$IMAGE,push-by-digest=true,push=true" \
+    --metadata-file "$meta" "$src" || die "building or pushing $ref failed. Run the release again to finish $TAG."
+  digest="$(jq -r '."containerimage.digest" // empty' "$meta")" || die "cannot read the build's metadata"
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "the build of $ref gave no image digest"
+  config="$(image_config "$REGISTRY/$IMAGE@$digest")" || exit 1
+  for label in "org.opencontainers.image.revision=$revision" "$LABEL_KEY.compose-sha256=$compose" "$LABEL_KEY.rollout-from=$from"; do
+    has_label "$config" "${label%%=*}" "${label#*=}" ||
+      die "the image just built ($digest) lacks ${label%%=*}=${label#*=}, so $ref was not created. Run the release again."
+  done
+  docker buildx imagetools create --tag "$ref" "$REGISTRY/$IMAGE@$digest" ||
+    die "creating $ref failed. Run the release again to finish $TAG."
+}
+
 publish_image() {
-  local revision src ref state
+  local revision src meta ref state
   revision="$(git_ rev-parse "$TAG^{commit}")"
   ref="$(image_ref "$VERSION")"
   src="$(mktemp -d)"
-  # shellcheck disable=SC2064 # expand now: the path is fixed
-  trap "rm -rf '$src'" EXIT
+  meta="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$src' '$meta'" EXIT
   git_ archive "$TAG" | tar -x -C "$src"
+  require_earlier_image
   state="$(image_state "$ref" "$revision")"
   case "$state" in
     match) echo "    $ref is already published from $TAG" ;;
     other) die "$ref exists but was not built from $TAG; it is left as it is" ;;
-    missing)
-      info "Building and pushing $ref"
-      docker buildx build --push --provenance=mode=max --sbom=true \
-        -f "$src/docker/$DOCKERFILE.Dockerfile" --build-arg "VERSION=$VERSION" \
-        --label "org.opencontainers.image.revision=$revision" \
-        --label "org.opencontainers.image.source=$SOURCE_URL" \
-        --label "org.opencontainers.image.version=$VERSION" \
-        -t "$ref" "$src" || die "building or pushing $ref failed. Run the release again to finish $TAG."
-      ;;
+    missing) build_checked_image "$src" "$revision" "$ref" "$meta" ;;
   esac
   state="$(image_state "$ref" "$revision")"
   [ "$state" = match ] || die "$ref is not the image built from $TAG"
-  # :latest moves only once the version's image is there.
   info "Pointing $(image_ref latest) at $VERSION"
   docker buildx imagetools create --tag "$(image_ref latest)" "$ref" ||
     die "moving $(image_ref latest) failed. Run the release again to finish $TAG."
@@ -663,11 +728,16 @@ main() {
       unreleased_notes | sed 's/^/    /'
       info "Would commit package.json and CHANGELOG.md, push them with $TAG, then publish:"
     fi
-    echo "    $(image_ref "$VERSION") and :latest"
+    local commit compose from
+    commit="$(build_commit)"
+    compose="$(compose_sha256 "$commit")" || exit 1
+    from="$(rollout_from "$commit" "$VERSION")" || exit 1
+    echo "    $(image_ref "$VERSION") and :latest, if missing built with $LABEL_KEY.compose-sha256=$compose $LABEL_KEY.rollout-from=$from"
     write_output
     return 0
   fi
 
+  require_digest_builder
   [ $RESUME -eq 1 ] || create_tag
   publish_image
   if [ $TRAY -eq 0 ]; then
