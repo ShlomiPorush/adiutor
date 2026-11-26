@@ -8,6 +8,21 @@ function countDocumentLoads(page: Page) {
   return loads
 }
 
+async function reloadedDocumentLoaded(page: Page) {
+  await expect
+    .poll(() =>
+      page
+        .evaluate(
+          () =>
+            document.readyState === "complete" &&
+            (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type ===
+              "reload",
+        )
+        .catch(() => false),
+    )
+    .toBe(true)
+}
+
 const hashedFiles = [
   ["script", "**/assets/*.js"],
   ["stylesheet", "**/assets/*.css"],
@@ -23,19 +38,18 @@ for (const [kind, pattern] of hashedFiles) {
       await route.fulfill({ status: 404, body: "" })
     })
     await page.goto("/", { waitUntil: "commit" })
-    await expect.poll(() => loads.count).toBe(2)
+    await reloadedDocumentLoaded(page)
     await expect(page.locator("#root > *").first()).toBeVisible()
-    await page.waitForLoadState("load")
     expect(await page.evaluate(() => sessionStorage.getItem("adiutor.reloaded"))).toBeNull()
+    expect(loads.count).toBe(2)
   })
 
   test(`a page whose ${kind} is missing every time reloads once, not again`, async ({ page }) => {
     const loads = countDocumentLoads(page)
     await page.route(pattern, (route) => route.fulfill({ status: 404, body: "" }))
     await page.goto("/", { waitUntil: "commit" })
-    await expect.poll(() => loads.count).toBe(2)
-    await page.waitForLoadState("load")
-    await page.waitForTimeout(2_000)
+    await reloadedDocumentLoaded(page)
+    expect(await page.evaluate(() => sessionStorage.getItem("adiutor.reloaded"))).toBe("1")
     expect(loads.count).toBe(2)
   })
 }

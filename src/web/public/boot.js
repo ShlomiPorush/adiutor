@@ -1,4 +1,3 @@
-// Kept as a file rather than inline so the Content-Security-Policy can forbid inline scripts.
 ;(() => {
   try {
     const theme = localStorage.getItem("adiutor.theme") || "system"
@@ -15,13 +14,6 @@
 ;(() => {
   const marker = "adiutor.reloaded"
   let failed = false
-  const withStorage = (action) => {
-    try {
-      return action(sessionStorage)
-    } catch {
-      return undefined
-    }
-  }
   const isHashedFile = (element) => {
     const address =
       element instanceof HTMLScriptElement
@@ -38,16 +30,20 @@
     (event) => {
       if (!isHashedFile(event.target)) return
       failed = true
-      if (withStorage((storage) => storage.getItem(marker)) !== null) return
-      const marked = withStorage((storage) => {
-        storage.setItem(marker, "1")
-        return true
-      })
-      if (marked) location.reload()
+      try {
+        if (sessionStorage.getItem(marker) !== null) return
+        sessionStorage.setItem(marker, "1")
+      } catch {
+        return
+      }
+      location.reload()
     },
     true,
   )
   addEventListener("load", () => {
-    if (!failed) withStorage((storage) => storage.removeItem(marker))
+    if (failed) return
+    try {
+      sessionStorage.removeItem(marker)
+    } catch {}
   })
 })()
