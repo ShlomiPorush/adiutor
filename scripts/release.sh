@@ -56,9 +56,9 @@ Steps: preflight (clean main in sync with origin, release notes present, version
 scripts/verify.sh, version and changelog update, release commit and tag
 pushed together, the image built from the tag with the labels adiutor.compose-sha256 and
 adiutor.rollout-from (docs/deployment.md, section 12), pushed by digest and checked, then tagged with
-the version, then :latest, then the GitHub Release from the CHANGELOG section as a draft. Then, with --tray, the tray's installer and Velopack feed go on the
-draft through `vpk upload github`; the release is published only once every one of them is read back
-from GitHub and matches the local files. When the newest tag has no published GitHub Release, an
+the version, then :latest, then the GitHub Release from the CHANGELOG section as a draft. Then, with
+--tray, the tray's installer and Velopack feed go on the draft through `vpk upload github`; the
+release is published only once every one of them is read back from GitHub and matches the local files. When the newest tag has no published GitHub Release, an
 earlier run stopped halfway: this run finishes that version instead of starting a new one, reusing
 what is already published, replacing the tray assets a stopped run left on the draft and refusing
 anything that was not built from the tag. Needs docker with a buildx builder that can push by digest
