@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Zero-downtime updates**: each release's image carries the labels `adiutor.compose-sha256` and `adiutor.rollout-from`, which say whether the release may replace the running one with a rollout that starts the new container before the old one stops. A release with a migration is still updated by hand with a short downtime. `docs/deployment.md`, section 12, lists what the host's Compose file needs (no fixed container name, a sticky-session cookie and draining in Traefik) and what not to do while both containers run. The image's version tag is now created only after the image built for it was checked.
+- **A page that loads while Adiutor is updated reloads once by itself** when its script or stylesheet is gone, instead of staying empty.
+
 ## [0.4.2] - 2026-11-19
 
 ### Changed

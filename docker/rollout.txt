@@ -1,0 +1,5 @@
+Releases that cannot run beside an older release, other than by a migration (docs/deployment.md, section 12).
+Add one dated line here in the change that makes a release unable to run beside the previous one: the
+release that carries the edit is then deployed by hand.
+
+2026-11-26: the first release with rollout labels; the releases before it carry none.

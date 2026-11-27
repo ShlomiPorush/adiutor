@@ -261,6 +261,8 @@ It runs Better Auth's own password reset: it prints the username and a new rando
 
 To go back to an earlier version, restore the backup from step 2, set the earlier `VERSION`, start it, and follow "Recovery and after any restore" (step 8).
 
+A host set up for a zero-downtime rollout (section 12) updates with the rollout instead, and a release that cannot roll out with "Update by hand" there.
+
 ## 10. The agent access release (once)
 
 The release that switches agents to connect by approval (CHANGELOG, "Agents and the sync connect by approval") ends the agent keys: from it on, Adiutor refuses every agent key before any of its code runs, and no new key can be made. Every agent and the sync connect once again, by approval. Do these steps in this order: a client updated before the server cannot connect to the older server (it stops with `endpoints_unavailable`), and an old client against the new server only stops.
@@ -328,3 +330,84 @@ Instead of Settings, `.env` may set `ADIUTOR_GITHUB_APP_ID`, `ADIUTOR_GITHUB_PRI
 
 - **Rotate:** on the App's page generate a second key, paste it in Settings, GitHub (check that the fingerprint shown is the new one), then delete the old key on GitHub. A key that was ever committed, shown or sent anywhere is public: delete it on GitHub and paste a new one.
 - **Remove an installation:** Remove in Settings, GitHub stops reading it at once. Also uninstall the App from that account on GitHub (the account's Settings, Applications, the App, Uninstall): a database restored from before the removal would otherwise read it again.
+
+## 12. Zero-downtime rollout
+
+A host can update Adiutor with a zero-downtime rollout with [docker rollout](https://github.com/wowu/docker-rollout): it starts the new container beside the running one, waits until the new one is healthy, then drains and removes the old one. For seconds to minutes both containers serve the same database. Each release says, in two image labels, whether it may roll out over the release that runs. A release that may not is updated by hand, with a short downtime ("Update by hand", below).
+
+### What each release publishes
+
+- **Image tags:** `ghcr.io/shlomiporush/adiutor:X.Y.Z` for every release, and `latest`. The Release workflow creates `X.Y.Z` only after the release's checks passed and the image it just built carries the right labels. It never moves or rebuilds a version that exists; a run that stopped halfway is finished by the next run. The git tag `vX.Y.Z` marks the same commit. Make release tags only with the Release workflow: the next run would publish a tag pushed by hand without checking that commit first.
+- **Health check:** in the image (`node dist/server/healthcheck.js`, which calls `/healthz`, which reads the database).
+- **Labels:**
+  - `adiutor.compose-sha256`: SHA-256 of `docker-compose.yml` in this repository at the release's tag. It changes only when the example file changes; your host's own file is never compared with it. A rollout needs the same value on the running image and the new one.
+  - `adiutor.rollout-from`: the oldest running release this release may run beside. A rollout needs the running release to be this version or newer.
+
+  Read them with `docker image inspect --format '{{json .Config.Labels}}' ghcr.io/shlomiporush/adiutor:X.Y.Z`.
+
+docker rollout itself reads neither label. Whatever starts the rollout, a deployment tool or you, compares them first: the same `adiutor.compose-sha256` on the running image and the new one, and a running version that is not older than the new image's `adiutor.rollout-from`. When either does not hold, or the running image has no labels, use "Update by hand" below. Never run docker rollout for Adiutor without that check: a release with a migration would migrate the database while the old container still serves.
+
+**How `rollout-from` is chosen.** It is the earliest release that contains the newest change to `drizzle/` (the migrations) or to `docker/rollout.txt`. So a release that adds a migration, or edits that file, runs beside no older release and is updated by hand: the new container migrates the database at start, while the old one still runs on it. A release without either runs beside every release since the last one that had them. `docker/rollout.txt` takes one dated line in a change that cannot run beside the previous release for another reason, for example a library upgrade that changes stored data, a changed meaning of stored values, or a changed lock between processes. The first release with labels is its own `rollout-from`, and it is updated by hand anyway: the releases before it carry no labels.
+
+### What your host's files need
+
+The tracked `docker-compose.yml` is an example. It sets `container_name`, so it cannot run two containers at once. Your own file, next to its `.env`:
+
+- `name: adiutor` at the top.
+- The service `adiutor` with `image: ghcr.io/shlomiporush/adiutor:${VERSION}`, and `.env` with exactly one `VERSION=X.Y.Z` line beside the settings of section 2.
+- No `container_name`, no published port, no `network_mode: host`, no `build`, and one replica: the rollout runs a second copy itself.
+- Keep `stop_grace_period: 90s`, the read-only root file system with its `/tmp` tmpfs, and the security options of the example.
+- A sticky-session cookie on the Traefik service, so a browser gets the page and the files it names from the same container.
+- Draining: a pre-stop hook that makes the old container unhealthy, and a health check that fails while it drains. Traefik stops routing to an unhealthy container; the old one finishes its open requests, then stops. The sleep must be longer than the health check's interval times its retries, plus Traefik's reload delay of about 2 seconds.
+
+```yaml
+name: adiutor
+
+services:
+  adiutor:
+    image: ghcr.io/shlomiporush/adiutor:${VERSION}
+    stop_grace_period: 90s
+    labels:
+      - "traefik.http.services.adiutor.loadbalancer.sticky.cookie=true"
+      - "traefik.http.services.adiutor.loadbalancer.sticky.cookie.secure=true"
+      - "traefik.http.services.adiutor.loadbalancer.sticky.cookie.httpOnly=true"
+      - "docker-rollout.pre-stop-hook=touch /tmp/drain && sleep 45"
+    healthcheck:
+      test: ["CMD-SHELL", "test ! -f /tmp/drain && node dist/server/healthcheck.js"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+```
+
+The rest of the service (Traefik's router labels, the network, `env_file`, the limits and the security options) stays as in the example. docker rollout reads the pre-stop hook from the running container, so draining starts with the rollout after the one that first created the container with that label.
+
+### During a rollout
+
+While both containers run:
+
+- **Do not change Settings, set up the GitHub App, connect a GitHub account, change your password, two-factor or passkeys, or run the recovery command**, and finish any of these that is under way before the rollout starts. Each keeps something in the container that served it: Settings saved on the old container reach the database but not the new container, a GitHub page coming back to the other container is refused, and an account change cut off by the old container's stop holds back agent approvals. If one happened anyway: after Settings were saved, restart the container (`docker compose restart adiutor`); start a GitHub step again; when Settings, Agent access says approvals are held back, use Disconnect all and connect the agents again.
+- A browser that loaded the page from the old container in the last moment before it was drained asks the new container for the old page's script or stylesheet, which is not there. The page then reloads once by itself, which opens the new release. If that reload fails too, or the browser blocks site storage, the page stays empty or unstyled until you reload it yourself.
+- The limits that count requests (sign-in attempts are not among them: those are in the database) count in each container, so they allow up to twice as many for that time.
+- Both containers poll Telegram, and Telegram answers one of them with a conflict: the logs show `telegram polling failed`, and Settings may show the bot as not polling for a few seconds. No message is handled twice.
+- When the overlap meets a GitHub pull (each hour, or the new container's first one), both containers may read GitHub. A pull that read earlier can be written last; its counts stay until the next pull.
+- A release that changes what agents may do can answer an agent `policy_changed` more than once; the agent reads the endpoints again each time.
+
+If the new container stops right after it starts (a wrong setting, for example), docker rollout 0.14 can remove the old container too ([wowu/docker-rollout#75](https://github.com/wowu/docker-rollout/issues/75)). Read the new container's log, fix the cause, and start the version that ran before with the commands of "Update by hand", below. It needs no restore: a release its labels let roll out uses the same database as the one before it.
+
+### Update by hand
+
+A release that cannot roll out (its labels do not allow it, or the running image has none) is updated with a short downtime. Back up the database first (section 9, step 2), then run, in the deploy directory, with the version to run:
+
+```bash
+NEW=X.Y.Z
+docker pull "ghcr.io/shlomiporush/adiutor:$NEW" &&
+  sed -i "s/^VERSION=.*/VERSION=$NEW/" .env &&
+  grep -qx "VERSION=$NEW" .env &&
+  env -u VERSION docker compose stop adiutor &&
+  env -u VERSION docker compose up -d --wait --wait-timeout 300 adiutor
+```
+
+Each step runs only after the one before it worked: the old container stops only once the new image is on the host and `.env` names it. `env -u VERSION` keeps a `VERSION` exported in your shell from overriding `.env`. Moving from the example file to your own rollout-ready file is done the same way: the project name stays `adiutor`, so Compose replaces the old container.
+
+To go back to an earlier release: when the newer release's `adiutor.rollout-from` is not newer than the earlier version, both use the same database, so run the commands above with the earlier version. Otherwise a migration came in between: stop the service first (`env -u VERSION docker compose stop adiutor`), restore the backup taken before the newer release, then run the commands above with the earlier version, and follow "Recovery and after any restore" (section 8). Never start an earlier release on a database a newer one migrated.

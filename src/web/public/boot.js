@@ -1,7 +1,3 @@
-// Runs before the first paint (index.html loads it synchronously): applies the theme and the
-// language this browser last used and a folded sidebar, so the page never flashes in the wrong theme or
-// direction, and a folded sidebar never flashes open (v3 NL-7).
-// Kept as a file rather than inline so the Content-Security-Policy can forbid inline scripts.
 ;(() => {
   try {
     const theme = localStorage.getItem("adiutor.theme") || "system"
@@ -14,4 +10,40 @@
   } catch {
     // Private mode or storage blocked: the defaults (light, Hebrew) stay.
   }
+})()
+;(() => {
+  const marker = "adiutor.reloaded"
+  let failed = false
+  const isHashedFile = (element) => {
+    const address =
+      element instanceof HTMLScriptElement
+        ? element.src
+        : element instanceof HTMLLinkElement && element.rel === "stylesheet"
+          ? element.href
+          : ""
+    if (!address) return false
+    const url = new URL(address)
+    return url.origin === location.origin && url.pathname.startsWith("/assets/")
+  }
+  addEventListener(
+    "error",
+    (event) => {
+      if (!isHashedFile(event.target)) return
+      failed = true
+      try {
+        if (sessionStorage.getItem(marker) !== null) return
+        sessionStorage.setItem(marker, "1")
+      } catch {
+        return
+      }
+      location.reload()
+    },
+    true,
+  )
+  addEventListener("load", () => {
+    if (failed) return
+    try {
+      sessionStorage.removeItem(marker)
+    } catch {}
+  })
 })()
